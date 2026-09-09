@@ -38,7 +38,7 @@ use common::{Fixture, git_in, run, run_with_stdin, stderr, stdout, write};
 const POLICY: &str = r#"version = 1
 
 [[rule]]
-id = "claim-needs-receipt"
+id = "claim read unread"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -151,7 +151,7 @@ fn the_refusal_names_the_check_and_the_keying() {
         &write_payload("src/tracked.rs"),
     ));
     assert!(
-        refusal.contains("claim-needs-receipt"),
+        refusal.contains("claim read unread"),
         "names the rule: {refusal}"
     );
     assert!(refusal.contains("branch"), "names the keying: {refusal}");
@@ -468,7 +468,7 @@ fn a_detached_head_cannot_answer_and_says_so_rather_than_refusing() {
 const ALTERNATION: &str = r#"version = 1
 
 [[rule]]
-id = "claim-needs-receipt"
+id = "claim read unread"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"

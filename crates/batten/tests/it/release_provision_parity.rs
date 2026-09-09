@@ -34,7 +34,7 @@
 //! linux-x86_64, macos-aarch64, macos-x86_64`. Upstream publishes three binaries
 //! and has since v0.1.2 — `aarch64-apple-darwin`, `x86_64-apple-darwin`,
 //! `x86_64-unknown-linux-gnu` — so `linux-aarch64` cannot be pinned, and
-//! `no-source-built-tool` forbids compiling one. Building the mapping surfaced a
+//! `pin add unsafe` forbids compiling one. Building the mapping surfaced a
 //! second instance nobody had found: `x86_64-pc-windows-gnu` has been in exactly
 //! the same state for its whole life, with no runner to reveal it.
 
@@ -54,7 +54,7 @@ use batten::rules::{self, Rule};
 /// the same column census a consumer's config does.
 fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "release-provision-parity",
+        "id": "release check partial",
         "kind": "policy",
         "scope": "tree",
         "sources": [".github/workflows/release-artifacts.yml", "batten.toml"],

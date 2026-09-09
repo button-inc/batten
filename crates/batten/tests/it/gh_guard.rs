@@ -28,7 +28,7 @@
 //! # One case asserts a rule id rather than a verdict, and that is not a weakening
 //!
 //! `gh pr ready` is ALLOWED by the predicate under test and DENIED by the engine
-//! overall, because `ready-needs-receipts` legitimately refuses a ready with no
+//! overall, because `check read unread` legitimately refuses a ready with no
 //! `verify` receipt for this head. The bats case drove `gh-guard-check.sh`
 //! directly, so it only ever asked the narrower question. Reading the aggregate
 //! exit code here would make one rule's correct arrival look like this rule's
@@ -86,10 +86,10 @@ use common::{run_with_stdin_at_real_root, stdout};
 /// THESE rows decide — a refusal from any other row is a different question, and
 /// the `gh pr ready` case below turns on exactly that distinction.
 const LIFECYCLE: [&str; 4] = [
-    "gh-pr-merge",
-    "gh-pr-comment-fast-forward",
-    "gh-pr-checks",
-    "gh-run-watch",
+    "commit ship other",
+    "review ship early",
+    "check watch loose",
+    "job watch loose",
 ];
 
 /// The repository root, whose committed `batten.toml` is the policy under test.
@@ -187,17 +187,20 @@ fn allowed_backgrounded(command: &str) {
 
 #[test]
 fn gh_pr_merge_is_refused_however_it_is_spelled() {
-    denied_by("gh pr merge 42 --rebase", "gh-pr-merge");
+    denied_by("gh pr merge 42 --rebase", "commit ship other");
     // Behind a flag VALUE, and behind an env prefix. The pairs are adjacent, so
     // an interposed flag never hides a real match.
-    denied_by("gh -R example-org/example-repo pr merge 42", "gh-pr-merge");
-    denied_by("GH_TOKEN=x gh pr merge 42", "gh-pr-merge");
+    denied_by(
+        "gh -R example-org/example-repo pr merge 42",
+        "commit ship other",
+    );
+    denied_by("GH_TOKEN=x gh pr merge 42", "commit ship other");
 }
 
 #[test]
 fn the_ci_watch_shapes_are_refused() {
-    denied_by("gh pr checks 63 --watch", "gh-pr-checks");
-    denied_by("gh run watch 12345", "gh-run-watch");
+    denied_by("gh pr checks 63 --watch", "check watch loose");
+    denied_by("gh run watch 12345", "job watch loose");
 }
 
 /// THE PAREN LANDS ON A MATCHED OPERAND ONLY WHEN THE COMMAND TAKES NO TRAILING
@@ -217,24 +220,24 @@ fn the_ci_watch_shapes_are_refused() {
 /// WHY the first probe passed, rather than leaving that to be rediscovered.
 #[test]
 fn a_grouped_lifecycle_command_is_still_refused() {
-    denied_by("(gh pr merge)", "gh-pr-merge");
-    denied_by("(gh run watch)", "gh-run-watch");
-    denied_by("(gh pr merge 42)", "gh-pr-merge");
+    denied_by("(gh pr merge)", "commit ship other");
+    denied_by("(gh run watch)", "job watch loose");
+    denied_by("(gh pr merge 42)", "commit ship other");
 }
 
 #[test]
 fn a_blocked_verb_in_a_later_segment_is_still_refused() {
     // CLOUD-857's class: a real agent command is compound most of the time, and
     // anchoring on the first word of the LINE misses every one of these.
-    denied_by("gh pr view 63 && gh run watch 1", "gh-run-watch");
-    denied_by("echo hi; gh pr checks 63", "gh-pr-checks");
+    denied_by("gh pr view 63 && gh run watch 1", "job watch loose");
+    denied_by("echo hi; gh pr checks 63", "check watch loose");
 }
 
 #[test]
 fn a_hand_typed_fast_forward_comment_is_refused() {
     denied_by(
         "gh pr comment 63 --body \"/fast-forward\"",
-        "gh-pr-comment-fast-forward",
+        "review ship early",
     );
 }
 
@@ -244,9 +247,12 @@ fn a_wrapped_gh_call_is_judged_by_its_effective_program() {
     // looks through wrappers, so the wrapper token is never what is judged. In
     // the web sandbox the wrapper form is often the only working form, so a guard
     // stopping at the wrapper would see none of the calls that matter.
-    denied_by("mise exec -- gh pr merge 42", "gh-pr-merge");
-    denied_by("mise x node@22 gh pr merge 42", "gh-pr-merge");
-    denied_by("env GH_TOKEN=x timeout 30 gh pr checks 42", "gh-pr-checks");
+    denied_by("mise exec -- gh pr merge 42", "commit ship other");
+    denied_by("mise x node@22 gh pr merge 42", "commit ship other");
+    denied_by(
+        "env GH_TOKEN=x timeout 30 gh pr checks 42",
+        "check watch loose",
+    );
 }
 
 // --- allowed: reads, creates, and verbs with no task wrapper -------------------
@@ -254,7 +260,7 @@ fn a_wrapped_gh_call_is_judged_by_its_effective_program() {
 #[test]
 fn gh_pr_ready_is_not_a_lifecycle_refusal() {
     // The one case that asks about the ROW rather than the verdict. See the
-    // module header: `ready-needs-receipts` refuses this correctly, and reading
+    // module header: `check read unread` refuses this correctly, and reading
     // the aggregate would report that as this rule's regression.
     assert_no_gh_lifecycle_refusal("gh pr ready 63");
 }
@@ -262,7 +268,7 @@ fn gh_pr_ready_is_not_a_lifecycle_refusal() {
 #[test]
 fn gh_pr_create_is_not_a_lifecycle_refusal() {
     // THE SAME SHAPE AS `gh pr ready` ABOVE, AND IT SAT ON `allowed` UNTIL
-    // CLOUD-1384. `pr-names-an-issue` is a `requires_key` row whose evidence is
+    // CLOUD-1384. `review name unnamed` is a `requires_key` row whose evidence is
     // the command, the BRANCH NAME, and the subjects on `origin/main..HEAD` — so
     // a full allow here asks about the developer's branch rather than about any
     // `gh` lifecycle row. Measured: exit 2 from a landed branch carrying no key,
@@ -412,7 +418,7 @@ fn decision_with_env(command: &str, key: &str, value: &str) -> String {
 ///
 /// The tree's decision is deliberate and documented; the rules file had drifted
 /// from it. That is corrected in the same change rather than carried forward, and
-/// the drift is reported rather than folded in — `rules-drift` gates values
+/// the drift is reported rather than folded in — `rule watch other` gates values
 /// `.claude/rules/*.md` restates, and it did not catch this one.
 ///
 /// **So the shell's own `BATTEN_GH_GUARD_BYPASS` arm is NOT conserved, and that
@@ -437,7 +443,7 @@ fn the_engines_hatch_suppresses_the_lifecycle() {
 fn the_undeclared_row_bypass_does_not_suppress() {
     let out = decision_with_env("gh pr merge 63", "BATTEN_GH_GUARD_BYPASS", "1");
     assert!(
-        out.contains("gh-pr-merge"),
+        out.contains("commit ship other"),
         "no row declares BATTEN_GH_GUARD_BYPASS, so it must not suppress this refusal \
          (batten.toml:273, deferred to CLOUD-1027)\n{out}"
     );

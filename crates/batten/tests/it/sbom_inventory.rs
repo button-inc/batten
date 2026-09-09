@@ -15,7 +15,7 @@
 //! are decided by the module from `line_sources`, so the producer cannot get them
 //! wrong on its behalf. Cases below drive both routes.
 //!
-//! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
+//! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
 //! `sbom-check.sh` re-ran `sbom.sh` twice and adjudicated the documents in shell.
 //! The scan stays outside — §9's prior art, and §5 makes `check` `read` — so
@@ -125,7 +125,7 @@ fn config() -> String {
         r#"version = 1
 
 [[rule]]
-id = "sbom-inventory"
+id = "manifest list wrong"
 kind = "policy"
 scope = "tree"
 module = "sbom-inventory.rego"

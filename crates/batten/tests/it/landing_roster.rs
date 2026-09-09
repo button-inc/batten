@@ -92,7 +92,7 @@ fn install_module(root: &Path) {
 /// pass here.
 fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "landing-roster-guarded",
+        "id": "check read never",
         "kind": "policy",
         "scope": "tree",
         "line_sources": [".github/workflows/*.yml"],
@@ -194,7 +194,7 @@ jobs:
 /// the guard's presence rather than on the fixture being a fixture.
 #[test]
 fn a_fixture_landing_workflow_that_consults_the_roster_is_clean() {
-    let root = repo("landing-roster-guarded", Some(GUARDED));
+    let root = repo("check read never", Some(GUARDED));
     assert!(rules_fired(&root).is_empty());
 }
 

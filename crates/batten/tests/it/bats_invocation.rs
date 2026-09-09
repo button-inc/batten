@@ -5,9 +5,9 @@
 //!
 //! The successor to `tests/test-bats-parallel.bats`, whose subject is
 //! `mise.toml`'s `[tasks."test:bats"]`. The suite was an authored bats file, so
-//! `shell-retirement`'s arm B refused maintaining it in place; the predicate
+//! `shell retire partial`'s arm B refused maintaining it in place; the predicate
 //! moved into the module and the classification of the task body moved into fact
-//! acquisition, which is the same split `command-task-defined` already makes.
+//! acquisition, which is the same split `task bind undefined` already makes.
 //!
 //! # Why this tier and not the module's own rules
 //!
@@ -51,7 +51,7 @@
 // carried: "the parallel backend is named explicitly rather than left to bats' default probe" policy/bats-invocation.rego
 // carried: "the parallel backend is a pinned tool, so the fast path cannot depend on the host" policy/bats-invocation.rego
 // carried: "CI installs the parallel backend — an absent rush is a missing TOOL, not a slow suite" policy/bats-invocation.rego
-// changed: "the test:bats invocation was found at all — this suite is not passing vacuously" crates/batten/tests/it/bats_invocation.rs the suite asserted its own subject exists, which a module cannot: a tree with no `test:bats` task is not-applicable rather than in violation, or the row fires on every fixture that copies this config (`command-task-defined` measured seven such findings). The property survives as `this_repository_is_clean_today` plus `a_tree_with_no_such_task_is_not_judged`, which together say the same thing about THIS tree without claiming it about every tree
+// changed: "the test:bats invocation was found at all — this suite is not passing vacuously" crates/batten/tests/it/bats_invocation.rs the suite asserted its own subject exists, which a module cannot: a tree with no `test:bats` task is not-applicable rather than in violation, or the row fires on every fixture that copies this config (`task bind undefined` measured seven such findings). The property survives as `this_repository_is_clean_today` plus `a_tree_with_no_such_task_is_not_judged`, which together say the same thing about THIS tree without claiming it about every tree
 
 // CLOUD-1268's fifth arm, and the first ledger block in this tree to use it. The
 // four above describe a subject that went with its suite; `tests/helpers.bash` is
@@ -84,7 +84,7 @@ use batten::rules::{self, Rule};
 /// the same column census a consumer's config does.
 fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "bats-invocation",
+        "id": "bats run wrong",
         "kind": "policy",
         "scope": "tree",
         "sources": ["mise.toml", ".github/workflows/ci.yml"],
@@ -351,7 +351,7 @@ fn a_sweep_that_names_no_hardware_is_refused() {
 
 #[test]
 fn a_tree_with_no_such_task_is_not_judged() {
-    // `command-task-defined`'s measured lesson, one row over: an unguarded module
+    // `task bind undefined`'s measured lesson, one row over: an unguarded module
     // reported seven findings against a fixture that copies this config without a
     // task namespace, including against a case named "this repository is clean
     // today".

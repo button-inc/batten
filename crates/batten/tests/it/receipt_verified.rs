@@ -1,7 +1,7 @@
 //! `batten receipt verified` over the compiled binary — the composed
 //! receipt read that retired `mise-tasks/verified.sh` (CLOUD-1148).
 //!
-//! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
+//! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
 //! The predecessor was a gate over three reads: a `verify` receipt for this
 //! exact HEAD, a `linear-check` receipt, and the `origin/main` that receipt was
@@ -17,7 +17,7 @@
 //! **Every title below is the base file's, byte for byte.** The first draft of
 //! this block invented them from the brief instead of reading
 //! `git show origin/main:tests/verified.bats`, so all ten arms matched nothing
-//! and `bats-tests-not-deleted` reported ten unmapped cases — which is the
+//! and `bats count dropped` reported ten unmapped cases — which is the
 //! ratchet doing exactly what it exists to do.
 //!
 //! CARRIED — the predicate moved intact onto the composed verb.

@@ -9,7 +9,7 @@
 //!
 //! The issue named `batten mcp call Linear get_issue` as its first candidate.
 //! That was retired before it shipped: no network call can be guaranteed inside
-//! `perf-assert`'s 100 ms hook ceiling, and every other rule at this boundary
+//! `path measure wrong`'s 100 ms hook ceiling, and every other rule at this boundary
 //! adjudicates CACHED state — receipts, claims, captures — never a live read.
 //! `policy/module-layering.rego` now forbids `repair` the network modules so the
 //! bound is a gate rather than a sentence, and these fixtures repair by creating

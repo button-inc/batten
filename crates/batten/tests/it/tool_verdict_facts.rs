@@ -20,7 +20,7 @@
 //! `evaluator-io-check` and the spawn census are the gates on that and this suite
 //! does not duplicate them.
 //!
-//! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
+//! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
 //! CLOUD-1199's disposition, applied: `pkl-check` RAN `pkl` and then adjudicated
 //! its exit status in shell. The run stays outside either way — §9's prior art —
@@ -76,7 +76,7 @@
 //!
 //! CARRIED — the verdict pair, which is the gate's whole content. A clean config
 //! records `status clean` and denies nothing; a rejected or unparseable one
-//! records `status error` and `validator-verdict-clean` refuses. The two
+//! records `status error` and `tool judge dirty` refuses. The two
 //! rejection cases collapse into one successor because the producer cannot tell
 //! them apart and never could: both are "the validator exited non-zero", and the
 //! REASON stays on the terminal rather than entering the record (rule 4).
@@ -88,7 +88,7 @@
 //! CHANGED — the could-not-look arm, whose exit code moves and whose meaning does
 //! not.
 
-// changed: "an unreadable config is exit 2, never a pass" crates/batten/tests/tool_verdict_facts.rs the shell gate exited 2 itself when it could not read the config. The producer exits 1 instead — a usage error, since the caller named a row whose declared input is unreadable — and the ADJUDICATION side is unchanged in substance: no record is written, so the id is absent from the map and `validator-verdict-clean` refuses nothing rather than reporting clean. `a_subject_that_cannot_be_read_is_refused_rather_than_keyed` is the successor, and it asserts the stronger half the shell case could not: that no key is composed at all, so a later reader cannot find a verdict over bytes nobody read
+// changed: "an unreadable config is exit 2, never a pass" crates/batten/tests/tool_verdict_facts.rs the shell gate exited 2 itself when it could not read the config. The producer exits 1 instead — a usage error, since the caller named a row whose declared input is unreadable — and the ADJUDICATION side is unchanged in substance: no record is written, so the id is absent from the map and `tool judge dirty` refuses nothing rather than reporting clean. `a_subject_that_cannot_be_read_is_refused_rather_than_keyed` is the successor, and it asserts the stronger half the shell case could not: that no key is composed at all, so a later reader cannot find a verdict over bytes nobody read
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -542,7 +542,7 @@ const SHIPPED: &str = include_str!("../../../../policy/validator-verdict-clean.r
 const SHIPPED_CONFIG: &str = r#"version = 1
 
 [[rule]]
-id = "validator-verdict-clean"
+id = "tool judge dirty"
 kind = "policy"
 scope = "tree"
 module = "validator-verdict-clean.rego"
@@ -594,7 +594,7 @@ fn the_shipped_module_refuses_a_recorded_error() {
     let outcome = check(&dir);
     let (answer, cause) = (stdout(&outcome), stderr(&outcome));
     assert!(
-        answer.contains("validator-verdict-clean"),
+        answer.contains("tool judge dirty"),
         "a recorded error must reach the shipped predicate and refuse\n{answer}{cause}"
     );
 }
@@ -616,7 +616,7 @@ fn the_shipped_module_passes_a_recorded_clean() {
     let outcome = check(&dir);
     let (answer, cause) = (stdout(&outcome), stderr(&outcome));
     assert!(
-        !answer.contains("validator-verdict-clean"),
+        !answer.contains("tool judge dirty"),
         "the reserved clean status is not a finding\n{answer}{cause}"
     );
 }

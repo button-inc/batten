@@ -41,7 +41,7 @@
 //! the engine's behaviour is proved against stubs, and the declaration is proved
 //! against the file that ships.
 //!
-//! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
+//! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
 //! `.claude/hooks/session-start.sh` is not in `governed_when_deleted` (that set
 //! is `mise-tasks/` paths and `.bats` suites), so it owes no arm. The suite does.
@@ -95,7 +95,7 @@
 //!   is lost is the end-to-end pairing of the step with its effect in one case.
 //!
 // changed: "the hook runs green on this checkout" crates/batten/tests/it/session_provisioning.rs the exit-0-and-silent half survives as `a_step_that_passes_says_nothing`, against stubs; the END-TO-END half is withdrawn, because dispatching the real rows provisions a container inside `test:cargo` — 141s measured cold — which is the cost CLOUD-1268 exists to stop moving between lanes. What covers it instead is the session itself: a failed step reports on the advisory channel at the moment it fails
-// changed: "running the hook leaves the tracked lockfile untouched" crates/batten/tests/it/session_provisioning.rs narrowed from the EFFECT to the DECLARATION: `the_install_step_is_declared_lockfile_free` asserts `session:install` carries MISE_LOCKFILE=false, where the retired case ran the hook and diffed `git status -- mise.lock`. `[settings] lockfile = false` in mise.toml is the standing authority and `lock-complete` the standing gate; what is lost is the observation that this particular path honours it
+// changed: "running the hook leaves the tracked lockfile untouched" crates/batten/tests/it/session_provisioning.rs narrowed from the EFFECT to the DECLARATION: `the_install_step_is_declared_lockfile_free` asserts `session:install` carries MISE_LOCKFILE=false, where the retired case ran the hook and diffed `git status -- mise.lock`. `[settings] lockfile = false` in mise.toml is the standing authority and `lock cover partial` the standing gate; what is lost is the observation that this particular path honours it
 // changed: "the session-start hook calls it — the whole point is WHEN it runs" crates/batten/tests/it/session_provisioning.rs from `tests/container-preflight.bats`, whose own subject survives. The case grepped the retired script for `container-preflight`; the property — that a preflight nothing runs at startup is worthless — is now the `session-container-preflight` row, and its POSITION is asserted too, which the grep could not say
 // changed: "the hook passes --degraded when provisioning failed" batten.toml the capability is gone rather than moved, and this is the one real loss in this retirement. `--degraded` told the preflight not to trust toolchain-dependent probes when an earlier step had failed, and it worked because the script carried a `fail` variable across its steps. Handlers share no state — each is its own process with its own outcome — so nothing can compute the flag. The consequence is bounded: a container whose install failed now gets the full probe set, so it may report a second symptom of one cause, and both refusals arrive in the same reply. Recovering it needs a fact the door does not carry; filed rather than papered over
 // changed: "the fixer is wired: session-start runs it, so a clone is compliant before it commits" crates/batten/tests/it/session_provisioning.rs from `tests/commit-attribution.bats`, whose own subject (hk.pkl, mise.toml) survives. The case grepped the retired script for its `step attribution-identity` line; the property — that the identity fixer runs before a clone commits — is now the `session-attribution-identity` row, asserted by `the_committed_provisioning_declares_every_step_in_order`. It is CHANGED rather than CARRIED because the retired case pinned the invocation's exact spelling inside a program and this pins a row's presence and position in a list
@@ -619,7 +619,7 @@ fn the_reachable_set_is_not_empty() {
 /// binary byte-identical to the release already on PATH.
 ///
 /// So the property is asserted rather than explained. `install.sh` cannot
-/// compile — `install-does-one-thing` in `batten.toml` bans `cargo` from it
+/// compile — `program add other` in `batten.toml` bans `cargo` from it
 /// outright — and this is that same ban one layer up, over the tasks a session
 /// start actually dispatches.
 ///
@@ -741,7 +741,7 @@ fn the_install_step_is_declared_lockfile_free() {
     assert!(
         body.contains("MISE_LOCKFILE=false"),
         "provisioning installs purely, so it cannot append a platform key `mise lock` \
-         cannot produce and `lock-complete` rejects"
+         cannot produce and `lock cover partial` rejects"
     );
     assert!(
         body.contains("mise install"),

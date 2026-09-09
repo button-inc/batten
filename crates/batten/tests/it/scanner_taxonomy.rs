@@ -24,7 +24,7 @@
 //!
 //! **The substitution axis is a different matter, and saying otherwise was a
 //! defect of its own** (CLOUD-998). This file used to state flatly that it was
-//! "not a gate over tool choice"; `no-tool-substitution` is exactly that, over
+//! "not a gate over tool choice"; `tool select other` is exactly that, over
 //! the command line, and its refusal redirects to the rules file. So the claim
 //! here is narrowed to the axis it holds for, and one assertion now pins the
 //! gate's name into the prose. This is otherwise the same shape as
@@ -56,7 +56,7 @@ const INDEX: &str = "AGENTS.md";
 ///
 /// ROW ONE NAMES A CAPABILITY, NOT A PRODUCT, and that is the correction
 /// CLOUD-998 landed. It used to pin the literal `` `grep` `` — the utility
-/// `no-tool-substitution` refuses over a tracked path — so the gate's own
+/// `tool select other` refuses over a tracked path — so the gate's own
 /// redirect sent a reader back to the refused call, and this assertion held the
 /// wrong answer in place. Naming a first-class tool instead would have been the
 /// same defect one layer over: which instruments a session carries varies, so
@@ -107,7 +107,7 @@ const DISPOSITION: &str = "CLOUD-310";
 /// gate existed over instrument choice, which was true when written and false
 /// once this row landed — and a reader who believes no gate exists has no reason
 /// to expect the refusal (CLOUD-998).
-const SUBSTITUTION_GATE: &str = "no-tool-substitution";
+const SUBSTITUTION_GATE: &str = "tool select other";
 
 /// The bare product names row one must not answer with.
 ///

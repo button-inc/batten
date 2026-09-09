@@ -15,7 +15,7 @@
 //! WHAT THIS ASSERTS, AND WHAT IT CANNOT. It asserts **agreement**: the task
 //! body in `mise.toml` is the authority, and the prose has to name the command
 //! that body actually runs. So a change to either side without the other is a
-//! finding, in both directions — the drift `rules-drift` does not reach here,
+//! finding, in both directions — the drift `rule watch other` does not reach here,
 //! because its restated-default scan is over declared defaults rather than over
 //! a task's own body.
 //!
@@ -93,8 +93,8 @@ fn the_rules_file_names_the_command_fmt_runs() {
 /// the regression unguarded in both directions; asserting the opposite keeps one
 /// case on the sentence and moves which way it points. What now stops the
 /// regression on the CONFIG side — where it actually lives — is
-/// `hk-fix-selection`, whose `task state wrong` reads this same clause
-/// and `fix-selection-complete`, which holds hk's own selection to the gate's
+/// `gate select wrong`, whose `task state wrong` reads this same clause
+/// and `gate fix missing`, which holds hk's own selection to the gate's
 /// fixer-bearing steps in both directions. Prose alone was never the mechanism;
 /// it is the half a reader sees.
 #[test]
@@ -103,7 +103,7 @@ fn fmt_is_described_as_the_formatters_only_subset_it_now_is() {
     assert!(
         prose.contains("formatters-only subset"),
         "{RULES} stopped calling `fmt` the formatters-only subset; it IS one since \
-         CLOUD-681, and `hk-fix-selection` reads this clause to keep the config and \
+         CLOUD-681, and `gate select wrong` reads this clause to keep the config and \
          the prose from drifting apart"
     );
 }

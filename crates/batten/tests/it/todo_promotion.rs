@@ -10,7 +10,7 @@
 //! What closed it is not a new predicate. The Ready-block grammar has been
 //! `crates/batten/src/ready.rs` since CLOUD-1121; `[[mint]] issue-read` has minted
 //! a receipt from every `get_issue` RESULT since CLOUD-1024; and
-//! `an-update-owes-a-recent-read` has forced such a read within 300 seconds of any
+//! `issue read stale` has forced such a read within 300 seconds of any
 //! write since CLOUD-312. This row is those three facts joined by one column:
 //! the mint's body grew a sixth field carrying the compiled authority's verdict,
 //! and `requires_field` lets the promotion row read it.
@@ -41,7 +41,7 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{Fixture, run_with_stdin, stderr};
+use common::{Fixture, run, run_with_stdin, stderr, stdout};
 
 /// This repository's own rows, as committed — never a fixture rewriting them.
 ///
@@ -216,7 +216,7 @@ fn a_second_read_of_the_same_unready_row_changes_nothing() {
 /// The refusal names the row that refused and the state to reach.
 ///
 /// The ROW is asserted, not just the code: three rows select this tool now, so an
-/// exit 2 alone would be satisfied by `an-update-owes-a-recent-read` firing on the
+/// exit 2 alone would be satisfied by `issue read stale` firing on the
 /// same call — the misattribution `replay.sh` calls `denied-by-another-row`, and
 /// here it would hide the whole of this change behind a gate that already existed.
 #[test]
@@ -231,12 +231,24 @@ fn the_refusal_names_this_row_and_carries_no_body() {
     );
     let text = stderr(&refusal);
     assert!(
-        text.contains("a-todo-promotion-owes-a-ready-verdict"),
+        text.contains("plan grade unread"),
         "the refusing row must be nameable, or a reader cannot find it in the config: {text}"
     );
+    // AND THE STATE TO REACH, THROUGH THE HOP THE GRAMMAR CREATES (CLOUD-1638).
+    //
+    // This used to read `text.contains("ready")`, which passed because the row
+    // was called `a-todo-promotion-owes-a-ready-verdict` — the assertion was
+    // satisfied by prose inside the id. An id drawn from a fixed vocabulary
+    // cannot carry an arbitrary state name, and that is the point rather than a
+    // regression: the line is a pointer and the remedy lives one dereference
+    // away. So the property is asserted where it now lives, which also proves
+    // the hop works rather than assuming it.
+    let remedy = run(&repo, &["policy", "rule", "plan grade unread"]);
+    let remedy_text = format!("{}{}", stdout(&remedy), stderr(&remedy));
     assert!(
-        text.contains("ready"),
-        "and the state the row has to reach, which is what the reader acts on: {text}"
+        remedy_text.to_lowercase().contains("ready"),
+        "and the state the row has to reach, which the reader gets from \
+         `policy rule`: {remedy_text}"
     );
     // Rule 4, and it is load-bearing here rather than editorial: the verdict was
     // computed over an issue body, and a refusal echoing what it read would put

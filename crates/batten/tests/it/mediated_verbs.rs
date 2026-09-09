@@ -94,7 +94,7 @@ fn assert_allowed(command: &str) {
 /// Weaker than [`assert_allowed`] on purpose, and only for commands where a
 /// SECOND row legitimately fires. `sed -n 1p <memory>` is a read as far as the
 /// `[[verb]]` table is concerned — the property these tests exist to pin — and
-/// is also, correctly, a `no-tool-substitution` deny, because printing a range
+/// is also, correctly, a `tool select other` deny, because printing a range
 /// of a tracked file is what `Read(offset, limit)` is for (CLOUD-864). Reading
 /// the aggregate exit code would make one rule's arrival look like the other
 /// rule's regression.
@@ -240,7 +240,7 @@ fn an_in_place_stream_edit_is_a_write_and_every_other_one_is_a_read() {
     // The read half, which a row without `requires_flag` would have refused:
     // every filtering invocation in the repository.
     assert_allowed("sed --version");
-    // A TRANSFORM, and allowed outright: `no-tool-substitution` qualifies its
+    // A TRANSFORM, and allowed outright: `tool select other` qualifies its
     // `sed` entry with `-n` precisely so this stays allowed — no first-class
     // tool applies a substitution expression, so refusing it would state a
     // reason that does not hold.
@@ -428,7 +428,7 @@ fn the_unqualified_rows_still_deny_and_a_read_is_still_allowed() {
     assert_denied(&format!("tee {GUARDED}"));
     assert_denied(&format!("cat x > {GUARDED}"));
     // Reads, and still reads to the VERB TABLE — which is what this case is
-    // about. `no-tool-substitution` also refuses them now, correctly, since
+    // about. `tool select other` also refuses them now, correctly, since
     // `cat`/`grep` over a tracked path is what `Read` and `Grep` are for; the
     // weaker assertion is what keeps that from reading as a protected-path
     // regression.
@@ -694,7 +694,7 @@ fn an_interpreter_writing_through_a_heredoc_body_is_a_known_gap() {
 /// enumeration rather than lengthen it.
 /// NOT `cat` OR `grep`, AND THAT IS THIS REPOSITORY'S OWN CONFIG SPEAKING. Both
 /// are declared readers, and both are refused here by a DIFFERENT row —
-/// `no-tool-substitution`, which routes a text utility over a tracked path to the
+/// `tool select other`, which routes a text utility over a tracked path to the
 /// structured surface. Asserting them allowed would fail for a reason that has
 /// nothing to do with this gate, and asserting them denied would read as evidence
 /// about readers when it is evidence about substitution.
@@ -962,7 +962,7 @@ fn a_backslash_continuation_is_one_command_and_is_still_refused() {
 // --- CLOUD-1258: a generic read of a memory names `read_memory` ---------------
 //
 // The third face of the object CLOUD-185 and CLOUD-864 closed the other two of.
-// `no-tool-substitution` decides over shell argv, so a structured-tool call is
+// `tool select other` decides over shell argv, so a structured-tool call is
 // invisible to it; `protected` crossed with `[[verb]]` enumerates mutations.
 
 /// A `Read` tool call naming a path, as a host sends it.

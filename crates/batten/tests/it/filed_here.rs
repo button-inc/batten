@@ -1,4 +1,4 @@
-//! `filed-here`, over the engine that builds its input (CLOUD-1051).
+//! `issue file other`, over the engine that builds its input (CLOUD-1051).
 //!
 //! # The tier this is, and why the retired suite could not be it
 //!
@@ -10,11 +10,11 @@
 //! cannot reach. The module's own `test_` rules are the other tier and pin the
 //! predicate; neither replaces the other.
 //!
-//! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
+//! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
 //! Two ledgers, two keys, and neither substitutes for the other. CLOUD-908's
 //! `[rule.conserves]` ledger below is keyed on a quoted CASE TITLE and asks what
-//! happened to each assertion. `shell-retirement` is keyed on the RETIRED PATH
+//! happened to each assertion. `shell retire partial` is keyed on the RETIRED PATH
 //! and asks what now holds the predicate at all — so it demands one arm per file
 //! naming both a policy surface and a compiled-binary test, because either alone
 //! is satisfiable by a port that does nothing.
@@ -195,7 +195,7 @@ fn install_module(root: &Path) {
 
 fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "filed-here",
+        "id": "issue file other",
         "kind": "policy",
         "scope": "tree",
         "base": "origin/main",
@@ -842,7 +842,7 @@ fn the_committed_row_is_the_one_these_cases_exercise() {
         .rules;
     let declared = committed
         .iter()
-        .find(|rule| rule.id == "filed-here")
+        .find(|rule| rule.id == "issue file other")
         .expect("the committed config declares the row this suite exercises");
     assert_eq!(declared.kind, RuleKind::Policy);
     assert_eq!(declared.scope, RuleScope::Tree);

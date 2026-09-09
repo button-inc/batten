@@ -294,7 +294,7 @@ fn a_tool_carrying_no_content_could_not_look_rather_than_landing_nothing() {
 #[test]
 fn a_planted_secret_in_the_content_reaches_no_output_and_nothing_on_disk() {
     // Assembled rather than written, for the reason `contract_drift.rs` gives:
-    // a credential-shaped literal in a tracked file is what `no-secrets` exists
+    // a credential-shaped literal in a tracked file is what `source carry unsafe` exists
     // to catch, and it is right to.
     let planted = format!("{}_{}", "ghp", "thisIsTheSortOfThingAWriteMustNeverEcho");
     let dir = scratch("prospective-pointer-only");

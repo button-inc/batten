@@ -8,7 +8,7 @@
 //! at any point** — the rejection came from git, after the work was written,
 //! verified and committed.
 //!
-//! `claim-not-raced` asks about a KEY across open pull requests, and both
+//! `claim mint twice` asks about a KEY across open pull requests, and both
 //! sessions served the same one, so it is correctly silent. The claim receipt —
 //! the one artifact saying *this session is working this branch* — lives under
 //! `$GIT_DIR`, is never committed, and dies with the container, so no clone can
@@ -64,7 +64,7 @@ fn denied_by_this_row(command: &str) {
         "the committed policy must refuse: {command}\n{out}"
     );
     assert!(
-        out.contains("leased-push"),
+        out.contains("branch write unsafe"),
         "the refusal for `{command}` must come from this row\n{out}"
     );
 }
@@ -137,7 +137,7 @@ fn a_grammar_token_does_not_make_another_tool_gits() {
 #[test]
 fn the_preset_still_owns_the_bare_forced_spellings() {
     // Asserted as SOMEBODY refusing rather than as this row's work. If this ever
-    // starts coming from `leased-push`, the narrowing has been undone and
+    // starts coming from `branch write unsafe`, the narrowing has been undone and
     // there are two rules over one object again.
     denied("git push --force origin main");
     denied("git push -f origin main");
@@ -179,7 +179,7 @@ fn the_explicit_expected_value_is_allowed() {
 fn the_flag_named_in_prose_is_not_a_push() {
     // ANTI-VACUITY IN THE OTHER DIRECTION. A row keyed on the substring alone
     // would fire on any command mentioning the flag — including the ones
-    // documenting this rule, which is how `no-secrets` refused its own
+    // documenting this rule, which is how `source carry unsafe` refused its own
     // explanatory comment. `pattern` requires the `git push` shape and `contains`
     // narrows within it, so a sentence about a leased push is not one.
     allowed("echo 'never reach for git push --force-with-lease here'");

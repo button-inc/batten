@@ -125,14 +125,14 @@ fn every_spelling_of_the_raw_read_is_refused() {
 /// it that way.
 ///
 /// `save_issue` is deliberately NOT asserted here. It is refused by
-/// `an-update-owes-a-recent-read` whenever no fresh receipt exists, so a case
+/// `issue read stale` whenever no fresh receipt exists, so a case
 /// asserting either verdict for it would be pinning a different row's behaviour
 /// under this row's name.
 #[test]
 fn the_row_reaches_no_verb_it_does_not_name() {
     let repo = repo("raw-read-controls");
     for tool in [
-        // The search `filing-needs-a-search` requires must stay open.
+        // The search `issue list unread` requires must stay open.
         "mcp__Linear__list_issues",
         // Already projected on every measured call, and a `shape` row cannot
         // express "without `fields`".
@@ -177,7 +177,7 @@ fn the_refusal_carries_no_byte_of_the_call() {
     );
     assert_eq!(output.status.code(), Some(2), "the row must refuse");
     assert!(
-        rendered.contains("no-raw-issue-read"),
+        rendered.contains("issue read loose"),
         "the refusal must name the row so a reader can find its remedy: {rendered}"
     );
     assert!(

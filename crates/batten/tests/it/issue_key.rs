@@ -43,7 +43,7 @@
 //!
 //! # The declared mutation, and why the row is in THIS file
 //!
-//! `obligations-bound` binds a §7 obligation by reading the declared file's
+//! `test name undefined` binds a §7 obligation by reading the declared file's
 //! lines for a row beginning `#MUTANT <slug>|`, and its `line_sources` covers
 //! `crates/batten/tests/**` and not `crates/batten/src/**` — so the row lives
 //! here even though the expression it applies belongs to `ready.rs`'s reader.
@@ -81,7 +81,7 @@ use common::{Fixture, git_in, run, run_with_stdin, scratch_outside_tree, stderr}
 const POLICY: &str = r#"version = 1
 
 [[rule]]
-id = "pr-names-an-issue"
+id = "review name unnamed"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -91,7 +91,7 @@ base = "origin/main"
 reason = "name the issue in the branch, a commit, or the body"
 
 [[rule]]
-id = "ready-names-an-issue"
+id = "review open unnamed"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -347,7 +347,7 @@ fn the_refusal_names_the_route_and_leaks_no_evidence() {
         &payload("gh pr create --title 'tidy' --body 'no key'"),
     ));
     assert!(
-        refusal.contains("pr-names-an-issue"),
+        refusal.contains("review name unnamed"),
         "names the rule: {refusal}"
     );
     // WHAT IS MISSING IS THE CLASS (CLOUD-1286): `issue name missing` says the
@@ -358,7 +358,7 @@ fn the_refusal_names_the_route_and_leaks_no_evidence() {
         refusal.contains("issue name missing"),
         "says what is missing rather than that the shape is banned: {refusal}"
     );
-    let explained = run(&dir, &["policy", "explain", "pr-names-an-issue"]);
+    let explained = run(&dir, &["policy", "explain", "review name unnamed"]);
     assert_eq!(explained.status.code(), Some(0), "the row resolves");
     assert!(
         String::from_utf8_lossy(&explained.stdout).contains("branch"),
@@ -393,7 +393,7 @@ fn a_requires_key_row_without_a_base_is_a_load_error() {
         .config(
             "version = 1\n\n\
              [[rule]]\n\
-             id = \"pr-names-an-issue\"\n\
+             id = \"review name unnamed\"\n\
              kind = \"shape\"\n\
              scope = \"mediated_call\"\n\
              severity = \"deny\"\n\
@@ -442,7 +442,7 @@ pub(crate) struct KeyExample {
 /// The consumer's own key, spelled from parts so this file carries no derivation
 /// of the token.
 ///
-/// `no-tracker-key-in-core` refuses one anywhere under `crates/**`, and a test is
+/// `issue name other` refuses one anywhere under `crates/**`, and a test is
 /// not exempt from the rule it is testing — the same dodge `tests/it/cli.rs`
 /// uses to seed the banned shapes it asserts on.
 pub(crate) fn key(n: u32) -> String {

@@ -50,7 +50,7 @@
 // engine's `2` is the policy verdict, and `2=2` is exactly the carry-over
 // `replay` refuses.
 //
-// replay: tests/mise-pin-agreement.bats c9aaa5dcc43b159f1bcee7fd5a6f50b6eb0280e3 mise-tasks/mise-pin-agreement.sh mise-pin-agreement 0=0 1=2
+// replay: tests/mise-pin-agreement.bats c9aaa5dcc43b159f1bcee7fd5a6f50b6eb0280e3 mise-tasks/mise-pin-agreement.sh pin declare wrong 0=0 1=2
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -74,7 +74,7 @@ id = "mise-tool-reference"
 regex = '^[a-z0-9]+:.+@.+$'
 
 [[rule]]
-id = "mise-pin-agreement"
+id = "pin declare wrong"
 kind = "policy"
 scope = "tree"
 documents = [".mcp.json", "mise.toml"]
@@ -186,14 +186,14 @@ fn denied(root: &Path) {
     );
     // THE RULE AND THE POINTER ARE THE WHOLE OBSERVABLE, and that is rule 4
     // rather than a thin assertion. Measured on this tree: `batten check` renders
-    // `.mcp.json mise-pin-agreement` and `check -J` carries
+    // `.mcp.json pin declare wrong` and `check -J` carries
     // `{rule, path, severity, report, identity}` — the verdict TOKEN reaches
     // neither. So which class fired is pinned by the module's own `test_` rules,
     // where the class is nameable, and this tier pins that the engine builds the
     // input at all. A case here asserting a token would have been asserting the
     // renderer, and it would have been red.
     assert!(
-        text.contains("mise-pin-agreement"),
+        text.contains("pin declare wrong"),
         "the finding names the rule: {text}"
     );
     assert!(

@@ -29,7 +29,7 @@
 //!
 //! # The declared mutation, and why the row is in THIS file
 //!
-//! `obligations-bound` reads the declared file's own lines for a row beginning
+//! `test name undefined` reads the declared file's own lines for a row beginning
 //! `#MUTANT <slug>|`, and its `line_sources` covers `crates/batten/tests/**` and
 //! not `crates/batten/src/**` — so the row lives here even though the expression
 //! it applies belongs to `decision.rs`'s degradation. A block comment because

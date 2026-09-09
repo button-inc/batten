@@ -1,7 +1,7 @@
 //! The mapping ledger for a case a live suite INVERTED rather than lost
 //! (CLOUD-908's column, this bundle's three).
 //!
-//! `bats-tests-not-deleted` conserves case NAMES, not counts: a case name that
+//! `bats count dropped` conserves case NAMES, not counts: a case name that
 //! disappears between `origin/main` and the head tree owes exactly one arm in
 //! `crates/batten/tests/*.rs`, whatever the suite's total did. That is the right
 //! reading and it is what caught this branch — three board-gate cases asserted a

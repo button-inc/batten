@@ -14,12 +14,12 @@
 //! noticed. This file is the row that would have.
 //!
 //! **THE FIXTURE REPOSITORY CARRIES ONE HANDLER ROW AND NO `[[rule]]` AT ALL.**
-//! That isolation is the whole design: `verdict-not-discarded` and the other
+//! That isolation is the whole design: `verdict guard missing` and the other
 //! mediated rows in the real `batten.toml` refuse commands in this same family,
 //! so driving the real config would let an engine row's verdict stand in for the
 //! handler's — the substitution that hid the defect the first time.
 //!
-//! **Rust rather than a `.bats` suite** (CLOUD-843). `shell-retirement` refuses
+//! **Rust rather than a `.bats` suite** (CLOUD-843). `shell retire partial` refuses
 //! a new `tests/*.bats`, and it is right to: the campaign's corpus has to shrink
 //! rather than stay level while the census reports movement. Writing the
 //! door tier here costs nothing it would have had in bash — the fixture is the

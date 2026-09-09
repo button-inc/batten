@@ -39,7 +39,7 @@ use common::{batten, git_in, scratch, stderr, stdout, write};
 /// The subject every case reads about.
 ///
 /// GENERIC, NEVER THIS CONSUMER'S TRACKER PREFIX. A key shape naming a specific
-/// tracker inside `crates/` is non-negotiable rule 1, which `no-tracker-key-in-core`
+/// tracker inside `crates/` is non-negotiable rule 1, which `issue name other`
 /// refuses — and it refuses a comment quoting one just as readily as an expression.
 const SUBJECT: &str = "ROW-1";
 

@@ -23,7 +23,7 @@
 //! mode for a rule whose whole value is being readable at Stop time.
 //!
 //! It does not catch a session that reads the line and complies anyway. The
-//! runnable half of that is `no-denied-identity-prescribed`, which refuses the
+//! runnable half of that is `remedy carry refused`, which refuses the
 //! prescription in the tree, and `identity_deny` itself, which refuses the
 //! commit. Same shape as `scanner_taxonomy.rs`: the prose carries the position,
 //! and the test keeps the prose from evaporating.
@@ -118,7 +118,7 @@ fn the_detail_states_why_the_hooks_predicate_cannot_be_satisfied() {
     // The standing mechanism is named where the detail lives, so a reader who
     // arrives here knows the prose is not the only thing holding the line.
     assert!(
-        detail.contains("no-denied-identity-prescribed"),
+        detail.contains("remedy carry refused"),
         "{DETAIL} must name the row that refuses the prescription in the tree"
     );
 }

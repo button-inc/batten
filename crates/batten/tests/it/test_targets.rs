@@ -82,7 +82,7 @@ fn install_module(root: &Path) {
 /// pass here.
 fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "test-targets",
+        "id": "test place wrong",
         "kind": "policy",
         "scope": "tree",
         "base": "origin/main",

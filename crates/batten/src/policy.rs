@@ -1684,6 +1684,21 @@ fn check_collapse(
     // config disagrees with the modules in one place or systematically.
     let mut findings: Vec<String> = Vec::new();
     for rule in rules {
+        // A ROW OUTSIDE THE GRAMMAR IS NOT IN THIS CONVERSATION.
+        //
+        // The collapse rule decides WHICH of two grammar names a row carries;
+        // a row whose id is not a three-word name carries only one, so there is
+        // nothing to collapse and nothing to disambiguate. This is not a hole a
+        // consumer can hide in: `config::validate_tables` refuses a non-grammar
+        // id outright once they declare a vocabulary, so adopting the grammar is
+        // what brings a row into scope here, and the two arms compose.
+        //
+        // Measured: without this, 49 cases across fifteen suites failed — every
+        // fixture that declares a `policy` row raising one class, none of which
+        // has adopted the vocabulary and none of which the rule is about.
+        if rule.id.split(' ').count() != 3 {
+            continue;
+        }
         let empty = BTreeSet::new();
         let classes = per_rule.get(&rule.id).unwrap_or(&empty);
         let sole = match (classes.len(), classes.iter().next()) {

@@ -44,7 +44,7 @@ use batten::rules::{self, Rule};
 /// the same column census a consumer's config does.
 fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "claim-order-is-stated",
+        "id": "claim declare dropped",
         "kind": "policy",
         "scope": "tree",
         "line_sources": ["AGENTS.md", "rules/toolchain.md"],

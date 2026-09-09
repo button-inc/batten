@@ -22,16 +22,16 @@
 //! **The producer is RUN, never planted.** `batten record tool` writes the record
 //! and `batten check` reads it back, so these cases prove the writer and the
 //! reader compose the SAME key. A hand-written record agrees with the reader by
-//! construction, which is how `validator-verdict-clean` shipped resolving `null`
+//! construction, which is how `tool judge dirty` shipped resolving `null`
 //! on every real checkout — the only writer in the tree was a test helper.
 //!
 //! The module read here is the COMMITTED one, copied into each scratch tree, and
 //! the pattern row is derived from the committed table rather than restated: an
 //! inline copy of either would drift and pass while the real gate was broken.
 //!
-//! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
+//! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
-//! `perf-assert.sh` was a pure function of stdin that adjudicated two questions
+//! `path measure wrong.sh` was a pure function of stdin that adjudicated two questions
 //! over data something else measured. Both move: the measurement verdict onto the
 //! `perf-p95` `[[rule.tools]]` row, and the README-agreement clause onto the
 //! module. The MEASUREMENT itself never lived in the program and does not move —
@@ -127,7 +127,7 @@ fn pattern_rows() -> String {
 /// This selected on `starts_with("path measure")`, `("prose state")` and
 /// `("source read")`, which reads as "the module's families" and is really "every
 /// class anybody ever names that way". A rebase brought in `prose state other`,
-/// raised by an unrelated `pr-partition-restated` row; the prefix swept it into a
+/// raised by an unrelated `review state other` row; the prefix swept it into a
 /// bundle that enables ONE module, nothing there raises it, and the registry's own
 /// both-directions check failed the config LOAD. The fixture cannot grow a class
 /// its module does not raise, so the list is the four ids and the coupling to
@@ -172,7 +172,7 @@ fn config() -> String {
         r#"version = 1
 
 [[rule]]
-id = "perf-assert"
+id = "path measure wrong"
 kind = "policy"
 scope = "tree"
 lines = ["README.md"]

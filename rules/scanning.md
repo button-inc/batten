@@ -223,7 +223,7 @@ symptom. `mem:serena-setup` carries the four gates and how to tell them apart;
 the rule here is the disposition: **report the prompt as a config finding and
 keep using the instrument, never quietly downgrade the instrument.**
 
-`no-tool-substitution` in `batten.toml` is the authority on which utility over
+`tool select other` in `batten.toml` is the authority on which utility over
 which path is refused, and on what it deliberately does not catch. Read it there;
 a second copy of that corpus here is the drift this file exists to avoid.
 
@@ -239,7 +239,7 @@ would have to decide over is a judgement, and non-negotiable rule 3 says a gate
 resolves to a command and an exit code, never a model verdict.
 
 **Substitution is gated.** Reaching for a shell text utility where the structured
-surface answers the question is decided by `no-tool-substitution`, a `pipeline`
+surface answers the question is decided by `tool select other`, a `pipeline`
 row over the command line — a real object, a real exit code. It is a deny, and
 its refusal points back here to choose between the classes above. So silence from
 that gate is not evidence you picked the right class; it only means you did not

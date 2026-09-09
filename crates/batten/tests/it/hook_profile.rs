@@ -6,7 +6,7 @@
 //! `input.tree["tool-verdict"]["hk-plan"]` with `with input as`, which passes
 //! whether or not anything can ever produce that shape — the exact class
 //! `rules/policy-modules.md` opens with, and the class that let
-//! `validator-verdict-clean` ship deciding nothing. This file runs the real
+//! `tool judge dirty` ship deciding nothing. This file runs the real
 //! producer and the real engine.
 //!
 //! **The three record states are the whole subject**, and this module reads them
@@ -14,7 +14,7 @@
 //! EMPTY is the tier having evaporated (a finding), and present-with-a-stray is
 //! the false green the split can produce.
 //!
-//! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
+//! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
 //! `hook-profile-check` ran `hk check --all --plan` twice and adjudicated the two
 //! plans in shell. The run stays outside — §9's prior art, and §5 makes `check`
@@ -72,7 +72,7 @@ fn config() -> String {
         r#"version = 1
 
 [[rule]]
-id = "hook-profile"
+id = "hook declare other"
 kind = "policy"
 scope = "tree"
 module = "hook-profile.rego"
@@ -193,7 +193,7 @@ fn a_slow_step_missing_from_check_is_refused() {
         Some(2),
         "a slow step outside the check plan is a policy verdict\n{answer}{cause}"
     );
-    assert!(answer.contains("hook-profile"), "{answer}{cause}");
+    assert!(answer.contains("hook declare other"), "{answer}{cause}");
 }
 
 #[test]

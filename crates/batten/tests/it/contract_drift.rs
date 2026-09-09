@@ -350,7 +350,7 @@ fn each_session_is_told_about_what_moved_under_it_and_not_about_the_rest() {
 #[test]
 fn the_notice_names_paths_and_never_a_byte_of_one() {
     // Assembled rather than written, and the reason is this repo's own gate:
-    // a credential-shaped literal in a tracked file is what `no-secrets`
+    // a credential-shaped literal in a tracked file is what `source carry unsafe`
     // exists to catch, and it caught this one. The planted value is still
     // secret-shaped where it matters — in the file the fixture writes and in
     // every string this case then searches — while the SOURCE carries no
@@ -527,7 +527,7 @@ fn the_mediation_hatch_does_not_silence_the_advisory() {
 // CLOUD-908's calibration, and the retirement it calibrates against is the only
 // one the campaign has actually completed. Every one of the 22 `@test` cases the
 // deleted suite declared is claimed below by exactly one arm naming a successor
-// that resolves. `bats-tests-not-deleted` reads this shape on every future
+// that resolves. `bats count dropped` reads this shape on every future
 // deletion; here it is retroactive, because the deletion already landed and
 // nothing recorded where the cases went.
 //

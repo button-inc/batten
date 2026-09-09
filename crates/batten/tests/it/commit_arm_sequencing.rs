@@ -33,7 +33,7 @@
 //! # The real commit, replayed — and why it is not a case here
 //!
 //! `BASE_SHA='65757c86^' HEAD_SHA=65757c86 mise run commit-check` reports
-//! `65757c86 arm-self-authorized bats-tests-not-deleted.withdrawn`, which is
+//! `65757c86 arm-self-authorized bats count dropped.withdrawn`, which is
 //! CLOUD-1402's Done clause satisfied over this repository's own history rather
 //! than over a fixture.
 //!
@@ -46,7 +46,7 @@
 //!
 //! # The declared mutation, and why the row is in THIS file
 //!
-//! `obligations-bound` binds a §7 obligation by reading the declared file's lines
+//! `test name undefined` binds a §7 obligation by reading the declared file's lines
 //! for a row beginning `#MUTANT <slug>|`. Its `line_sources` covers
 //! `crates/batten/tests/**` and not `crates/batten/src/**`, so the row has to be
 //! here even though the expression it applies belongs to `commit.rs`'s predicate

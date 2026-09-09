@@ -46,7 +46,7 @@
 //
 // `perf-compare.bats` had 20 cases and `perf-gate.bats` 6, and every title below
 // is the retired suite's own — read off the deleted files rather than restated
-// from the design, which is the error `bats-tests-not-deleted` caught on the
+// from the design, which is the error `bats count dropped` caught on the
 // first draft of this block.
 //
 // carried: "a pair within the threshold passes, and names the threshold" crates/batten/tests/it/perf_compare.rs

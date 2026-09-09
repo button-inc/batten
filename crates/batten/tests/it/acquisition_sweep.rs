@@ -34,14 +34,14 @@
 //!
 //! `bench/acquisition/sweep.py` is retired here under CLOUD-1229. It was 327 lines
 //! of Python driven by a one-line task, and its own header argued the shape was
-//! forced by `shell-retirement` refusing an added shell rule. A second author read
+//! forced by `shell retire partial` refusing an added shell rule. A second author read
 //! that argument and added a third helper for the identical stated reason
 //! (CLOUD-1208). The campaign's subject is authored SHELL because that is what it
 //! was built to retire — a statement about its reach, never a licence for what
 //! sits beside it.
 //!
 //! It carries **no** `// changed:` marker, and that absence is the point rather
-//! than an omission. Those arms are `shell-retirement`'s and `[rule.conserves]`'s
+//! than an omission. Those arms are `shell retire partial`'s and `[rule.conserves]`'s
 //! ledger over a governed file's death, and the deleted path was governed by
 //! neither — not under `mise-tasks/`, not a `.bats` suite, watched by nothing.
 //! Writing an arm for it would put a row in a ledger whose subject it never was.

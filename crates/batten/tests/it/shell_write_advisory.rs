@@ -18,7 +18,7 @@
 //! # The drift gate
 //!
 //! [`the_two_authorities_agree_on_what_is_governed`] is the mechanism the module
-//! header promises. §1 asks that `shell-retirement` and this advisory never
+//! header promises. §1 asks that `shell retire partial` and this advisory never
 //! disagree about the governed set, and the clean way to guarantee it — calling
 //! the owning module's predicate — does not compile in this engine. So the
 //! predicate is restated, and restatement without a gate is how two authorities
@@ -63,7 +63,7 @@ fn bash_payload(command: &str) -> String {
 ///
 /// **THE PREMISE THESE CASES USED TO INHERIT** (CLOUD-1434). They ran at the real
 /// root, and none of them established that nothing ELSE refuses the call first —
-/// yet `claim-needs-receipt` denies any write inside the repository when the
+/// yet `claim read unread` denies any write inside the repository when the
 /// branch carries no claim receipt, and a deny pre-empts the advisory. So the
 /// positives passed only while the SESSION RUNNING THE SUITE happened to hold a
 /// receipt, and the negatives passed *vacuously* under a deny: no advisory
@@ -96,7 +96,7 @@ fn bench(name: &str) -> PathBuf {
     Fixture::new(name)
         .config(
             "version = 1\n\n\
-             [[rule]]\nid = \"shell-write-advisory\"\nkind = \"policy\"\n\
+             [[rule]]\nid = \"shell edit early\"\nkind = \"policy\"\n\
              scope = \"mediated_call\"\nmodule = \"policy/shell-write-advisory.rego\"\n\
              severity = \"warn\"\n",
         )
@@ -127,7 +127,7 @@ fn signals(dir: &Path, payload: &str) -> bool {
 ///
 /// The exit code is asserted alongside, because a `warn` that moved the status
 /// would be the deny this row refuses — and a deny at write time refuses the one
-/// disposition `shell-retirement` admits.
+/// disposition `shell retire partial` admits.
 #[test]
 fn a_write_to_a_governed_shell_path_signals_without_refusing() {
     let dir = bench("swa-a_write_to_a_governed_shell_path_s");
@@ -216,7 +216,7 @@ fn a_call_carrying_no_write_target_is_silent() {
 
 /// THE DRIFT GATE. The two authorities agree about what is governed.
 ///
-/// The advisory restates `shell-retirement`'s path predicate because calling it
+/// The advisory restates `shell retire partial`'s path predicate because calling it
 /// does not compile — a FUNCTION rule in another package is not reachable even
 /// though the bundle shares one engine. Restating creates two authorities that
 /// can disagree, and the disagreement would be invisible: each module keeps
@@ -251,12 +251,12 @@ fn the_two_authorities_agree_on_what_is_governed() {
     ] {
         assert!(
             owner.contains(clause),
-            "shell-retirement no longer carries `{clause}` — the advisory mirrors a \
+            "shell retire partial no longer carries `{clause}` — the advisory mirrors a \
              predicate that moved, so update both or make the call compile"
         );
         assert!(
             mirror.contains(clause),
-            "shell-write-advisory no longer carries `{clause}` — it has drifted from \
+            "shell edit early no longer carries `{clause}` — it has drifted from \
              the gate it advertises"
         );
     }
@@ -281,7 +281,7 @@ fn the_two_authorities_agree_on_what_is_governed() {
 /// # Why a FIXTURE rather than this repository
 ///
 /// The first version of this case drove the real tree and relied on
-/// `claim-needs-receipt` to supply the deny. That made the premise depend on
+/// `claim read unread` to supply the deny. That made the premise depend on
 /// whether the SESSION RUNNING THE SUITE happened to hold a claim receipt: with
 /// one, nothing refuses, only the advisory is emitted, and the case fails for a
 /// reason that has nothing to do with the defect. Measured — it did exactly that,
@@ -298,7 +298,7 @@ fn an_advised_and_denied_call_emits_only_the_refusal() {
     let bench = Fixture::new("swa-advise-and-deny")
         .config(
             "version = 1\nprotected = [\"mise-tasks/**\"]\n\n\
-             [[rule]]\nid = \"shell-write-advisory\"\nkind = \"policy\"\n\
+             [[rule]]\nid = \"shell edit early\"\nkind = \"policy\"\n\
              scope = \"mediated_call\"\nmodule = \"policy/shell-write-advisory.rego\"\n\
              severity = \"warn\"\n",
         )

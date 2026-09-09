@@ -7,7 +7,7 @@
 //! sha, polling the ref endpoint conditionally so a quiet trunk cost no rate
 //! limit. `tests/main-watch.bats` pinned eight properties of that loop. Both are
 //! retired here, and this file is where those eight are answered — the ledger
-//! arms below name it, and `shell-retirement`'s `test port missing` arm is what
+//! arms below name it, and `shell retire partial`'s `test port missing` arm is what
 //! refuses a retirement that names no compiled tier at all.
 //!
 //! # What it reaches, and what it deliberately does not

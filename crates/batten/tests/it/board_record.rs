@@ -18,7 +18,7 @@
 //! reads, the column arithmetic, and the create/groom boundary. The two real
 //! programs keep their own suites.
 //!
-//! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
+//! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
 //! The successor is `recorder.rs` rather than a module: a recorder decides
 //! nothing, so there is no predicate for a `.rego` file to hold. It is a policy

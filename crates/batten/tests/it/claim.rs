@@ -31,7 +31,7 @@
 //! identical in every one — the same payloads are refused, the same gaps are
 //! gaps — and stating the remapping once here beats burying it in 76 entries.
 //!
-//! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
+//! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
 // carried: mise-tasks/claim-check.sh crates/batten/src/claim.rs kind:verb crates/batten/tests/it/claim.rs
 // carried: tests/claim-check.bats crates/batten/src/claim.rs kind:verb crates/batten/tests/it/claim.rs

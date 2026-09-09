@@ -1,4 +1,4 @@
-//! `plan-complete`, over the engine that builds its input (CLOUD-472).
+//! `plan cover partial`, over the engine that builds its input (CLOUD-472).
 //!
 //! # The seam this tier owns, and why the module's own suite cannot reach it
 //!
@@ -111,7 +111,7 @@ fn install_module(root: &Path) {
 
 fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "plan-complete",
+        "id": "plan cover partial",
         "kind": "policy",
         "scope": "tree",
         "base": "origin/main",
@@ -310,7 +310,7 @@ fn the_committed_row_is_the_one_these_cases_exercise() {
         .rules;
     let declared = committed
         .iter()
-        .find(|rule| rule.id == "plan-complete")
+        .find(|rule| rule.id == "plan cover partial")
         .expect("the committed config declares the row this suite exercises");
     assert_eq!(declared.kind, RuleKind::Policy);
     assert_eq!(declared.scope, RuleScope::Tree);

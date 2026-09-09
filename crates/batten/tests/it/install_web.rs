@@ -63,7 +63,7 @@ const TAG: &str = "v9.9.9";
 /// The repository the fixture host serves.
 ///
 /// Named by the fixture rather than defaulted, so this suite does not spell out
-/// where this repository is hosted — `no-origin-literal-in-fixtures` refuses
+/// where this repository is hosted — `forge name other` refuses
 /// that literal anywhere under `crates/batten/tests/**`, and it is right to: a
 /// fixture that hard-codes the origin is testing this deployment rather than the
 /// installer. `install.sh` reads `BATTEN_REPO`, so naming one here is the

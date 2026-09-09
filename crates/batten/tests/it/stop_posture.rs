@@ -1,4 +1,4 @@
-//! `stop-posture` over the compiled binary (CLOUD-1051).
+//! `prose report duplicate` over the compiled binary (CLOUD-1051).
 //!
 //! # The defect this file exists because of, stated first
 //!
@@ -14,7 +14,7 @@
 //! `batten adjudicate --harness claude-code` against a real payload and reads what a
 //! host would read.
 //!
-//! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
+//! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
 //! The program's successor is the engine's own Stop routine rather than a
 //! module, because four of `stop-guard`'s five rules spawn or read the tree and
@@ -156,7 +156,7 @@ kind = "issue"
 target = "put it in the row that already owns it, or file one"
 
 [[rule]]
-id = "stop-posture"
+id = "prose report duplicate"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/stop-posture.rego"
@@ -424,7 +424,7 @@ fn a_hedged_final_message_reaches_the_host_advisory_channel() {
         "the nudge travels on the advisory channel: {stdout}"
     );
     assert!(
-        stdout.contains("stop-posture"),
+        stdout.contains("prose report duplicate"),
         "and it names the predicate: {stdout}"
     );
 }
@@ -455,7 +455,7 @@ fn the_infinitive_hedge_reaches_the_host_advisory_channel() {
         "an advisory never changes the exit code: {stdout}"
     );
     assert!(
-        stdout.contains("additionalContext") && stdout.contains("stop-posture"),
+        stdout.contains("additionalContext") && stdout.contains("prose report duplicate"),
         "the infinitive opener must reach the same channel as the pronoun one: {stdout}"
     );
 }
@@ -474,7 +474,7 @@ fn an_infinitive_that_is_not_a_flagging_verb_stays_silent() {
         &stop_payload("One thing to check is whether the exit code is 2.", false),
     ));
     assert!(
-        !stdout.contains("stop-posture"),
+        !stdout.contains("prose report duplicate"),
         "a plan to check is not an act of flagging: {stdout}"
     );
 }
@@ -642,7 +642,7 @@ fn a_stranded_finding_is_pointed_at_and_the_turn_still_ends() {
     );
 }
 
-/// PRECEDENCE IS MEASURED, NOT ASSERTED. `stop-posture` leads at 3/3 against
+/// PRECEDENCE IS MEASURED, NOT ASSERTED. `prose report duplicate` leads at 3/3 against
 /// `finding-sink`'s 1/1, and two nudges on one turn is how a channel stops being
 /// read — so when both would fire, exactly one does and it is the first.
 // UNIX-ONLY, per CLOUD-113: this case spawns a `#!/bin/sh` stub, and the
@@ -659,7 +659,7 @@ fn the_measured_rule_keeps_precedence_when_both_would_fire() {
         &stop_with_transcript(&dir, "One thing I would flag is the exit code."),
     ));
     assert!(
-        stdout.contains("stop-posture"),
+        stdout.contains("prose report duplicate"),
         "the measured rule speaks: {stdout}"
     );
     assert!(

@@ -57,7 +57,7 @@ use batten::rules::{self, Rule};
 /// the same column census a consumer's config does.
 fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "ci-cache-declared",
+        "id": "job carry missing",
         "kind": "policy",
         "scope": "tree",
         "sources": [".github/workflows/*.yml", "mise.toml"],

@@ -454,7 +454,7 @@ its assertion really binds.
 Stated plainly rather than implied: `mutate::subjects()` enumerates the shell
 programs under `mise-tasks`, the Rego modules under `policy`, and the preset
 directories — never `crates/batten/tests`, so no sweep reaches these rows today,
-exactly as none reaches `mcp_dispatch.rs`'s. `obligations-bound` is satisfied (a
+exactly as none reaches `mcp_dispatch.rs`'s. `test name undefined` is satisfied (a
 tracked file carrying the slug) and the sweep half is not. That gap is the
 mutation-tooling row's, and naming it here is what keeps the declaration from
 reading as coverage it does not have.

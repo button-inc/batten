@@ -51,7 +51,7 @@ use common::{Fixture, at_root, rust_sources, stderr};
 ///   are **compile errors** rather than lint findings — stronger than the
 ///   `clippy.toml` rows that name them, which is why those rows now carry
 ///   `allow-invalid` with that reason recorded.
-/// * `perf-assert` holds the mediated path to CLOUD-689's ceiling, which is what
+/// * `path measure wrong` holds the mediated path to CLOUD-689's ceiling, which is what
 ///   a runtime on that path would break and what a manifest scan never measured.
 ///
 /// The other clients stay listed. Nothing in this tree may reach the network

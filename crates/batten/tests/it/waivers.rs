@@ -118,7 +118,7 @@ fn without_a_waiver_the_rule_denies() {
     assert!(stdout.contains("lib.rs:2 no-todo"), "got: {stdout}");
 }
 
-// subsumed: "an exempted entry passes only through a waiver carrying a reason" crates/batten/tests/it/waivers.rs that case was about the waiver SURFACE rather than about `no-source-built-tool` — a live waiver clears the verdict and leaves a pointer-only audit line on stderr — and this drives the compiled binary over a `forbid` row to assert exactly that (CLOUD-1137)
+// subsumed: "an exempted entry passes only through a waiver carrying a reason" crates/batten/tests/it/waivers.rs that case was about the waiver SURFACE rather than about `pin add unsafe` — a live waiver clears the verdict and leaves a pointer-only audit line on stderr — and this drives the compiled binary over a `forbid` row to assert exactly that (CLOUD-1137)
 #[test]
 fn a_live_waiver_clears_the_verdict_and_audits_on_stderr() {
     let (repo, home) = repo("waiver-live", &format!("{RULE}{}", waiver(LIVE)));

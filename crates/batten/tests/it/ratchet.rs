@@ -29,14 +29,14 @@ const BASE_SRC: &str =
 /// A config carrying one ratchet row over `src/**/*.rs`.
 fn ratchet_config(pattern: &str, direction: &str, severity: &str) -> String {
     format!(
-        "version = 1\n\n[[rule]]\nid = \"tests-not-deleted\"\nkind = \"ratchet\"\nglob = \"src/**/*.rs\"\npattern = \"{pattern}\"\ndirection = \"{direction}\"\nbase = \"main\"\nseverity = \"{severity}\"\n"
+        "version = 1\n\n[[rule]]\nid = \"test count dropped\"\nkind = \"ratchet\"\nglob = \"src/**/*.rs\"\npattern = \"{pattern}\"\ndirection = \"{direction}\"\nbase = \"main\"\nseverity = \"{severity}\"\n"
     )
 }
 
 /// A repo whose base commit carries [`BASE_SRC`], with `config` committed.
 ///
 /// `base = "main"` rather than a remote-tracking ref: the fixtures carry no
-/// origin literal (`no-origin-literal-in-fixtures`), and a local branch proves
+/// origin literal (`forge name other`), and a local branch proves
 /// the same plumbing.
 fn ratchet_repo(name: &str, config: &str) -> PathBuf {
     let dir = Fixture::new(name)
@@ -74,7 +74,7 @@ fn deleting_a_test_is_a_violation_naming_the_two_counts() {
     );
     let text = stdout(&output);
     assert!(
-        text.contains("tests-not-deleted"),
+        text.contains("test count dropped"),
         "the finding names the rule: {text:?}"
     );
     assert!(
@@ -202,7 +202,7 @@ fn a_warn_row_reports_without_failing_until_promoted() {
         "a warn row reports without failing"
     );
     assert!(
-        stdout(&output).contains("tests-not-deleted"),
+        stdout(&output).contains("test count dropped"),
         "and it does report: {}",
         stdout(&output)
     );
@@ -222,7 +222,7 @@ fn an_unresolvable_base_is_a_usage_error_naming_the_rev() {
     // deleted" having looked at nothing.
     let dir = ratchet_repo(
         "ratchet-bad-base",
-        "version = 1\n\n[[rule]]\nid = \"tests-not-deleted\"\nkind = \"ratchet\"\nglob = \"src/**/*.rs\"\npattern = \"#[test]\"\ndirection = \"non_decreasing\"\nbase = \"no-such-rev\"\nseverity = \"deny\"\n",
+        "version = 1\n\n[[rule]]\nid = \"test count dropped\"\nkind = \"ratchet\"\nglob = \"src/**/*.rs\"\npattern = \"#[test]\"\ndirection = \"non_decreasing\"\nbase = \"no-such-rev\"\nseverity = \"deny\"\n",
     );
     let output = check(&dir);
     assert_eq!(
@@ -368,7 +368,7 @@ fn a_waiver_suppresses_a_ratchet_and_a_lapsed_one_does_not() {
     // and tells nobody.
     let with_expiry = |expires: &str| {
         format!(
-            "{}\n[[waiver]]\nrule = \"tests-not-deleted\"\nreason = \"tracked in CLOUD-1; the suite is being consolidated\"\nexpires = \"{expires}\"\n",
+            "{}\n[[waiver]]\nrule = \"test count dropped\"\nreason = \"tracked in CLOUD-1; the suite is being consolidated\"\nexpires = \"{expires}\"\n",
             ratchet_config("#[test]", "non_decreasing", "deny")
         )
     };
@@ -563,7 +563,7 @@ fn retirement_repo(name: &str, retires_with: Option<&str>) -> PathBuf {
 ///
 /// The base state is the FIRST commit rather than a second one plus a moved
 /// branch: git refuses to force a branch that is checked out, which is the same
-/// defect `no-branch-f-main` gates on the bats corpus.
+/// defect `branch edit unsafe` gates on the bats corpus.
 fn retirement_repo_declaring(name: &str, retires_with: Option<&str>, alpha: &str) -> PathBuf {
     let dir = Fixture::new(name)
         .config(&retirement_config(retires_with))
@@ -972,7 +972,7 @@ fn a_complete_mapping_is_the_second_admission_for_a_decrease() {
     // Arm (e) used to read: a complete mapping is NOT a second way to buy a
     // decrease, the subject still has to die. That composition is unsatisfiable
     // for the case CLOUD-1059 creates. A Bats suite whose subject is a LIVE
-    // `.rego` module cannot be edited in place — `shell-retirement` refuses
+    // `.rego` module cannot be edited in place — `shell retire partial` refuses
     // exactly that — and its subject is not dying, because the module is what
     // the migration keeps. So the only two doors were both shut, and a rule with
     // no open door is not a ratchet, it is a wall.
@@ -2011,7 +2011,7 @@ fn removing_an_inline_body_never_violates_either_row() {
 // OWN existence — which script to prefer, what to fetch, what to verify about the
 // fetched bytes — and have no successor because they should have no subject.
 
-// THE FILE-LEVEL ARM, which is the same ledger one granularity up. `shell-retirement`
+// THE FILE-LEVEL ARM, which is the same ledger one granularity up. `shell retire partial`
 // reads these same markers keyed on the retired PATH rather than on a quoted case, so
 // the suite owes a row here as well as the eight case rows below — 908 conserves the
 // cases, 1059 conserves the file, and a withdrawal has to be spellable at both or the

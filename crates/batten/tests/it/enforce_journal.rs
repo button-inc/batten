@@ -874,7 +874,7 @@ fn the_read_surface_journals_nothing() {
 // --- the secret class: journaling, then custody -------------------------------
 
 /// The fragments the synthetic credential is assembled from, split so no
-/// contiguous token exists in a committed byte — consumer #1's own `no-secrets`
+/// contiguous token exists in a committed byte — consumer #1's own `source carry unsafe`
 /// rule globs this file.
 const TOKEN_PARTS: [&str; 5] = ["AKIA", "6RJ4", "MP2T", "V8QX", "L3ZB"];
 
@@ -914,7 +914,7 @@ fn secrets_config(url: &str, sha: &str) -> String {
          sha256 = \"{sha}\"\n\
          binary = \"ripsecrets\"\n\n\
          [[rule]]\n\
-         id = \"no-secrets\"\n\
+         id = \"source carry unsafe\"\n\
          kind = \"secrets\"\n\
          glob = \"**/*.conf\"\n\
          severity = \"deny\"\n\
@@ -961,7 +961,7 @@ fn secret_env(name: &str) -> Env {
 fn a_secret_class_finding_reaches_the_store_carrying_no_kind() {
     let env = secret_env("enforce-journal-secret");
     let record = env
-        .record("no-secrets")
+        .record("source carry unsafe")
         .expect("the secrets kind's finding reached the store");
     assert_eq!(
         record["identity"]["version"].as_str().unwrap(),
@@ -983,7 +983,7 @@ fn a_secret_class_finding_reaches_the_store_carrying_no_kind() {
     assert_eq!(
         env.records()
             .iter()
-            .filter(|r| r["rule"] == "no-secrets")
+            .filter(|r| r["rule"] == "source carry unsafe")
             .count(),
         1
     );
@@ -993,7 +993,7 @@ fn a_secret_class_finding_reaches_the_store_carrying_no_kind() {
 #[test]
 fn a_lost_key_re_opens_its_findings_loudly_and_re_mints_nothing() {
     let env = secret_env("enforce-journal-orphan");
-    let before = env.record("no-secrets").unwrap();
+    let before = env.record("source carry unsafe").unwrap();
     let fingerprint = before["identity"]["fingerprint"]
         .as_str()
         .unwrap()
@@ -1055,7 +1055,7 @@ fn a_lost_key_re_opens_its_findings_loudly_and_re_mints_nothing() {
 #[test]
 fn a_rotation_join_moves_the_record_and_keeps_its_disposition() {
     let env = secret_env("enforce-journal-rotate");
-    let old = env.record("no-secrets").unwrap()["identity"]["fingerprint"]
+    let old = env.record("source carry unsafe").unwrap()["identity"]["fingerprint"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -1088,7 +1088,7 @@ fn a_rotation_join_moves_the_record_and_keeps_its_disposition() {
         "the ledger carries no key bytes"
     );
 
-    let moved = env.record("no-secrets").unwrap();
+    let moved = env.record("source carry unsafe").unwrap();
     let new = moved["identity"]["fingerprint"].as_str().unwrap();
     assert_ne!(new, old, "the identity moved with the key");
     assert_eq!(
@@ -1100,7 +1100,7 @@ fn a_rotation_join_moves_the_record_and_keeps_its_disposition() {
     assert_eq!(
         env.records()
             .iter()
-            .filter(|r| r["rule"] == "no-secrets")
+            .filter(|r| r["rule"] == "source carry unsafe")
             .count(),
         1,
         "one finding, not two — the pre-rotation file is dropped, and it must be, \

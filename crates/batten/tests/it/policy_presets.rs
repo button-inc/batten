@@ -538,7 +538,7 @@ fn every_shipped_preset_passes_its_own_suite() {
         // NOT MEDIATED HERE, and the reason is this loop's own bound rather
         // than a gap (CLOUD-857). `preset_row` fabricates a `mediated_call`
         // scope for EVERY preset so one loop can load them all — but
-        // `shell-hygiene` is enabled `scope = "tree"` in this repository and its
+        // `shell spelling wrong` is enabled `scope = "tree"` in this repository and its
         // two modules decide over files, not commands. Asking them whether a
         // test ever passed a compound COMMAND would be judging a surface this
         // helper invented, which is the fabricated-shape defect one level up.
@@ -598,7 +598,7 @@ fn tree_preset_row(id: &str, preset: &str) -> Rule {
 /// loads and decides for a consumer who wrote no `[[pattern]]` and no
 /// `[[verdict]]` row at all. A harness that declared the ids would supply input
 /// no consumer supplies, and the deny cases would then pass for the wrong reason
-/// — which is how CLOUD-1161's `ci-hygiene` shipped two dead predicates under a
+/// — which is how CLOUD-1161's `job spelling wrong` shipped two dead predicates under a
 /// green `batten policy test` reporting 330 passed.
 fn loaded(name: &str, row: Rule) -> policy::Bundle {
     let root = scratch(name);

@@ -35,7 +35,7 @@ use batten::hk;
 /// census a consumer's config does.
 fn row() -> batten::rules::Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "hk-plan-required",
+        "id": "plan require missing",
         "kind": "policy",
         "scope": "tree",
         "module": "policy/hk-plan-required.rego",
@@ -240,7 +240,7 @@ fn a_row_naming_an_unplannable_surface_is_refused() {
 #[test]
 fn this_repositorys_plan_row_is_clean_today() {
     let root = common::at_root(".");
-    let output = common::run_at_real_root(&root, &["enforce", "--rule", "hk-plan-required"]);
+    let output = common::run_at_real_root(&root, &["enforce", "--rule", "plan require missing"]);
     assert_eq!(
         output.status.code(),
         Some(0),

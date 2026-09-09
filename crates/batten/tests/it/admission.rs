@@ -116,7 +116,7 @@ fn answers(reason: &str) -> BTreeMap<String, String> {
 /// read `Spent`. Every caller below passes a distinct reason.
 fn binding(subject: &str, anchor: &str, epoch: &str, reason: &str) -> Binding {
     Binding {
-        rule: "prose-only".to_owned(),
+        rule: "diff ship early".to_owned(),
         verdict: "diff ship early".to_owned(),
         subject: subject.to_owned(),
         anchor: batten::admission::Anchor::Call {
@@ -132,7 +132,7 @@ fn binding(subject: &str, anchor: &str, epoch: &str, reason: &str) -> Binding {
 /// The situation the binding above was minted for.
 fn situation<'a>(subject: &'a str, anchor: &'a str, epoch: &'a str) -> Situation<'a> {
     Situation {
-        rule: "prose-only",
+        rule: "diff ship early",
         verdict: "diff ship early",
         subject,
         anchor,
@@ -329,7 +329,7 @@ fn a_cycle_cannot_be_constructed_without_breaking_an_address() {
     }
 
     let situation = Situation {
-        rule: "prose-only",
+        rule: "diff ship early",
         verdict: "diff ship early",
         subject: "a.rs",
         anchor: "call:head1",
@@ -396,7 +396,7 @@ fn two_concurrent_consumes_resolve_to_exactly_one_winner() {
                         &root,
                         &issued,
                         &Situation {
-                            rule: "prose-only",
+                            rule: "diff ship early",
                             verdict: "diff ship early",
                             subject: "a.rs",
                             anchor: "call:head1",
@@ -462,7 +462,7 @@ fn an_unanswered_question_yields_no_admission_and_prints_what_to_answer() {
             "override",
             "request",
             "--rule",
-            "prose-only",
+            "diff ship early",
             "--verdict",
             "diff ship early",
             "--subject",
@@ -530,7 +530,7 @@ fn an_undeclared_class_is_refused_naming_the_registry_size() {
             "override",
             "request",
             "--rule",
-            "prose-only",
+            "diff ship early",
             "--verdict",
             "no such class",
             "--subject",
@@ -562,7 +562,7 @@ fn a_correctly_answered_override_completes_end_to_end() {
             "override",
             "request",
             "--rule",
-            "prose-only",
+            "diff ship early",
             "--verdict",
             "diff ship early",
             "--subject",
@@ -635,7 +635,7 @@ fn issued_through_the_verb(root: &Path, subject: &str) -> String {
             "override",
             "request",
             "--rule",
-            "prose-only",
+            "diff ship early",
             "--verdict",
             "diff ship early",
             "--subject",
@@ -670,7 +670,7 @@ fn the_verb_spends_a_legitimate_admission_and_reports_it() {
             "--admission",
             &admission,
             "--rule",
-            "prose-only",
+            "diff ship early",
             "--verdict",
             "diff ship early",
             "--subject",
@@ -734,7 +734,7 @@ fn the_verb_refuses_a_replay_with_the_policy_code() {
         "--admission",
         admission.as_str(),
         "--rule",
-        "prose-only",
+        "diff ship early",
         "--verdict",
         "diff ship early",
         "--subject",
@@ -775,7 +775,7 @@ fn the_verb_refuses_an_admission_presented_for_another_subject() {
             "--admission",
             &admission,
             "--rule",
-            "prose-only",
+            "diff ship early",
             "--verdict",
             "diff ship early",
             "--subject",
@@ -1247,7 +1247,7 @@ fn admits_fixture_with_predicate(name: &str) -> PathBuf {
 ///
 /// Measured before the fix, on this repository: two admissions for
 /// `filed-over-own-diff` and `filed-and-left-open` — both predicates of the
-/// `filed-here` row — were issued, spent, committed, and honoured by neither
+/// `issue file other` row — were issued, spent, committed, and honoured by neither
 /// gate. `batten-check` reported both findings unchanged afterwards.
 ///
 /// # Why the existing cases could not see it

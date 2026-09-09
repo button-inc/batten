@@ -12,7 +12,7 @@
 //! "mediated_call"` policy row **denied exactly as `deny` did**, silently, which
 //! is the one direction a severity column must never fail in.
 //!
-//! `pinned-toolchain-preset` was live in that state: `batten.toml` declares it
+//! `pin table other` was live in that state: `batten.toml` declares it
 //! `warn` — with a comment explaining that the first landing must not refuse —
 //! and it refused.
 //!

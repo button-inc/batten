@@ -25,7 +25,7 @@
 //! # The retirement ledger
 //!
 //! `mise-tasks/target-prune.sh` and `tests/target-prune.bats` are retired here
-//! under CLOUD-1059. The rows below are what `shell-retirement`'s arm C reads.
+//! under CLOUD-1059. The rows below are what `shell retire partial`'s arm C reads.
 //!
 //! WHY IT WAS MIGRATED AT ALL, and this one is the campaign working on its author
 //! a third time — after `semver` and `perf-pair`, and less creditably than

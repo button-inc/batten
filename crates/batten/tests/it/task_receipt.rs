@@ -354,15 +354,15 @@ fn a_call_with_no_receipt_is_could_not_look() {
 /// never rendered.
 ///
 /// Measured on this repository's own policy: `cargo test -p batten` selects
-/// `no-bare-cargo`, whose reason names both sanctioned routes, and
-/// `task-substitution`, whose subject is whichever declared task leads with
+/// `cargo run loose`, whose reason names both sanctioned routes, and
+/// `task run loose`, whose subject is whichever declared task leads with
 /// `cargo` — 13 do. The reader was told to run `attribution-identity`, a task
 /// that has nothing to do with running tests: a remedy that does not do the job,
 /// which is the class CLOUD-1050 made unrepresentable in a verdict's own prose
 /// and the gate ordering put back.
 ///
 /// **CI could never have seen it.** A module reading `input.facts.tasks` is
-/// could-not-look until a session-start receipt exists, so `task-substitution`
+/// could-not-look until a session-start receipt exists, so `task run loose`
 /// is live in an agent session and inert on a runner — which is exactly why this
 /// case mints the receipt itself rather than asserting over the committed tree.
 /// A case over the committed tree passes on a runner whichever way the gates are

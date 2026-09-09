@@ -5,7 +5,7 @@
 //! emitted two lines. No rule kind reported its own duration and every
 //! `command`-rule child has `Stdio::null()` on both streams, so the largest item
 //! in this repository's CI was unattributable *by construction*. Two sessions in
-//! a row attributed it confidently and wrongly — once to `no-secrets` (which
+//! a row attributed it confidently and wrongly — once to `source carry unsafe` (which
 //! measures 3%) and once to `forbid`/`ratchet` read amplification (which
 //! measures ~150ms) — before an instrument existed to ask. The census is that
 //! instrument and this is its gate: without a case under it, it is a log rather

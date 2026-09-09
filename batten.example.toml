@@ -150,7 +150,7 @@ redirect = "append, or write through the surface that owns the file"
 #             default). Scope is never severity: a severity value in the scope
 #             key (or the reverse) is refused with exit 1, not reinterpreted.
 [[rule]]
-id = "no-conflict-markers"
+id = "source carry broken"
 kind = "command"
 glob = "**/*.rs"
 check = "hk util check-merge-conflict --assume-in-merge {{files}}"
@@ -311,7 +311,7 @@ reason = "set the tool's own severity to deny; do not let a warning ride an exit
 # A git-ignored batten.local.toml may NOT waive a rule declared here — a waiver
 # lowers the bar, so the durable tier is the committed authority alone (§8).
 [[waiver]]
-rule = "no-conflict-markers"
+rule = "source carry broken"
 reason = "the vendored tree is being replaced in CLOUD-123; gating it churns the diff"
 expires = "2026-12-31"
 path = "vendor/**"

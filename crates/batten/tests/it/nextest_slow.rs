@@ -9,7 +9,7 @@
 //!
 //! # The absent-file case is the one that earns this file
 //!
-//! `landing-roster-guarded` shipped with a could-not-look arm that could never
+//! `check read never` shipped with a could-not-look arm that could never
 //! fire: its row named a GLOB, and a glob matching zero files leaves the rule
 //! SKIPPED rather than evaluated over an empty document, so a branch deleting the
 //! subject passed clean. `.config/nextest.toml` is a literal path rather than a
@@ -79,7 +79,7 @@ fn install_module(root: &Path) {
 /// pass here.
 fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "nextest-slow",
+        "id": "suite grade late",
         "kind": "policy",
         "scope": "tree",
         "lines": [CONFIG],
@@ -134,7 +134,7 @@ fn the_committed_config_declares_a_terminating_slow_timeout() {
 }
 
 /// THE CASE THIS TIER EXISTS FOR, and the one a `with input as` case cannot
-/// decide. `landing-roster-guarded` carried a could-not-look arm that never fired
+/// decide. `check read never` carried a could-not-look arm that never fired
 /// because its row named a glob and a glob matching nothing leaves the rule
 /// SKIPPED. This row names a literal path; that it therefore still acquires the
 /// source and still refuses is measured here rather than assumed.
@@ -216,7 +216,7 @@ fn a_period_in_an_unconvertible_unit_is_refused() {
 
 /// AND A COMMENTED-OUT DECLARATION IS NOT ONE. The ordinary shape of "this was
 /// flaky, disabling it for now" leaves the text in the file, which is exactly how
-/// `landing-roster-guarded`'s first draft was defeated by its own documentation.
+/// `check read never`'s first draft was defeated by its own documentation.
 #[test]
 fn a_commented_declaration_does_not_arm_the_ban() {
     let root = repo(

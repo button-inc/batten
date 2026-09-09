@@ -9,7 +9,7 @@
 //! Kept out of `tests/cli.rs` deliberately — that file is the exit-code and
 //! output-contract suite, and other work appends to it.
 //!
-//! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
+//! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
 //! CLOUD-1145. `derived-check` was 289.8s — 23.8% of the bats corpus — spent
 //! re-answering a question this file already answers over the compiled binary.

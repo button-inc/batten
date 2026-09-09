@@ -219,7 +219,7 @@ fn every_delay_carries_an_expect_naming_a_bound_that_resolves() {
     // that certifies a delay which should not exist is estimating, and
     // non-negotiable rule 3 forbids that.
     //
-    // What DOES stop a twelfth waiver is `delay-waivers-not-growing` in
+    // What DOES stop a twelfth waiver is `waiver add refused` in
     // `batten.toml` — a ratchet over the COUNT, which is a real object with a
     // real exit code and no judgement in it. This test keeps its narrower and
     // honest job: the annotations that exist point at something that resolves.

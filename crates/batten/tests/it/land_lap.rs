@@ -10,7 +10,7 @@
 //!
 //! # The per-title rows are not what the gate counts, and that is the point
 //!
-//! `shell-retirement` counts `arms_for(path)` and stops: two arms, one per
+//! `shell retire partial` counts `arms_for(path)` and stops: two arms, one per
 //! deleted path. The 146 rows below are invisible to it. They exist because
 //! reading titles has produced a live defect once per suite across this whole
 //! campaign, every one in code written the same session and green under its own
@@ -88,7 +88,7 @@
 // carried: "THE PR BODY REACHES filed-here-check, or its exemption is inert" crates/batten/src/lib.rs kind:mechanism
 // carried: "CLOUD-995: a gate that exits before reading stdin is not a refusal" crates/batten/src/land.rs kind:mechanism
 // carried: "a body that names its issue but never closes it stops before review is asked for" crates/batten/src/lib.rs kind:mechanism
-// carried: "a prose-only branch stops before review is asked for" crates/batten/src/lib.rs kind:mechanism
+// carried: "a diff ship early branch stops before review is asked for" crates/batten/src/lib.rs kind:mechanism
 // carried: "a missing verify receipt stops the lap" crates/batten/src/lib.rs kind:mechanism
 // carried: "red CI stops the lap without asking for the merge" crates/batten/src/land.rs kind:mechanism
 // carried: "a run CI DECLINED is a stop, not a red — the agent is told to rebase" crates/batten/src/land.rs kind:mechanism

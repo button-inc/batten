@@ -72,7 +72,7 @@
 // changed: "unreadable wiring is refused rather than reporting every event unwired" policy/rules-drift.rego conditioned on a wiring claim existing: an unreadable `.claude/settings.json` is `drift read unread` when some sentence claims a wiring, and silent when none does
 // changed: "unreadable schemas are refused rather than reporting every key unemittable" policy/rules-drift.rego same conditioning, plus a READ-BUT-EMPTY arm the predecessor did not need: this build of regorus has no `walk`, so the recursive descent became one fixed path, and a schema whose shape moved parses fine and yields nothing — invisible to `input.tree.missing`, so `schema_vacuous` covers it
 // changed: "unreadable policy source is refused rather than reporting every name unqueried" policy/rules-drift.rego same conditioning, on a named fixed rule existing
-// changed: "the gate is wired into the hk gate, so a drift reddens a commit" policy/rules-drift.rego the assertion moves from the suite to the wiring itself: hk's `rules-drift` step now runs `mise run rules-drift`, which is an inline `batten check --rule 'rule watch other'`, so the step name and the rule id are one object rather than two that a grep held together
+// changed: "the gate is wired into the hk gate, so a drift reddens a commit" policy/rules-drift.rego the assertion moves from the suite to the wiring itself: hk's `rule watch other` step now runs `mise run rules-drift`, which is an inline `batten check --rule 'rule watch other'`, so the step name and the rule id are one object rather than two that a grep held together
 //
 // ONE PREDICATE NARROWED, and it is recorded here rather than absorbed into the
 // carried arm above it. The predecessor took `head -n1` of grep order when a
@@ -92,7 +92,7 @@ use std::path::Path;
 use common::{git_in, run, scratch, stdout, write};
 
 /// The rule's own id, which is also what `--rule` selects.
-const RULE: &str = "rules-drift";
+const RULE: &str = "rule watch other";
 
 /// Materialize a repository carrying the committed module and this row.
 ///
@@ -608,7 +608,7 @@ fn an_unparseable_authority_no_prose_claims_against_is_still_silent() {
 #[test]
 fn an_authority_no_prose_claims_against_is_silent() {
     // THE SCOPE MIRROR, and it is the difference from the predecessor worth
-    // measuring. `rules-drift.sh` exited 1 at startup when it could not read an
+    // measuring. `rule watch other.sh` exited 1 at startup when it could not read an
     // authority. A `[[rule]]` has NO CALL SITE — it runs wherever `batten check`
     // runs, including every fixture repository that inherits this config — so an
     // unconditional guard would make the row speak everywhere. That is the
@@ -742,7 +742,7 @@ fn an_arm_named_without_a_count_is_untouched() {
 
 /// The sentence `rules/policy-modules.md` closes its key lists with, and
 /// the anchor `schema-key-undocumented` keys on.
-const CLAIM: &str = "`rules-drift` holds the lists above to those two files.\n";
+const CLAIM: &str = "`rule watch other` holds the lists above to those two files.\n";
 
 #[test]
 fn a_schema_key_the_claiming_file_omits_is_reported() {
@@ -873,7 +873,7 @@ fn the_two_anchors_this_gate_keys_on_are_still_one_line_in_the_committed_files()
 // of the file asks: does a name in the tree agree with the mechanism that
 // judges it. These ask it of the two names a refusal line carries.
 //
-// They use their own runner rather than `judge`: that one names rules-drift's
+// They use their own runner rather than `judge`: that one names rule watch other's
 // own rule and reads stdout, and what is under test here is whether the config
 // LOADS at all, which is a usage error on stderr.
 

@@ -134,7 +134,7 @@ fn advisory(output: &Output) -> Option<String> {
 /// The measured shape: a declared program nothing can reach is said out loud, at
 /// the session's first moment, naming the program rather than describing it.
 ///
-/// `no-conflict-markers` is the instance — it declared `hk`, nothing a toolchain
+/// `source carry broken` is the instance — it declared `hk`, nothing a toolchain
 /// manager provides is on bare `PATH`, and the merge-conflict gate had been
 /// unable to launch for as long as the drift existed while `doctor` reported only
 /// that SOME declared program was off `PATH`.

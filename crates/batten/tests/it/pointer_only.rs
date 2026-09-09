@@ -1419,7 +1419,7 @@ const CENSUS: &[Verb] = &[
     // which is 66 of this config's 128 rows.
     Verb {
         path: "policy rule",
-        args: &["no-bare-cargo"],
+        args: &["cargo run loose"],
         stdin: Stdin::Nothing,
         disposition: Disposition::Echoes(
             "the answer IS a `[[rule]]` row's declared remedy, echoed back to the caller who \
@@ -1445,7 +1445,7 @@ const CENSUS: &[Verb] = &[
         path: "override request",
         args: &[
             "--rule",
-            "prose-only",
+            "diff ship early",
             "--verdict",
             "path write refused",
             "--subject",
@@ -1467,7 +1467,7 @@ const CENSUS: &[Verb] = &[
             "--admission",
             "0000000000000000000000000000000000000000000000000000000000000000",
             "--rule",
-            "prose-only",
+            "diff ship early",
             "--verdict",
             "path write refused",
             "--subject",

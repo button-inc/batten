@@ -1,4 +1,4 @@
-//! `mutation-declared-case`, over the engine that builds its input (CLOUD-1355).
+//! `marker name undefined`, over the engine that builds its input (CLOUD-1355).
 //!
 //! # The seam, and why the module's own suite cannot reach it
 //!
@@ -63,7 +63,7 @@ fn install_module(root: &Path) {
 /// keep honest.
 fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "mutation-declared-case",
+        "id": "marker name undefined",
         "kind": "policy",
         "scope": "tree",
         "line_sources": [
@@ -98,7 +98,7 @@ fn verdicts(root: &Path) -> Vec<String> {
     .collect()
 }
 
-const UNDEFINED: &str = "mutation-declared-case";
+const UNDEFINED: &str = "marker name undefined";
 
 /// The declaring file, as a module carrying a suite declaration and one row.
 fn declaring(suite: &str, case: &str) -> String {

@@ -99,7 +99,7 @@ fn install_module(root: &Path) {
 /// pass here.
 fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "fixture-forks",
+        "id": "test fix duplicate",
         "kind": "policy",
         "scope": "tree",
         "base": "origin/main",

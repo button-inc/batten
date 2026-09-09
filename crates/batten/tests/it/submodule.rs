@@ -46,7 +46,7 @@ fn bats(name: &str) -> String {
 
 /// A ratchet row over every `.bats` file at any depth — the glob that spans the
 /// submodule, which is the whole point.
-const SPANNING_CONFIG: &str = "version = 1\n\n[[rule]]\nid = \"bats-tests-not-deleted\"\nkind = \"ratchet\"\nglob = \"tests/**/*.bats\"\npattern = \"@test \\\"\"\ndirection = \"non_decreasing\"\nbase = \"main\"\nseverity = \"deny\"\n";
+const SPANNING_CONFIG: &str = "version = 1\n\n[[rule]]\nid = \"bats count dropped\"\nkind = \"ratchet\"\nglob = \"tests/**/*.bats\"\npattern = \"@test \\\"\"\ndirection = \"non_decreasing\"\nbase = \"main\"\nseverity = \"deny\"\n";
 
 /// A superproject with `config`, two of its own bats suites, and a real
 /// submodule at [`SUBMODULE`] carrying three more.
@@ -207,7 +207,7 @@ fn deleting_a_matched_file_outside_the_submodule_still_fires() {
         "both counts are the superproject's alone: {text:?}"
     );
     assert!(
-        text.contains("bats-tests-not-deleted"),
+        text.contains("bats count dropped"),
         "the finding names the rule: {text:?}"
     );
 }

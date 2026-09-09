@@ -53,7 +53,7 @@
 //! The claim gate's half of the same port DID land — its only caller named it by
 //! task name, which is why `mise.toml` could answer for it unchanged.
 //!
-//! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
+//! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
 // carried: mise-tasks/ready-lint.sh crates/batten/src/ready.rs kind:verb crates/batten/tests/it/ready.rs
 // carried: tests/ready-lint.bats crates/batten/src/ready.rs kind:verb crates/batten/tests/it/ready.rs
@@ -376,7 +376,7 @@ fn with_pressure_test(name: &str, runner_exits: Option<i32>) -> PathBuf {
         "batten.toml",
         &format!(
             "version = 1\n\n[ready]\npressure_test_required_from = \"2026-06-01T00:00:00.000Z\"\n\n\
-             [[rule]]\nid = \"review-dispatched\"\nkind = \"policy\"\nscope = \"tree\"\n\
+             [[rule]]\nid = \"prompt run never\"\nkind = \"policy\"\nscope = \"tree\"\n\
              module = \"policy/review-dispatched.rego\"\nseverity = \"deny\"\n\n\
              [[rule.review]]\nid = \"ready-pressure-test-body\"\nprompt = \"ready-pressure-test\"\n\
              runner = '{}'\nversion = \"0\"\nsubject = \"tracker-body\"\n\n{}",
@@ -681,7 +681,7 @@ fn a_gate_that_names_no_task_is_refused() {
     // WHETHER THE TASK EXISTS IS NOT ASKED HERE, and that is rule 1 rather than
     // an omission — resolving it means the core naming the consumer's task
     // manifest, which `document_facts.rs` refuses and which caught the first
-    // draft of this doing it. `batten.toml`'s `command-task-defined` already
+    // draft of this doing it. `batten.toml`'s `task bind undefined` already
     // decides that question over the consumer's own declaration, so asking it
     // twice would be a second authority with only the newer one deciding.
     let dir = with_tasks("ready-claims-gate-task");
@@ -839,7 +839,7 @@ fn the_object_wins_and_the_prose_goes_unread() {
 
 #[test]
 fn a_prose_only_block_still_passes_and_is_named_as_a_dialect() {
-    // EVERY ISSUE READY TODAY IS STILL READY. Refusing a prose-only block would
+    // EVERY ISSUE READY TODAY IS STILL READY. Refusing a diff ship early block would
     // refuse ~40 refined rows for being written before the mechanism existed,
     // which is the recognise-to-report bargain this gate already runs twice. The
     // dialect is a FACT rather than a verdict, so a caller can find the rows

@@ -39,7 +39,7 @@ use crate::common;
 use std::path::PathBuf;
 
 /// A class that declares an `override` route with a precondition, and is raised
-/// on the mediated boundary. `batten.toml`'s `leased-push` row.
+/// on the mediated boundary. `batten.toml`'s `branch write unsafe` row.
 const PRECONDITIONED: &str = "branch write unsafe";
 /// The same, spelled as a command this repository refuses.
 const PRECONDITIONED_CALL: &str = "git push --force-with-lease origin main";

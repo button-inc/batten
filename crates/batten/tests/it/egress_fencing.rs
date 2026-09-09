@@ -39,7 +39,7 @@ const AUTHORITY: &str = r#"
 version = 1
 
 [[rule]]
-id = "egress-fencing"
+id = "provision guard missing"
 kind = "policy"
 scope = "tree"
 documents = ["mise.toml", "batten.toml"]
@@ -221,7 +221,7 @@ fn denied_at(root: &Path, pointer: &str) {
     // carries neither the token nor the class, so a case asserting one would be
     // asserting the renderer. Which class fired is the module's own rules' job.
     assert!(
-        text.contains("egress-fencing"),
+        text.contains("provision guard missing"),
         "the finding names the rule: {text}"
     );
     assert!(

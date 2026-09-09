@@ -39,7 +39,7 @@ use batten::rules::{self, Rule};
 /// would refuse cannot be smuggled in by hand.
 fn row(line_sources: &[&str], documents: &[&str]) -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "remedy-authorship",
+        "id": "remedy own other",
         "kind": "policy",
         "scope": "tree",
         "line_sources": line_sources,
@@ -155,7 +155,7 @@ fn the_same_block_fully_prefixed_is_clean_and_was_evaluated() {
         scan.findings
     );
     assert!(
-        !scan.not_evaluated.contains_key("remedy-authorship"),
+        !scan.not_evaluated.contains_key("remedy own other"),
         "and it looked — a skip here would make the case above pass for the \
          wrong reason"
     );
@@ -300,7 +300,7 @@ fn a_declared_line_source_matching_nothing_is_not_a_pass() {
         "a rule that could not look reports no finding"
     );
     assert!(
-        scan.not_evaluated.contains_key("remedy-authorship"),
+        scan.not_evaluated.contains_key("remedy own other"),
         "but it must be recorded NOT EVALUATED — silence here IS the vacuous pass"
     );
 }

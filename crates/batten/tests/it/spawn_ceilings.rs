@@ -38,7 +38,7 @@
 //!
 //! ─── CLOUD-909's REPLAY, row 6 ───────────────────────────────────────────────
 //!
-// replay-call: tests/fanout-guard.bats 5a1c1dc mise-tasks/fanout-guard.sh a-spawn-names-few-artifacts deny=2 allow=0
+// replay-call: tests/fanout-guard.bats 5a1c1dc mise-tasks/fanout-guard.sh spawn count wrong deny=2 allow=0
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -140,7 +140,7 @@ fn a_manifest_over_the_cap_is_refused() {
     );
     let text = stderr(&refusal);
     assert!(
-        text.contains("a-spawn-names-few-artifacts"),
+        text.contains("spawn count wrong"),
         "the row that refused, so a reader can find it in the config: {text}"
     );
     // The count AND the ceiling, which is what a reader acts on — one without the
@@ -249,7 +249,7 @@ fn an_oversize_prompt_is_refused() {
     );
     let text = stderr(&refusal);
     assert!(
-        text.contains("a-spawn-prompt-stays-in-budget"),
+        text.contains("prompt measure wrong"),
         "and the row that refused is the budget row, not the manifest one: {text}"
     );
 
@@ -273,7 +273,7 @@ fn only_a_spawn_is_judged() {
     let over = "read a.txt b.txt c.txt d.txt then act";
     // ASSERTED BY THE ROWS THAT MUST STAY SILENT, not by the exit code. A tool
     // this row ignores may still be refused by a NEIGHBOUR — measured here:
-    // `mcp__Linear__save_issue` carries no `id`, so `filing-needs-a-search`
+    // `mcp__Linear__save_issue` carries no `id`, so `issue list unread`
     // refuses it and the exit 2 belongs to row 1. Reading that as row 6 judging a
     // non-spawn is the misattribution `replay.sh` calls `denied-by-another-row`,
     // one level in.
@@ -290,10 +290,7 @@ fn only_a_spawn_is_judged() {
             &payload(tool, over),
         );
         let text = stderr(&output);
-        for row in [
-            "a-spawn-names-few-artifacts",
-            "a-spawn-prompt-stays-in-budget",
-        ] {
+        for row in ["spawn count wrong", "prompt measure wrong"] {
             assert!(
                 !text.contains(row),
                 "this call commits no fresh context window, so {row} owes it nothing: \

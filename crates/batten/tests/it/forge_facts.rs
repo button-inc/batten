@@ -210,7 +210,7 @@ fn no_record_at_all_is_could_not_look() {
 // Every case above plants the record by hand, which is right for asserting what
 // the READER does with one and cannot show that anything in the tree can write
 // one. Nothing could: `git grep batten-forge` found this file and `forge.rs`, so
-// `forge-verdict-required` — a registered `severity = "deny"` row — resolved
+// `forge check red` — a registered `severity = "deny"` row — resolved
 // `null` on every real checkout and decided nothing from the day it merged.
 //
 // These run `batten record forge`. The difference is the same one its sibling

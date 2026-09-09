@@ -56,7 +56,7 @@ use common::{batten, stderr};
 
 /// A repository whose committed authority is `config`.
 ///
-/// Built through `Fixture` rather than by hand, and that is `fixture-forks`
+/// Built through `Fixture` rather than by hand, and that is `test fix duplicate`
 /// working rather than a style note: it refused the first draft of this file,
 /// which ran its own `git init`. Every fixture copies the one template
 /// `common/mod.rs` builds, so a suite cannot drift into its own repository

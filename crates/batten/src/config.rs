@@ -3145,11 +3145,19 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // form is rewritten to itself. Doing it here rather than in the validator
     // is what makes it a parse-time property rather than a check somebody can
     // run late.
-    for rule in &mut config.rules {
-        rule.id = crate::verdict::normalise_rule_id(&rule.id);
-    }
-    for waiver in &mut config.waivers {
-        waiver.rule = crate::verdict::normalise_rule_id(&waiver.rule);
+    // ONLY FOR A CONSUMER THAT HAS ADOPTED THE GRAMMAR, which is the same
+    // exemption the grammar and collapse arms take and must be the same one.
+    // A tree declaring no vocabulary spells its ids however it likes —
+    // `no-todo` is that consumer's whole name for the row, not a spelling of a
+    // three-word one — and rewriting it to `no todo` would rename a row nobody
+    // asked to rename. Measured: 22 cases failed on exactly that.
+    if !config.vocabulary.is_empty() {
+        for rule in &mut config.rules {
+            rule.id = crate::verdict::normalise_rule_id(&rule.id);
+        }
+        for waiver in &mut config.waivers {
+            waiver.rule = crate::verdict::normalise_rule_id(&waiver.rule);
+        }
     }
     validate_tables(&config, text, source)?;
     Ok(config)
@@ -3463,7 +3471,7 @@ pub fn defaults() -> Config {
 /// validator every committed rule passes.
 fn default_rules() -> Vec<Rule> {
     vec![Rule {
-        id: "no-conflict-markers".to_owned(),
+        id: "source carry broken".to_owned(),
         kind: crate::rules::RuleKind::Forbid,
         // Every path, unlike the starter's `**/*/*`. That narrower glob exists
         // to keep the rule off the `batten.toml` that declares it — a `forbid`

@@ -265,7 +265,7 @@ fn the_refusal_is_a_declared_class_with_a_route() {
 fn a_drifted_contract_exits_two_and_names_the_class() {
     // `Fixture` rather than a `tempfile`: it is this suite's own scratch
     // convention and needs no dev-dependency the binary does not link.
-    let scratch = common::Fixture::new("hk-contract-drift");
+    let scratch = common::Fixture::new("gate table other");
     let root = scratch.path();
     fs::copy(common::at_root("hk.pkl"), root.join("hk.pkl")).expect("the runner config copies");
     fs::create_dir_all(root.join("contracts")).expect("the artifact directory");

@@ -22,7 +22,7 @@
 //! # What this row does NOT decide, and where that half lives
 //!
 //! Whether hk's `fix` hook selects exactly the gate's fixer-bearing steps is
-//! `fix-selection-complete`'s, a `command` row running `mise run
+//! `gate fix missing`'s, a `command` row running `mise run
 //! fix-selection-check`. It is not answerable from lines: it needs the config
 //! evaluated, and evaluation is where the surprise was — the derived spelling
 //! evaluates correctly under `pkl` while hk's own evaluator reads it as EMPTY.
@@ -64,7 +64,7 @@ use batten::rules::{self, Rule};
 /// the same column census a consumer's config does.
 fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "hk-fix-selection",
+        "id": "gate select wrong",
         "kind": "policy",
         "scope": "tree",
         "sources": ["mise.toml"],
@@ -208,7 +208,7 @@ fn the_fixture_shape_is_clean_too() {
 
 // ---------------------------------------------------------------------------
 // The prose, which is this row's half. What the config DOES is
-// `fix-selection-complete`'s, and it is a command rather than a line scan.
+// `gate fix missing`'s, and it is a command rather than a line scan.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -308,7 +308,7 @@ run = "hk fix --all"
 
 #[test]
 fn a_tree_with_no_hook_config_is_not_judged() {
-    // `command-task-defined`'s measured lesson, one row over: an unguarded module
+    // `task bind undefined`'s measured lesson, one row over: an unguarded module
     // reported seven findings against a fixture that copies this config without
     // its subject. A repository that runs no hk hooks has no selection to judge.
     let root = common::scratch("hk-fix-selection-foreign");

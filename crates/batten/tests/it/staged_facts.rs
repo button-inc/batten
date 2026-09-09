@@ -8,7 +8,7 @@
 //! about the checkout."* So the fixture stages one value, leaves a DIFFERENT
 //! value in the working tree, and asserts the module sees the staged one.
 //!
-//! That matters beyond tidiness. `lock-complete` is the pure "committed bytes
+//! That matters beyond tidiness. `lock cover partial` is the pure "committed bytes
 //! only" gate — it judges THE COMMIT, not the developer's working copy — so a
 //! successor reading the worktree would answer a different question and pass
 //! over a staged-but-unsaved edit. A silent wrong answer, not a missing feature.
@@ -264,7 +264,7 @@ fn an_unstaged_path_is_could_not_look_never_an_empty_node() {
 /// The same probe, over a path whose extension no [`Format`] owns.
 ///
 /// `mise.lock` is TOML by content and `.lock` by name, and `Format::for_path`
-/// decides on the NAME — so this config is the whole of `lock-complete`'s
+/// decides on the NAME — so this config is the whole of `lock cover partial`'s
 /// blocker expressed as a fixture.
 const LOCK: &str = r#"version = 1
 
@@ -492,7 +492,7 @@ fn a_declared_format_does_not_override_an_extension_that_names_one() {
 /// A lockfile locking every platform this repository installs on, complete.
 ///
 /// The base the two cases below vary, and it has to be complete rather than
-/// minimal: `lock-complete` decides eight predicates over one file, so a fixture
+/// minimal: `lock cover partial` decides eight predicates over one file, so a fixture
 /// carrying a single platform would be refused for a reason neither case is
 /// about and the anti-vacuity mirror could never be green.
 const COMPLETE_LOCK: &str = r#"[[tools."aqua:example/tool"]]
@@ -518,7 +518,7 @@ const PARTIAL_ENTRY: &str = r#"
 checksum = "sha256:abc"
 "#;
 
-/// Materialize a repository carrying the committed `lock-complete` module.
+/// Materialize a repository carrying the committed `lock cover partial` module.
 fn lock_fixture(name: &str, lock: &str) -> PathBuf {
     let module = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -565,7 +565,7 @@ fn the_committed_lock_rule_refuses_a_partial_entry_over_the_binary() {
          registered and deciding nothing again\n{answer}{cause}"
     );
     // THE PREDICATE ID, NOT THE ROW ID. A module's finding carries the `rule` id
-    // the `violation` object declares — `lock-complete` is what `--rule` selects
+    // the `violation` object declares — `lock cover partial` is what `--rule` selects
     // and `lock-platform-uninstallable` is what decided — so asserting the row
     // name here would pass over any module that raised anything at all.
     assert!(

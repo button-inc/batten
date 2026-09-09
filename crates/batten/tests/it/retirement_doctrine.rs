@@ -30,7 +30,7 @@
 //!
 //! It does **not** catch an agent who does not read the file, and it holds nothing
 //! about whether a given change should have been reshaped as a retirement. That
-//! axis is `shell-retirement`'s, it is decided over a real diff with a real exit
+//! axis is `shell retire partial`'s, it is decided over a real diff with a real exit
 //! code, and a §7 here claiming otherwise would be this row's own defect one level
 //! up.
 //!

@@ -30,7 +30,7 @@
 //!
 //! # The declared mutation, and why the row is in THIS file
 //!
-//! `obligations-bound` reads the declared file's own lines for a row beginning
+//! `test name undefined` reads the declared file's own lines for a row beginning
 //! `#MUTANT <slug>|`, and its `line_sources` covers `crates/batten/tests/**` and
 //! not `crates/batten/src/**` — so the row lives here even though the expression
 //! it applies belongs to `gitwrite::next_offer`. A block comment because the
@@ -251,7 +251,7 @@ fn a_conflicting_replay_refuses() {
 ///
 /// Measured on #848: `3f308039` and `main`'s `a7935a7b` share patch identity
 /// `f185159e…`, and the lap stopped on it every time. Resolving it needed a hand
-/// rebase, which `rebase-not-hand-stepped` denies — so this engine gap presented
+/// rebase, which `patch run loose` denies — so this engine gap presented
 /// as a policy deadlock and cost a human override to get past.
 ///
 /// # The fixture is shaped by what makes the bug visible

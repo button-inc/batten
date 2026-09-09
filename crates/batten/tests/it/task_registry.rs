@@ -4,7 +4,7 @@
 //! **BOTH HALVES, because the registry is one mechanism read from both ends.**
 //! An earlier revision of this file landed the reader alone and recorded the
 //! writer as blocked; that was wrong, and the retraction is on CLOUD-1283. The
-//! claim was that `shell-retirement` admits a repointing at the BINDING
+//! claim was that `shell retire partial` admits a repointing at the BINDING
 //! (`reg="$(dirname "$0")/task-registry.sh"`) and none at the SPEND
 //! (`"$reg" read "$pid" phase_since`). It admits both — the successor declared
 //! on the arm below is `batten task`, so the span the module derives over a
@@ -898,7 +898,7 @@ fn outside_a_repository_a_write_is_could_not_look_rather_than_a_silent_success()
 // **THE CALL SITES ARE REPOINTED, NOT REWRITTEN.** `mise-tasks/land-lock.sh`
 // bound the program to `reg` and spent it three times; the successor declared on
 // the arms below is `batten task`, so each spend's derived span is exactly
-// `"$reg"` and `shell-retirement`'s `repoints_at_the_declared_invocation` admits
+// `"$reg"` and `shell retire partial`'s `repoints_at_the_declared_invocation` admits
 // the substitution. `mise.toml`'s `task-registry` task is the same repointing at
 // the other end — one line, translating the engine's `2`/`3` back to the shell's
 // `1`/`2` so a caller written against the retiring program's codes still reads

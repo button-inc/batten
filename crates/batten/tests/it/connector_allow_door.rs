@@ -21,7 +21,7 @@
 //! real `batten.toml` would let another rule's verdict stand in for this one —
 //! the exact substitution that hid the defect for the life of the migration.
 //!
-//! **Rust rather than a `.bats` suite** (CLOUD-843): `shell-retirement` refuses
+//! **Rust rather than a `.bats` suite** (CLOUD-843): `shell retire partial` refuses
 //! a new one, correctly. The fixture and the binary are the same either way.
 
 //! **UNIX ONLY, and the gate is load-bearing rather than tidy.** Every case here
@@ -65,7 +65,7 @@ expires = "2027-02-28"
 
 /// THE DENIED VERB IS ONE NO ENGINE ROW COVERS. `send_later` would have been the
 /// natural fixture and is the wrong one: this repository's own
-/// `no-scheduled-self-wakeup` refuses it, so a case built on it passes whether
+/// `timer mint refused` refuses it, so a case built on it passes whether
 /// the handler spoke or not. That substitution is the defect, not a detail.
 const SETTINGS: &str = r#"{"permissions":{
   "allow":["mcp__Claude_Code_Remote__create_session"],
@@ -198,7 +198,7 @@ fn the_committed_guard_writes_a_host_document_so_its_verdict_is_dropped() {
     // and this suite's whole subject is telling those two apart.
     //
     // WHY IT IS ASSERTED RATHER THAN FIXED: the repair is one `case` in a
-    // governed shell file, which `shell-retirement` refuses unless the file is
+    // governed shell file, which `shell retire partial` refuses unless the file is
     // retired — and it cannot be, because it reads `/tmp/mcp-config-cse_*.json`
     // per call, which no Rego module may do and no Rust port may carry into the
     // core (rule 1). So this case is the finding's durable home, and it FLIPS the

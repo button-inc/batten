@@ -1,4 +1,4 @@
-//! `pr-partition-restated` over the compiled binary.
+//! `review state other` over the compiled binary.
 //!
 //! **What the module's own `test_` rules cannot answer.** They substitute their
 //! own vocabulary for `data.batten.patterns` and hand the predicate a fabricated
@@ -64,7 +64,7 @@ id = "pr-partition-prose"
 regex = '{PATTERN}'
 
 [[rule]]
-id = "pr-partition-restated"
+id = "review state other"
 kind = "policy"
 scope = "tree"
 line_sources = ["prose/*.md"]
@@ -126,7 +126,7 @@ fn refuses(name: &str, prose: &str) {
         Some(2),
         "{name}: this prose must refuse\n{answer}{cause}"
     );
-    assert!(answer.contains("pr-partition-restated"), "{answer}{cause}");
+    assert!(answer.contains("review state other"), "{answer}{cause}");
 }
 
 #[test]
@@ -212,7 +212,7 @@ fn an_unreadable_source_is_reported_rather_than_passed() {
         Some(2),
         "a declared source that will not read must refuse, never pass\n{answer}{cause}"
     );
-    assert!(answer.contains("pr-partition-restated"), "{answer}{cause}");
+    assert!(answer.contains("review state other"), "{answer}{cause}");
 }
 
 #[test]

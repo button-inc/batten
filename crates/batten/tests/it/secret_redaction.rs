@@ -40,7 +40,7 @@ use batten::secret::{REDACTED, Secret};
 /// DELIBERATELY NOT SHAPED LIKE A REAL CREDENTIAL.
 ///
 /// It was `ghp_`-prefixed first, because a fixture standing in for a leaked PAT
-/// reads better if it looks like one. `no-secrets` refused the tree for it and
+/// reads better if it looks like one. `source carry unsafe` refused the tree for it and
 /// was right to — a scanner that skipped a well-formed token because it sat in a
 /// test file would have a hole in exactly the place this suite is about. The
 /// shape buys nothing here: every assertion is over a rendering, and redaction

@@ -8,9 +8,9 @@
 //! only a test has nothing under test.
 //!
 //! The guard carried FOUR families and all four had already landed, which is what
-//! made it deletable whole rather than piecemeal — `shell-retirement`'s one
+//! made it deletable whole rather than piecemeal — `shell retire partial`'s one
 //! admitted disposition, and the reason no line of it needed editing to qualify.
-//! Three of the four are this module's; the fourth is `task-substitution`'s, so it
+//! Three of the four are this module's; the fourth is `task run loose`'s, so it
 //! names that surface and its own tier.
 
 // carried: mise-tasks/run-shape-guard.sh policy/run-shape.rego crates/batten/tests/it/run_shape.rs
@@ -24,7 +24,7 @@
 // file and drops its cases is the silent coverage loss that row measured.
 //
 // Routed by FAMILY rather than by file: three of the guard's four families are
-// this module's, and `cargo-substitutes-for-a-task` is `task-substitution`'s, so
+// this module's, and `cargo-substitutes-for-a-task` is `task run loose`'s, so
 // those cases name that surface and its own tier instead. A row naming this file
 // for all 42 would claim coverage that is not here.
 // carried: "THE MEASURED SHAPE: a sleep in the middle of a compound is denied" policy/run-shape.rego crates/batten/tests/it/run_shape.rs
@@ -57,7 +57,7 @@
 // carried: "THE MEASURED SHAPE: a weaker clippy through the sanctioned escape is refused" policy/task-substitution.rego crates/batten/tests/it/task_receipt.rs
 // carried: "the task itself is allowed — this rule is about substitution, not about cargo" policy/task-substitution.rego crates/batten/tests/it/task_receipt.rs
 // carried: "a subcommand no task wraps is a genuine one-off and is untouched" policy/task-substitution.rego crates/batten/tests/it/task_receipt.rs
-// carried: "a BARE cargo is no-bare-cargo's, so the two never report one command" policy/task-substitution.rego crates/batten/tests/it/task_receipt.rs
+// carried: "a BARE cargo is cargo run loose's, so the two never report one command" policy/task-substitution.rego crates/batten/tests/it/task_receipt.rs
 // carried: "an EQUAL argv is not weaker, so spelling a task's own line out is allowed" policy/task-substitution.rego crates/batten/tests/it/task_receipt.rs
 // carried: "a narrower argv IS weaker, and the task it is weaker than is named" policy/task-substitution.rego crates/batten/tests/it/task_receipt.rs
 // carried: "a DIFFERENT program argv is a different command, not a weaker one" policy/task-substitution.rego crates/batten/tests/it/task_receipt.rs
@@ -81,7 +81,7 @@
 //! CLOUD-1059. The suite's own subject was `policy/run-shape.rego`, which
 //! CLOUD-1050 rewrote: the module's refusal stopped being prose and became a
 //! declared class. Its cases asserted the prose, so they went red — and
-//! `shell-retirement` refuses editing a bats suite in place, which is the whole
+//! `shell retire partial` refuses editing a bats suite in place, which is the whole
 //! point of that gate. Both doors shut on an edit; the open one is the
 //! migration, and this is it. Every case below carries a `// carried:` arm.
 //!
@@ -154,7 +154,7 @@ fn fixture(name: &str) -> PathBuf {
         concat!(
             "version = 1\n\n",
             "[[rule]]\n",
-            "id = \"commit-message-obtainable\"\n",
+            "id = \"commit read missing\"\n",
             "kind = \"policy\"\n",
             "scope = \"mediated_call\"\n",
             "module = \"policy/run-shape.rego\"\n",
@@ -400,7 +400,7 @@ fn a_redirect_bound_to_the_commits_own_element_is_a_message_source() {
 
 #[test]
 fn a_heredoc_body_is_not_shell() {
-    // CLOUD-723, the same parser change read in reverse. `verdict-not-discarded`
+    // CLOUD-723, the same parser change read in reverse. `verdict guard missing`
     // and every `pipeline` row decide over these segments, so a body carrying a
     // `;` used to split the list and turn a paragraph into its own command —
     // measured twice in one session, both times on the command that was writing

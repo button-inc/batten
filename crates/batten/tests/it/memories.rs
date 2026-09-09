@@ -48,7 +48,7 @@ use std::path::Path;
 use common::{git_in, run, scratch, stdout, write};
 
 /// The rule's own id, which is also what `--rule` selects.
-const RULE: &str = "memory-graph";
+const RULE: &str = "memory point missing";
 
 /// Materialize a repository carrying the committed module and this row.
 ///

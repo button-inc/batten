@@ -6,7 +6,7 @@
 //! subject was `policy/privileged-lane.rego`, which CLOUD-1050 rewrote: the
 //! module's refusal stopped being prose and became a declared class, so the
 //! suite's fixture — a `batten.toml` with no `[[verdict]]` row — stopped
-//! loading. `shell-retirement` refuses editing a bats suite in place, so the
+//! loading. `shell retire partial` refuses editing a bats suite in place, so the
 //! open door is the migration. Every case below carries a `// carried:` arm.
 //!
 //! # What it keeps
@@ -55,7 +55,7 @@ fn fixture(name: &str, workflow: &str, body: &str) -> PathBuf {
         concat!(
             "version = 1\n\n",
             "[[rule]]\n",
-            "id = \"privileged-lane-tests-origin\"\n",
+            "id = \"lane guard other\"\n",
             "kind = \"policy\"\n",
             "scope = \"tree\"\n",
             "sources = [\".github/workflows/*.yml\"]\n",
@@ -124,7 +124,7 @@ fn denied(root: &Path) {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        text.contains("privileged-lane-tests-origin"),
+        text.contains("lane guard other"),
         "the finding names the rule: {text}"
     );
 }

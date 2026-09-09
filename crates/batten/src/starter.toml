@@ -83,7 +83,7 @@ redirect = "append, or write through the surface that owns the file"
 # that declares the rule. Narrow it to your source tree (`src/**`, `lib/**`) once
 # you know the layout; a glob is include-only, so `!` does not work here.
 [[rule]]
-id = "no-conflict-markers"
+id = "source carry broken"
 kind = "forbid"
 glob = "**/*/*"
 pattern = "<<<<<<< "

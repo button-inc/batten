@@ -28,7 +28,7 @@
 //! half a plan cannot see and the reason the two are not one gate.
 //!
 //! Whether the surviving job installs what the suite needs is
-//! `bats-invocation`'s, whose `install_args` clause derives the job from the
+//! `bats run wrong`'s, whose `install_args` clause derives the job from the
 //! same `mise run test:bats` reading this file exercises.
 //!
 //! # The measurement behind the row
@@ -57,7 +57,7 @@ use batten::rules::{self, Rule};
 /// the same column census a consumer's config does.
 fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "ci-suite-lane",
+        "id": "job select missing",
         "kind": "policy",
         "scope": "tree",
         "sources": [".github/workflows/ci.yml"],

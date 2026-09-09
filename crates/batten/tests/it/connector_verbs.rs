@@ -63,7 +63,7 @@
 //
 // `01e9534` is `773a8fc^` — the commit before the one that retired this guard —
 // and both the dying suite and the dying program are present there, checked.
-// replay-call: tests/connector-verb-guard.bats 01e9534 mise-tasks/connector-verb-guard.sh no-pr-activity-subscription deny=2 allow=0
+// replay-call: tests/connector-verb-guard.bats 01e9534 mise-tasks/connector-verb-guard.sh review watch refused deny=2 allow=0
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -103,9 +103,9 @@ fn payload(tool: &str) -> String {
 
 /// The three verbs, and the rows that decide them.
 const DECIDED: &[(&str, &str)] = &[
-    ("subscribe_pr_activity", "no-pr-activity-subscription"),
-    ("send_later", "no-scheduled-self-wakeup"),
-    ("create_trigger", "no-scheduled-trigger"),
+    ("subscribe_pr_activity", "review watch refused"),
+    ("send_later", "timer mint refused"),
+    ("create_trigger", "event mint refused"),
 ];
 
 /// CARRIES: every "is denied" case, under the readable name, under a UUID, and
@@ -237,12 +237,28 @@ fn each_refusal_names_its_own_remedy() {
         // line" stopped being the rule id — it became the last word of a
         // sentence. The pointer half is what this reads, and taking it
         // explicitly says so rather than relying on the route's absence.
+        // AND THE NAME IS THREE WORDS (CLOUD-1638), so the last WORD is one
+        // third of it. `explain` answers about the CLASS, which is the head's
+        // first three words on both arms — a discriminating row appends its id
+        // after the pointers and a collapsed row's id IS the class, so reading
+        // the front is right in both cases and reading the back is right in
+        // neither.
         let pointer = text.split(" — ").next().unwrap_or(&text);
-        let row = pointer
-            .split_whitespace()
-            .next_back()
-            .expect("a deny names the rule that fired");
-        let explained = run(&repo, &["policy", "explain", row]);
+        let words: Vec<&str> = pointer.split_whitespace().collect();
+        assert!(
+            words.len() >= 3,
+            "{verb}: a deny names the class that fired: {text}"
+        );
+        // THE ROW'S remedy, not the class's: what this case asserts is that the
+        // refusal reaches the row's own `reason`, and `explain` answers about
+        // the class. The id is the head's last three words on a discriminating
+        // row; on a collapsed row it IS the class, so the first three resolve.
+        let tail = words[words.len() - 3..].join(" ");
+        let class = words[..3].join(" ");
+        let mut explained = run(&repo, &["policy", "rule", &tail]);
+        if explained.status.code() != Some(0) {
+            explained = run(&repo, &["policy", "rule", &class]);
+        }
         assert_eq!(explained.status.code(), Some(0), "{verb}: the row resolves");
         let explained_text = String::from_utf8_lossy(&explained.stdout);
         assert!(

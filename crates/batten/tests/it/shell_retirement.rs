@@ -35,7 +35,7 @@ use batten::rules::{self, Rule};
 /// refuse cannot be smuggled in by hand.
 pub(crate) fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "shell-retirement",
+        "id": "shell retire partial",
         "kind": "policy",
         "scope": "tree",
         "base": "origin/main",

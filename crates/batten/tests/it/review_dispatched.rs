@@ -1,4 +1,4 @@
-//! `review-dispatched`, over the engine that builds its input (CLOUD-472).
+//! `prompt run never`, over the engine that builds its input (CLOUD-472).
 //!
 //! # The seam, and why the module's own suite cannot reach it
 //!
@@ -49,7 +49,7 @@ use std::path::{Path, PathBuf};
 
 use batten::rules::{self, Rule, RuleKind, RuleScope};
 
-const RULE: &str = "review-dispatched";
+const RULE: &str = "prompt run never";
 const REVIEW: &str = "ready-pressure-test";
 const SUBJECT: &str = "subject.md";
 

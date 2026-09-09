@@ -239,7 +239,7 @@ const ROOT_VAR: &str = "BATTEN_FIXTURE_WIRING_ROOT";
 /// directions this module no longer has. What survives them is worth keeping: the
 /// committed `ready-issue-key` row spells this consumer's tracker prefix, and
 /// reproducing that expression here would put a specific consumer's vocabulary
-/// inside `crates/`, which `no-tracker-key-in-core` refuses. It refused it twice —
+/// inside `crates/`, which `issue name other` refuses. It refused it twice —
 /// the second time was the comment explaining the first fix, which quoted the
 /// prefix it had just removed, and the gate was right: a grep for a consumer's
 /// names does not care which side of a `///` the name is on.
@@ -289,7 +289,7 @@ fn config() -> String {
         r#"version = 1
 
 [[rule]]
-id = "harness-wiring"
+id = "hook wire missing"
 kind = "policy"
 scope = "tree"
 documents = [".claude/settings.json"]
@@ -446,7 +446,7 @@ fn a_committed_sibling_beside_the_mediator_is_refused() {
     let output = check(&repo, Some(&outside));
     assert!(!output.status.success(), "a sibling passed");
     assert!(
-        findings(&output).contains(".claude/settings.json harness-wiring"),
+        findings(&output).contains(".claude/settings.json hook wire missing"),
         "wrong finding: {}",
         findings(&output)
     );
@@ -495,7 +495,7 @@ fn a_stop_sibling_is_refused_too_so_the_scope_is_every_event() {
     let output = check(&repo, Some(&outside));
     assert!(!output.status.success(), "a Stop sibling passed");
     assert!(
-        findings(&output).contains(".claude/settings.json harness-wiring"),
+        findings(&output).contains(".claude/settings.json hook wire missing"),
         "wrong finding: {}",
         findings(&output)
     );
@@ -508,7 +508,7 @@ fn a_tree_with_no_wiring_surface_is_clean() {
     // table: a declared row matched nothing in a tree carrying no wiring surface
     // at all, so the module reported a spent licence over a tree it never looked
     // at — `cli.rs`'s fixture repos have no `.claude/settings.json` and four of
-    // its cases went red with `1 harness-wiring` above their own expected finding.
+    // its cases went red with `1 hook wire missing` above their own expected finding.
     //
     // The table is gone and with it the direction that could fire here, so the
     // property is now structural rather than guarded. The case stays because it
@@ -553,7 +553,7 @@ fn a_merged_registration_beside_the_mediator_is_refused() {
     let output = check(&repo, Some(&outside));
     assert!(!output.status.success(), "a merged sibling passed");
     assert!(
-        findings(&output).contains("harness-wiring"),
+        findings(&output).contains("hook wire missing"),
         "wrong finding: {}",
         findings(&output)
     );
@@ -588,7 +588,7 @@ fn the_launcher_hooks_are_refused_rather_than_tolerated() {
     // A COUNT AND NO PATH: a merged path is under somebody's home directory and
     // differs per machine, so rule 4 and §6 byte-stability both forbid it travelling.
     assert!(
-        findings(&output).contains("2 harness-wiring"),
+        findings(&output).contains("2 hook wire missing"),
         "wrong finding: {}",
         findings(&output)
     );
@@ -642,7 +642,7 @@ fn the_committed_half_survives_an_absent_merged_surface() {
         "the committed half went silent with no merged surface — CLOUD-1307 has          been reintroduced by recombining the two rows"
     );
     assert!(
-        findings(&output).contains(".claude/settings.json harness-wiring"),
+        findings(&output).contains(".claude/settings.json hook wire missing"),
         "wrong finding: {}",
         findings(&output)
     );
@@ -695,7 +695,7 @@ fn this_repository_is_wired_correctly() {
     // row a module reads and the config stops declaring.
     let output = batten()
         .current_dir(at_root("."))
-        .args(["check", "--rule", "harness-wiring"])
+        .args(["check", "--rule", "hook wire missing"])
         .output()
         .expect("run batten check");
     assert!(

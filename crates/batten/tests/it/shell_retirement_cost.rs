@@ -178,7 +178,7 @@ fn arm(name: &str, count: usize) -> Duration {
         let costs = rules::rule_costs();
         let cost = costs
             .iter()
-            .find(|cost| cost.rule == "shell-retirement")
+            .find(|cost| cost.rule == "shell retire partial")
             .expect("the census carries the row that just ran");
         best = best.min(cost.elapsed);
     }

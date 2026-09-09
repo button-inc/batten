@@ -180,7 +180,7 @@ fn an_empty_page_still_reduces_because_it_is_a_real_answer() {
     // The other side of the case above, which is what keeps it discriminating: a
     // genuinely empty array IS a list, so it reduces to an empty projection with
     // its paging intact rather than to could-not-look. A search that found
-    // nothing is the answer `filing-needs-a-search` acts on.
+    // nothing is the answer `issue list unread` acts on.
     let empty = serde_json::json!({ "hasNextPage": false, "issues": [] });
     let payload = mcp::payload(&framed(&empty));
     let reduced = mcp::reduce(&row(LIST_ROW), &payload.value).expect("an empty page is an answer");

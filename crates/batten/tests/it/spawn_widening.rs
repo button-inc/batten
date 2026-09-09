@@ -1,4 +1,4 @@
-//! `spawn-widening` over the compiled engine (CLOUD-1338).
+//! `spawn add other` over the compiled engine (CLOUD-1338).
 //!
 //! # Why this tier, and what the module's own suite structurally cannot prove
 //!
@@ -48,7 +48,7 @@ use batten::rules::{self, Rule};
 /// or 3 above, and both reported clean.
 fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "spawn-widening",
+        "id": "spawn add other",
         "kind": "policy",
         "scope": "tree",
         "base": "origin/main",
@@ -165,14 +165,14 @@ fn an_added_spawn_escape_is_refused() {
     );
     assert_eq!(
         verdicts(&root),
-        vec![String::from("spawn-widening")],
+        vec![String::from("spawn add other")],
         "an escape this change added is the whole subject of the rule"
     );
 }
 
 /// **THE CASE THAT ACTUALLY FIRED IN THE FIELD, half two.**
 ///
-/// `spawn-adapters` refuses a spawn in an unplaced module; adding the module to
+/// `adapter place missing` refuses a spawn in an unplaced module; adding the module to
 /// its set answers that refusal in one edit, and nothing read the edit. Two
 /// placements landed that way on the branch this rule was written for.
 #[test]
@@ -193,7 +193,7 @@ fn an_added_spawn_placement_is_refused() {
     );
     assert_eq!(
         verdicts(&root),
-        vec![String::from("spawn-widening")],
+        vec![String::from("spawn add other")],
         "the table is deny-by-omission, so widening it is the escape"
     );
 }
@@ -295,7 +295,7 @@ fn another_lints_allow_is_still_an_escape() {
     );
     assert_eq!(
         verdicts(&root),
-        vec![String::from("spawn-widening")],
+        vec![String::from("spawn add other")],
         "`too_many_arguments` is a claim about the code, not about how a test reports failure"
     );
 }

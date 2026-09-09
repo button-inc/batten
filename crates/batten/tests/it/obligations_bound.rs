@@ -1,4 +1,4 @@
-//! `obligations-bound`, over the engine that builds its input (CLOUD-472).
+//! `test name undefined`, over the engine that builds its input (CLOUD-472).
 //!
 //! # The seam, and why the module's own suite cannot reach it
 //!
@@ -101,7 +101,7 @@ fn install_module(root: &Path) {
 /// obligation unbindable for a reason no message would name.
 fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "obligations-bound",
+        "id": "test name undefined",
         "kind": "policy",
         "scope": "tree",
         "base": "origin/main",
@@ -341,7 +341,7 @@ fn the_committed_row_is_the_one_these_cases_exercise() {
         .rules;
     let declared = committed
         .iter()
-        .find(|rule| rule.id == "obligations-bound")
+        .find(|rule| rule.id == "test name undefined")
         .expect("the committed config declares the row this suite exercises");
     assert_eq!(declared.kind, RuleKind::Policy);
     assert_eq!(declared.scope, RuleScope::Tree);

@@ -55,7 +55,7 @@ const CONFLICTED: &str = "fn main() {}\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>
 /// into, because in that case there is no config file to match. Comparing a
 /// `regex` spelling isolates the variable this case is actually about: which
 /// layer supplied the policy, not what the policy says.
-const SAME_AS_DEFAULTS: &str = "version = 1\n\n[[rule]]\nid = \"no-conflict-markers\"\n\
+const SAME_AS_DEFAULTS: &str = "version = 1\n\n[[rule]]\nid = \"source carry broken\"\n\
      kind = \"forbid\"\nglob = \"**/*\"\nregex = \"^<{7} \"\nseverity = \"deny\"\n\
      scope = \"tree\"\n";
 
@@ -96,7 +96,7 @@ fn a_seeded_violation_of_a_default_rule_is_a_violation() {
     assert_eq!(output.status.code(), Some(2), "stderr: {}", stderr(&output));
     assert_eq!(
         stdout(&output),
-        "src/lib.rs:2 no-conflict-markers\n",
+        "src/lib.rs:2 source carry broken\n",
         "the finding is a pointer — `path:line rule-id`, never the matched line"
     );
     assert!(stderr(&output).contains(config::DEFAULTS_NOTE));

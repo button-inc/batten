@@ -1,4 +1,4 @@
-//! `harness-grant` over the compiled binary (CLOUD-1247).
+//! `grant carry missing` over the compiled binary (CLOUD-1247).
 //!
 //! **The question a `with input as` case cannot answer.** The module's own
 //! `test_` rules pin the predicate and nothing else: they hand it a fabricated
@@ -54,7 +54,7 @@ const MODULE: &str = include_str!("../../../../policy/harness-grant.rego");
 const CONFIG: &str = r#"version = 1
 
 [[rule]]
-id = "harness-grant"
+id = "grant carry missing"
 kind = "policy"
 scope = "tree"
 documents = [".claude/settings.json"]
@@ -142,7 +142,7 @@ fn a_dropped_grant_is_refused() {
         Some(2),
         "a settings file naming no mediator must refuse\n{answer}{cause}"
     );
-    assert!(answer.contains("harness-grant"), "{answer}{cause}");
+    assert!(answer.contains("grant carry missing"), "{answer}{cause}");
 }
 
 #[test]
@@ -161,7 +161,7 @@ fn a_dropped_sentinel_is_refused() {
         Some(2),
         "dropping $defaults must refuse in its own right\n{answer}{cause}"
     );
-    assert!(answer.contains("harness-grant"), "{answer}{cause}");
+    assert!(answer.contains("grant carry missing"), "{answer}{cause}");
 }
 
 #[test]

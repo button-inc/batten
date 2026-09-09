@@ -371,8 +371,8 @@ fn the_record_is_keyed_on_the_fact_and_on_its_rows_declared_subject() {
     // here: a record minted under one subject is simply absent under another, and
     // `facts::sourced` already turns absence into could-not-look.
     assert_ne!(
-        facts::sourced_path(git, "review-answered", "0f1e2d3"),
-        facts::sourced_path(git, "review-answered", "claude/some-branch")
+        facts::sourced_path(git, "review judge missing", "0f1e2d3"),
+        facts::sourced_path(git, "review judge missing", "claude/some-branch")
     );
     // Neither component may escape the directory: a fact name may carry a `/` and
     // a branch name routinely does.
@@ -559,7 +559,7 @@ fn no_byte_of_a_mismatched_buffer_is_available_to_the_verdict() {
 /// A row that counts `counts`'s elements satisfying `clauses`.
 fn counting(counts: &str, clauses: &[(&str, facts::Literal)], returns: Returns) -> facts::Declared {
     facts::Declared {
-        name: "review-answered".to_owned(),
+        name: "review judge missing".to_owned(),
         command: None,
         tool: Some("pull_request_read".to_owned()),
         counts: Some(counts.to_owned()),
@@ -799,7 +799,7 @@ fn a_named_path_beside_a_json_array_contract_is_refused_at_load() {
         panic!("a named `counts` path beside `json-array` must not load");
     };
     let rendered = error.to_string();
-    assert!(rendered.contains("review-answered"), "got: {rendered}");
+    assert!(rendered.contains("review judge missing"), "got: {rendered}");
     assert!(rendered.contains("json-array"), "got: {rendered}");
     // THE DISCRIMINATING HALF, and it is what keeps this from being a ban on
     // `json-array` beside `counts` altogether: the root spelling is the one path a
@@ -916,7 +916,7 @@ fn counts_beside_an_opaque_contract_is_refused_at_load() {
         panic!("`counts` beside `opaque` must not load");
     };
     let rendered = error.to_string();
-    assert!(rendered.contains("review-answered"), "got: {rendered}");
+    assert!(rendered.contains("review judge missing"), "got: {rendered}");
     assert!(rendered.contains("opaque"), "got: {rendered}");
     // And the shapes it CAN carry load, or the conjunct would be a ban on
     // counting rather than on the contradiction. `json-array` takes the root
@@ -1072,7 +1072,7 @@ fn blocking_without_counts_is_refused_at_load() {
         panic!("`blocking` with no `counts` must not load");
     };
     let rendered = error.to_string();
-    assert!(rendered.contains("review-answered"), "got: {rendered}");
+    assert!(rendered.contains("review judge missing"), "got: {rendered}");
     assert!(rendered.contains("blocking"), "got: {rendered}");
 }
 

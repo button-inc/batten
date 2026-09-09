@@ -13,7 +13,7 @@
 //! fix", naming its own remedy, and the session hand-stepped `git fetch origin
 //! main`, `git rebase origin/main` and `git push` instead of handing the lap
 //! back to `land`. Nothing refused any of it. A `git push --force-with-lease`
-//! minutes earlier WAS refused by `leased-push`, which is what makes this a gap
+//! minutes earlier WAS refused by `branch write unsafe`, which is what makes this a gap
 //! rather than a decision somebody took.
 //!
 //! **Judged against the committed `batten.toml`, not a fixture**, on
@@ -73,7 +73,7 @@ use crate::common::{run_with_stdin_at_real_root, stdout};
 
 /// The row under test. Named rather than inferred from the verdict, because a
 /// refusal from any OTHER row is a different question.
-const ROW: &str = "rebase-not-hand-stepped";
+const ROW: &str = "patch run loose";
 
 /// The repository root, whose committed `batten.toml` is the policy under test.
 fn root() -> PathBuf {
@@ -328,7 +328,7 @@ was an unterminated comment (E0758).
 `mutate::subjects()` enumerates the shell gates under `mise-tasks/ *.sh`, the
 consumer modules under `policy/ *.rego` and the preset directories, never
 `crates/batten/tests/`, so no sweep reaches this row today — exactly as none
-reaches `mcp_dispatch.rs`'s. `obligations-bound` is satisfied and the sweep half
+reaches `mcp_dispatch.rs`'s. `test name undefined` is satisfied and the sweep half
 is not; naming that here keeps the declaration from reading as coverage it does
 not have.
 

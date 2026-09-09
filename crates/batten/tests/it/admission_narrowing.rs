@@ -5,7 +5,7 @@
 //!
 //! `admission_anchor` re-runs the rule a refusal named so it can recover that
 //! finding's fingerprint and bind the admission to it. `--rule` carries a
-//! PREDICATE id — `filed-here` publishes `filed-over-own-diff` — so filtering
+//! PREDICATE id — `issue file other` publishes `filed-over-own-diff` — so filtering
 //! `declared.id == rule` selected nothing, the scan produced no finding, and the
 //! mint silently took the `head()` fallback: an admission answered, spent, and
 //! queried by nothing (CLOUD-1087, CLOUD-1125).
@@ -214,7 +214,7 @@ fn the_committed_bundles_publish_no_engine_side_rule_name() {
     assert!(
         policy::publishers_of(&bundles, "filed-over-own-diff")
             .into_iter()
-            .eq(["filed-here"]),
+            .eq(["issue file other"]),
         "the committed tree still publishes a predicate under a differently-named \
          row — the shape the whole narrowing exists to handle"
     );

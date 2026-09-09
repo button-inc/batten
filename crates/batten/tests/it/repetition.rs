@@ -51,7 +51,7 @@ fn config(module: &str, extra: &str) -> String {
         r#"version = 1
 
 [[rule]]
-id = "repetition-without-progress"
+id = "turn run loose"
 kind = "policy"
 scope = "mediated_call"
 module = "{module}"

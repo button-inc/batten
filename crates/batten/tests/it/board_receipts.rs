@@ -71,7 +71,7 @@
 //! translation is stated rather than assumed — the shell body denies by printing a
 //! decision document and exiting 0, the engine denies with exit 2 (§7).
 //!
-// replay-call: tests/issue-search-guard.bats 8e0acf1 mise-tasks/issue-search-guard.sh filing-needs-a-search deny=2 allow=0
+// replay-call: tests/issue-search-guard.bats 8e0acf1 mise-tasks/issue-search-guard.sh issue list unread deny=2 allow=0
 //!
 //! ─── CLOUD-908's MAPPING, row 2 ──────────────────────────────────────────────
 //!
@@ -116,7 +116,7 @@
 //!
 //! ─── CLOUD-909's REPLAY, row 2 ───────────────────────────────────────────────
 //!
-// replay-call: tests/issue-read-guard.bats 1dbad05 mise-tasks/issue-read-guard.sh an-update-owes-a-recent-read deny=2 allow=0
+// replay-call: tests/issue-read-guard.bats 1dbad05 mise-tasks/issue-read-guard.sh issue read stale deny=2 allow=0
 //!
 //! ─── CLOUD-908's MAPPING, the two MINTERS (CLOUD-1024) ───────────────────────
 //!
@@ -214,7 +214,7 @@
 //!
 //! ─── CLOUD-909's REPLAY, row 3 ───────────────────────────────────────────────
 //!
-// replay-call: tests/board-move-guard.bats 66d9d8f mise-tasks/board-move-guard.sh a-move-to-in-review-owes-an-adjudication deny=2 allow=0
+// replay-call: tests/board-move-guard.bats 66d9d8f mise-tasks/board-move-guard.sh review judge unread deny=2 allow=0
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -238,7 +238,7 @@ fn repo(name: &str) -> PathBuf {
     // name, and staged BEFORE the commit so they are tracked like the config is.
     //
     // Enumerated because naming them would put a consumer's policy filenames in
-    // `crates/**`, which is non-negotiable rule 1 — and `no-consumer-repo-name`
+    // `crates/**`, which is non-negotiable rule 1 — and `source name other`
     // computes that rather than trusting a reader to notice, which is how the
     // first draft of this file was caught. It is also the more robust half: a
     // module added to `policy/` needs no edit here, where a list would silently
@@ -339,7 +339,7 @@ fn filing_without_a_search_is_refused_and_with_one_is_allowed() {
         "the refusal must name the receipt that is absent: {text}"
     );
     assert!(
-        text.contains("filing-needs-a-search"),
+        text.contains("issue list unread"),
         "and the row that refused, so a reader can find it in the config: {text}"
     );
 
@@ -376,18 +376,18 @@ fn an_update_is_not_row_ones_business() {
     // THE REFUSING ROW IS THE ONLY ROW ID ON THE LINE, which is what CLOUD-1286
     // changed here and it changed it for the better. This case used to have to
     // read attribution off the `Refused by <id>` PREFIX, because a bare
-    // `contains("filing-needs-a-search")` matched row 2's own reason — which
+    // `contains("issue list unread")` matched row 2's own reason — which
     // ENDS by naming row 1, "Creating an issue is never gated by this row (that
-    // is `filing-needs-a-search`)". That cross-reference is prose, so it now
+    // is `issue list unread`)". That cross-reference is prose, so it now
     // lives behind `batten policy explain` with the rest of it, and the id on
     // the emitted line is the engine's own attribution and nothing else. The
     // negative assertion is what keeps that claim honest.
     assert!(
-        !text.contains("filing-needs-a-search"),
+        !text.contains("issue list unread"),
         "an update names an id, so the row that gates FILING must stay silent: {text}"
     );
     assert!(
-        text.contains("an-update-owes-a-recent-read"),
+        text.contains("issue read stale"),
         "and the row that does answer an edit is the one that spoke: {text}"
     );
 }
@@ -557,7 +557,7 @@ fn an_update_with_no_receipt_is_refused() {
     );
     let text = stderr(&refusal);
     assert!(
-        text.contains("an-update-owes-a-recent-read"),
+        text.contains("issue read stale"),
         "the row that refused, so a reader can find it in the config: {text}"
     );
     // The CALL that mints the receipt is the class's declared route and is one
@@ -628,7 +628,7 @@ fn a_read_older_than_the_bound_is_refused() {
     );
     let text = stderr(&refusal);
     assert!(
-        text.contains("an-update-owes-a-recent-read"),
+        text.contains("issue read stale"),
         "the row that refused: {text}"
     );
     assert!(
@@ -685,7 +685,7 @@ fn a_supplied_instant_decides_recency_rather_than_the_clock() {
     );
     let text = stderr(&refusal);
     assert!(
-        text.contains("an-update-owes-a-recent-read"),
+        text.contains("issue read stale"),
         "the row that refused: {text}"
     );
 }
@@ -935,7 +935,7 @@ fn a_create_is_not_row_twos_business() {
         "a create that asked its question is allowed, with no read receipt anywhere"
     );
     assert!(
-        !text.contains("Refused by an-update-owes-a-recent-read"),
+        !text.contains("Refused by issue read stale"),
         "the row that gates EDITING must stay silent on a filing: {text}"
     );
 }
@@ -1105,7 +1105,7 @@ fn a_move_with_no_adjudication_is_refused() {
     );
     let text = stderr(&refusal);
     assert!(
-        text.contains("a-move-to-in-review-owes-an-adjudication"),
+        text.contains("review judge unread"),
         "the row that refused: {text}"
     );
     // The check whose receipt is missing is the pointer and stays inline; the
@@ -1156,7 +1156,7 @@ fn an_adjudication_past_the_bound_is_refused() {
     );
     let text = stderr(&refusal);
     assert!(
-        text.contains("a-move-to-in-review-owes-an-adjudication"),
+        text.contains("review judge unread"),
         "the row that refused: {text}"
     );
     // The bound the age was measured against travels as a pointer, because it
@@ -1318,7 +1318,7 @@ fn row_threes_selectors_are_the_guards() {
         ),
     );
     assert!(
-        !stderr(&output).contains("Refused by a-move-to-in-review-owes-an-adjudication"),
+        !stderr(&output).contains("Refused by review judge unread"),
         "a create names no row to move, so this row must stay silent: {}",
         stderr(&output)
     );

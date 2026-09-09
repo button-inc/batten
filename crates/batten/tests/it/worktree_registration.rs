@@ -37,7 +37,7 @@ use std::path::{Path, PathBuf};
 use common::{Fixture, git_in, run, stdout};
 
 /// The rule id under test, and the string a case reads its verdict off.
-const RULE: &str = "worktree-registration-live";
+const RULE: &str = "registry read missing";
 
 /// The module's real bytes, from this checkout.
 ///
@@ -62,7 +62,7 @@ fn config() -> String {
     "version = 1\n\
      \n\
      [[rule]]\n\
-     id = \"worktree-registration-live\"\n\
+     id = \"registry read missing\"\n\
      kind = \"policy\"\n\
      scope = \"tree\"\n\
      git = [\"worktrees\"]\n\

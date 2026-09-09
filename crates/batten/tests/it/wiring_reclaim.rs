@@ -32,7 +32,7 @@
 //! up. `common::at_home` sets both spellings, so the isolation is one call
 //! rather than a variable per platform remembered per spawn.
 //!
-//! **Rust rather than a `.bats` suite** (CLOUD-843): `shell-retirement` refuses
+//! **Rust rather than a `.bats` suite** (CLOUD-843): `shell retire partial` refuses
 //! a new one, correctly — the campaign's corpus has to shrink rather than stay
 //! level while the census reports movement. Nothing here needed bash.
 

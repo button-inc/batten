@@ -57,7 +57,7 @@ fn fixture(name: &str) -> std::path::PathBuf {
 ///
 /// That is `rules/rust.md`'s "shown able to fail" rule inverted — a case
 /// asserting a conclusion over a premise the environment never created — and it
-/// is worth naming that `cfg-gated-test` does NOT see this shape: the `#[cfg]`
+/// is worth naming that `test cover missing` does NOT see this shape: the `#[cfg]`
 /// was on a block inside this helper rather than on a `#[test]`, so the cases
 /// compiled and ran on Windows and only their fixture was missing. The remedy is
 /// to make the premise real on both platforms rather than to narrow the cases.

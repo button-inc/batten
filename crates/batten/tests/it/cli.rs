@@ -34,7 +34,7 @@ use common::{
 /// no-authority case". It has none, and `hook` resolves its authority upward to
 /// the git root anyway, so every case below adjudicated against THIS
 /// repository's own committed policy. Measured 2026-08-29: driven from
-/// `crates/batten/`, `gh pr checks 714` came back refused by `gh-pr-checks`, a
+/// `crates/batten/`, `gh pr checks 714` came back refused by `check watch loose`, a
 /// row that exists only in the repository-root `batten.toml`.
 ///
 /// What that cost is the failure this file already names one helper down — "a
@@ -62,7 +62,7 @@ fn run_hook(name: &str, harness: &str, payload: &str, bypass: bool) -> Output {
 /// the same defect the decision matrix's own totality test exists to prevent.
 const GH_POLICY_CONFIG: &str = r#"version = 1
 [[rule]]
-id = "gh-pr-merge"
+id = "commit ship other"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -70,7 +70,7 @@ pattern = "gh pr merge"
 reason = "use `mise run land`"
 
 [[rule]]
-id = "gh-pr-comment-fast-forward"
+id = "review ship early"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -79,7 +79,7 @@ contains = "fast-forward"
 reason = "use `mise run land`"
 
 [[rule]]
-id = "gh-pr-checks"
+id = "check watch loose"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -87,7 +87,7 @@ pattern = "gh pr checks"
 reason = "use `mise run ci-wait`"
 
 [[rule]]
-id = "gh-run-watch"
+id = "job watch loose"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -300,7 +300,7 @@ fn committed_budget_surfaces(dir: &Path) {
     fs::create_dir_all(dir.join(".serena")).expect("create fixture serena dir");
     fs::write(dir.join(".serena/project.yml"), "initial_prompt: ''\n")
         .expect("write fixture project config");
-    // The committed `perf-assert` row declares `README.md` as a LITERAL `lines`
+    // The committed `path measure wrong` row declares `README.md` as a LITERAL `lines`
     // entry (CLOUD-1321), so it is acquired whether or not this fixture has one
     // and an absent file reaches the module through `input.tree.missing`. That is
     // deliberate there — a glob would match nothing in a treeless fixture and the
@@ -324,7 +324,7 @@ fn committed_budget_surfaces(dir: &Path) {
     committed_policy_modules(dir);
 }
 
-/// Also seeds the scanner the committed `no-secrets` row resolves, and returns
+/// Also seeds the scanner the committed `source carry unsafe` row resolves, and returns
 /// the `HOME` every invocation against this fixture must run under.
 ///
 /// Same argument as the `origin/main` ref above, one precondition further out:
@@ -2041,12 +2041,24 @@ fn every_hook_policy_table_deny_names_its_fix() {
         // was always named after: `explain` answers about the CLASS and resolves
         // a rule id only as a fallback, and the two are different questions
         // wherever a class has more than one raiser.
+        // AND THE ID IS THREE WORDS, NOT ONE (CLOUD-1638). Taking the last
+        // whitespace token grabbed `other` out of `commit ship other`. The head
+        // is `<class> <pointers> <rule-id>` where the id is present only when it
+        // DIFFERS from the class, so: the last three words are the id on a
+        // discriminating row, and on a collapsed row the class token — the first
+        // three words — is the id, because that is what collapsing means.
         let head = stderr.split(" — ").next().unwrap_or(&stderr);
-        let row = head
-            .split_whitespace()
-            .next_back()
-            .expect("a deny names the rule that fired");
-        let explained = batten_with(&dir, &["policy", "rule", row], &[]);
+        let words: Vec<&str> = head.split_whitespace().collect();
+        assert!(
+            words.len() >= 3,
+            "a deny names the class that fired: {stderr}"
+        );
+        let tail = words[words.len() - 3..].join(" ");
+        let class = words[..3].join(" ");
+        let mut explained = batten_with(&dir, &["policy", "rule", &tail], &[]);
+        if explained.status.code() != Some(0) {
+            explained = batten_with(&dir, &["policy", "rule", &class], &[]);
+        }
         assert_eq!(
             explained.status.code(),
             Some(0),
@@ -2096,7 +2108,7 @@ fn the_in_band_hosts_carry_the_decision_in_their_document() {
             "{harness}: the document must carry the class, got: {reason}"
         );
         assert!(
-            reason.contains("gh-pr-merge"),
+            reason.contains("commit ship other"),
             "{harness}: and the rule the hop takes, got: {reason}"
         );
     }
@@ -2613,7 +2625,10 @@ fn a_quoted_invocation_denies_on_both_harness_channels() {
             // The row's id on the line is what says a deny reached this channel
             // — CLOUD-1286 took the `Refused by` prefix off it, and this case
             // is about the CHANNEL rather than about the wording.
-            assert!(stderr.contains("gh-pr-merge"), "{harness}: got {stderr}");
+            assert!(
+                stderr.contains("commit ship other"),
+                "{harness}: got {stderr}"
+            );
         }
     }
 }
@@ -3108,22 +3123,22 @@ struct ShapeCase {
 const SHAPE_CENSUS: &[ShapeCase] = &[
     ShapeCase {
         call: CensusCall::Command("gh pr merge 42"),
-        rule: "gh-pr-merge",
+        rule: "commit ship other",
         site: CensusSite::Checkout,
     },
     ShapeCase {
         call: CensusCall::Command("gh pr comment 7 --body /fast-forward"),
-        rule: "gh-pr-comment-fast-forward",
+        rule: "review ship early",
         site: CensusSite::Checkout,
     },
     ShapeCase {
         call: CensusCall::Command("gh pr checks --watch"),
-        rule: "gh-pr-checks",
+        rule: "check watch loose",
         site: CensusSite::Checkout,
     },
     ShapeCase {
         call: CensusCall::Command("gh run watch 123"),
-        rule: "gh-run-watch",
+        rule: "job watch loose",
         site: CensusSite::Checkout,
     },
     // The landing loop's own hand-stepping (CLOUD-1461), which belongs with the
@@ -3146,46 +3161,46 @@ const SHAPE_CENSUS: &[ShapeCase] = &[
     // allows, and that file is what stops the row becoming a blanket refusal.
     ShapeCase {
         call: CensusCall::Command("git rebase origin/main"),
-        rule: "rebase-not-hand-stepped",
+        rule: "patch run loose",
         site: CensusSite::Checkout,
     },
     ShapeCase {
         call: CensusCall::Command("cargo test -p batten"),
-        rule: "no-bare-cargo",
+        rule: "cargo run loose",
         site: CensusSite::Checkout,
     },
     ShapeCase {
         // The wrapper does not launder it: `effective_program` steps past `env`
         // to reach `cargo`, and the mediator is read from what it stepped over.
         call: CensusCall::Command("env RUSTFLAGS=-Awarnings cargo build"),
-        rule: "no-bare-cargo",
+        rule: "cargo run loose",
         site: CensusSite::Checkout,
     },
     ShapeCase {
         call: CensusCall::Command("gh pr create --title 'no key here'"),
-        rule: "pr-names-an-issue",
+        rule: "review name unnamed",
         site: CensusSite::Keyless,
     },
     ShapeCase {
         call: CensusCall::Command("gh pr ready 42"),
-        rule: "ready-names-an-issue",
+        rule: "review open unnamed",
         site: CensusSite::Keyless,
     },
     // CLOUD-312 row 4. Decided by the tool name alone, under the readable server
     // spelling — the UUID and bare-name spellings are `connector_verbs.rs`'s.
     ShapeCase {
         call: CensusCall::Verb("mcp__Claude_Code_Remote__subscribe_pr_activity"),
-        rule: "no-pr-activity-subscription",
+        rule: "review watch refused",
         site: CensusSite::Checkout,
     },
     ShapeCase {
         call: CensusCall::Verb("mcp__Claude_Code_Remote__send_later"),
-        rule: "no-scheduled-self-wakeup",
+        rule: "timer mint refused",
         site: CensusSite::Checkout,
     },
     ShapeCase {
         call: CensusCall::Verb("mcp__Claude_Code_Remote__create_trigger"),
-        rule: "no-scheduled-trigger",
+        rule: "event mint refused",
         site: CensusSite::Checkout,
     },
     // CLOUD-1264. The raw tracker read, under the readable server spelling — the
@@ -3193,7 +3208,7 @@ const SHAPE_CENSUS: &[ShapeCase] = &[
     // `raw_tracker_read.rs`'s.
     ShapeCase {
         call: CensusCall::Verb("mcp__Linear__get_issue"),
-        rule: "no-raw-issue-read",
+        rule: "issue read loose",
         site: CensusSite::Checkout,
     },
     // CLOUD-312 row 6. Four named artifacts against a ceiling of three, over the
@@ -3204,7 +3219,7 @@ const SHAPE_CENSUS: &[ShapeCase] = &[
             prompt: "read one.txt two.txt three.txt four.txt then act",
             repeat: 1,
         },
-        rule: "a-spawn-names-few-artifacts",
+        rule: "spawn count wrong",
         site: CensusSite::Manifest,
     },
     // The token ceiling reads only the envelope, so no fact about the tree can
@@ -3217,7 +3232,7 @@ const SHAPE_CENSUS: &[ShapeCase] = &[
             prompt: "x",
             repeat: 6100,
         },
-        rule: "a-spawn-prompt-stays-in-budget",
+        rule: "prompt measure wrong",
         site: CensusSite::Checkout,
     },
 ];
@@ -3322,7 +3337,7 @@ fn render_gaps(config: &str, gaps: &[CensusGap]) -> String {
 /// before any rule runs — correctly, since a silently absent module is a gate
 /// that decides nothing. So a fixture missing them fails on that refusal rather
 /// than on the rule it is about, which is the same precondition the budget
-/// surfaces and the `no-secrets` scanner already owe.
+/// surfaces and the `source carry unsafe` scanner already owe.
 ///
 /// The DIRECTORY is mirrored rather than a list named here. The retirement
 /// campaign adds a module per migrated gate, and a hand-kept list would make
@@ -3459,14 +3474,14 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
     // And the reads it must not refuse, from the same committed rows.
     //
     // `gh pr ready` is absent from this list and did not simply become a deny:
-    // since CLOUD-312 it is *also* gated by the `ready-needs-receipts` row, so
+    // since CLOUD-312 it is *also* gated by the `check read unread` row, so
     // against this checkout its verdict depends on whether the tree carries
     // valid receipts — a property of the world, not of the commit. Its shape row
     // is censused at the keyless site above, where the shape rows are evaluated
-    // first and the refusal therefore names `ready-names-an-issue`; the receipt
+    // first and the refusal therefore names `review open unnamed`; the receipt
     // row's own case is the one below this.
     // `mise exec -- cargo test` and `mise run test:cargo` are here because
-    // `no-bare-cargo` is not a ban on the program (CLOUD-271): the row refuses
+    // `cargo run loose` is not a ban on the program (CLOUD-271): the row refuses
     // the ROUTE, and a row that closed the sanctioned route too would ban the
     // toolchain outright. `mise exec` is looked through, so this pair is the
     // only thing standing between `require_via` and exactly that.
@@ -3536,8 +3551,8 @@ fn the_bare_cargo_refusal_names_the_sanctioned_route() {
     // this case makes is unchanged and still asserted end to end — a reader must
     // be able to reach "the program is fine, the route is not" rather than
     // reading the deny as "cargo is banned".
-    assert!(stderr.contains("no-bare-cargo"), "got: {stderr}");
-    let explained = batten_with(&root, &["policy", "explain", "no-bare-cargo"], &[]);
+    assert!(stderr.contains("cargo run loose"), "got: {stderr}");
+    let explained = batten_with(&root, &["policy", "explain", "cargo run loose"], &[]);
     assert_eq!(explained.status.code(), Some(0), "the row resolves");
     let text = String::from_utf8_lossy(&explained.stdout);
     assert!(text.contains("mise exec -- cargo"), "got: {text}");
@@ -3700,11 +3715,11 @@ fn the_census_check_refuses_a_case_naming_no_row() {
 /// checkout happens to have run `verify`.
 ///
 /// SEVEN ROWS CAN REFUSE, AND ALL SEVEN ARE PRECONDITIONS — which is the
-/// assertion, rather than a widening of it. `ready-needs-receipts` refuses until
-/// `verify` has run; `ready-names-an-issue` is a `shape` row carrying
+/// assertion, rather than a widening of it. `check read unread` refuses until
+/// `verify` has run; `review open unnamed` is a `shape` row carrying
 /// `requires_key`, which the rules file describes as narrowing the deny "from
 /// *this command is banned* to *this command is banned unless the work is
-/// keyed*"; `ready-needs-an-answered-review` (CLOUD-859) refuses until the
+/// keyed*"; `review answer unread` (CLOUD-859) refuses until the
 /// declared review command has been run for this head. None is the outright ban
 /// this case exists to refuse, and which one fires first is a property of the
 /// checkout.
@@ -3724,13 +3739,13 @@ fn the_census_check_refuses_a_case_naming_no_row() {
 /// was correct (CLOUD-661). The fix is to assert what the case means.
 ///
 /// AND THE SAME OMISSION RECURRED, which is why the list is the fragile part
-/// rather than the wording. `ready-needs-an-answered-review` landed as a third
+/// rather than the wording. `review answer unread` landed as a third
 /// precondition row and was not added here, so this case stayed green only while
 /// one of the older two ALSO refused. It goes red the moment a branch satisfies
 /// both — a `verify` receipt present and a key on the commits — which is the
 /// state every branch reaches just before it readies, and precisely the state
 /// this case is about. CI never saw it: a fresh checkout has no verify receipt,
-/// so `ready-needs-receipts` fires first and masks the gap. Measured 2026-08-26.
+/// so `check read unread` fires first and masks the gap. Measured 2026-08-26.
 /// A fourth precondition row will do this again; the durable form is to select
 /// the rows by KIND rather than to name them, which needs a surface this test
 /// does not have today.
@@ -3746,9 +3761,9 @@ fn the_committed_policy_gates_ready_on_receipts_rather_than_banning_it() {
         // the `gh` lifecycle bans, which refuse the command outright.
         Some(2) => assert!(
             [
-                "ready-needs-receipts",
-                "ready-names-an-issue",
-                "ready-needs-an-answered-review",
+                "check read unread",
+                "review open unnamed",
+                "review answer unread",
                 // CLOUD-690's two tool-sourced siblings, each a receipt row over
                 // one check, and the two module predicates that read what those
                 // records found. The module rows belong here for the same reason
@@ -3758,8 +3773,8 @@ fn the_committed_policy_gates_ready_on_receipts_rather_than_banning_it() {
                 // the command. Which one fires first is a property of the
                 // checkout — measured, a head with a record carrying unresolved
                 // threads reaches the module rather than any receipt row.
-                "ready-needs-the-threads-answered",
-                "ready-needs-a-review-to-exist",
+                "review answer partial",
+                "review list unread",
                 "review-unanswered",
                 "review-absent",
             ]
@@ -3793,7 +3808,7 @@ fn hook_denies_a_blocked_shape_in_the_harness_channel() {
     // CLOUD-1286: the redirect is one hop off the line, so what the channel must
     // carry is the row that refused — the handle that hop takes.
     assert!(
-        stdout.contains("gh-pr-merge"),
+        stdout.contains("commit ship other"),
         "the deny must name the row the fixture policy declares, got: {stdout}"
     );
 }
@@ -3840,7 +3855,7 @@ fn every_host_denies_the_same_call_through_its_own_channel() {
         // about the channel, and the hop itself is proven by
         // `every_hook_policy_table_deny_names_its_fix`.
         assert!(
-            stdout.contains("gh-pr-merge"),
+            stdout.contains("commit ship other"),
             "{harness}: the deny must name the row that refused, got: {stdout}"
         );
     }
@@ -3862,7 +3877,7 @@ fn every_host_denies_the_same_call_through_its_own_channel() {
             "{harness}: stray stdout on these hosts risks being read as an allow"
         );
         assert!(
-            common::stderr(&output).contains("gh-pr-merge"),
+            common::stderr(&output).contains("commit ship other"),
             "{harness}: the decision travels on stderr here"
         );
     }
@@ -4137,7 +4152,7 @@ fn hook_fails_open_on_an_undecodable_payload() {
 fn hook_honours_the_bypass_hatch() {
     // THE AUTHORITY HAS TO REFUSE THIS CALL, or the case says nothing (CLOUD-1135).
     // It used to drive `run_hook`, which now loads an authority declaring no
-    // rules — an allow the bypass could not have caused. `gh-pr-merge` is a row
+    // rules — an allow the bypass could not have caused. `commit ship other` is a row
     // in the same fixture `hook_exit_code_harness_denies_with_exit_2` uses to
     // assert the deny this suppresses, so the two are the same call twice.
     let dir = repo_with_gh_policy("bypass-over-a-real-deny");
@@ -4156,7 +4171,7 @@ fn hook_exit_code_harness_denies_with_exit_2() {
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("gh-pr-merge"), "got: {stderr}");
+    assert!(stderr.contains("commit ship other"), "got: {stderr}");
     // A verdict is an answer, not a crash. The host hands this text back to the
     // model as the deny reason, so it must not wear the binary's error prefix.
     assert!(
@@ -6469,7 +6484,7 @@ fn the_committed_repo_config_gates_a_repository() {
     let dir = repo_with_config("config-committed", &contents);
     let home = committed_config_fixture_git(&dir);
     committed_budget_surfaces(&dir);
-    // A file the committed no-conflict-markers rule must flag. The marker is
+    // A file the committed source carry broken rule must flag. The marker is
     // still assembled at runtime, but for a narrower reason than before
     // (CLOUD-229): the rule now delegates to `hk util check-merge-conflict`,
     // which only fires on a marker at the START of a line, so the seven
@@ -6497,7 +6512,7 @@ fn the_committed_repo_config_gates_a_repository() {
     let output = batten()
         .arg("enforce")
         .arg("--rule")
-        .arg("no-conflict-markers")
+        .arg("source carry broken")
         .current_dir(&dir)
         .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
@@ -6511,7 +6526,7 @@ fn the_committed_repo_config_gates_a_repository() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "crates/** no-conflict-markers\n",
+        "crates/** source carry broken\n",
         "a command condemns a batch, so the pointer is the glob and carries no line"
     );
 }
@@ -6568,7 +6583,7 @@ fn the_committed_delegating_rule_spawns_nothing_when_its_glob_misses() {
     fs::write(dir.join("notes.txt"), marker).expect("write out-of-glob source");
 
     // `enforce --rule`, not a bare `enforce`. The property is about ONE row —
-    // `no-conflict-markers`, `kind = "command"`, `glob = "crates/**"` — and the
+    // `source carry broken`, `kind = "command"`, `glob = "crates/**"` — and the
     // narrowing is what makes the assertion say so. Unnarrowed, exit 0 and an
     // empty stdout also claimed that none of the other 103 rows fires on this
     // fixture, which is incidental to the property and cost 206s of a 1482s
@@ -6581,7 +6596,7 @@ fn the_committed_delegating_rule_spawns_nothing_when_its_glob_misses() {
     let output = batten()
         .arg("enforce")
         .arg("--rule")
-        .arg("no-conflict-markers")
+        .arg("source carry broken")
         .current_dir(&dir)
         .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
@@ -6607,10 +6622,10 @@ fn the_committed_delegating_rule_spawns_nothing_when_its_glob_misses() {
 /// drifted between them would leave the discriminator proving nothing about the
 /// set the other arm ran.
 const AGNOSTICISM_RULES: [&str; 5] = [
-    "no-consumer-account-literal",
-    "no-consumer-entity-path",
-    "no-consumer-repo-name",
-    "no-tracker-key-in-core",
+    "fact name other",
+    "path name other",
+    "source name other",
+    "issue name other",
     // CLOUD-761's row, and the only one of the five whose glob is not
     // `crates/**`: the module tree carries the same class and had no gate at
     // all. It joins this census rather than getting a fixture of its own,
@@ -6618,17 +6633,17 @@ const AGNOSTICISM_RULES: [&str; 5] = [
     // committed table — is exactly what a row scoped to a different directory
     // needs. A separate fixture would assert the row fires and say nothing about
     // whether it fires where it was aimed.
-    "no-tracker-key-in-modules",
+    "pattern name other",
 ];
 
 /// See [`AGNOSTICISM_RULES`].
 const PORTABILITY_RULES: [&str; 6] = [
-    "no-gnu-sed-z",
-    "no-gnu-sed-in-place",
-    "no-bash4-mapfile",
-    "no-gnu-xargs-r",
-    "no-branch-f-main",
-    "no-util-linux-flock",
+    "shell parse unsafe",
+    "shell edit unsafe",
+    "shell read unsafe",
+    "shell list unsafe",
+    "branch edit unsafe",
+    "shell guard unsafe",
 ];
 
 #[test]
@@ -6694,7 +6709,7 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     fs::create_dir_all(&src).expect("create fixture source tree");
     fs::write(src.join("lib.rs"), &payload).expect("write fixture source");
     fs::write(dirty.join("crates/demo/notes.txt"), &payload).expect("write fixture notes");
-    // The module tree, which `no-tracker-key-in-modules` is the row for. A
+    // The module tree, which `pattern name other` is the row for. A
     // module composing its own key expression instead of reading
     // `data.batten.patterns` by id is the second authority the registry exists
     // to make unwritable; the file is a fixture rather than a loadable module,
@@ -6728,17 +6743,17 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "crates/demo/notes.txt:1 no-consumer-account-literal\n\
-         crates/demo/notes.txt:2 no-consumer-entity-path\n\
-         crates/demo/notes.txt:3 no-consumer-repo-name\n\
-         crates/demo/notes.txt:4 no-tracker-key-in-core\n\
-         crates/demo/notes.txt:5 no-tracker-key-in-core\n\
-         crates/demo/src/lib.rs:1 no-consumer-account-literal\n\
-         crates/demo/src/lib.rs:2 no-consumer-entity-path\n\
-         crates/demo/src/lib.rs:3 no-consumer-repo-name\n\
-         crates/demo/src/lib.rs:4 no-tracker-key-in-core\n\
-         crates/demo/src/lib.rs:5 no-tracker-key-in-core\n\
-         policy/demo.rego:1 no-tracker-key-in-modules\n",
+        "crates/demo/notes.txt:1 fact name other\n\
+         crates/demo/notes.txt:2 path name other\n\
+         crates/demo/notes.txt:3 source name other\n\
+         crates/demo/notes.txt:4 issue name other\n\
+         crates/demo/notes.txt:5 issue name other\n\
+         crates/demo/src/lib.rs:1 fact name other\n\
+         crates/demo/src/lib.rs:2 path name other\n\
+         crates/demo/src/lib.rs:3 source name other\n\
+         crates/demo/src/lib.rs:4 issue name other\n\
+         crates/demo/src/lib.rs:5 issue name other\n\
+         policy/demo.rego:1 pattern name other\n",
         "one sorted pointer per banned shape per file, and nothing else"
     );
 
@@ -6823,7 +6838,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     .expect("write fixture task");
     fs::create_dir_all(dirty.join("tests")).expect("create fixture test dir");
     // The `# subject:` header every suite owes since CLOUD-807: the committed
-    // `bats-tests-not-deleted` row carries `retires_with`, so a suite declaring
+    // `bats count dropped` row carries `retires_with`, so a suite declaring
     // no subject is itself a finding. Declared here — pointing at the task seed
     // this fixture already writes — so this test keeps asserting the PORTABILITY
     // rules and nothing else, rather than growing a second rule's pointer. It
@@ -6837,7 +6852,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
 
     // THE SEEDS ARE COMMITTED INTO THE BASE, for the reason the `# subject:`
     // header above already records one rule earlier (CLOUD-1059). The committed
-    // `shell-retirement` row decides over the delta against `origin/main`, and
+    // `shell retire partial` row decides over the delta against `origin/main`, and
     // `committed_config_fixture_git` pins that ref at an EMPTY commit — so a seed
     // written afterwards is an authored shell rule this fixture ADDS, which that
     // row refuses, and the refusal would grow a second rule's pointer into an
@@ -6852,7 +6867,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     git_in(&dirty, &["commit", "-q", "-m", "seed"]);
     git_in(&dirty, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
 
-    // `enforce`, not `check`: the committed ruleset carries `no-conflict-markers`,
+    // `enforce`, not `check`: the committed ruleset carries `source carry broken`,
     // a kind that runs a configured command, and the read-effect verb refuses the
     // whole config rather than silently skipping that one row (exit 1, pinned by
     // `the_committed_config_refuses_to_run_a_spawning_kind_under_check`). Every
@@ -6874,12 +6889,12 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "mise-tasks/seed.sh:1 no-gnu-sed-z\n\
-         mise-tasks/seed.sh:2 no-gnu-sed-in-place\n\
-         mise-tasks/seed.sh:3 no-bash4-mapfile\n\
-         mise-tasks/seed.sh:4 no-gnu-xargs-r\n\
-         mise-tasks/seed.sh:5 no-util-linux-flock\n\
-         tests/seed.bats:2 no-branch-f-main\n",
+        "mise-tasks/seed.sh:1 shell parse unsafe\n\
+         mise-tasks/seed.sh:2 shell edit unsafe\n\
+         mise-tasks/seed.sh:3 shell read unsafe\n\
+         mise-tasks/seed.sh:4 shell list unsafe\n\
+         mise-tasks/seed.sh:5 shell guard unsafe\n\
+         tests/seed.bats:2 branch edit unsafe\n",
         "one sorted pointer per banned construct, and nothing else"
     );
 
@@ -6912,7 +6927,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
 
     // Committed into the base for the reason the dirty fixture above records
     // (CLOUD-1059): otherwise these two seeds are files this fixture ADDS, and
-    // `shell-retirement` refuses an added authored shell rule — which would make
+    // `shell retire partial` refuses an added authored shell rule — which would make
     // a tree that is portable by construction exit 2 for a reason that has
     // nothing to do with portability.
     git_in(&clean, &["add", "mise-tasks/seed.sh", "tests/seed.bats"]);
@@ -6978,7 +6993,7 @@ fn the_committed_example_config_loads_over_the_binary() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "**/*.rs no-conflict-markers\n",
+        "**/*.rs source carry broken\n",
         "a command condemns a batch, so the pointer is the glob and carries no line"
     );
 }
@@ -7032,7 +7047,7 @@ fn the_shipped_starter_config_loads_over_the_binary() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "src/main.rs:1 no-conflict-markers\n",
+        "src/main.rs:1 source carry broken\n",
         "a forbid rule points at the line, not at the batch a command condemns"
     );
 }
@@ -11407,7 +11422,7 @@ fn a_non_string_prompt_reads_as_absent() {
 
 /// A policy whose `gh pr create` needs one agent-sourced fact.
 ///
-/// `claim-not-raced` is the worked instance CLOUD-776 names: `issue-guard`'s
+/// `claim mint twice` is the worked instance CLOUD-776 names: `issue-guard`'s
 /// duplicate-claim half could not port to the mediated path because "the
 /// claimed-key lookup needs a network call the mediated path is barred from"
 /// (CLOUD-446), so it became a `tree`-scoped row run under `verify` — catching
@@ -11421,7 +11436,7 @@ command = "gh pr list --state open --json headRefName"
 returns = "json-array"
 
 [[rule]]
-id = "claim-not-raced"
+id = "claim mint twice"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -11465,10 +11480,10 @@ fn the_agent_sourced_fact_loop_closes_end_to_end() {
     // string the record is verified against, so a dereference that lost it would
     // be a broken loop rather than a shorter line.
     assert!(
-        reason.contains("claim-not-raced"),
+        reason.contains("claim mint twice"),
         "the deny names the row that refused; got: {reason}"
     );
-    let explained = batten_with(&dir, &["policy", "explain", "claim-not-raced"], &[]);
+    let explained = batten_with(&dir, &["policy", "explain", "claim mint twice"], &[]);
     assert_eq!(explained.status.code(), Some(0), "the row resolves");
     assert!(
         String::from_utf8_lossy(&explained.stdout)
@@ -12143,7 +12158,7 @@ fn help_leads_with_the_crate_description() {
 /// violation, and the same tree without it is clean.
 ///
 /// `[attribution] identity_deny` refuses what a COMMIT carries and has never
-/// failed to. `no-denied-identity-prescribed` refuses what a tracked FILE
+/// failed to. `remedy carry refused` refuses what a tracked FILE
 /// prescribes — the user-level hook's remedy, copied into the tree, where it
 /// would become a standing second authority telling the next reader to do the
 /// thing this repository denies.
@@ -12172,7 +12187,7 @@ fn a_tracked_instruction_may_not_prescribe_the_denied_commit_identity() {
 
     // `check --rule`, not `enforce`. The unnarrowed read-effect verb does refuse
     // this config outright — it carries a spawning kind — but `--rule` selects
-    // the row BEFORE that refusal is reached, and `no-denied-identity-prescribed`
+    // the row BEFORE that refusal is reached, and `remedy carry refused`
     // is not one of the three `kind = "command"` rows. `mise.toml` already relies
     // on this against these same committed bytes: `check --rule 'diff ship early'`,
     // `--rule 'issue file other'`, `--rule 'memory point missing'`.
@@ -12189,7 +12204,7 @@ fn a_tracked_instruction_may_not_prescribe_the_denied_commit_identity() {
     let output = batten()
         .arg("check")
         .arg("--rule")
-        .arg("no-denied-identity-prescribed")
+        .arg("remedy carry refused")
         .current_dir(&dirty)
         .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
@@ -12203,7 +12218,7 @@ fn a_tracked_instruction_may_not_prescribe_the_denied_commit_identity() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "HOWTO.md:2 no-denied-identity-prescribed\n",
+        "HOWTO.md:2 remedy carry refused\n",
         "one pointer, and the matched line is never echoed"
     );
 
@@ -12227,7 +12242,7 @@ fn a_tracked_instruction_may_not_prescribe_the_denied_commit_identity() {
     let output = batten()
         .arg("check")
         .arg("--rule")
-        .arg("no-denied-identity-prescribed")
+        .arg("remedy carry refused")
         .current_dir(&clean)
         .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
@@ -12338,7 +12353,7 @@ name = "claimed-key"
 command = "gh pr list --state open --json headRefName"
 
 [[rule]]
-id = "claim-not-raced"
+id = "claim mint twice"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -12835,7 +12850,7 @@ fn a_met_precondition_lets_the_rule_run_normally() {
 fn a_ratchet_declaring_no_precondition_is_untouched_by_the_new_gate() {
     let dir = Fixture::new("precondition-ratchet")
         .config(
-            "version = 1\n\n[[rule]]\nid = \"tests-not-deleted\"\nkind = \"ratchet\"\nglob = \"**/*.rs\"\npattern = \"#[test]\"\ndirection = \"non_decreasing\"\nbase = \"HEAD\"\nseverity = \"deny\"\nscope = \"tree\"\nno_fix_reason = \"restore the tests, or waive the reduction deliberately\"\n",
+            "version = 1\n\n[[rule]]\nid = \"test count dropped\"\nkind = \"ratchet\"\nglob = \"**/*.rs\"\npattern = \"#[test]\"\ndirection = \"non_decreasing\"\nbase = \"HEAD\"\nseverity = \"deny\"\nscope = \"tree\"\nno_fix_reason = \"restore the tests, or waive the reduction deliberately\"\n",
         )
         .files(&[("lib.rs", "#[test]\nfn a() {}\n")])
         .git()
@@ -12922,11 +12937,11 @@ fn every_rule_kind_is_classified_and_only_one_approximates() {
     assert!(!Decidability::Approximating.may_block());
 }
 
-// --- ready-guard, retired onto `ready-needs-receipts` (CLOUD-843 / CLOUD-1170) -
+// --- ready-guard, retired onto `check read unread` (CLOUD-843 / CLOUD-1170) -
 //
 // `mise-tasks/ready-guard.sh` was a `PreToolUse` body denying `gh pr ready`
 // until `verify` and `linear-check` had both passed against this exact HEAD.
-// CLOUD-312 landed its receipt predicate as the `ready-needs-receipts` row in
+// CLOUD-312 landed its receipt predicate as the `check read unread` row in
 // `batten.toml`, and this block is the ledger for the shell half going away.
 //
 // **THE PROGRAM WAS WIRED NOWHERE AT HEAD, which is what makes the withdrawal
@@ -12973,7 +12988,7 @@ fn every_rule_kind_is_classified_and_only_one_approximates() {
 // every ready, always. Closing it needs either an engine change or an edit to
 // `land-lock.sh`, which is governed and out of this change's scope.
 //
-// withdrawn: "gh pr ready --undo is the inverse action and is never gated" CLOUD-237's carve-out inverted under the engine: `pattern = "gh pr ready"` matches the undo too, so the one call that can only SAVE CI minutes is now denied (measured, exit 2, `Refused by ready-needs-receipts`). Not fixable by rewriting the pattern — `regex` carries no lookaround, and anchoring the row would trade this false deny for a false ALLOW on `gh pr ready 42 --json x`. CLOUD-1275
+// withdrawn: "gh pr ready --undo is the inverse action and is never gated" CLOUD-237's carve-out inverted under the engine: `pattern = "gh pr ready"` matches the undo too, so the one call that can only SAVE CI minutes is now denied (measured, exit 2, `Refused by check read unread`). Not fixable by rewriting the pattern — `regex` carries no lookaround, and anchoring the row would trade this false deny for a false ALLOW on `gh pr ready 42 --json x`. CLOUD-1275
 // withdrawn: "denies ready when this clone does not hold the landing lease" the lease predicate is not expressible as a receipt row for the `branch_validity` reason above, and the program enforcing it was wired nowhere. CLOUD-1275
 // withdrawn: "the lease refusal names the task to run, not merely the refusal" same predicate, same block; the remedy text has no row to live on until the predicate does. CLOUD-1275
 // withdrawn: "a LAPSED lease is refused, and the refusal says how long ago" `max_age` reads an mtime and renders `expired`, never an elapsed count, so even once the predicate lands the "how long ago" half is a deliberate loss. CLOUD-1275
@@ -12996,7 +13011,7 @@ fn every_rule_kind_is_classified_and_only_one_approximates() {
 const READY_RECEIPT_CONFIG: &str = r#"version = 1
 
 [[rule]]
-id = "ready-needs-receipts"
+id = "check read unread"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -13063,7 +13078,7 @@ fn a_ready_with_no_receipts_is_refused_and_the_refusal_names_the_task() {
     assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
     let refusal = stderr(&output);
     assert!(
-        refusal.contains("ready-needs-receipts"),
+        refusal.contains("check read unread"),
         "the refusal must name the row: {refusal}"
     );
     assert!(

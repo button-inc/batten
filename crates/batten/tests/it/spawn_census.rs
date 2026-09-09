@@ -71,7 +71,7 @@ fn the_lint_is_denied_in_the_manifest_itself() {
     // `clippy.toml` alone. Every other lint in this table is `warn`, promoted to
     // an error only by `mise run lint:clippy`'s `-D warnings`. CLOUD-822 measured
     // the consequence: `mise exec -- cargo clippy -p batten --all-targets` — the
-    // escape `no-bare-cargo`'s own refusal text recommends — omits that flag and
+    // escape `cargo run loose`'s own refusal text recommends — omits that flag and
     // missed 10 `expect_used` errors. A spawn gate at `warn` would report clean
     // over an unannotated spawn under a sanctioned command, and the agent would
     // then quote the clean run as verification.

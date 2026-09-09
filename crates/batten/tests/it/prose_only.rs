@@ -23,7 +23,7 @@
 //! The shell classified diff LINES; the engine compares REMAINDERS. Two cases
 //! here discriminate that directly and neither could have been written against
 //! the shell: a block of code moved within a file (identical remainders, so
-//! prose-only holds even though every line of it appears as `+` and `-`), and a
+//! diff ship early holds even though every line of it appears as `+` and `-`), and a
 //! comment reflowed across a boundary.
 
 // THE FILE-GRANULARITY RETIREMENT ARM (CLOUD-1059). Its grammar is disjoint from
@@ -48,7 +48,7 @@ use batten::rules::{self, Rule};
 /// the same column census a consumer's config does.
 fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "prose-only",
+        "id": "diff ship early",
         "kind": "policy",
         "scope": "tree",
         "base": "origin/main",
@@ -129,8 +129,8 @@ fn refused(root: &Path) {
     let findings = findings(root);
     assert_eq!(
         findings,
-        vec!["prose-only".to_owned()],
-        "the branch should be priced as prose-only"
+        vec!["diff ship early".to_owned()],
+        "the branch should be priced as diff ship early"
     );
 }
 
@@ -431,8 +431,8 @@ fn a_comment_only_change_to_a_declaration_language_is_refused() {
         );
         assert_eq!(
             findings(&root),
-            vec!["prose-only".to_owned()],
-            "a comment-only change to {path} must be priced as prose-only"
+            vec!["diff ship early".to_owned()],
+            "a comment-only change to {path} must be priced as diff ship early"
         );
     }
 }

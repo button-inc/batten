@@ -85,7 +85,7 @@ fn fixture(name: &str, key: &str) -> PathBuf {
     };
     // THROUGH `common::Fixture`, never a hand-rolled `git init` chain: the builder
     // copies a template rather than forking `git init` (CLOUD-1419 measured 1,819
-    // init processes over one run from exactly that habit), and `fixture-forks`
+    // init processes over one run from exactly that habit), and `test fix duplicate`
     // refuses a new copy of it. `base_commit` also pins `refs/remotes/origin/main`,
     // which is the ref these rows name — no remote is needed, because what the
     // identity reads is a REF and a local one resolves identically.
@@ -96,7 +96,7 @@ fn fixture(name: &str, key: &str) -> PathBuf {
              scope = \"mediated_call\"\nseverity = \"deny\"\npattern = \"git push\"\n\
              checks = [\"{RECEIPT}\"]\nkey = \"{key}\"\n{base}\
              reason = \"dispatch the code-review skill\"\n\n\
-             [[rule]]\nid = \"ready-needs-review\"\nkind = \"receipt\"\n\
+             [[rule]]\nid = \"review ask missing\"\nkind = \"receipt\"\n\
              scope = \"mediated_call\"\nseverity = \"deny\"\npattern = \"gh pr ready\"\n\
              checks = [\"{RECEIPT}\"]\nkey = \"{key}\"\n{base}\
              reason = \"dispatch the code-review skill\"\n"

@@ -37,7 +37,7 @@
 //! while that task carries no template. `task read unread` is the arm
 //! that surfaces the day they stop being.
 
-//! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
+//! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
 //! CLOUD-1161. `ci-local-parity` was 54.6s and 1093 lines holding 40 predicates.
 //! The generic half is the `ci-hygiene` preset, the consumer half is
@@ -187,7 +187,7 @@ use batten::rules::{self, Rule};
 /// the same column census a consumer's config does.
 fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "ci-parity",
+        "id": "job check other",
         "kind": "policy",
         "scope": "tree",
         "sources": [

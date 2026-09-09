@@ -19,7 +19,7 @@
 //! predicate one task over.
 //!
 //! **WHY IT IS NOT IN THAT BATS SUITE**, which is where it belongs on subject. The
-//! `shell-retirement` row (`severity = "deny"`) refuses an EDITED `tests/**/*.bats`
+//! `shell retire partial` row (`severity = "deny"`) refuses an EDITED `tests/**/*.bats`
 //! as `shell edit refused` and an ADDED one as `shell add refused`, and the one
 //! admitted edit is a line whose removal names a path the same change deletes. So
 //! the bats corpus is closed to an addition like this one. That is CLOUD-1088 —

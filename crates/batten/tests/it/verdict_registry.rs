@@ -435,7 +435,7 @@ fn route_findings(name: &str, authority: &str, manifest: &str) -> Vec<String> {
     common::git_in(&root, &["add", "-A"]);
     common::git_in(&root, &["commit", "-q", "-m", "fixture"]);
     let routes_row: Rule = serde_json::from_value(serde_json::json!({
-        "id": "verdict-routes-resolve",
+        "id": "route resolve missing",
         "kind": "policy",
         "scope": "tree",
         "sources": ["batten.toml", "mise.toml"],
@@ -489,7 +489,7 @@ fn a_command_route_naming_an_undefined_task_is_refused_over_the_engine() {
             &authority_with("command", "mise run absent"),
             MANIFEST
         ),
-        vec!["verdict-routes-resolve".to_owned()]
+        vec!["route resolve missing".to_owned()]
     );
 }
 

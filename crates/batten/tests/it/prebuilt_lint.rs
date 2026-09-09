@@ -12,9 +12,9 @@
 //! The bats suite stood the WHOLE shipped config up in a fixture — symlinked
 //! manifest and sources, a copied `batten.toml`, a copied `AGENTS.md` for
 //! `[budget.instructions]`, a `.serena/project.yml` for `[[embedded]]`, a
-//! provisioned ripsecrets stub for `no-secrets`, a resolvable `origin/main` for the
+//! provisioned ripsecrets stub for `source carry unsafe`, a resolvable `origin/main` for the
 //! `ratchet` rows, and a task namespace synthesised from every `mise run <task>` in
-//! the config so `command-task-defined` would not fire. Every one of those was a
+//! the config so `task bind undefined` would not fire. Every one of those was a
 //! precondition of running the config, not of testing these two rows.
 //!
 //! These cases run the two rows and nothing else, so none of that is owed. That is
@@ -36,10 +36,10 @@ use std::path::{Path, PathBuf};
 
 use batten::rules::{self, Rule};
 
-/// `no-source-built-tool` as `batten.toml` declares it.
+/// `pin add unsafe` as `batten.toml` declares it.
 fn no_source_built_tool() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "no-source-built-tool",
+        "id": "pin add unsafe",
         "kind": "forbid",
         "glob": "mise.toml",
         "pattern": "\"cargo:",
@@ -50,10 +50,10 @@ fn no_source_built_tool() -> Rule {
     .expect("the row batten.toml declares")
 }
 
-/// `no-cargo-install-in-ci` as `batten.toml` declares it.
+/// `cargo add loose` as `batten.toml` declares it.
 fn no_cargo_install_in_ci() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "no-cargo-install-in-ci",
+        "id": "cargo add loose",
         "kind": "forbid",
         "glob": ".github/workflows/*.yml",
         "pattern": "cargo install",
@@ -138,14 +138,14 @@ fn this_repository_is_clean_today() {
 }
 
 // ---------------------------------------------------------------------------
-// `no-source-built-tool`: the mistake, and the shape that is not it.
+// `pin add unsafe`: the mistake, and the shape that is not it.
 // ---------------------------------------------------------------------------
 
 // carried: "a cargo: backend in mise.toml is a violation, named and located" crates/batten/tests/it/prebuilt_lint.rs
 #[test]
 fn a_cargo_backend_in_the_manifest_is_a_violation_named_and_located() {
     let root = tools_with("cargo-backend", "\"cargo:cargo-hack\" = \"0.6\"");
-    assert_eq!(findings(&root), vec!["mise.toml:3 no-source-built-tool"]);
+    assert_eq!(findings(&root), vec!["mise.toml:3 pin add unsafe"]);
 }
 
 // carried: "a prebuilt backend is not a violation — the rule bans compiling, not installing" crates/batten/tests/it/prebuilt_lint.rs
@@ -162,7 +162,7 @@ fn a_prebuilt_backend_is_not_a_violation() {
 }
 
 // ---------------------------------------------------------------------------
-// `no-cargo-install-in-ci`: the same pair, spelled by hand in a workflow step.
+// `cargo add loose`: the same pair, spelled by hand in a workflow step.
 // ---------------------------------------------------------------------------
 
 // carried: "cargo install in a workflow is a violation" crates/batten/tests/it/prebuilt_lint.rs
@@ -172,7 +172,7 @@ fn cargo_install_in_a_workflow_is_a_violation() {
     workflow_with(&root, "cargo install cargo-hack");
     assert_eq!(
         findings(&root),
-        vec![".github/workflows/t.yml:8 no-cargo-install-in-ci"]
+        vec![".github/workflows/t.yml:8 cargo add loose"]
     );
 }
 

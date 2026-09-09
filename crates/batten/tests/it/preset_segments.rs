@@ -17,7 +17,7 @@
 //! one the engine produces constantly and the tests never did.
 //!
 //! **Judged against the committed `batten.toml`**, which enables
-//! `trunk-based-preset` like any other consumer would (CLOUD-836). A fixture-only
+//! `trunk push forced` like any other consumer would (CLOUD-836). A fixture-only
 //! suite would stay green after someone disabled the row, which is exactly the
 //! drift a corpus over the real config exists to catch.
 //!
@@ -160,7 +160,7 @@ fn force_with_lease_survives_segmentation() {
     // the bypass rather than toward the safer flag.
     //
     // ASSERTED AS "THE PRESET DOES NOT FIRE" rather than as a clean exit, because
-    // this consumer now declares `leased-push` over the BARE spelling and the two
+    // this consumer now declares `branch write unsafe` over the BARE spelling and the two
     // statements are different. The preset's distinction is what this case
     // is named for and it is unchanged; whether THIS repository additionally
     // refuses the leased spelling is a consumer decision the preset has no view on.

@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 use batten::rules::{self, Rule};
 
 /// The predicate id the module declares — NOT the `[[rule]]` id, which is
-/// `cfg-gated-test`. The two differ, and the difference is load-bearing: an
+/// `test cover missing`. The two differ, and the difference is load-bearing: an
 /// admission resolves its anchor by the FINDING's rule, so minting against the
 /// config id silently produces a `call:<head>` anchor that suppresses nothing.
 const GATED_ADDED: &str = "platform-gated-test-added";
@@ -58,7 +58,7 @@ const GATED_ADDED: &str = "platform-gated-test-added";
 ///
 /// NO HAND-ROLLED `git init` — [`common::init_repo`] copies the one template the
 /// whole suite shares. CLOUD-1419 measured 79 forked inits producing 1,819 git
-/// processes over one traced run, and `fixture-forks` refused this helper's first
+/// processes over one traced run, and `test fix duplicate` refused this helper's first
 /// spelling at the line that wrote it.
 fn repo(name: &str, before: &[&str], after: &[&str]) -> PathBuf {
     let root = common::scratch(name);
@@ -99,7 +99,7 @@ fn install_module(root: &Path) {
 /// no lines and refuses nothing.
 fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "cfg-gated-test",
+        "id": "test cover missing",
         "kind": "policy",
         "scope": "tree",
         "base": "origin/main",

@@ -28,7 +28,7 @@
 //! # The retirement ledger
 //!
 //! `mise-tasks/perf-pair.sh` and `tests/perf-pair.bats` are retired here under
-//! CLOUD-1059. The rows below are what `shell-retirement`'s arm C reads.
+//! CLOUD-1059. The rows below are what `shell retire partial`'s arm C reads.
 //!
 //! WHY IT WAS MIGRATED AT ALL, which is the campaign working on its author a
 //! second time (after `semver`). CLOUD-875 is a repair to the SKIP, and making it
@@ -58,11 +58,11 @@
 // subsumed: "each wired arm runs in its OWN tree, which is what replaced the cd" crates/batten/src/perf.rs kind:verb
 // subsumed: "failures are not ignored — a broken binary is timeable and must not pass" crates/batten/src/perf.rs kind:verb
 //
-// The arm census. `perf-assert` still budgets the paths, and the port must still
+// The arm census. `path measure wrong` still budgets the paths, and the port must still
 // pair every one of them — but the assertion moved from counting `^pair ` lines
 // in a shell file to the plan the module builds.
 //
-// carried: "every path perf-assert budgets is paired here" crates/batten/tests/it/perf_pair.rs
+// carried: "every path path measure wrong budgets is paired here" crates/batten/tests/it/perf_pair.rs
 //
 // The worktree recovery, and this pair is the most interesting entry in the
 // ledger. Both cases guarded a MEASURED defect (2026-08-14): `git worktree add`
@@ -288,10 +288,10 @@ fn the_keyed_base_directory_survives_the_per_run_wipe() {
     );
 }
 
-/// Every path `perf-assert` budgets is still paired.
+/// Every path `path measure wrong` budgets is still paired.
 ///
 /// CARRIED from the retired suite, and the assertion had to move rather than be
-/// dropped: it caught a real hole once already (CLOUD-697, where `perf-assert`
+/// dropped: it caught a real hole once already (CLOUD-697, where `path measure wrong`
 /// budgeted four paths and the pair measured three, so `perf-compare` was blind
 /// to `wired` — the entry point an agent actually waits on).
 ///
@@ -344,7 +344,7 @@ fn every_path_perf_assert_budgets_is_paired() {
     for path in budgeted {
         assert!(
             module.contains(&format!("\"{path}\"")),
-            "`perf-assert` budgets `{path}` and the pair does not measure it"
+            "`path measure wrong` budgets `{path}` and the pair does not measure it"
         );
     }
 }

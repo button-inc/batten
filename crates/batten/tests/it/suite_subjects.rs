@@ -33,7 +33,7 @@ use batten::rules::{self, Rule};
 /// the same column census a consumer's config does.
 fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "suite-subject-retirable",
+        "id": "suite retire unclear",
         "kind": "policy",
         "scope": "tree",
         "line_sources": ["tests/*.bats", "tests/**/*.bats"],

@@ -21,7 +21,7 @@
 
 // THE ONE TARGET THAT STAYS SEPARATE (CLOUD-1210). `evaluator-io-check`
 // probes this file with `cargo test --test policy_modules`, and that task is
-// a governed `mise-tasks/*.sh`: `shell-retirement` gives it exactly two
+// a governed `mise-tasks/*.sh`: `shell retire partial` gives it exactly two
 // shapes — retire it whole, or leave it alone — so repointing the probe at
 // the group is not an edit this change may make. Keeping the target is the
 // cheaper half of that trade: one extra link against a gate that stays live.

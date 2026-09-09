@@ -193,7 +193,7 @@ fn a_head_keyed_record_cleared_on_one_commit_does_not_satisfy_the_next() {
 // ported: "ANTI-VACUITY: a branch-keyed record still satisfies the check after a new commit" crates/batten/tests/it/fact_record_keying.rs subject:crates/batten/src/facts.rs
 #[test]
 fn anti_vacuity_a_branch_keyed_record_survives_a_new_commit() {
-    // The case that has to stay green. `claim-needs-receipt` is keyed by branch
+    // The case that has to stay green. `claim read unread` is keyed by branch
     // precisely because a claim attests to a decision about an issue that every
     // commit on the branch continues to serve. A fix that head-keyed every record
     // would pass the case above and make `claim` demand a re-claim per commit,

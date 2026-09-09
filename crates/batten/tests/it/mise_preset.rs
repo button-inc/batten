@@ -44,7 +44,7 @@ use batten::rules::{self, Rule};
 /// compiles, the suite still runs, and the deny cases silently stop denying.
 fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "mise-preset-tree",
+        "id": "task table other",
         "kind": "policy",
         "scope": "tree",
         "preset": "mise",
@@ -77,7 +77,7 @@ fn findings(root: &Path) -> Vec<(String, Option<usize>)> {
     // vendored table; its `[[pattern]]` lookups would resolve to undefined for
     // every real consumer, so a harness that declared any id would supply input
     // no consumer supplies and the deny cases below would pass for the wrong
-    // reason — how `ci-hygiene` once shipped two dead predicates under a green
+    // reason — how `job spelling wrong` once shipped two dead predicates under a green
     // `batten policy test` reporting 330 passed.
     rules::run_static(
         &[row()],

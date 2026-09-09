@@ -13,7 +13,7 @@
 //!
 //! # Why the exemption case is the load-bearing one
 //!
-//! `ci-suite-lane` already governs this variable where CI sets it, so the
+//! `job select missing` already governs this variable where CI sets it, so the
 //! DECLARED use is gated and the ad-hoc one was free — a hole shaped exactly like
 //! the repository's own legitimate use. That shape is what makes the exemption
 //! assertion matter more than the deny: a row that refused the `ci` job's own line
@@ -69,7 +69,7 @@ fn denied_by_this_row(command: &str) {
         "the committed policy must refuse: {command}\n{out}"
     );
     assert!(
-        out.contains("hook-skip-local"),
+        out.contains("hook skip unseen"),
         "the refusal for `{command}` must come from this row\n{out}"
     );
 }
@@ -126,7 +126,7 @@ fn a_step_skip_behind_a_compound_command_is_still_reached() {
 #[test]
 fn the_declared_ci_carve_is_not_judged_here() {
     // THE CASE THAT KEEPS THIS FROM BEING SWITCHED OFF. `.github/workflows/ci.yml`
-    // hands hk exactly this, and `ci-suite-lane` is the row that governs it. A
+    // hands hk exactly this, and `job select missing` is the row that governs it. A
     // guard refusing the repository's own declared invocation gets disabled, and
     // then it enforces nothing at all.
     allowed_backgrounded("HK_SKIP_STEPS=test:bats mise run ci");

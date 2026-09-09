@@ -128,7 +128,7 @@ reason: unknown_key` — the key is unpublished, not absent. That is CLOUD-591's
 **So: refuse it, and do not re-derive this.** `mise run attribution-identity`
 writes the accountable identity repo-locally, and local beats global, which is
 why every commit here is attributed correctly and the gate has never failed.
-`no-denied-identity-prescribed` is the standing half — a `forbid` row refusing
+`remedy carry refused` is the standing half — a `forbid` row refusing
 any tracked Markdown that prescribes the denied identity, so the hook's remedy
 cannot be copied into this tree and become a second authority. A repo-level stop
 hook answering in the same channel was considered and **rejected on noise**: by

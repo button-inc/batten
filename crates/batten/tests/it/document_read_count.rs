@@ -100,7 +100,7 @@ fn rows_declaring_one_path_read_it_once() {
     // THE DEFECT THIS ASSERTS AWAY. `run`'s `for rule in rules` wrapped
     // `tree_document`'s `for path in documents` with no dedup and no cache, so
     // two rows declaring one path read and parsed it twice — 79 rules x N
-    // documents is 79N reads plus 79N parses, on the one surface `perf-assert`
+    // documents is 79N reads plus 79N parses, on the one surface `path measure wrong`
     // deliberately budgets no ceiling for.
     //
     // Fails by: removing the cache lookup in `acquire_declared`, which makes

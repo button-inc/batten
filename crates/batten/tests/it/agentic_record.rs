@@ -101,7 +101,7 @@ fn config() -> String {
         r#"version = 1
 
 [[rule]]
-id = "agentic-experiment-record"
+id = "fact file missing"
 kind = "policy"
 scope = "tree"
 documents = ["{TRIALS}", "{METHOD}"]

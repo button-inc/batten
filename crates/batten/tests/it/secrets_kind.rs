@@ -8,7 +8,7 @@
 //!
 //! # The planted token is assembled at runtime, and that is load-bearing
 //!
-//! Consumer #1's own `no-secrets` rule globs the whole tree, so a literal
+//! Consumer #1's own `source carry unsafe` rule globs the whole tree, so a literal
 //! credential written into this file would be a standing violation of the rule
 //! this suite exists to prove — the repository would fail its own gate, forever,
 //! on its own test fixture. The token is therefore built from fragments at
@@ -122,7 +122,7 @@ impl Env {
                  sha256 = \"{sha}\"\n\
                  binary = \"ripsecrets\"\n\n\
                  [[rule]]\n\
-                 id = \"no-secrets\"\n\
+                 id = \"source carry unsafe\"\n\
                  kind = \"secrets\"\n\
                  glob = \"**/*.conf\"\n\
                  severity = \"deny\"\n\
@@ -169,7 +169,7 @@ fn collect(dir: &Path, out: &mut Vec<u8>) {
 /// The fragments the synthetic credentials are assembled from.
 ///
 /// Split so the contiguous token exists in no committed byte sequence — see the
-/// module docs: a literal here would violate consumer #1's own `no-secrets` rule
+/// module docs: a literal here would violate consumer #1's own `source carry unsafe` rule
 /// over this very file.
 const TOKEN_PARTS: [&str; 5] = ["AKIA", "7QF2", "NX8M", "3JD5", "W0PC"];
 const OTHER_PARTS: [&str; 5] = ["AKIA", "B4T6", "LZ9R", "K1YV", "H2SD"];
@@ -263,7 +263,7 @@ fn a_planted_secret_is_a_pointer_and_never_its_bytes() {
     );
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        "app.conf:1 no-secrets\n",
+        "app.conf:1 source carry unsafe\n",
         "stdout is the pointer line and nothing else"
     );
     nowhere(&env, &out, &secret, "text output");
@@ -283,7 +283,7 @@ fn the_json_document_carries_no_span_either() {
     let finding = &document["findings"][0];
     assert_eq!(finding["path"], "app.conf");
     assert_eq!(finding["line"], 1);
-    assert_eq!(finding["rule"], "no-secrets");
+    assert_eq!(finding["rule"], "source carry unsafe");
     nowhere(&env, &out, &secret, "-J output");
 }
 
@@ -310,7 +310,7 @@ fn the_emitted_identity_is_secret_class_and_differs_from_the_unkeyed_digest() {
 
     // And the fingerprint is not the unkeyed digest of the same span.
     let unkeyed = batten::identity::code_fingerprint(
-        "no-secrets",
+        "source carry unsafe",
         "app.conf",
         &secret,
         batten::identity::SpanNormalization::Verbatim,
@@ -367,7 +367,7 @@ fn the_same_input_twice_is_byte_identical_and_ordered() {
     assert_eq!(first.stdout, second.stdout, "text output is byte-stable");
     assert_eq!(
         String::from_utf8_lossy(&first.stdout),
-        "a.conf:1 no-secrets\nb.conf:1 no-secrets\n",
+        "a.conf:1 source carry unsafe\nb.conf:1 source carry unsafe\n",
         "ordered by path, not by the order the scanner happened to emit"
     );
 
@@ -591,7 +591,7 @@ fn an_erroring_gate_exits_three_while_the_other_gates_still_evaluate() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("errored no-secrets"),
+        stderr.contains("errored source carry unsafe"),
         "the erroring gate appears in output, by id: {stderr}"
     );
     assert!(
@@ -629,7 +629,7 @@ fn an_erroring_gate_does_not_suppress_another_gates_findings() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("errored no-secrets"),
+        stderr.contains("errored source carry unsafe"),
         "precedence governs the exit code, never what appears in output: {stderr}"
     );
 }
@@ -658,7 +658,7 @@ fn a_contained_failure_still_names_what_went_wrong() {
         "the reason reaches the operator: {stderr}"
     );
     assert!(
-        stderr.contains("errored no-secrets"),
+        stderr.contains("errored source carry unsafe"),
         "beside the id and the class: {stderr}"
     );
     nowhere(&env, &out, &secret, "contained failure");
@@ -686,7 +686,7 @@ fn the_data_channel_reports_the_contained_failure_as_a_class_token_alone() {
     let document: serde_json::Value =
         serde_json::from_slice(&out.stdout).expect("-J stdout is JSON");
 
-    assert_eq!(document["errored"][0]["rule"], "no-secrets");
+    assert_eq!(document["errored"][0]["rule"], "source carry unsafe");
     assert_eq!(document["errored"][0]["class"], "internal");
     assert_eq!(
         document["errored"][0].as_object().map(serde_json::Map::len),

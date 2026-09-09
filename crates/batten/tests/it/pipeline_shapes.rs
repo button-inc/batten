@@ -17,7 +17,7 @@
 //! `cargo` row, which is exactly the drift the corpus exists to catch.
 //!
 //! Every `cargo` sample is written `mise exec -- cargo …` since CLOUD-271: the
-//! committed `no-bare-cargo` row refuses the unmediated route outright, so a
+//! committed `cargo run loose` row refuses the unmediated route outright, so a
 //! bare spelling would make the allows fail and — worse — make the denies pass
 //! for the wrong row, which is coverage that has stopped testing this predicate.
 //! The wrapper look-through means the mediated form is still judged as `cargo`,
@@ -165,7 +165,7 @@ fn an_and_chain_is_allowed_because_it_cannot_manufacture_a_green() {
     assert_allowed_backgrounded("mise run fmt && mise run verify");
     // THE GIT-FAMILY ARM, AND ITS OPERAND MOVED (CLOUD-1351). This read
     // `git fetch origin main && git rebase origin/main`, and that command is now
-    // DENIED — by `rebase-not-hand-stepped`, for hand-stepping a step
+    // DENIED — by `patch run loose`, for hand-stepping a step
     // `mise run land` drives, which is a different row answering a different
     // question. The claim here is about `&&` alone, so an operand another row
     // independently refuses makes the case ambiguous: it would fail while
@@ -293,7 +293,7 @@ fn the_refusal_states_the_principle_rather_than_naming_one_command() {
     // renders one cause, and this case asserts WHICH row the reader is sent to.
     let refusal = cause_backgrounded("mise run verify | tail -6");
     assert!(
-        refusal.contains("verdict-not-discarded"),
+        refusal.contains("verdict guard missing"),
         "names the rule: {refusal}"
     );
     // The principle now travels as the declared class rather than as a sentence
@@ -310,7 +310,7 @@ fn the_refusal_states_the_principle_rather_than_naming_one_command() {
     // survive the move: `explain` prints the principle in full rather than the
     // narrower wording an agent complied with literally and then re-broke on the
     // next command (CLOUD-199).
-    let explained = run(&root(), &["policy", "explain", "verdict-not-discarded"]);
+    let explained = run(&root(), &["policy", "explain", "verdict guard missing"]);
     assert_eq!(explained.status.code(), Some(0), "the row resolves");
     assert!(
         String::from_utf8_lossy(&explained.stdout).contains("run_in_background"),
@@ -358,8 +358,8 @@ fn each_shape_renders_its_own_cause() {
 // The second predicate this kind carries. Same file as the discard family
 // because they are decided over the same parse and by the same row kind, and
 // splitting them would hide that the ALLOW half of each is the other's deny:
-// a filter downstream of a pipe is refused by `verdict-not-discarded` when its
-// producer carries a verdict, and allowed by `no-tool-substitution` always.
+// a filter downstream of a pipe is refused by `verdict guard missing` when its
+// producer carries a verdict, and allowed by `tool select other` always.
 
 #[test]
 fn a_text_utility_aimed_at_a_repository_path_is_refused() {
@@ -452,7 +452,7 @@ fn the_same_utility_downstream_of_a_pipe_is_a_filter_and_is_untouched() {
 
 #[test]
 fn a_target_outside_the_repository_is_not_a_substitution() {
-    // `>/tmp/<task>.log` is the shape `verdict-not-discarded` MANDATES, so a row
+    // `>/tmp/<task>.log` is the shape `verdict guard missing` MANDATES, so a row
     // that refused reading one back would put the two rows in contradiction.
     assert_allowed("cat /tmp/verify.log");
     assert_allowed("tail -20 /tmp/land.log");

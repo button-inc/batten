@@ -44,7 +44,7 @@
 //! reports a result under. It is `[[mint]]`'s control through the same
 //! `selects_tool_name`, so there is no second matcher to drift.
 //!
-//! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
+//! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
 // carried: tests/review-answered.bats policy/review-answered.rego crates/batten/tests/it/review_answered.rs
 //!
@@ -67,10 +67,10 @@
 //! four moved AGAIN under CLOUD-690, because what produces the count changed:
 //! each is noted below with what the number is now and why.
 //!
-// changed: "review-answered.bats::THE MEASURED SHAPE: a head carrying unresolved threads is refused, naming the count" crates/batten/tests/it/review_answered.rs the count is identical and where it is read from is not: `4 blocking` was a substring of a free string, and it is now the `Subject::Count` the engine renders beside the token (CLOUD-1050)
-// changed: "review-answered.bats::VACUITY: zero threads and no review reads as unreviewed, not as all-addressed" crates/batten/tests/it/review_answered.rs the count is 0 now and the rule is `review-absent`: the condition was one element of a `--jq` projection and is a second fact with its own inverted comparison since CLOUD-690, so the assertion moved from prose to a different predicate's subject rather than only to a subject
-// changed: "review-answered.bats::VACUITY: a page the command could not read refuses rather than passing" crates/batten/tests/it/review_answered.rs same number, different producer: the projection emitted an extra element and the `blocking` column adds one, so the discriminating pair with the all-answered case is now two identical thread sets under different page flags
-// changed: "review-answered.bats::THE BYPASS: a compound command is still a ready" crates/batten/tests/it/review_answered.rs same cause, same number; what the case proves — that the receipt row's selection and this module's narrowing agree about one command — is unchanged
+// changed: "review judge missing.bats::THE MEASURED SHAPE: a head carrying unresolved threads is refused, naming the count" crates/batten/tests/it/review_answered.rs the count is identical and where it is read from is not: `4 blocking` was a substring of a free string, and it is now the `Subject::Count` the engine renders beside the token (CLOUD-1050)
+// changed: "review judge missing.bats::VACUITY: zero threads and no review reads as unreviewed, not as all-addressed" crates/batten/tests/it/review_answered.rs the count is 0 now and the rule is `review-absent`: the condition was one element of a `--jq` projection and is a second fact with its own inverted comparison since CLOUD-690, so the assertion moved from prose to a different predicate's subject rather than only to a subject
+// changed: "review judge missing.bats::VACUITY: a page the command could not read refuses rather than passing" crates/batten/tests/it/review_answered.rs same number, different producer: the projection emitted an extra element and the `blocking` column adds one, so the discriminating pair with the all-answered case is now two identical thread sets under different page flags
+// changed: "review judge missing.bats::THE BYPASS: a compound command is still a ready" crates/batten/tests/it/review_answered.rs same cause, same number; what the case proves — that the receipt row's selection and this module's narrowing agree about one command — is unchanged
 //!
 //! # Two cases the retired suite could not have
 //!
@@ -488,14 +488,8 @@ fn a_ready_with_no_record_at_all_is_refused_and_the_remedy_names_the_read() {
     // line. The point this case makes survives the move — what a reader reaches
     // is still a ROUTE that can mint the record rather than a shell command no
     // selector would accept.
-    assert!(
-        decision.contains("ready-needs-the-threads-answered"),
-        "{decision}"
-    );
-    let explained = run(
-        &dir,
-        &["policy", "explain", "ready-needs-the-threads-answered"],
-    );
+    assert!(decision.contains("review answer partial"), "{decision}");
+    let explained = run(&dir, &["policy", "explain", "review answer partial"]);
     assert_eq!(explained.status.code(), Some(0), "the row resolves");
     let routes = String::from_utf8_lossy(&explained.stdout);
     assert!(routes.contains(&declared.selector), "{routes}");
@@ -679,18 +673,12 @@ fn a_sibling_method_answering_the_same_shape_is_not_a_review() {
     // module's zero-count one: the receipt row reports the check as unrecorded, so
     // what the sibling call answered was never a fact about reviews at all. The
     // module cannot even be reached, which is why this asserts the receipt row.
-    assert!(
-        decision.contains("ready-needs-a-review-to-exist"),
-        "{decision}"
-    );
+    assert!(decision.contains("review list unread"), "{decision}");
     // The remedy naming the RIGHT method is one hop away (CLOUD-1286), and it is
     // the half worth reaching for here: this whole case is about a sibling
     // method being counted as a review, so a remedy pointing at the wrong one
     // would be the same defect in the fix.
-    let explained = run(
-        &dir,
-        &["policy", "explain", "ready-needs-a-review-to-exist"],
-    );
+    let explained = run(&dir, &["policy", "explain", "review list unread"]);
     assert_eq!(explained.status.code(), Some(0), "the row resolves");
     assert!(
         String::from_utf8_lossy(&explained.stdout).contains("get_reviews"),
@@ -842,7 +830,7 @@ fn reading_the_review_is_never_refused_so_the_remedy_is_reachable() {
     let payload = serde_json::json!({
         "hook_event_name": "PreToolUse",
         "tool_name": declared.raw_tool(),
-        // NEUTRAL owner and repo, which `no-origin-literal-in-fixtures` is right
+        // NEUTRAL owner and repo, which `forge name other` is right
         // to insist on: what this case asserts is that a `mediated_call` row
         // judges an MCP invocation at all, and nothing about it depends on WHICH
         // repository the arguments name.
@@ -906,7 +894,7 @@ fn an_undeclared_class_refuses_with_the_token_and_says_the_registry_is_silent() 
 /// satisfies the check it names.
 const ROWS: &str = r#"
 [[rule]]
-id = "ready-needs-the-threads-answered"
+id = "review answer partial"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -916,7 +904,7 @@ key = "head"
 reason = "read the threads with the pull_request_read tool, method get_review_comments"
 
 [[rule]]
-id = "ready-needs-a-review-to-exist"
+id = "review list unread"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -926,7 +914,7 @@ key = "head"
 reason = "read the reviews with the pull_request_read tool, method get_reviews"
 
 [[rule]]
-id = "review-answered"
+id = "review judge missing"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/review-answered.rego"

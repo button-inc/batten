@@ -1,4 +1,4 @@
-//! `connector-not-granted` over the compiled binary (CLOUD-1260).
+//! `connector grant loose` over the compiled binary (CLOUD-1260).
 //!
 //! **The question a `with input as` case cannot answer.** The module's own `test_`
 //! rules pin the predicate and nothing else: they hand it a fabricated
@@ -52,7 +52,7 @@ const MODULE: &str = include_str!("../../../../policy/connector-not-granted.rego
 const CONFIG: &str = r#"version = 1
 
 [[rule]]
-id = "connector-not-granted"
+id = "connector grant loose"
 kind = "policy"
 scope = "tree"
 documents = [".claude/settings.json"]
@@ -130,7 +130,7 @@ fn a_named_raw_grant_is_refused() {
         Some(2),
         "a granted raw tool must refuse: the reduction beside it decides nothing\n{answer}{cause}"
     );
-    assert!(answer.contains("connector-not-granted"), "{answer}{cause}");
+    assert!(answer.contains("connector grant loose"), "{answer}{cause}");
 }
 
 #[test]
@@ -147,7 +147,7 @@ fn a_globbed_server_grant_is_refused() {
         Some(2),
         "a wildcard grant is wider than a named one and must refuse too\n{answer}{cause}"
     );
-    assert!(answer.contains("connector-not-granted"), "{answer}{cause}");
+    assert!(answer.contains("connector grant loose"), "{answer}{cause}");
 }
 
 #[test]

@@ -2684,7 +2684,7 @@ mod tests {
             "resolve-zero-config-local-redefine",
             "version = 1\n",
             Some(
-                "version = 1\n\n[[rule]]\nid = \"no-conflict-markers\"\nkind = \"forbid\"\n\
+                "version = 1\n\n[[rule]]\nid = \"source carry broken\"\nkind = \"forbid\"\n\
                  glob = \"nothing/**\"\npattern = \"x\"\nseverity = \"deny\"\n",
             ),
         );

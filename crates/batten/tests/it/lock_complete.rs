@@ -21,7 +21,7 @@
 //! `@test` cases. The successor is a consumer module, so no `kind:` field is
 //! owed. A THIRD path goes with them and owes no arm —
 //! `policy/lock-entry-complete.rego` is neither a `mise-tasks/` program nor a
-//! `.bats` suite, so `shell-retirement` does not govern it; the note below says
+//! `.bats` suite, so `shell retire partial` does not govern it; the note below says
 //! where its predicate went anyway, because a reader looking for it should not
 //! have to reconstruct that from the absence of a row.
 //
@@ -90,7 +90,7 @@ use std::path::{Path, PathBuf};
 use common::{git_in, run, scratch, stdout, write};
 
 /// The rule ids this module publishes, which is also what `--rule` selects.
-const RULE: &str = "lock-complete";
+const RULE: &str = "lock cover partial";
 
 /// A lockfile entry for one tool, complete for whichever platforms are named.
 fn tool_with(name: &str, platforms: &[&str]) -> String {
@@ -550,7 +550,7 @@ id = "plain-dotted-version"
 regex = '^[0-9]+(\.[0-9]+)*$'
 
 [[rule]]
-id = "lock-complete"
+id = "lock cover partial"
 kind = "policy"
 scope = "tree"
 module = "policy/lock-complete.rego"

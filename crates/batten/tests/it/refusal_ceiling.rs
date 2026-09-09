@@ -22,7 +22,7 @@
 //! the ceiling is reported; the allow half — anti-vacuity, and the load-bearing
 //! one (CLOUD-418) — is that every refusal this repository can actually emit
 //! passes. A ceiling that refuses correct output is a gate somebody switches
-//! off, and the converted `no-tool-substitution` refusal is the specific line
+//! off, and the converted `tool select other` refusal is the specific line
 //! the row names.
 //!
 //! **BOTH ARMS ARE MEASURED HERE NOW, EACH AGAINST ITS OWN CEILING**
@@ -192,7 +192,7 @@ fn no_refusal_lost_its_pointer() {
 ///
 /// Modules copied by ENUMERATION rather than by name, for `board_receipts`'
 /// stated reason: naming a consumer's policy filenames inside `crates/**` is
-/// non-negotiable rule 1, and `no-consumer-repo-name` computes that.
+/// non-negotiable rule 1, and `source name other` computes that.
 fn fixture(name: &str) -> PathBuf {
     let staged = Fixture::new(name).config(include_str!("../../../../batten.toml"));
     let modules = staged.path().join("policy");
@@ -254,7 +254,7 @@ fn a_first_sighting_carries_the_gloss_and_its_route_by_kind() {
         "the pointer stays inline: {line}"
     );
     assert!(
-        line.contains("no-tool-substitution"),
+        line.contains("tool select other"),
         "the rule id is the hop to the row's own remedy: {line}"
     );
     assert!(
@@ -292,7 +292,7 @@ fn a_repeat_drops_the_definition_and_keeps_the_pointers() {
         "the repeat is a byte prefix of the first sighting: {repeat:?} vs {first:?}"
     );
     assert!(
-        repeat.contains("no-tool-substitution"),
+        repeat.contains("tool select other"),
         "the rule id stays on the repeat arm — for 66 rows it is the only \
          discriminator (CLOUD-1637's second amendment): {repeat}"
     );
