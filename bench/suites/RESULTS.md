@@ -85,7 +85,6 @@ to it pays.
 | 0.7 | 0.2% | `tests/release-due.bats` |
 | 0.6 | 0.2% | `tests/connector-allow-resolve.bats` |
 | 0.5 | 0.2% | `tests/container-preflight.bats` |
-| 0.5 | 0.2% | `tests/coderabbit-config-check.bats` |
 | 0.5 | 0.1% | `tests/evaluator-io-check.bats` |
 | 0.5 | 0.1% | `tests/timeout-check.bats` |
 | 0.4 | 0.1% | `tests/git-hook.bats` |
