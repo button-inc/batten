@@ -378,6 +378,74 @@ fn the_committed_records_satisfy_this_gate() {
     );
 }
 
+/// The replay's own reading of the gate, IN-PROCESS rather than over a spawn.
+///
+/// **THE REPLAY IS NOT ONE OF THIS FILE'S E2E CLAIMS** (CLOUD-1750). The header
+/// above names three things only the compiled binary can prove — that the engine
+/// PARSES both records into `input.tree.documents`, that an array of tables
+/// arrives iterable, and that an absent record reaches `input.tree.missing`. The
+/// cases that assert those still spawn, and should. The replay asserts something
+/// else entirely and 78 times over: that one predicate fires when one required
+/// key is gone.
+///
+/// `rules::run_static` is the same read surface a consumer reaches — the engine,
+/// with the same document parsing, not a `with input as` stub whose green means
+/// nothing. So the guarantee the header defends is unchanged and the process
+/// boundary is gone.
+///
+/// The scratch repository stays: `input.tree.*` is defined over TRACKED paths, so
+/// git is what makes the surface non-empty. One per block, not one per mutation.
+fn replay_vocabulary() -> Vec<batten::verdict::DeclaredVerdict> {
+    // NARROWED TO WHAT THIS MODULE RAISES, and the whole table is refused here.
+    // `run_static` holds the both-directions invariant the registry holds: a
+    // declared class nothing raises "reads as coverage". A fixture enabling ONE
+    // module against the committed table therefore fails on every other row's
+    // class — which is the refusal this helper met first, and it is the engine
+    // being right rather than a fixture problem.
+    //
+    // **BUILT ONCE PER BLOCK, NOT PER MUTATION.** Reading it inside the loop
+    // re-parsed the whole committed verdict table 13 times and took the block
+    // from 2.0s to 4.4s — a conversion that moved the tier and lost the time,
+    // which is why the number is taken after every one of these changes rather
+    // than assumed from the shape.
+    common::verdicts_in(&common::at_root("."))
+        .into_iter()
+        .filter(|verdict| RAISED.contains(&verdict.id.as_str()))
+        .collect()
+}
+
+fn replayed_findings(
+    dir: &std::path::Path,
+    verdicts: &[batten::verdict::DeclaredVerdict],
+) -> String {
+    let row: batten::rules::Rule = serde_json::from_value(serde_json::json!({
+        "id": "agentic-experiment-record",
+        "kind": "policy",
+        "scope": "tree",
+        "documents": [TRIALS, METHOD],
+        "module": "policy/agentic-experiment-record.rego",
+        "severity": "deny",
+    }))
+    .expect("the loader accepts the committed row's shape");
+
+    batten::rules::run_static(
+        &[row],
+        &[],
+        batten::policy::Vocabulary {
+            patterns: &[],
+            verdicts: &verdicts,
+            recorders: &[],
+        },
+        dir,
+    )
+    .expect("the read surface runs a policy row")
+    .findings
+    .into_iter()
+    .map(|finding| finding.rule)
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
 /// The trial blocks this file replays, one `#[test]` each.
 ///
 /// **THE SPLIT IS THE PERFORMANCE FIX AND THIS CONSTANT IS ITS SAFETY CATCH**
@@ -419,6 +487,7 @@ fn replay_block(block: usize) {
     let method = std::fs::read_to_string(common::at_root(METHOD)).expect("the method record");
 
     let dir = repo(&format!("replay-{block}"), Some(&trials), Some(&method));
+    let verdicts = replay_vocabulary();
     let mut fired = 0_usize;
 
     for line in &REQUIRED_LINES {
@@ -433,7 +502,7 @@ fn replay_block(block: usize) {
         // without a second commit — and if that were ever untrue this assertion
         // would go to zero rather than quietly passing.
         write(&dir, TRIALS, &mutated);
-        if findings(&dir).contains("agentic-record-incomplete") {
+        if replayed_findings(&dir, &verdicts).contains("agentic-record-incomplete") {
             fired += 1;
         }
     }
