@@ -496,3 +496,72 @@ fn no_pull_request_to_ask_is_could_not_look_and_never_a_refusal() {
         "exit 2 would claim the bot refused this head, which nothing established"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The stop names a route that exists (CLOUD-1586's mechanism, CLOUD-1050's rule)
+// ---------------------------------------------------------------------------
+
+/// The conflict refusal and the gate that denies the hand rebase agree, and both
+/// name a route this engine actually has.
+///
+/// **Measured on this branch rather than imagined.** The verb's conflict line
+/// reported the commit and the FIRST path and stopped there; the
+/// `rebase-not-hand-stepped` row then told the reader the way out was
+/// `--continue`, `--abort` or `--skip`. The replay is STATELESS — nothing is
+/// half-replayed, so no rebase is ever in progress — and none of those three can
+/// apply to it. A session followed both, concluded the landing loop was
+/// defective, and was one step from cherry-picking around it, which completes
+/// the replay while writing no lap record at all: `rebase-conflict-stops-the-lap`
+/// would then read clean over a conflict that happened, which is the false green
+/// this whole family exists to catch.
+///
+/// Two authorities for one route is the drift, so this asserts they AGREE rather
+/// than checking either alone. Text over the committed files, because that is
+/// what a reader meets: driving the verb to a conflict needs a live remote, and
+/// `crates/batten/tests/it/rebase.rs` already owns the mechanism end to end.
+#[test]
+fn the_conflict_stop_and_its_gate_name_a_route_that_exists() {
+    let verb = std::fs::read_to_string(common::at_root("crates/batten/src/lib.rs"))
+        .expect("the boundary is readable");
+    let after = verb
+        .split_once("land::Replay::Conflicted")
+        .expect("the conflict arm is where the message lives")
+        .1;
+    let arm = &after[..after.find("land::Replay::Current").unwrap_or(after.len())];
+
+    assert!(
+        arm.contains("--resolve"),
+        "the conflict refusal must name the route it has, or a reader reaches for one it does not"
+    );
+    assert!(
+        arm.contains("=<file>"),
+        "and the per-conflict spelling, because a path conflicting twice is the common case and is \
+         unguessable from a bare --resolve"
+    );
+    // NAMING `--continue` IS RIGHT HERE, and the first draft of this case
+    // asserted its absence — which would have refused the very sentence that
+    // stops a reader reaching for it. What matters is that the text says WHY it
+    // cannot apply, so the reader stops looking rather than concluding the loop
+    // is broken.
+    assert!(
+        arm.contains("STATELESS"),
+        "the refusal must say why there is nothing to continue, or its absence reads as a defect"
+    );
+
+    let config = std::fs::read_to_string(common::at_root("batten.toml"))
+        .expect("the committed authority is readable");
+    let row = config
+        .split_once("id = \"rebase-not-hand-stepped\"")
+        .expect("the row is declared")
+        .1;
+    let reason = &row[..row.find("\n\n").unwrap_or(row.len())];
+
+    assert!(
+        reason.contains("--resolve"),
+        "the gate that denies the hand rebase must name the route that replaces it"
+    );
+    assert!(
+        reason.contains("STATELESS"),
+        "and must say why the rebase-in-progress exits cannot apply, rather than offering them"
+    );
+}
