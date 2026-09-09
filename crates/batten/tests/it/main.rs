@@ -217,6 +217,7 @@ mod rebase;
 mod receipt_verified;
 mod reclaim_report_once;
 mod record_closes;
+mod record_families;
 mod redirect_resolves;
 mod reference_coverage;
 mod refusal_ceiling;

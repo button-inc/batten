@@ -361,6 +361,30 @@ impl Origin {
 ///
 /// Returns an error when the shard cannot be created, written, or synced.
 pub fn append(store_dir: &Path, shard: &str, entry: &Entry) -> Result<()> {
+    append_line(store_dir, shard, &serde_json::to_string(entry)?)
+}
+
+/// Append one already-encoded line to a shard, durably.
+///
+/// **The one append path in this crate, and [`append`] is now a caller of it
+/// rather than a second copy** (CLOUD-1713). Three shell programs hand-rolled a
+/// durable append-only store under `.git/` while this machinery sat here with no
+/// door — `reclaim-census` being a single-shard journal with a boot id as the
+/// shard key, written by hand next to this file. Generalising the line write is
+/// what opens the door without minting a second store, which is exactly what that
+/// row forbids.
+///
+/// Persist-before-emit, and the `sync_all` is the half that makes the
+/// discriminating case decidable: without it a caller can emit having written a
+/// record the next boot cannot read. `reclaim-census` reached for `sync -d` for
+/// this reason; the durability barrier moves here so no caller has to remember.
+///
+/// No lock, for [`append`]'s reason: a shard has exactly one writer.
+///
+/// # Errors
+///
+/// Returns an error when the shard cannot be created, written, or synced.
+pub fn append_line(store_dir: &Path, shard: &str, line: &str) -> Result<()> {
     let dir = shards_dir(store_dir);
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("create the shard directory {}", dir.display()))?;
@@ -370,11 +394,89 @@ pub fn append(store_dir: &Path, shard: &str, entry: &Entry) -> Result<()> {
         .append(true)
         .open(&path)
         .with_context(|| format!("open the shard {}", path.display()))?;
-    let line = serde_json::to_string(entry)?;
     writeln!(file, "{line}").with_context(|| format!("append to the shard {}", path.display()))?;
     file.sync_all()
         .with_context(|| format!("sync the shard {}", path.display()))?;
     Ok(())
+}
+
+/// What folding every shard of a generic journal found.
+///
+/// **`task::Reading`'s three answers, and that type is the stated precedent
+/// rather than a coincidence** (CLOUD-1713 §7). A fold over zero records is
+/// *nothing* — a real answer — and is never the same claim as being unable to
+/// read the store. Collapsing them is the dead-gate shape this whole crate is
+/// written against: an unreadable store reported as "no records" reads clean.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fold {
+    /// No shard holds a whole record. Nothing has been appended, or every line
+    /// present was torn. A real answer.
+    Nothing,
+    /// Every whole record, shard-sorted then in append order.
+    Records(Vec<String>),
+    /// The store is there and cannot be read. Could-not-look.
+    Unreadable(PathBuf),
+}
+
+/// Fold every shard of a generic journal into its whole records.
+///
+/// **A HALF-WRITTEN APPEND IS NOT A RECORD**, which is the discriminating case
+/// (CLOUD-1032). A line counts only if it was terminated: the file's final
+/// fragment is dropped unless the file ends in a newline, because a process that
+/// died mid-`write` leaves exactly that. [`read_shards`] drops a torn trailing
+/// line by failing to parse it as an [`Entry`]; a generic record has no schema to
+/// fail against, so the termination has to be read off the bytes instead.
+///
+/// Shard order is lexical, for [`read_shards`]'s reason: a fold must be a pure
+/// function of the shard contents and never of `read_dir` order (§6).
+///
+/// # Errors
+///
+/// Never returns an error: an unreadable store is [`Fold::Unreadable`], which is
+/// an answer rather than a fault, and a caller that pattern-matches only
+/// [`Fold::Records`] gets a compile error rather than a silent empty list.
+#[must_use]
+pub fn fold_lines(store_dir: &Path) -> Fold {
+    let dir = shards_dir(store_dir);
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        // ABSENT IS NOTHING, not unreadable: a store nobody has appended to has
+        // no directory, and that is a genuine "no records" rather than a failure
+        // to look. A store that exists and cannot be listed is the other arm.
+        return if dir.exists() {
+            Fold::Unreadable(dir)
+        } else {
+            Fold::Nothing
+        };
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+        .collect();
+    paths.sort();
+
+    let mut all = Vec::new();
+    for path in paths {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return Fold::Unreadable(path);
+        };
+        // Only terminated lines. `split('\n')` then dropping the tail is what
+        // distinguishes a whole final record from a torn one; `lines()` cannot,
+        // because it yields an unterminated tail identically to a terminated one.
+        let mut parts: Vec<&str> = text.split('\n').collect();
+        let _torn_or_empty = parts.pop();
+        all.extend(
+            parts
+                .iter()
+                .filter(|line| !line.is_empty())
+                .map(|line| (*line).to_owned()),
+        );
+    }
+    if all.is_empty() {
+        Fold::Nothing
+    } else {
+        Fold::Records(all)
+    }
 }
 
 /// The shard id for this process in this worktree.

@@ -4710,6 +4710,65 @@ pub const SURFACE: &[CommandDecl] = &[
     // No positional: the branch is the key and the engine resolves it, so a
     // caller cannot record against a branch it is not on — `record tool`'s
     // anti-staleness argument, applied to a different key.
+    // CLOUD-1713's two doors. Three programs (841 lines) hand-rolled a durable
+    // store under `.git/` because the engine's own two shapes — keyed put/hit and
+    // append-and-fold — had no leaf. LEAVES UNDER `record` rather than new nouns:
+    // CLOUD-1546 counts 42 top-level rows and CLOUD-1182 records nine ports
+    // becoming nine nouns, and a store family is an object this verb records, not
+    // a verb of its own.
+    CommandDecl {
+        path: "record keyed",
+        id: "record.keyed",
+        about: "Put one value into a keyed store family, read from stdin",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[
+            FlagDecl::positional("family", "The store family the record belongs to"),
+            FlagDecl::positional("key", "The key the record is filed under"),
+        ],
+    },
+    CommandDecl {
+        path: "record journal",
+        id: "record.journal",
+        about: "Append one record to an append-and-fold store family, read from stdin",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[FlagDecl::positional(
+            "family",
+            "The store family the record belongs to",
+        )],
+    },
+    // The READ half of CLOUD-1713's two families, and they stay under `record`
+    // on `capture show`'s precedent: `record` is a store NOUN and is already
+    // `unclassified` because the subtree writes, so a read leaf under it neither
+    // leaks onto the derived agent allowlist nor needs a noun of its own. The
+    // producer/consumer split is still §2's answer to "how does a
+    // read-classed surface obtain a record without gaining a write" — the producer
+    // is a separate verb, exactly as `record tool` already is for
+    // `validator-verdict-clean`.
+    CommandDecl {
+        path: "record show",
+        id: "record.show",
+        about: "Read one keyed record back: `hit` and the value, or `miss`",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[
+            FlagDecl::positional("family", "The store family to read"),
+            FlagDecl::positional("key", "The key to look under"),
+        ],
+    },
+    CommandDecl {
+        path: "record fold",
+        id: "record.fold",
+        about: "Fold a journal family: `nothing`, its records, or `unreadable <path>`",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[FlagDecl::positional("family", "The store family to fold")],
+    },
     CommandDecl {
         path: "record plan",
         id: "record.plan",

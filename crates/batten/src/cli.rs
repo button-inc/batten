@@ -1346,6 +1346,30 @@ pub enum RecordCommand {
         /// The ref or sha the verdict was taken against.
         reference: String,
     },
+    /// Put one value into a keyed store family (CLOUD-1713).
+    Keyed {
+        /// The store family the record belongs to.
+        family: String,
+        /// The key the record is filed under.
+        key: String,
+    },
+    /// Append one record to an append-and-fold store family (CLOUD-1713).
+    Journal {
+        /// The store family the record belongs to.
+        family: String,
+    },
+    /// Read one keyed record back: `hit` and the value, or `miss`.
+    Show {
+        /// The store family to read.
+        family: String,
+        /// The key to look under.
+        key: String,
+    },
+    /// Fold a journal family: `nothing`, its records, or `unreadable <path>`.
+    Fold {
+        /// The store family to fold.
+        family: String,
+    },
     /// Record this branch's plan: `<id> <status>` per line, on stdin.
     ///
     /// No argument, for [`RecordCommand::Tool`]'s reason one layer over: the
@@ -2355,6 +2379,20 @@ fn record_of(matches: &ArgMatches) -> Option<RecordCommand> {
         }),
         ("forge", matches) => Some(RecordCommand::Forge {
             reference: matches.get_one::<String>("ref")?.clone(),
+        }),
+        ("keyed", matches) => Some(RecordCommand::Keyed {
+            family: matches.get_one::<String>("family")?.clone(),
+            key: matches.get_one::<String>("key")?.clone(),
+        }),
+        ("journal", matches) => Some(RecordCommand::Journal {
+            family: matches.get_one::<String>("family")?.clone(),
+        }),
+        ("show", matches) => Some(RecordCommand::Show {
+            family: matches.get_one::<String>("family")?.clone(),
+            key: matches.get_one::<String>("key")?.clone(),
+        }),
+        ("fold", matches) => Some(RecordCommand::Fold {
+            family: matches.get_one::<String>("family")?.clone(),
         }),
         // No positional to read: the branch is the key and the engine resolves
         // it, so this arm takes the sub-verb and nothing else.
