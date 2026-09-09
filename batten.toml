@@ -9162,7 +9162,7 @@ measured = "2026-09-07"
 # COLD'S BASIS MOVES WITH WARM'S, for the 2026-09-06 entry's measured reason:
 # refreshing one and not the other made the very next lap refuse on the other arm
 # with warm never breached.
-count = 256
+count = 268
 tolerance = 10
 
 # COLD'S BASIS MOVES AND COLD'S FLOOR DOES NOT, and that is the entry above
@@ -9182,7 +9182,7 @@ tolerance = 10
 # together.
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 256
+count = 268
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
