@@ -229,19 +229,19 @@ pub enum Precheck {
     /// # IT NARROWS THE WINDOW AND DOES NOT CLOSE IT, WHICH IS STATED RATHER THAN
     /// IMPLIED
     ///
-    /// The commit point does not itself advance `main` — it posts the
-    /// `/fast-forward` comment that `.github/workflows/fast-forward.yml` acts on,
-    /// and that workflow re-reads the draft bit, the fork head and the check
-    /// roster but never the lease. So a rival that acquires the lease between this
-    /// precheck and that push is not refused by anything here: what this removes
-    /// is the whole width of `Step::Wait`, during which nothing re-read the ref at
-    /// all, and what remains is the gap between the request and the merge.
+    /// The commit point does not itself advance the trunk — it REQUESTS the
+    /// advance, and whatever executes that request runs outside this process. A
+    /// consumer's executor re-reads whatever its own configuration tells it to,
+    /// and the lease is not part of that contract, so a rival acquiring the lease
+    /// between this precheck and that push is refused by nothing here. What this
+    /// removes is the whole width of `Step::Wait`, during which nothing re-read
+    /// the ref at all; what remains is the gap between the request and the merge.
     ///
-    /// Closing the rest needs a fencing token the executor revalidates, which is a
-    /// change to that workflow's protocol rather than to this row (CLOUD-1703).
+    /// Closing the rest needs a fencing token the executor revalidates, which is
+    /// a change to that request protocol rather than to this row (CLOUD-1705).
     /// Named here because a precheck that reads as a guarantee is worse than one
-    /// that reads as a narrowing: the next person to weigh the executor's own
-    /// fence should find the gap written down, not infer its absence.
+    /// that reads as a narrowing: the next reader should find the gap written
+    /// down rather than infer its absence.
     LeaseHeld,
 }
 

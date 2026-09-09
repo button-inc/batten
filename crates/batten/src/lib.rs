@@ -7177,6 +7177,14 @@ fn run_land_lap(
         // in this function. What each answer means is `land::progress`'s — one
         // table, read here rather than re-derived per step — and what each step
         // leaves behind is its row's `compensate`.
+        // The lap's identity, gathered once: every precheck reads a subset of it.
+        let this_lap = Asked {
+            root,
+            url,
+            reference,
+            branch,
+            lap,
+        };
         for row in &pipeline.steps {
             let step = row.step;
             // THE ROW'S OWN QUESTION, where the driver used to carry a
@@ -7184,41 +7192,16 @@ fn run_land_lap(
             // and can only lap, never land: it exists to spend nothing.
             // THE BET IS SETTLED BEFORE ANYTHING IS SPENT, and before the
             // replay that would otherwise build on somebody else's commits.
-            if let Some(pipeline::Precheck::BetSettled) = row.precheck {
-                if let Some(code) =
-                    settle_the_bet(root, url, &mut bet, reference, branch, out, err)?
-                {
-                    unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
-                    return Ok(code);
-                }
-                // AND ONLY THEN IS A NEW ONE PLACED. Placing before settling would
-                // stack a second borrowed range on an unsettled first, and the
-                // undo point recorded for the second would already be
-                // speculative.
-                place_the_bet(root, &mut bet, reference, branch, out)?;
+            // THE TWO ROWS THAT CAN END A LAP BEFORE IT SPENDS, asked together
+            // because they share an unwind and differ only in what follows it.
+            let asked = asks_before_the_step(*row, this_lap, &mut trunk_poll, &mut bet, out, err)?;
+            if let Answered::Stop(code) = asked {
+                unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
+                return Ok(code);
             }
-            // THE ROW'S OWN QUESTION. Only the row declaring `BaseMoved` asks it:
-            // running the probe before every step would be a forge read per step
-            // rather than per lap, and a precheck the composition never asked for.
-            if row.precheck == Some(pipeline::Precheck::BaseMoved)
-                && base_moved(root, &mut trunk_poll, reference, lap, step, out)?
-            {
+            if asked == Answered::Lap {
                 unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
                 continue 'laps;
-            }
-            // THE ROW'S OWN QUESTION, AND THE ONE THAT FAILS CLOSED. A lap that no
-            // longer holds its lease must not write `main`: the holder it lost to
-            // is landing under the same trunk. This STOPS rather than laps —
-            // another lap would re-reach the same commit point without the
-            // authority to use it, and re-running CI to discover that is a matrix
-            // spent on a question one ref read already answered.
-            if row.precheck == Some(pipeline::Precheck::LeaseHeld) && !still_holds_lease(root) {
-                writeln!(
-                    err,
-                    "::error:: land: the lease is no longer held by this clone; not fast-forwarding {branch}"
-                )?;
-                unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
-                return Ok(exit::ExitCode::Violation);
             }
             // THE PHASE, PUSHED BEFORE THE STEP RUNS RATHER THAN AFTER IT. A step
             // is what this lap is doing WHILE it blocks, and the whole reason a
@@ -9785,6 +9768,98 @@ impl<'clone> Heartbeat<'clone> {
         // Bound rather than dropped: `beat` answers a `bool`, and dropping a
         // `Copy` is a lint of its own.
         let _renewed = lease::beat(self.root, terms, progress.as_deref(), now);
+    }
+}
+
+/// What a row's own question says the lap should do next.
+///
+/// Every non-`Go` answer unwinds; they differ only in what follows, which is what
+/// lets the caller ask once and branch on the difference alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Answered {
+    /// Nothing to answer, or the answer admits the step.
+    Go,
+    /// Unwind and take another lap — the base moved while the last step ran.
+    Lap,
+    /// Unwind and stop, with the code the answer decided.
+    Stop(ExitCode),
+}
+
+/// What every precheck reads, gathered so the ask is one call rather than three.
+///
+/// A struct rather than nine parameters, for `clippy::too_many_arguments`: these
+/// are the lap's identity, and each precheck takes the subset it needs.
+#[derive(Debug, Clone, Copy)]
+struct Asked<'lap> {
+    root: &'lap Path,
+    url: &'lap str,
+    reference: &'lap str,
+    branch: &'lap str,
+    lap: u32,
+}
+
+/// The two prechecks a row can carry that end a lap before it spends.
+///
+/// # WHY THEY ARE ASKED TOGETHER
+///
+/// They share an unwind and differ only in what follows it, and
+/// `clippy::too_many_lines` refuses `run_land_lap` with either arm written
+/// inline — the lap was already at the bound before this row added one. Which is
+/// the shape [`pipeline::StepRow::precheck`] asks for in as many words: a
+/// per-step slot rather than an `if` in the loop.
+///
+/// # THE TWO FAIL IN OPPOSITE DIRECTIONS, DELIBERATELY
+///
+/// [`pipeline::Precheck::BaseMoved`] fails OPEN: a probe that cannot answer costs
+/// one wasted matrix, so a could-not-look admits the step.
+/// [`pipeline::Precheck::LeaseHeld`] fails CLOSED: it guards two landers writing
+/// one trunk, so a lease this clone cannot read is one it will not move `main`
+/// under. Same slot, opposite defaults, and the reason is the cost of being wrong
+/// rather than a preference (CLOUD-1703).
+fn asks_before_the_step(
+    row: pipeline::StepRow,
+    asked: Asked<'_>,
+    trunk_poll: &mut main_watch::Poll,
+    bet: &mut speculation::Bet,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<Answered> {
+    let Asked {
+        root,
+        url,
+        reference,
+        branch,
+        lap,
+    } = asked;
+    match row.precheck {
+        // THE BET IS SETTLED BEFORE ANYTHING IS SPENT, and before the replay that
+        // would otherwise build on somebody else's commits.
+        Some(pipeline::Precheck::BetSettled) => {
+            if let Some(code) = settle_the_bet(root, url, bet, reference, branch, out, err)? {
+                return Ok(Answered::Stop(code));
+            }
+            // AND ONLY THEN IS A NEW ONE PLACED. Placing before settling would
+            // stack a second borrowed range on an unsettled first, and the undo
+            // point recorded for the second would already be speculative.
+            place_the_bet(root, bet, reference, branch, out)?;
+            Ok(Answered::Go)
+        }
+        Some(pipeline::Precheck::BaseMoved)
+            if base_moved(root, trunk_poll, reference, lap, row.step, out)? =>
+        {
+            Ok(Answered::Lap)
+        }
+        Some(pipeline::Precheck::LeaseHeld) if !still_holds_lease(root) => {
+            // The refusal is written HERE rather than by the caller, because the
+            // lap's arms are then one shape: unwind, then lap or stop. Pointer
+            // only (rule 4) — the branch and the reason, never the lease body.
+            writeln!(
+                err,
+                "::error:: land: the lease is no longer held by this clone; not fast-forwarding {branch}"
+            )?;
+            Ok(Answered::Stop(exit::ExitCode::Violation))
+        }
+        _ => Ok(Answered::Go),
     }
 }
 

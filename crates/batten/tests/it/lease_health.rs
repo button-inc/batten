@@ -276,7 +276,7 @@ fn a_stalled_holder_is_stealable_once_its_beat_has_published() {
         nonce: String::from("n1"),
     };
     let observed = |progress: &str| Observed::Held {
-        sha: String::from("f".repeat(40)),
+        sha: "f".repeat(40),
         body: body(progress),
     };
 
@@ -329,7 +329,7 @@ fn a_wait_whose_checks_move_keeps_advancing() {
     std::fs::create_dir_all(git_dir.join("batten-tasks")).expect("registry dir");
     std::fs::write(
         git_dir.join("batten-tasks").join(&pid_text),
-        &format!("task: land\npid: {pid_text}\nphase: wait\nphase_since: 1700000000\ntick_at: 0\nsig_at: 0\n"),
+        format!("task: land\npid: {pid_text}\nphase: wait\nphase_since: 1700000000\ntick_at: 0\nsig_at: 0\n"),
     )
     .expect("registry entry");
 
@@ -338,7 +338,7 @@ fn a_wait_whose_checks_move_keeps_advancing() {
         &pid_text,
         batten::task::Signal::Sig,
         "7",
-        1700001000,
+        1_700_001_000,
     );
     let first =
         batten::lease::own_progress(&git_dir, pid).expect("a token after the first reading");
@@ -348,7 +348,7 @@ fn a_wait_whose_checks_move_keeps_advancing() {
         &pid_text,
         batten::task::Signal::Sig,
         "9",
-        1700002000,
+        1_700_002_000,
     );
     let moved = batten::lease::own_progress(&git_dir, pid).expect("a token after the world moved");
 
@@ -375,7 +375,7 @@ fn a_wait_where_nothing_moves_republishes_the_same_token() {
     std::fs::create_dir_all(git_dir.join("batten-tasks")).expect("registry dir");
     std::fs::write(
         git_dir.join("batten-tasks").join(&pid_text),
-        &format!("task: land\npid: {pid_text}\nphase: wait\nphase_since: 1700000000\ntick_at: 0\nsig_at: 0\n"),
+        format!("task: land\npid: {pid_text}\nphase: wait\nphase_since: 1700000000\ntick_at: 0\nsig_at: 0\n"),
     )
     .expect("registry entry");
 
@@ -384,7 +384,7 @@ fn a_wait_where_nothing_moves_republishes_the_same_token() {
         &pid_text,
         batten::task::Signal::Sig,
         "7",
-        1700001000,
+        1_700_001_000,
     );
     let first =
         batten::lease::own_progress(&git_dir, pid).expect("a token after the first reading");
@@ -395,7 +395,7 @@ fn a_wait_where_nothing_moves_republishes_the_same_token() {
         &pid_text,
         batten::task::Signal::Sig,
         "7",
-        1700005000,
+        1_700_005_000,
     );
     let still = batten::lease::own_progress(&git_dir, pid).expect("a token after a quiet hour");
 

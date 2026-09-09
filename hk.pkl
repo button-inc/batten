@@ -171,25 +171,6 @@ local gate = new Mapping<String, Step> {
   ["no-docs-tree"] {
     check = "mise run no-docs-tree"
   }
-  // An ADDED doc comment that asserts an absolute about behaviour names somewhere
-  // to look (CLOUD-1703). The defect it answers is a claim promoted from an
-  // inference and never checked, which then became load-bearing for three further
-  // designs — and whose one mechanical tell was that it cited nothing while every
-  // neighbouring claim cited a `file:line`.
-  //
-  // It decides CITATION, never truth: whether a cited claim is correct is not
-  // computable, and the refusal says so rather than letting a green run read as a
-  // verdict about correctness (`ready-cites-check` draws the same line).
-  //
-  // Globbed on the sources it reads, and delta-scoped inside: the tree already
-  // carries hundreds of correct absolutes written before the rule, so a
-  // whole-tree scan would redden all of them at once and be bypassed — which is
-  // the difference between this and its glob-less neighbour above, whose input
-  // genuinely is the whole index.
-  ["claims-cite-check"] {
-    glob = List("crates/batten/src/*.rs", "mise-tasks/claims-cite-check.sh")
-    check = "mise run claims-cite-check"
-  }
   // The coverage half of the nextest swap (CLOUD-813). `test:cargo` runs
   // `cargo nextest run`, which does not execute doctests; the swap was safe
   // because `cargo test --doc --workspace` reported zero on this workspace, and

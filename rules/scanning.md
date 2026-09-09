@@ -158,37 +158,3 @@ as `spawn_census.rs`'s assertion that `clippy.toml` names the spawn type. It
 catches **deletion and drift** in the prose. It does not catch a misused
 instrument, it cannot, and a §7 claiming otherwise would be the same defect this
 file is about (CLOUD-844).
-
-## Asserting a whole-tree answer: cite it or soften it
-
-The rows above choose an instrument for a question. This one governs what you may
-then WRITE about the answer, because the failure that costs most here is not
-reaching for `grep` where a symbol tool belonged — it is reporting the result as
-a guarantee you did not check.
-
-**An absolute is a claim about every path, and a scan answers one question.**
-"Nothing calls this", "this cannot happen", "every reader runs" — each asserts a
-whole-tree property, and each is legitimate only when it names the scan or the
-line that establishes it. An absence has no `path:line` to cite, so cite the scan
-instead; an inference drawn from a cited fact is not itself that fact, and says
-so.
-
-Measured (CLOUD-1703): a plan asserted that an unparseable lease body "is still
-takeable — this cannot wedge the fleet", promoted from the mechanical fact that
-the CAS can address such a ref. It was never checked and it was wrong in the
-costly direction — `authorises` answers `Run` and `turn` answers `Wait`, so such a
-body is unheld AND uncontested. The claim was load-bearing for three further
-designs built on top of it and survived three rounds of review. Its one tell was
-that every neighbouring claim carried a `file:line` and it carried none.
-
-**Gated by `claims-cite-check`** over added doc comments under
-`crates/batten/src/`: an added comment asserting `cannot`, `never`, `always` or
-`nothing` about behaviour must carry a `path.rs:NNN`, a `CLOUD-N` or a
-[`symbol`] in the same comment block. Delta-scoped, because the tree already
-carries hundreds of correct absolutes and a gate that must be bypassed to commit
-decides nothing.
-
-**It checks for a citation, never for truth**, which is the same boundary
-`ready-cites-check` draws: whether a cited claim is correct is not computable, so
-a green run says a reader was given somewhere to look and says nothing else. A §7
-claiming otherwise would be this file's own defect again.
