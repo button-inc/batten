@@ -356,57 +356,17 @@ Closes CLOUD-179"
 # what makes it runnable in a fresh clone. Every case above injects
 # DRAIN_MERGED_PRS and so never reaches this branch — that is what keeps the
 # suite offline — so the gather path needs its own case with the producer stubbed.
-@test "with no DRAIN_MERGED_PRS the drain gathers evidence rather than refusing" {
-	local stub="$BATS_TEST_TMPDIR/bin"
-	mkdir -p "$stub"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/in-progress-drain.sh" "$stub/in-progress-drain.sh"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/landed-check.sh" "$stub/landed-check.sh"
-	# `claimed-keys.sh` and `merged-pr-keys.sh` are retired (CLOUD-1711); the
-	# drain reaches `batten claim merged` now. So the stub SHADOWS THE BINARY and
-	# dispatches: the one verb under test is faked and every other call — the
-	# `claim keys` that `landed-check` makes one hop down — reaches the real one.
-	# A blanket stub would answer for both and the case would prove nothing.
-	batten_stub "$stub" 'printf "CLOUD-179\t42\n"'
-
-	land "fix: work with no closing key in the commit"
-	unset DRAIN_MERGED_PRS
-	run bash -c "PATH='$stub:$PATH' printf '%s' '[$(row CLOUD-179 2026-08-20T10:00:00.000Z feat/x '')]' | PATH='$stub:$PATH' $stub/in-progress-drain.sh"
-	[ "$status" -eq 1 ]
-	[[ "$output" == *"CLOUD-179"* ]]
-}
-
-# A `batten` that answers ONE verb and defers the rest to the real binary.
+# THE TWO GATHER CASES ARE WITHDRAWN (CLOUD-1711), not silently dropped.
 #
-# `$1` is the directory to place it in — put first on PATH by the case — and
-# `$2` is the body run for `claim merged`. Everything else `exec`s the batten
-# resolved outside this directory, so the gate under test keeps its real
-# `claim keys`, its real config loading and its real exit contract.
-batten_stub() {
-	local dir="$1" body="$2" real
-	real="$(PATH="${PATH#"$dir":}" command -v batten)"
-	cat >"$dir/batten" <<-STUB
-		#!/usr/bin/env bash
-		if [ "\$1" = "claim" ] && [ "\$2" = "merged" ]; then
-			$body
-			exit 0
-		fi
-		exec "$real" "\$@"
-	STUB
-	chmod +x "$dir/batten"
-}
-
-@test "a failed gather is could-not-look, never a short sweep" {
-	local stub="$BATS_TEST_TMPDIR/bin2"
-	mkdir -p "$stub"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/in-progress-drain.sh" "$stub/in-progress-drain.sh"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/landed-check.sh" "$stub/landed-check.sh"
-	# The same shadowing stub, refusing (CLOUD-1711). `batten claim merged` exits
-	# non-zero on a truncated or empty forge answer, and that is what must become
-	# the drain's own 2 rather than a short sweep reported as clean.
-	batten_stub "$stub" 'exit 2'
-
-	unset DRAIN_MERGED_PRS
-	run bash -c "PATH='$stub:$PATH' printf '%s' '[$(row CLOUD-179 2026-08-20T10:00:00.000Z feat/x '')]' | PATH='$stub:$PATH' $stub/in-progress-drain.sh"
-	[ "$status" -eq 2 ]
-	[[ "$output" == *"merged-pr-keys"* ]]
-}
+# Both stubbed `mise-tasks/merged-pr-keys.sh` beside the real gates and drove the
+# drain's no-`DRAIN_MERGED_PRS` path through it. That program is retired; the
+# drain reaches `batten claim merged`, and a stub for an engine leaf is a shim
+# for `batten` itself — which `shell edit refused` rightly will not admit into a
+# governed suite, because a shell helper that shadows the binary is behaviour,
+# not a fixture precondition.
+#
+# WHAT IS LOST AND WHERE IT IS COVERED. The leaf's own refusal on a truncated or
+# empty forge answer is `crates/batten/tests/it/claimed_keys.rs`. What no case
+# now covers is the drain's TRANSLATION of that refusal into its own exit 2, and
+# that is stated here rather than left for a reader to discover by its absence —
+# it belongs in the drain's own port, which is this campaign's next batch.
