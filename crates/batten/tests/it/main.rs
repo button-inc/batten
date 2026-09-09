@@ -42,6 +42,7 @@ mod acquisition_metric;
 mod acquisition_sweep;
 mod address_resolve;
 mod address_transport;
+mod adjudicate_absent;
 mod admission;
 mod admission_narrowing;
 mod advisory_drain;

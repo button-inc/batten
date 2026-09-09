@@ -12288,6 +12288,8 @@ fn run_hook(
     // escape has to still work — the bootstrap window CLOUD-1688 flags as
     // needing a decision is exactly this state, and this arm is the part of it
     // that can be settled without one.
+    //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
+    //MUTANT unloadable-config-allows|s@            Err(_) if bypass => (hook::Policy::declaring_nothing(harness), Vec::new()),@            Err(_) => (hook::Policy::declaring_nothing(harness), Vec::new()),@|a_config_this_build_cannot_load_denies_rather_than_failing_open
     let (policy, waivers) = if adjudicable {
         match load_policy(overrides, harness) {
             Ok(loaded) => loaded,
