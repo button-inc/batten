@@ -2318,9 +2318,9 @@ pub fn progress_of(git_dir: &std::path::Path, pid: u32) -> Option<Progress> {
 /// `None` wherever there is nothing to read, which [`progress_of`] documents as
 /// the honest answer for a lap whose bookkeeping never registered rather than as
 /// evidence of a stall.
-#[must_use]
 //MUTANT-SUITE crates/batten/tests/it/lease_health.rs
 //MUTANT progress-never-published|s@    progress_of(git_dir, pid).map(Progress::token)@    None@|a_land_publishes_its_own_progress_token
+#[must_use]
 pub fn own_progress(git_dir: &std::path::Path, pid: u32) -> Option<String> {
     progress_of(git_dir, pid).map(Progress::token)
 }
