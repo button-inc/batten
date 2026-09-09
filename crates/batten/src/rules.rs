@@ -6846,39 +6846,7 @@ fn run(
     // engine emitted first — a function of the walk, which is already sorted.
     dedup_scoped(&mut scan.findings);
     // Sort by the pointer tuple so identical input yields identical output.
-    //
-    // THE KEY IS TOTAL, AND THE THREE-FIELD VERSION WAS NOT. `sort_by` is
-    // stable, so any two findings the comparator called equal kept the order they
-    // were PUSHED in — which made byte-stability (house style §6, the property
-    // this sort exists to establish) rest on emission order rather than on the
-    // comparator.
-    //
-    // THE EQUAL CASE IS REACHABLE, not theoretical: a `policy` rule's
-    // [`Finding::rule`] is the PREDICATE id and [`Finding::owner`] the row id, so
-    // two predicates of one bundle reporting the same line agree on all three
-    // fields the old key read and differ only in fields it did not.
-    //
-    // `owner` and `identity` close it. `StoredIdentity` already derives `Ord` —
-    // it keys the `BTreeSet` in `dedup_scoped` — and is unique per finding by
-    // construction, so the order is a function of the SET rather than of the walk
-    // that produced it.
-    fn order_key(
-        finding: &Finding,
-    ) -> (
-        &str,
-        Option<usize>,
-        &str,
-        &Option<String>,
-        &crate::identity::StoredIdentity,
-    ) {
-        (
-            finding.path.as_str(),
-            finding.line,
-            finding.rule.as_str(),
-            &finding.owner,
-            &finding.identity,
-        )
-    }
+    // `order_key` carries why the key is the five fields it is.
     scan.findings
         .sort_by(|a, b| order_key(a).cmp(&order_key(b)));
     scan.requested = requested_sinks(rules, &scan);
@@ -7150,6 +7118,42 @@ fn requested_sinks(rules: &[Rule], scan: &Scan) -> Vec<crate::sink::Requested> {
 /// cannot classify (`kind()` is `None`) is left alone for
 /// [`crate::findings`]'s reason: guessing a kind for one a later version minted
 /// would silently drop findings by a rule nobody wrote here.
+/// The total order [`run`] sorts findings by, at module scope because it is a
+/// definition rather than a step: declared inside the function it would sit
+/// after statements, and `run` is already at its line budget.
+///
+/// THE KEY IS TOTAL, AND THE THREE-FIELD VERSION WAS NOT. `sort_by` is stable,
+/// so any two findings the comparator called equal kept the order they were
+/// PUSHED in — which made byte-stability (house style §6, the property the sort
+/// exists to establish) rest on emission order rather than on the comparator.
+///
+/// THE EQUAL CASE IS REACHABLE, not theoretical: a `policy` rule's
+/// [`Finding::rule`] is the PREDICATE id and [`Finding::owner`] the row id, so
+/// two predicates of one bundle reporting the same line agree on all three
+/// fields the old key read and differ only in fields it did not.
+///
+/// `owner` and `identity` close it. [`crate::identity::StoredIdentity`] already
+/// derives `Ord` — it keys the `BTreeSet` in [`dedup_scoped`] — and is unique
+/// per finding by construction, so the order is a function of the SET rather
+/// than of the walk that produced it.
+fn order_key(
+    finding: &Finding,
+) -> (
+    &str,
+    Option<usize>,
+    &str,
+    &Option<String>,
+    &crate::identity::StoredIdentity,
+) {
+    (
+        finding.path.as_str(),
+        finding.line,
+        finding.rule.as_str(),
+        &finding.owner,
+        &finding.identity,
+    )
+}
+
 fn dedup_scoped(findings: &mut Vec<Finding>) {
     let mut seen: BTreeSet<identity::StoredIdentity> = BTreeSet::new();
     findings.retain(|finding| {
