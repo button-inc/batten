@@ -644,6 +644,15 @@ impl Refusal {
     /// Concision is bought with a class a reader can look up; where there is no
     /// class there is nothing to buy it with, and the long form is the honest
     /// answer rather than a fallback.
+    /// **A COLLAPSED ROW RENDERS ONE TOKEN** (CLOUD-1638). Where the row IS its
+    /// class's sole raiser the two names are one, and `validate` refuses any
+    /// other spelling at load — so appending the id would print the same three
+    /// words twice. The 116 rows that are not collapsed still carry it, for the
+    /// reason above: it is their only discriminator.
+    ///
+    /// Decided from the strings rather than from a flag, because the load-time
+    /// predicate has already made them equal exactly when they name one thing,
+    /// and re-deriving the condition here would be a second authority over it.
     #[must_use]
     pub fn line(&self) -> String {
         match self.verdict() {
@@ -651,6 +660,7 @@ impl Refusal {
             // token plus pointers — so this is a projection rather than a second
             // renderer. Composing the line here from the token and the subject
             // would be a second authority over a string the composer built.
+            Some(token) if token == self.rule => self.reason.clone(),
             Some(_) => format!("{} {}", self.reason, self.rule),
             None => self.render(),
         }

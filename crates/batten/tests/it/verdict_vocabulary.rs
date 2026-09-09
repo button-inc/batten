@@ -254,3 +254,84 @@ fn the_measured_list_and_the_declared_table_are_the_same_set() {
         "declared-but-unmeasured: {unmeasured:?}; measured-but-undeclared: {undeclared:?}"
     );
 }
+
+/// The spelling table (CLOUD-1638): what a name costs in each separator.
+///
+/// # Why this is a case rather than a paragraph
+///
+/// CLOUD-1638 moves 136 rule ids from unconstrained kebab prose into this
+/// grammar, and the argument for doing so is a measurement: a rule id averaged
+/// **4.93** tokens (max 13) against a three-word name's **3.01**. A number that
+/// lives only in an issue body decays the moment the vocabulary changes; here it
+/// is recomputed from the committed table on every run, so a word that stops
+/// being one token, or a spelling that stops being the cheap one, reddens.
+///
+/// The ORDER is the assertion, not the absolute figures. Absolute means drift
+/// with the table's contents and would make this a snapshot nobody can update
+/// honestly; the ranking — space cheapest, then snake, then hyphen — is the
+/// property the grammar's canonical form rests on, and it is what would have to
+/// be false for the space form to be the wrong choice.
+#[test]
+fn the_space_form_is_the_cheapest_spelling_of_a_name() {
+    let bpe = tiktoken_rs::o200k_base().expect("the pinned encoding is vendored with the crate");
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let text =
+        std::fs::read_to_string(root.join("batten.toml")).expect("the authority is readable");
+    let config: toml::Value = toml::from_str(&text).expect("the authority parses");
+
+    // Every name the grammar governs: the class tokens and the rule ids, which
+    // after this row are drawn from one vocabulary and must price the same.
+    let mut names: Vec<String> = Vec::new();
+    for table in ["verdict", "rule"] {
+        let Some(rows) = config.get(table).and_then(toml::Value::as_array) else {
+            continue;
+        };
+        names.extend(
+            rows.iter()
+                .filter_map(|row| row.get("id"))
+                .filter_map(toml::Value::as_str)
+                .filter(|id| id.split(' ').count() == 3)
+                .map(ToOwned::to_owned),
+        );
+    }
+    assert!(
+        names.len() > 100,
+        "the scan must actually find the declared names: {}",
+        names.len()
+    );
+
+    // A LEADING SPACE, for the reason the case above gives: it is what a name
+    // inside a rendered line actually costs.
+    let mean = |spell: &dyn Fn(&str) -> String| -> f64 {
+        let total: usize = names
+            .iter()
+            .map(|name| {
+                bpe.encode_with_special_tokens(&format!(" {}", spell(name)))
+                    .len()
+            })
+            .sum();
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a count of names and of tokens, both far below 2^53; the ratio is \
+                      reported to two decimals and the assertion below is an ORDERING"
+        )]
+        let mean = total as f64 / names.len() as f64;
+        mean
+    };
+
+    let space = mean(&|name: &str| name.to_owned());
+    let snake = mean(&|name: &str| name.replace(' ', "_"));
+    let hyphen = mean(&|name: &str| name.replace(' ', "-"));
+
+    assert!(
+        space < snake && snake < hyphen,
+        "the space form must be the cheapest spelling and hyphen the dearest — \
+         space {space:.2}, snake {snake:.2}, hyphen {hyphen:.2} over {} names under {PIN}",
+        names.len()
+    );
+    assert!(
+        space < 4.0,
+        "a three-word name drawn from one-token words costs about three tokens; \
+         {space:.2} means a word in the table stopped being one token"
+    );
+}

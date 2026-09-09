@@ -1661,6 +1661,8 @@ fn check_tree_paths_are_emittable(rule: &Rule, bundle: &Bundle, source: &str) ->
 /// # Errors
 ///
 /// A [`UsageError`] (exit `1`) naming the row and which direction it broke.
+//MUTANT-SUITE crates/batten/tests/it/rules_drift.rs
+//MUTANT identity-arm-dropped|s@            Some(class) if rule.id != class => findings.push(format!(@            Some(class) if false \&\& rule.id != class => findings.push(format!(@|a_sole_raiser_whose_id_differs_from_its_class_is_refused_at_load
 fn check_collapse(
     rules: &[Rule],
     per_rule: &BTreeMap<String, BTreeSet<String>>,

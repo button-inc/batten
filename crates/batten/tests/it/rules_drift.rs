@@ -865,3 +865,157 @@ fn the_two_anchors_this_gate_keys_on_are_still_one_line_in_the_committed_files()
          `schema-key-undocumented` silently stops judging it"
     );
 }
+
+// --- the rule-id grammar and the collapse predicate (CLOUD-1638) ------------
+//
+// Anchored in this suite because it is `//MUTANT identity-arm-dropped`'s
+// declared `//MUTANT-SUITE`, and because the question is the same one the rest
+// of the file asks: does a name in the tree agree with the mechanism that
+// judges it. These ask it of the two names a refusal line carries.
+//
+// They use their own runner rather than `judge`: that one names rules-drift's
+// own rule and reads stdout, and what is under test here is whether the config
+// LOADS at all, which is a usage error on stderr.
+
+/// A config declaring one class, one module raising it, and one `policy` row
+/// whose id the caller chooses.
+///
+/// **Every declared word is spent by a name in the file, and every name is
+/// spelled from it.** Both directions bite: `validate` refuses an orphan word —
+/// a vocabulary entry no name uses — and it refuses a name using a word no slot
+/// declares. The first draft failed all four cases on the first, then two more
+/// on the second, because the ROUTE id `config read first` is a name too and
+/// needs `config` and `first` declared alongside the class's own words.
+fn collapse_fixture(name: &str, rule_id: &str, extra_words: &str) -> std::path::PathBuf {
+    let dir = scratch(name);
+    write(
+        &dir,
+        "policy/collapse-probe.rego",
+        r#"# METADATA
+# description: |
+#   One class, so a row binding this module is its sole raiser.
+#   THIS BLOCK IS YAML AND MUST STAY THE LAST COMMENT BLOCK BEFORE `package`.
+# schemas:
+#   - input: schema["policy-input.schema"]
+package batten.collapse_probe
+
+import rego.v1
+
+rules contains "collapse-probe"
+
+violation contains {
+	"rule": "collapse-probe",
+	"verdict": "probe read absent",
+	"subjects": [{"count": 1}],
+} if {
+	input.tree.tracked
+}
+"#,
+    );
+    write(
+        &dir,
+        "batten.toml",
+        &format!(
+            r#"version = 1
+
+[vocabulary]
+tokenizer = "o200k_base"
+tokenizer_source = "https://github.com/openai/tiktoken"
+tokenizer_retrieved = "2026-09-01"
+subject = [{{ word = "probe", gloss = "the fixture subject" }}, {{ word = "config", gloss = "the committed authority" }}{subject}]
+action = [{{ word = "read", gloss = "a read of the subject" }}{action}]
+condition = [{{ word = "absent", gloss = "the subject is not there" }}, {{ word = "first", gloss = "the subject comes first" }}{condition}]
+
+[[verdict]]
+id = "probe read absent"
+gloss = "the fixture class the collapse predicate is exercised over"
+class = """
+A fixture class, raised by exactly one module, so a row binding that module is
+its sole raiser and the collapse predicate has a decision to make.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[rule]]
+id = "{rule_id}"
+kind = "policy"
+scope = "tree"
+module = "policy/collapse-probe.rego"
+severity = "deny"
+"#,
+            subject = if extra_words.is_empty() {
+                ""
+            } else {
+                r#", { word = "task", gloss = "a declared task" }"#
+            },
+            action = if extra_words.is_empty() {
+                ""
+            } else {
+                r#", { word = "run", gloss = "a run of the subject" }"#
+            },
+            condition = "",
+        ),
+    );
+    git_in(&dir, &["init", "-q"]);
+    dir
+}
+
+/// `check` over the fixture's own config, reading the channel a usage error uses.
+fn load(dir: &Path) -> (Option<i32>, String) {
+    let out = run(dir, &["check"]);
+    (out.status.code(), common::stderr(&out))
+}
+
+/// THE COLLAPSE ARM, first direction: two names for one thing is refused.
+#[test]
+fn a_sole_raiser_whose_id_differs_from_its_class_is_refused_at_load() {
+    let dir = collapse_fixture("collapse-differs", "task run first", "extra");
+    let (code, text) = load(&dir);
+    assert_eq!(
+        code,
+        Some(1),
+        "the row and the class name one thing: {text}"
+    );
+    assert!(
+        text.contains("probe read absent"),
+        "and the refusal names the token the row owes: {text}"
+    );
+}
+
+/// THE SAME ARM, satisfied. Without this the case above passes over a predicate
+/// that refuses every policy row, which would make the arm decorative.
+#[test]
+fn a_sole_raiser_carrying_its_class_token_loads() {
+    let dir = collapse_fixture("collapse-agrees", "probe read absent", "");
+    let (code, text) = load(&dir);
+    assert_ne!(
+        code,
+        Some(1),
+        "a row spelled as the class it solely raises is the shape the arm WANTS: {text}"
+    );
+}
+
+/// THE GRAMMAR ARM: a word no slot declares is refused, id or class alike.
+#[test]
+fn a_rule_id_outside_the_vocabulary_is_refused_at_load() {
+    let dir = collapse_fixture("grammar-undeclared", "task run undeclared", "extra");
+    let (code, text) = load(&dir);
+    assert_eq!(code, Some(1), "`undeclared` is in no slot: {text}");
+}
+
+/// NORMALISATION reaches the load path, not just the unit under it: a
+/// hyphen-spelled id is the same row as the space form, so it satisfies the
+/// collapse arm the space form satisfies.
+#[test]
+fn a_hyphen_spelled_id_is_the_same_row_as_the_space_form() {
+    let dir = collapse_fixture("grammar-hyphen", "probe-read-absent", "");
+    let (code, text) = load(&dir);
+    assert_ne!(
+        code,
+        Some(1),
+        "`probe-read-absent` normalises to `probe read absent`: {text}"
+    );
+}
