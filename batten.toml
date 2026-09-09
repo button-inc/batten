@@ -4388,6 +4388,42 @@ fields = [
   "project",
 ]
 
+# THE DOCUMENT-SIDE REDUCTION, and it is the same defect one method over (CLOUD-1742).
+# `get_document` had no row, so every document read was handed back re-serialised
+# rather than reduced — the shape `crates/batten/src/mcp.rs` already records for an
+# undeclared method: MORE OUT THAN IN. A document's `content` is its entire body, so
+# this is the widest single field the tracker returns and the one nobody reading a
+# projection asked for.
+#
+# DROPPING `content` COSTS A GATE NOTHING, for the reason the `get_issue` block above
+# states of its own narrowing: `mcp call` stores every response WHOLE, so a gate reads
+# the body from the capture store by key while the model receives a dozen fields. The
+# two have never needed to be the same channel.
+#
+# THE PROVENANCE FIELDS ARE NOT DECORATION, and choosing them for size would have been
+# the error. `updatedAt`, `updatedBy` and `team` are exactly the three that made
+# CLOUD-1742 legible: a spec `AGENTS.md` cites as authoritative was overwritten in
+# place and reparented to another team, and those fields are what showed it. A
+# projection carrying only `id`, `title` and `url` would have reported the clobbered
+# document as the same document — which is the failure this row's sibling exists to
+# prevent one surface over.
+[[mcp.result]]
+method = "get_document"
+reduce = "project"
+fields = [
+  "id",
+  "title",
+  "url",
+  "slugId",
+  "createdAt",
+  "creator",
+  "updatedAt",
+  "updatedBy",
+  "archivedAt",
+  "project",
+  "team",
+]
+
 # THE LIST-SIDE REDUCTION (CLOUD-1380). `list_issues` had no row and the verb said
 # so on every call — `undeclared — stored 17,313 bytes, emitted 20,366`. MORE OUT
 # THAN IN, because an undeclared result is handed back re-serialised rather than
