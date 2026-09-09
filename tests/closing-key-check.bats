@@ -148,12 +148,12 @@ Refs: CLOUD-593, CLOUD-344, CLOUD-661, CLOUD-103'
 }
 
 @test "a body naming no key at all is the key rule's case, not this one" {
-	# One rule, one authority. The engine's `pr-names-an-issue` row judges this
+	# One rule, one authority. The engine's `review name unnamed` row judges this
 	# at `gh pr create`, which is earlier and cheaper. It was `issue-guard` until
 	# CLOUD-446 retired that program.
 	run bash -c "printf 'A body with no key.\n' | $GATE"
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"pr-names-an-issue rule owns that case"* ]]
+	[[ "$output" == *"review name unnamed rule owns that case"* ]]
 }
 
 @test "one closed key is enough, even beside a named-but-unclosed one" {
@@ -171,7 +171,7 @@ Refs: CLOUD-593, CLOUD-344, CLOUD-661, CLOUD-103'
 	# boundary deleted.
 	run bash -c "printf 'SUBCLOUD-17 is a different system.\n' | $GATE"
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"pr-names-an-issue rule owns that case"* ]]
+	[[ "$output" == *"review name unnamed rule owns that case"* ]]
 }
 
 @test "several named keys are each reported, in stable numeric order" {

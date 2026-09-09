@@ -207,7 +207,7 @@ EOF
 @test "a receipt that cannot be written is reported, never a nonconformance" {
 	# THE FALSE VERDICT CI REPORTED (CLOUD-631). `batten receipt record` exits 1
 	# where the configured transcript is unreadable, which is a runner's ordinary
-	# state, and `set -e` made that the document's verdict — `sbom-ntia-conformance`
+	# state, and `set -e` made that the document's verdict — `manifest cover partial`
 	# red over a document sbomcheck had just passed. The receipt is a cache written
 	# after the answer, so its failure costs the next hook a scan and nothing else.
 	: >"$BATS_TEST_TMPDIR/receipt.fails"
@@ -422,23 +422,23 @@ EOF
 
 # ─── CLOUD-631: the promotion, asserted over the committed bytes ──────────────
 
-@test "THE PROMOTION: the committed batten.toml declares deny on sbom-ntia-conformance" {
+@test "THE PROMOTION: the committed batten.toml declares deny on manifest cover partial" {
 	# Asserted over the bytes rather than inferred from behaviour, so the row cannot
 	# be quietly relaxed later — `config-lint`s weakening class covers that shape,
 	# and this pins the value the promotion set.
 	local toml="$BATS_TEST_DIRNAME/../batten.toml"
-	run awk '/^id = "sbom-ntia-conformance"$/ { found = 1 }
+	run awk '/^id = "manifest cover partial"$/ { found = 1 }
 	         found && /^severity = / { print; exit }' "$toml"
 	[ "$status" -eq 0 ]
 	[ "$output" = 'severity = "deny"' ]
 }
 
 @test "the precondition row is STILL deny, and the two are not the same question" {
-	# `sbom-ntia-precondition` answers "could we look" and was always deny; the
+	# `manifest check unread` answers "could we look" and was always deny; the
 	# promotion moves the verdict row only. A change that collapsed them would make
 	# an unresolvable checker indistinguishable from a nonconformant document.
 	local toml="$BATS_TEST_DIRNAME/../batten.toml"
-	run awk '/^id = "sbom-ntia-precondition"$/ { found = 1 }
+	run awk '/^id = "manifest check unread"$/ { found = 1 }
 	         found && /^severity = / { print; exit }' "$toml"
 	[ "$status" -eq 0 ]
 	[ "$output" = 'severity = "deny"' ]

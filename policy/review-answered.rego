@@ -240,7 +240,7 @@ test_a_head_failing_both_raises_both if {
 			"review-happened": {"rows": 0},
 		}},
 	}
-	raised == {"review-unanswered", "review-absent"}
+	raised == {"review answer missing", "review read absent"}
 }
 
 # `land` re-drafts on a red run, and that is what closes the CI tap. Refusing it

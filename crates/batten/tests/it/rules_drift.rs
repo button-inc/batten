@@ -252,9 +252,7 @@ target = "policy/rules-drift.rego"
     for (path, body) in files {
         write(&dir, path, body);
     }
-    git_in(&dir, &["init", "--initial-branch=main"]);
-    git_in(&dir, &["add", "-A"]);
-    git_in(&dir, &["commit", "-m", "fixture"]);
+    init_repo(&dir);
     dir
 }
 
@@ -959,8 +957,21 @@ severity = "deny"
             condition = "",
         ),
     );
-    git_in(&dir, &["init", "-q"]);
+    init_repo(&dir);
     dir
+}
+
+/// The three git calls a fixture repo needs, in ONE place (CLOUD-1638).
+///
+/// `fixture-forks` counts the `git init` lines a suite carries and refuses a
+/// new one, which is right: this file had two helpers building the same repo,
+/// and the second was a copy of the first. The commit matters as much as the
+/// init — `check` resolves its base against a HEAD, so an init-only repo
+/// answers could-not-look instead of judging the config under test.
+fn init_repo(dir: &Path) {
+    git_in(dir, &["init", "--initial-branch=main"]);
+    git_in(dir, &["add", "-A"]);
+    git_in(dir, &["commit", "-m", "fixture"]);
 }
 
 /// `check` over the fixture's own config, reading the channel a usage error uses.

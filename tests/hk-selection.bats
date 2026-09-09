@@ -39,7 +39,7 @@ status_of() {
 @test "every path selects batten-check once a rule globs the whole tree" {
 	# SUPERSEDES "a Markdown file that is not an input does not select
 	# batten-check", which asserted `skipped` for README.md on the premise that
-	# it "carries no rule glob and is in no budget". CLOUD-59's `no-secrets` row
+	# it "carries no rule glob and is in no budget". CLOUD-59's `source carry unsafe` row
 	# globs `**`, so that premise is simply false now: a credential can be in
 	# README.md, and narrowing the rule would be choosing which files are
 	# allowed to carry one.
@@ -82,12 +82,12 @@ status_of() {
 }
 
 @test "every non-crates path a batten.toml rule globs selects batten-check" {
-	# mise.toml (no-source-built-tool), workflows (no-cargo-install-in-ci),
-	# tests/*.bats (bats-tests-not-deleted). These are the ones the issue's
+	# mise.toml (pin add unsafe), workflows (cargo add loose),
+	# tests/*.bats (bats count dropped). These are the ones the issue's
 	# proposed glob would have dropped.
 	[ "$(status_of batten-check mise.toml)" = "included" ]
 	[ "$(status_of batten-check .github/workflows/ci.yml)" = "included" ]
-	[ "$(status_of batten-check tests/lock-complete.bats)" = "included" ]
+	[ "$(status_of batten-check tests/lock cover partial.bats)" = "included" ]
 }
 
 @test "the embedded budget path selects batten-check" {

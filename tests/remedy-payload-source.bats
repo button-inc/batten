@@ -31,9 +31,9 @@ setup() {
 	# PREDICATE is unchanged and that is the point: this suite asks whether the
 	# message names a source that works on any host, and where the message lives is
 	# not what it is about.
-	READ_GUARD=$(awk '/^id = "an-update-owes-a-recent-read"/{f=1} f&&/^reason = """/{c=1} c{print} c&&/"""$/&&!/^reason/{exit}' batten.toml)
-	SEARCH_GUARD=$(awk '/^id = "filing-needs-a-search"/{f=1} f&&/^reason = """/{c=1} c{print} c&&/"""$/&&!/^reason/{exit}' batten.toml)
-	CLAIM_ROW=$(awk '/^id = "claim-needs-receipt"/{f=1} f&&/^reason = """/{c=1} c{print} c&&/"""$/&&!/^reason/{exit}' batten.toml)
+	READ_GUARD=$(awk '/^id = "issue read stale"/{f=1} f&&/^reason = """/{c=1} c{print} c&&/"""$/&&!/^reason/{exit}' batten.toml)
+	SEARCH_GUARD=$(awk '/^id = "issue list unread"/{f=1} f&&/^reason = """/{c=1} c{print} c&&/"""$/&&!/^reason/{exit}' batten.toml)
+	CLAIM_ROW=$(awk '/^id = "claim read unread"/{f=1} f&&/^reason = """/{c=1} c{print} c&&/"""$/&&!/^reason/{exit}' batten.toml)
 	ABSENT=$(awk '/no readable transcript/,/^fi$/' mise-tasks/board-payloads.sh)
 }
 

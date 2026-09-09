@@ -105,13 +105,13 @@ test_the_finding_carries_a_count_and_nothing_else if {
 # ONE BELOW THE THRESHOLD IS CLEAN. An off-by-one here moves the whole population
 # the rule fires on.
 test_two_turns_in_a_row_is_not_a_run if {
-	count(violation) == 0 with input as session({"agent-turn-run": 2})
+	count(violation) == 0 with input as session({"turn run loose": 2})
 }
 
 # THE ARM THAT MAKES ADJACENCY WORTH HAVING: a session that acts between turns
 # has a trailing run of one however long it runs.
 test_a_session_that_acts_between_turns_is_clean if {
-	count(violation) == 0 with input as session({"agent-turn-run": 1})
+	count(violation) == 0 with input as session({"turn run loose": 1})
 }
 
 # COULD NOT LOOK IS NOT INNOCENCE, and it is not guilt either.

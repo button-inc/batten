@@ -37,7 +37,7 @@
 setup() {
 	# The PINNED toolchain, resolved once from the repository that pins it. The
 	# toy crate lives outside this tree, so a bare `cargo` there would resolve to
-	# whatever is ambient — which is the exact defect `no-bare-cargo` refuses, and
+	# whatever is ambient — which is the exact defect `cargo run loose` refuses, and
 	# the exact defect this suite is about.
 	CARGO=$(cd "$BATS_TEST_DIRNAME/.." && mise which cargo)
 	[ -x "$CARGO" ] || skip "no pinned cargo to drive clippy with"
@@ -175,7 +175,7 @@ toy_clippy() {
 
 @test "at warn the gate reports clean, and at deny the same source is refused" {
 	# CLOUD-822's measurement, reproduced as the argument for where the level
-	# lives. The escape `no-bare-cargo`'s own refusal text recommends omits
+	# lives. The escape `cargo run loose`'s own refusal text recommends omits
 	# `-D warnings`; under it a lint left at `warn` reports clean over an
 	# unannotated spawn, and the agent then quotes the clean run as verification.
 	#

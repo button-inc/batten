@@ -98,7 +98,7 @@ shim() { (cd "$REPO" && "$SHIM" "$@"); }
 
 @test "the launch args stay in .mcp.json, so the pin gate still reads them" {
 	# The shim moved the COMMAND and deliberately not the args. If the pinned,
-	# scoped `mise exec` argv migrated into this script, `mise-pin-agreement`
+	# scoped `mise exec` argv migrated into this script, `pin declare wrong`
 	# would report a clean pass over a file that no longer carries a pin.
 	run jq -r '.mcpServers.serena.args | join(" ")' "$BATS_TEST_DIRNAME/../.mcp.json"
 	[[ "$output" == "exec pipx:serena-agent@"*" -- serena start-mcp-server"* ]]
