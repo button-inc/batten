@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-record-journal 1  batten 
+.SH NAME
+batten\-record\-journal \- Append one record to an append\-and\-fold store family, read from stdin
+.SH SYNOPSIS
+\fBbatten record journal\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIfamily\fR> 
+.SH DESCRIPTION
+Append one record to an append\-and\-fold store family, read from stdin
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIfamily\fR>
+The store family the record belongs to

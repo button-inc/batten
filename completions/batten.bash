@@ -760,11 +760,23 @@ _batten() {
             batten__subcmd__help__subcmd__record,closes)
                 cmd="batten__subcmd__help__subcmd__record__subcmd__closes"
                 ;;
+            batten__subcmd__help__subcmd__record,fold)
+                cmd="batten__subcmd__help__subcmd__record__subcmd__fold"
+                ;;
             batten__subcmd__help__subcmd__record,forge)
                 cmd="batten__subcmd__help__subcmd__record__subcmd__forge"
                 ;;
+            batten__subcmd__help__subcmd__record,journal)
+                cmd="batten__subcmd__help__subcmd__record__subcmd__journal"
+                ;;
+            batten__subcmd__help__subcmd__record,keyed)
+                cmd="batten__subcmd__help__subcmd__record__subcmd__keyed"
+                ;;
             batten__subcmd__help__subcmd__record,plan)
                 cmd="batten__subcmd__help__subcmd__record__subcmd__plan"
+                ;;
+            batten__subcmd__help__subcmd__record,show)
+                cmd="batten__subcmd__help__subcmd__record__subcmd__show"
                 ;;
             batten__subcmd__help__subcmd__record,tool)
                 cmd="batten__subcmd__help__subcmd__record__subcmd__tool"
@@ -1225,14 +1237,26 @@ _batten() {
             batten__subcmd__record,closes)
                 cmd="batten__subcmd__record__subcmd__closes"
                 ;;
+            batten__subcmd__record,fold)
+                cmd="batten__subcmd__record__subcmd__fold"
+                ;;
             batten__subcmd__record,forge)
                 cmd="batten__subcmd__record__subcmd__forge"
                 ;;
             batten__subcmd__record,help)
                 cmd="batten__subcmd__record__subcmd__help"
                 ;;
+            batten__subcmd__record,journal)
+                cmd="batten__subcmd__record__subcmd__journal"
+                ;;
+            batten__subcmd__record,keyed)
+                cmd="batten__subcmd__record__subcmd__keyed"
+                ;;
             batten__subcmd__record,plan)
                 cmd="batten__subcmd__record__subcmd__plan"
+                ;;
+            batten__subcmd__record,show)
+                cmd="batten__subcmd__record__subcmd__show"
                 ;;
             batten__subcmd__record,tool)
                 cmd="batten__subcmd__record__subcmd__tool"
@@ -1240,14 +1264,26 @@ _batten() {
             batten__subcmd__record__subcmd__help,closes)
                 cmd="batten__subcmd__record__subcmd__help__subcmd__closes"
                 ;;
+            batten__subcmd__record__subcmd__help,fold)
+                cmd="batten__subcmd__record__subcmd__help__subcmd__fold"
+                ;;
             batten__subcmd__record__subcmd__help,forge)
                 cmd="batten__subcmd__record__subcmd__help__subcmd__forge"
                 ;;
             batten__subcmd__record__subcmd__help,help)
                 cmd="batten__subcmd__record__subcmd__help__subcmd__help"
                 ;;
+            batten__subcmd__record__subcmd__help,journal)
+                cmd="batten__subcmd__record__subcmd__help__subcmd__journal"
+                ;;
+            batten__subcmd__record__subcmd__help,keyed)
+                cmd="batten__subcmd__record__subcmd__help__subcmd__keyed"
+                ;;
             batten__subcmd__record__subcmd__help,plan)
                 cmd="batten__subcmd__record__subcmd__help__subcmd__plan"
+                ;;
+            batten__subcmd__record__subcmd__help,show)
+                cmd="batten__subcmd__record__subcmd__help__subcmd__show"
                 ;;
             batten__subcmd__record__subcmd__help,tool)
                 cmd="batten__subcmd__record__subcmd__help__subcmd__tool"
@@ -5213,7 +5249,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__record)
-            opts="tool forge plan closes"
+            opts="tool forge keyed journal show fold plan closes"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -5227,6 +5263,20 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__record__subcmd__closes)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__help__subcmd__record__subcmd__fold)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -5254,7 +5304,49 @@ _batten() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        batten__subcmd__help__subcmd__record__subcmd__journal)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__help__subcmd__record__subcmd__keyed)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         batten__subcmd__help__subcmd__record__subcmd__plan)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__help__subcmd__record__subcmd__show)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -8961,7 +9053,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__record)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help tool forge plan closes help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help tool forge keyed journal show fold plan closes help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -8991,6 +9083,36 @@ _batten() {
             return 0
             ;;
         batten__subcmd__record__subcmd__closes)
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --strictness)
+                    COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-level)
+                    COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__record__subcmd__fold)
             opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -9051,7 +9173,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__record__subcmd__help)
-            opts="tool forge plan closes help"
+            opts="tool forge keyed journal show fold plan closes help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -9065,6 +9187,20 @@ _batten() {
             return 0
             ;;
         batten__subcmd__record__subcmd__help__subcmd__closes)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__record__subcmd__help__subcmd__fold)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -9106,7 +9242,49 @@ _batten() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        batten__subcmd__record__subcmd__help__subcmd__journal)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__record__subcmd__help__subcmd__keyed)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         batten__subcmd__record__subcmd__help__subcmd__plan)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__record__subcmd__help__subcmd__show)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -9134,7 +9312,97 @@ _batten() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        batten__subcmd__record__subcmd__journal)
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --strictness)
+                    COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-level)
+                    COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__record__subcmd__keyed)
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --strictness)
+                    COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-level)
+                    COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         batten__subcmd__record__subcmd__plan)
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --strictness)
+                    COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-level)
+                    COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__record__subcmd__show)
             opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
