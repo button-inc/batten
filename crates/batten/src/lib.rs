@@ -12,6 +12,7 @@ pub mod action;
 pub mod admission;
 pub mod advisory;
 pub mod agent;
+pub mod arm;
 pub mod attribution;
 pub mod baseline;
 /// The board's column vocabulary, resolved from config rather than held as
@@ -62,6 +63,7 @@ pub mod hook;
 pub mod hookcost;
 pub mod identity;
 pub mod init;
+pub mod install;
 /// Rust call sites, parsed — where a token sits, not merely that it appears.
 pub mod invocation;
 pub mod journal;
@@ -129,11 +131,14 @@ pub mod speculation;
 /// (CLOUD-760). The first occupant of `Cost::Effect`: resolving it runs a
 /// program, which is the classification rather than an accident of it.
 pub mod symbols;
+pub mod tokens;
 
 pub mod startup;
 pub mod state;
 pub mod stop;
 pub mod store;
+/// The per-suite cost corpus, derived from the report the runner already wrote.
+pub mod suites;
 pub mod surface;
 /// What a long-running task is doing, recorded where it can be read without a log.
 pub mod task;
@@ -249,8 +254,16 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         ),
         Some(Command::Config { command }) => run_config(&command, &overrides, mode, out, err),
         Some(Command::Spec { format }) => run_spec(format, out),
+        // CLOUD-1718. No config is resolved and nothing is read: the §8 chain
+        // has nothing to contribute to a fold over two integers, and threading it
+        // through would make an unreadable config able to change a verdict this
+        // verb computes without one.
+        Some(Command::Verdict {
+            findings,
+            unjudgeable,
+        }) => Ok(exit::ExitCode::combine(findings, unjudgeable)),
         Some(Command::ShowAgent { json }) => run_show_agent(json, &overrides, out),
-        Some(Command::Doctor { command }) => run_doctor(&command, out),
+        Some(Command::Doctor { command }) => run_doctor(&command, out, err),
         // `init` reads no config — it is the verb that exists because there is
         // none — so the §8 chain is deliberately not threaded through it.
         Some(Command::Init { dry_run }) => run_init(dry_run, mode, out, err),
@@ -413,8 +426,318 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // input, which is exactly the committed authority a `--config-from` is
         // meant to pin. That is also what stops a caller keying a record to
         // anything the config does not already declare (CLOUD-1265).
-        Some(Command::Record { command }) => record::run(command, &overrides, out),
+        Some(Command::Record { command }) => record::run(command, &overrides, out, err),
+        Some(Command::Ci { command }) => run_ci(&command, &overrides, out, err),
+        Some(Command::Release { command }) => run_release(&command, out, err),
+        Some(Command::Bench { command }) => run_bench(&command, out, err),
     }
+}
+
+/// `batten bench tokens` (CLOUD-119), ported off `mise-tasks/token-bench.sh`
+/// and the drift half of `mise-tasks/token-bench-check.sh`.
+///
+/// # `--check` REGENERATES INTO SCRATCH, never over the committed file
+///
+/// A gate that rewrites the tree it is judging cannot fail twice, and would
+/// launder drift into a clean second run. The comparison is byte-for-byte and
+/// the report is pointer-only: the file that drifted, never the diff body, since
+/// the remedy is always the same one command.
+///
+/// # Errors
+///
+/// A missing input, a fixture that will not stage, or a step that will not run.
+fn run_bench(
+    command: &cli::BenchCommand,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let cli::BenchCommand::Tokens { check } = *command;
+    let root = git::repo_root(Path::new("."))?;
+    let root = Path::new(&root);
+
+    // The binary under test, built once. `cargo run` per step would fold cargo's
+    // own chatter into a measurement of Batten's output, which is the one thing
+    // these byte counts must not contain.
+    let binary = root.join("target/debug/batten");
+    if !binary.is_file() {
+        writeln!(
+            err,
+            "::error:: bench tokens: no binary at {} — build it first; this measures a binary \
+             rather than building one.",
+            binary.display()
+        )?;
+        return Ok(ExitCode::Internal);
+    }
+
+    let scratch = root.join("target/token-bench");
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch).map_err(|_| {
+        UsageError::raise(String::from(
+            "bench tokens: could not create the scratch root",
+        ))
+    })?;
+
+    let measured = tokens::measure(root, &binary, &scratch)?;
+    let rendered = tokens::render(root, &measured)?;
+    let committed = root.join(tokens::RESULTS);
+
+    if check {
+        let existing = std::fs::read_to_string(&committed).unwrap_or_default();
+
+        // THE HONESTY HALF RUNS FIRST, and over the COMMITTED bytes rather than
+        // the fresh render. A generator bug that dropped a method line would
+        // otherwise be invisible here: both sides would lack it and the diff
+        // would be clean. What a reader sees is what is judged.
+        let unmethodical = tokens::unmethodical(&existing);
+        if !unmethodical.is_empty() {
+            writeln!(
+                err,
+                "::error:: bench tokens: {} published figure(s) do not state their method. A \
+                 number with no workload, baseline and run count is the claim this benchmark \
+                 exists to beat.",
+                unmethodical.len()
+            )?;
+            for finding in &unmethodical {
+                writeln!(
+                    err,
+                    "  {}:{} lacks {}",
+                    tokens::RESULTS,
+                    finding.line,
+                    finding.owed
+                )?;
+            }
+            return Ok(ExitCode::Violation);
+        }
+
+        if existing == rendered {
+            writeln!(out, "bench tokens: the committed results table reproduces")?;
+            return Ok(ExitCode::Success);
+        }
+        // POINTER-ONLY: the file that drifted, never the diff body — the remedy
+        // is always the same one command, so the bytes add nothing.
+        writeln!(
+            err,
+            "::error:: bench tokens: {} is not what a fresh run produces; run `mise run \
+             token-bench`.",
+            tokens::RESULTS
+        )?;
+        return Ok(ExitCode::Violation);
+    }
+
+    if let Some(parent) = committed.parent() {
+        std::fs::create_dir_all(parent).map_err(|_| {
+            UsageError::raise(String::from(
+                "bench tokens: could not create the report directory",
+            ))
+        })?;
+    }
+    std::fs::write(&committed, &rendered)
+        .map_err(|_| UsageError::raise(String::from("bench tokens: could not write the report")))?;
+    writeln!(out, "bench tokens: wrote {}", tokens::RESULTS)?;
+    Ok(ExitCode::Success)
+}
+
+/// `batten release install` (CLOUD-65), ported off `mise-tasks/install-check.sh`.
+///
+/// # Three authorities, asked rather than scraped
+///
+/// The release matrix is the workflow's, archive naming is `dist`'s, and which
+/// targets are installable is `install.sh`'s. Each is asked through the surface
+/// it already publishes; only the binstall template is restated here, because
+/// cargo reads TOML and not a shell function.
+///
+/// # Errors
+///
+/// Could-not-look: a file the contract is written in that cannot be read, a
+/// workflow declaring no matrix, or a `pkg-fmt` with no suffix rule. Each is
+/// `Internal` rather than a refusal, because a gate that could not look must not
+/// report a contract it never checked.
+fn run_release(
+    command: &cli::ReleaseCommand,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let cli::ReleaseCommand::Install = *command;
+    let root = git::repo_root(Path::new("."))?;
+    let root = Path::new(&root);
+
+    let read = |path: &str| -> Result<String> {
+        std::fs::read_to_string(root.join(path)).map_err(|_| {
+            UsageError::raise(format!(
+                "release install: cannot read {path}, so the install contract is unknown. That is \
+                 a checkout problem, not a failing contract."
+            ))
+        })
+    };
+
+    let workflow_path = std::env::var("BATTEN_RELEASE_WORKFLOW")
+        .unwrap_or_else(|_| String::from(".github/workflows/release-artifacts.yml"));
+    let matrix = install::matrix_targets(&read(&workflow_path)?);
+    if matrix.is_empty() {
+        writeln!(
+            err,
+            "::error:: release install: no matrix targets in {workflow_path}. A gate that checks \
+             nothing must not report green."
+        )?;
+        return Ok(ExitCode::Internal);
+    }
+
+    let manifest = read("crates/batten/Cargo.toml")?;
+    let workspace = read("Cargo.toml")?;
+    let Some(binstall) = install::binstall_in(&manifest) else {
+        writeln!(
+            err,
+            "::error:: release install: no pkg-url in crates/batten/Cargo.toml. \
+             [package.metadata.binstall] is how cargo binstall resolves a release asset; without \
+             it that half of the contract is unchecked."
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    let (Some(repo), Some(version)) = (
+        install::manifest_scalar(&workspace, "repository"),
+        install::manifest_scalar(&workspace, "version"),
+    ) else {
+        writeln!(
+            err,
+            "::error:: release install: the workspace manifest declares no repository or no \
+             version, so binstall's placeholders cannot be resolved."
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+
+    // The two interim spawns. Both programs are wave 2's; when they are engine
+    // code this asks a function and the contract is unchanged.
+    let ask = |program: &str, args: &[&str]| -> Result<String> {
+        let output = std::process::Command::new(root.join(program))
+            .args(args)
+            .current_dir(root)
+            .output()
+            .map_err(|_| UsageError::raise(format!("release install: could not run {program}")))?;
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    };
+
+    let declared: std::collections::BTreeSet<String> = ask("install.sh", &["--targets"])?
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    if declared.is_empty() {
+        writeln!(
+            err,
+            "::error:: release install: install.sh --targets printed nothing. That flag is how \
+             this reads the script's own list; without it nothing is compared."
+        )?;
+        return Ok(ExitCode::Internal);
+    }
+
+    let mut found: Vec<install::Disagreement> = Vec::new();
+    let mut installable: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+
+    for target in &matrix {
+        let stem = ask("mise-tasks/dist.sh", &["--stem", target])?
+            .trim()
+            .to_owned();
+        if stem.is_empty() {
+            writeln!(
+                err,
+                "::error:: release install: mise-tasks/dist.sh --stem {target} printed nothing. \
+                 Its naming is what every other reader agrees with; if it cannot be asked, \
+                 nothing here has been checked."
+            )?;
+            return Ok(ExitCode::Internal);
+        }
+
+        // The archive suffix is the BINSTALL manifest's answer, which is the one
+        // cargo acts on. Deriving it from the triple here would put a second
+        // idea of "which platform ships a zip" in the tree.
+        let format = binstall.format_for(target);
+        let Some(suffix) = install::Binstall::suffix(format) else {
+            writeln!(
+                err,
+                "::error:: release install: binstall pkg-fmt '{format}' (target {target}) is one \
+                 this gate has no suffix rule for. Add it in the same change that adds it to the \
+                 manifest — a guessed suffix would make the comparison vacuous."
+            )?;
+            return Ok(ExitCode::Internal);
+        };
+        let dist_name = format!("{stem}{suffix}");
+
+        // Every matrix target, including the ones `install.sh` declines to
+        // INSTALL: answering a naming query correctly for them is still part of
+        // the contract binstall reads.
+        let asked = ask("install.sh", &["--asset-name", &version, target])?
+            .trim()
+            .to_owned();
+        if asked != dist_name {
+            found.push(install::Disagreement::AssetName {
+                target: target.clone(),
+                dist: dist_name.clone(),
+                install: asked.clone(),
+            });
+        }
+
+        // THE VERSION MUST BE CARRIED, NOT BAKED. Asking twice proves the
+        // template is parametric directly, where a sample version only proved
+        // it by proxy.
+        let other_version = if version == "9.9.9" { "1.1.1" } else { "9.9.9" };
+        let again = ask("install.sh", &["--asset-name", other_version, target])?
+            .trim()
+            .to_owned();
+        if !install::parametric((&version, &asked), (other_version, &again)) {
+            found.push(install::Disagreement::NotParametric(target.clone()));
+        }
+
+        if suffix != ".zip" {
+            installable.insert(target.clone());
+        }
+
+        let expected = format!("{repo}/releases/download/v{version}/{dist_name}");
+        let resolved = binstall.resolve(&repo, "batten", &version, target)?;
+        if resolved != expected {
+            found.push(install::Disagreement::BinstallUrl {
+                target: target.clone(),
+                release: expected,
+                binstall: resolved,
+            });
+        }
+    }
+
+    // The installable set is DERIVED from the archive suffix, so this gate never
+    // carries its own idea of which platform has no POSIX shell.
+    for target in installable.difference(&declared) {
+        found.push(install::Disagreement::Unserved(target.clone()));
+    }
+    for target in declared.difference(&installable) {
+        found.push(install::Disagreement::Unbuilt(target.clone()));
+    }
+
+    let tracked = git::tracked_paths(root)?;
+    for path in install::committed_binaries(root, &tracked) {
+        found.push(install::Disagreement::CommittedBinary(path));
+    }
+
+    if found.is_empty() {
+        writeln!(
+            out,
+            "release install: {} matrix target(s) name-agree across dist, install.sh and \
+             binstall; {} installable; {} tracked file(s) carry no executable magic",
+            matrix.len(),
+            installable.len(),
+            tracked.len()
+        )?;
+        return Ok(ExitCode::Success);
+    }
+    writeln!(
+        err,
+        "::error:: release install: {} disagreement(s). The install path resolves assets by name, \
+         so a mismatch here is a 404 on a user's machine and nowhere else.",
+        found.len()
+    )?;
+    for disagreement in &found {
+        writeln!(err, "  {}", disagreement.line())?;
+    }
+    Ok(ExitCode::Violation)
 }
 
 /// Audit a design-evidence claim stream read on stdin (CLOUD-53).
@@ -1755,11 +2078,33 @@ fn run_mcp(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
+    // RECORD, THEN BECOME. The two statements are the whole verb, and the order
+    // is the diagnosis: a connect timeout WITH a matching record means
+    // spawned-and-unresponsive, one WITHOUT means never spawned, and nothing in
+    // this repository could tell those apart before CLOUD-714. Recording after
+    // the exec is not an option — there is no after.
+    //
+    // Nothing is written to either channel here. `out` and `err` are untouched
+    // because stdout is the MCP transport, and one stray byte on it corrupts the
+    // JSON-RPC stream and takes the server down looking exactly like the bug.
+    if let cli::McpCommand::Spawn { server, command } = command {
+        mcp::record_spawn(Path::new("."), server);
+        // Returns only on failure; success replaces this process.
+        return exec::become_argv(command).map(|never| match never {});
+    }
     let cli::McpCommand::Call {
         server,
         method,
         params,
-    } = command;
+    } = command
+    else {
+        // Unreachable: the enum has two variants and the first is handled above.
+        // A refusal rather than a panic, on this module's own rule that an
+        // impossible parse is still answered rather than aborted.
+        return Err(UsageError::raise(
+            "mcp: no sub-verb resolved from this invocation".to_owned(),
+        ));
+    };
     let repo = git::repo_root(Path::new("."))?;
     let resolved = resolve::resolve(Path::new("."), overrides)?;
     let config = resolved.mcp.clone().unwrap_or_default();
@@ -3215,6 +3560,7 @@ fn run_receipt(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     match command {
+        ReceiptCommand::Clean => receipt::run_clean(out, err),
         ReceiptCommand::Record { check } => receipt::run_record(&check, mode, err),
         ReceiptCommand::Status { check, key, json } => receipt::run_status(&check, key, json, out),
         ReceiptCommand::Verified => receipt::run_verified(out),
@@ -6912,6 +7258,46 @@ fn run_perf(
                 Ok(ExitCode::Internal)
             }
         },
+        // A FAILED ARM WRITES NO RECORDS AT ALL. `invocation` returns the whole
+        // table or an error, so a broken path cannot reach `record tool` as a
+        // fast number — which is what it would look like, since a binary that
+        // has started failing outright is still perfectly timeable.
+        cli::PerfCommand::Measure => match perf::invocation(root) {
+            Ok(records) => {
+                for record in records {
+                    writeln!(out, "{}", record.measurement())?;
+                }
+                Ok(ExitCode::Success)
+            }
+            Err(reason) => {
+                writeln!(err, "::error:: {reason}")?;
+                Ok(ExitCode::Internal)
+            }
+        },
+        cli::PerfCommand::Record => {
+            // OFF TRUNK IS A REFUSAL, loudly, and nothing is written.
+            if let Some(branch) = perf::on_trunk(root)? {
+                writeln!(
+                    err,
+                    "::error:: perf record: HEAD is on {branch}, not the trunk — a branch's \
+                     numbers are not the trunk's, and a series mixing them cannot be read. \
+                     Nothing written."
+                )?;
+                return Ok(ExitCode::Violation);
+            }
+            let mut input = String::new();
+            std::io::stdin().read_to_string(&mut input)?;
+            match perf::record_series(root, &input) {
+                Ok(pointer) => {
+                    writeln!(out, "{pointer}")?;
+                    Ok(ExitCode::Success)
+                }
+                Err(reason) => {
+                    writeln!(err, "::error:: {reason}")?;
+                    Ok(ExitCode::Internal)
+                }
+            }
+        }
         cli::PerfCommand::Compare => {
             let mut input = String::new();
             std::io::stdin().read_to_string(&mut input)?;
@@ -16955,10 +17341,83 @@ fn run_exec(
             })?;
     }
     settings.continue_on_error = settings.continue_on_error || request.continue_on_error;
+    // THE LOCK IS HELD ACROSS THE CHILD, AND THE GUARD IS WHAT MAKES THAT TRUE
+    // ON EVERY RETURN (CLOUD-1710). A wrapped command that fails comes back as
+    // `Err(Passthrough)`, so releasing after the call would leak the lock on
+    // exactly the path that matters most — the shell named the same defect and
+    // used a trap: *"a failure that leaves the lock held wedges every later
+    // caller for the full timeout, turning one red run into a stuck repo."*
+    let _held = match exec::hold(exec_lock(request)?.as_ref(), err)? {
+        exec::LockOutcome::Refused(code) => return Ok(code),
+        taken => taken,
+    };
     // The report goes to the ERROR channel, never `out`: stdout belongs to the
     // wrapped command (CLOUD-285), so a pointer line there would corrupt a
     // document the caller may be parsing.
     exec::run_with(&request.command, &patterns, &settings, err)
+}
+
+/// What `--lock` asked for, as the value [`exec::hold`] takes.
+///
+/// Parsed HERE rather than in `exec.rs`, for `--jobs`' reason and in `--jobs`'
+/// place: a bad value owes a `UsageError` naming what was wrong with it, and
+/// the boundary is where this crate turns typed argv into declared values.
+///
+/// # Errors
+///
+/// [`UsageError`] when `--lock-attempts` is not a positive whole number.
+fn exec_lock(request: &cli::ExecRequest) -> Result<Option<exec::Lock>> {
+    let place = match (request.lock.as_deref(), request.lock_path.as_deref()) {
+        // **A LOCK-ONLY OPTION WITH NO LOCK IS A CALLER BUG, NOT A NO-OP**
+        // (review of #928). This returned before either option was read, so
+        // `batten exec --lock-attempts 40 -- cmd` ran UNLOCKED and discarded the
+        // wait the caller asked for — silently, and at exactly the moment a
+        // caller believed they were queuing. Refusing costs one line and names
+        // the missing flag; the alternative teaches the caller that the option
+        // does nothing.
+        (None, None) if request.lock_attempts.is_some() || request.lock_label.is_some() => {
+            return Err(UsageError::raise(
+                "exec: --lock-attempts and --lock-label configure a lock; name one with --lock or --lock-path",
+            ));
+        }
+        (None, None) => return Ok(None),
+        (Some(key), None) => exec::LockPlace::Key(key.to_owned()),
+        (None, Some(path)) => exec::LockPlace::Path(std::path::PathBuf::from(path)),
+        // A refusal rather than a precedence rule: the two answer "where should
+        // the queue form" differently, and silently picking one would serialize
+        // the wrong thing — which is the failure mode a lock exists to prevent.
+        (Some(_), Some(_)) => {
+            return Err(UsageError::raise(
+                "exec: --lock and --lock-path name two different queues; give one",
+            ));
+        }
+    };
+    let attempts = match request.lock_attempts.as_ref() {
+        Some(raw) => raw
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .filter(|n| *n > 0)
+            .ok_or_else(|| {
+                UsageError::raise(format!(
+                    "exec: --lock-attempts wants a positive whole number, not `{raw}`"
+                ))
+            })?,
+        None => exec::LOCK_ATTEMPTS_DEFAULT,
+    };
+    let named = match &place {
+        exec::LockPlace::Key(key) => key.clone(),
+        exec::LockPlace::Path(path) => path.display().to_string(),
+    };
+    Ok(Some(exec::Lock {
+        place,
+        attempts,
+        // The caller names what the wait was FOR, and the key is the fallback
+        // rather than the message: `the toolchain lock (aarch64-apple-darwin)`
+        // is a pointer to the thing a reader has to reason about, where a bare
+        // key is a pointer to a directory.
+        label: request.lock_label.clone().unwrap_or(named),
+    }))
 }
 
 fn load_exec_settings(
@@ -20143,7 +20602,11 @@ fn run_config(
 /// [`ExitCode::Violation`] by construction: a diagnostic never renders a policy
 /// verdict, so a mediating harness can never read "this checkout is
 /// misconfigured" as a deny (§7).
-fn run_doctor(command: &cli::DoctorCommand, out: &mut dyn Write) -> Result<ExitCode> {
+fn run_doctor(
+    command: &cli::DoctorCommand,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
     match *command {
         cli::DoctorCommand::Diagnose { json } => run_diagnose(json, out),
         cli::DoctorCommand::Hooks { json } => run_doctor_hooks(json, out),
@@ -20154,6 +20617,7 @@ fn run_doctor(command: &cli::DoctorCommand, out: &mut dyn Write) -> Result<ExitC
         cli::DoctorCommand::Toolchain { ref manifest, json } => {
             run_doctor_toolchain(manifest, json, out)
         }
+        cli::DoctorCommand::Target { ref target } => doctor::run_target(target, out, err),
     }
 }
 
@@ -20187,6 +20651,176 @@ fn run_doctor_toolchain(manifest: &str, json: bool, out: &mut dyn Write) -> Resu
         output::line(out, &verdict)?;
     }
     Ok(verdict.code())
+}
+
+/// `batten ci slow-needed` (CLOUD-398), ported off `mise-tasks/ci-slow-needed.sh`.
+///
+/// # The answer is yes or no, so the exit table is `checks green`'s
+///
+/// `Success` is *the slow tier is needed*; `Violation` is *it is not*. That
+/// reads oddly only until the alternative is written down: a verb that exited `0`
+/// for both and printed the answer would make every caller parse prose to decide
+/// whether to run a tier, which is the payload-as-verdict shape §6 refuses.
+///
+/// # An empty diff is COULD-NOT-LOOK, never a clean one
+///
+/// The retired program says why, and it is the whole reason this is not a
+/// one-line predicate: *"an empty diff means the comparison did not look — a
+/// wrong base, a shallow clone — and answering 'skip the slow tier' there would
+/// be the false-absent this program exists to avoid."*
+///
+/// # Errors
+///
+/// Propagates a write failure on either channel.
+fn run_ci(
+    command: &cli::CiCommand,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    match *command {
+        cli::CiCommand::SlowNeeded { ref base } => run_ci_slow_needed(base, overrides, out, err),
+        cli::CiCommand::Suites { ref base } => run_ci_suites(base, out, err),
+    }
+}
+
+/// Which bats suites a diff can move (CLOUD-886), ported off
+/// `mise-tasks/suite-select.sh` under CLOUD-1716.
+///
+/// # COULD-NOT-LOOK WIDENS, it never narrows
+///
+/// Every failure here -- an unresolvable base, an unreadable suite, a header
+/// that has rotted -- falls back to every suite rather than refusing. The
+/// asymmetry is the whole design: a run that is too wide shows up in the bill,
+/// and one that is too narrow has no symptom at all.
+///
+/// # Errors
+///
+/// Propagates a write failure on either channel. Nothing about the tree is an
+/// error; the widest answer is always available.
+fn run_ci_suites(base: &str, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+    let root = git::repo_root(Path::new("."))?;
+    let root = Path::new(&root);
+    let suites = bats_suites(root);
+
+    let widest = |why: &str, out: &mut dyn Write, err: &mut dyn Write| -> Result<ExitCode> {
+        writeln!(err, "ci suites: running every suite — {why}")?;
+        for suite in &suites {
+            writeln!(out, "{suite}")?;
+        }
+        Ok(ExitCode::Success)
+    };
+
+    let Ok(Some(delta)) = git::base_delta(root, base, &[String::from("**")], false) else {
+        return widest(
+            &format!("no {base} to compare against, so the changed set is unknowable"),
+            out,
+            err,
+        );
+    };
+    let changed: std::collections::BTreeSet<String> = delta
+        .added
+        .iter()
+        .chain(delta.edited.iter())
+        .chain(delta.deleted.iter())
+        .cloned()
+        .collect();
+
+    let mut subjects: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+        std::collections::BTreeMap::new();
+    for suite in &suites {
+        let Ok(text) = std::fs::read_to_string(root.join(suite)) else {
+            return widest(&format!("{suite} could not be read"), out, err);
+        };
+        subjects.insert(suite.clone(), rules::declared_subject(&text, "# subject:"));
+    }
+
+    let selection = suites::select(&changed, &suites, &subjects);
+    if let Some(ref why) = selection.widened {
+        return widest(why, out, err);
+    }
+    for suite in &selection.suites {
+        writeln!(out, "{suite}")?;
+    }
+    Ok(ExitCode::Success)
+}
+
+/// Every bats suite PRESENT in the working tree.
+///
+/// Present rather than merely tracked, and for `select`'s reason: every path
+/// this emits is one the consumer hands to bats, and a file bats cannot open is
+/// not a suite to run -- which is exactly the state a retirement passes through.
+fn bats_suites(root: &Path) -> std::collections::BTreeSet<String> {
+    let mut found = std::collections::BTreeSet::new();
+    if let Ok(entries) = std::fs::read_dir(root.join("tests")) {
+        for entry in entries.filter_map(std::result::Result::ok) {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.ends_with(".bats") && root.join("tests").join(&name).is_file() {
+                found.insert(format!("tests/{name}"));
+            }
+        }
+    }
+    found
+}
+
+/// Whether a diff can move the hk slow tier (CLOUD-398).
+///
+/// # Errors
+///
+/// Propagates a write failure on either channel.
+fn run_ci_slow_needed(
+    base: &str,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let resolved = resolve::resolve(Path::new("."), overrides)?;
+    let inert = resolved
+        .ci
+        .as_ref()
+        .map(|ci| ci.slow_inert.clone())
+        .unwrap_or_default();
+
+    let root = git::repo_root(Path::new("."))?;
+    let Some(delta) = git::base_delta(Path::new(&root), base, &[String::from("**")], false)? else {
+        writeln!(
+            err,
+            "::error:: ci slow-needed: {base} does not resolve, so there is no diff to judge."
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    let mut changed: Vec<String> = delta
+        .added
+        .iter()
+        .chain(delta.edited.iter())
+        .chain(delta.deleted.iter())
+        .cloned()
+        .collect();
+    changed.sort_unstable();
+    changed.dedup();
+
+    if changed.is_empty() {
+        writeln!(
+            err,
+            "::error:: ci slow-needed: {base} reports no changed paths, which is could-not-look \
+             rather than a clean diff."
+        )?;
+        return Ok(ExitCode::Internal);
+    }
+
+    // A POINTER TO THE PATH THAT DECIDED IT, never the list and never a count of
+    // the diff: the one thing a reader needs is which path is not inert, because
+    // that is what they would add to the list if they disagreed.
+    if let Some(live) = crate::ci::first_live_path(&inert, &changed) {
+        writeln!(out, "ci slow-needed: {live} can move the slow tier")?;
+        Ok(ExitCode::Success)
+    } else {
+        writeln!(
+            out,
+            "ci slow-needed: every changed path is inert to the slow tier"
+        )?;
+        Ok(ExitCode::Violation)
+    }
 }
 
 /// Does a commit in this clone run the gate (CLOUD-1398)?

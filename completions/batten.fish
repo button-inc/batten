@@ -138,6 +138,10 @@ complete -c batten -n "__fish_batten_using_subcommand enforce" -l no-input -d 'N
 complete -c batten -n "__fish_batten_using_subcommand enforce" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand enforce" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand exec" -l jobs -d 'How many of a `:::` bundle\'s commands run at once' -r
+complete -c batten -n "__fish_batten_using_subcommand exec" -l lock -d 'Hold this clone\'s named singleton lock for the child\'s lifetime' -r
+complete -c batten -n "__fish_batten_using_subcommand exec" -l lock-path -d 'Hold the lock at this path, for a resource the clone does not own' -r
+complete -c batten -n "__fish_batten_using_subcommand exec" -l lock-attempts -d 'How many times to ask for the lock before reporting it held' -r
+complete -c batten -n "__fish_batten_using_subcommand exec" -l lock-label -d 'What the wait is for, named by the caller for the refusal line' -r
 complete -c batten -n "__fish_batten_using_subcommand exec" -l format -d 'How Batten\'s own record is encoded (hk\'s axis)' -r -f -a "human\t'Pointer lines, one per fact'
 json\t'One JSON document'
 jsonl\t'One JSON record per line'"
