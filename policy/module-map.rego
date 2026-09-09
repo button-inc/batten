@@ -114,7 +114,7 @@ named(base) if {
 
 violation contains {
 	"rule": "module-map",
-	"verdict": "module place missing",
+	"verdict": "module list missing",
 	"subjects": [{"path": path}],
 } if {
 	map_lines
@@ -140,7 +140,7 @@ test_a_module_with_a_map_row_is_clean if {
 
 test_a_module_with_no_map_row_is_refused if {
 	some v in violation with input as tree({"crates/demo/src/severity.rs"}, mapped)
-	v.verdict == "module place missing"
+	v.verdict == "module list missing"
 }
 
 test_a_bare_mention_does_not_satisfy_the_row if {
@@ -148,7 +148,7 @@ test_a_bare_mention_does_not_satisfy_the_row if {
 		{"crates/demo/src/severity.rs"},
 		{".serena/memories/core.md": ["Note: severity.rs is described in another memory."]},
 	)
-	v.verdict == "module place missing"
+	v.verdict == "module list missing"
 }
 
 test_a_path_outside_a_crate_source_is_not_a_module if {
