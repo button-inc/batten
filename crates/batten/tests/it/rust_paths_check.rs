@@ -34,6 +34,7 @@
 
 use crate::common;
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
@@ -41,10 +42,10 @@ use common::{Fixture, git_in, run, stderr, stdout};
 
 /// A repository declaring only this rule, so any finding is the one under test.
 fn paths_repo(name: &str, entries: &[&str]) -> PathBuf {
-    let listed = entries
-        .iter()
-        .map(|e| format!("      - \"{e}\"\n"))
-        .collect::<String>();
+    let mut listed = String::new();
+    for entry in entries {
+        writeln!(listed, "      - \"{entry}\"").unwrap();
+    }
     let workflow = format!(
         "on:\n  pull_request:\n    paths:\n{listed}jobs:\n  build:\n    runs-on: ubuntu-latest\n"
     );
