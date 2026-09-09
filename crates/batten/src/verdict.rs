@@ -1213,33 +1213,6 @@ pub enum Native {
     // moment it fires. That also makes them resolvable from `vendored()` with
     // no config load, which is what keeps `policy explain` usable over a config
     // that will not parse.
-    /// The declaration could not be READ AT ALL — not valid TOML.
-    ///
-    /// **Deliberately not in [`Native::CONFIG_FAULTS`]**, which is the per-TABLE
-    /// set and is censused in both directions against `config.rs`'s own list. This
-    /// one has no table: it is raised before any table exists, by the parse that
-    /// every table's validator runs after.
-    ///
-    /// # Why it needs a class when the other parse failures do not
-    ///
-    /// A class here is not for `explain` — it is the DISCRIMINATOR the mediated
-    /// boundary acts on (CLOUD-1677). Gates are registered fail-open, and a gate
-    /// that fails open is inert: it neither allows nor denies, it is absent. So a
-    /// config fault is never a choice between refusing and allowing, it is a
-    /// choice between keeping the enforcement surface we still have and losing it
-    /// entirely.
-    ///
-    /// An unknown key, a version this build is too old for, a row whose validator
-    /// refused — each leaves every OTHER row readable and enforceable, and leaves
-    /// an agent that can still be told to repair the one that is broken. Failing
-    /// the whole load there buys nothing and costs the surface that would have
-    /// carried the repair instruction.
-    ///
-    /// A file that is not TOML is the one case with no partial function to
-    /// preserve: zero rows are readable, so refusing the call is the only signal
-    /// left, and the declared hatch is the recovery path. That asymmetry is why
-    /// this class exists and why it is exactly one class wide.
-    ConfigUnreadable,
     /// The `[[verb]]` table would not load.
     VerbTableRefused,
     /// The `[[pattern]]` table would not load.
@@ -1285,6 +1258,39 @@ pub enum Native {
     /// than in a consumer `[[verdict]]` row. No consumer can name the class,
     /// because the engine is what takes the plan and what compares it.
     PlanReadStale,
+    /// The declaration could not be READ AT ALL — not valid TOML.
+    ///
+    /// **APPENDED, NEVER INSERTED.** This enum carries no `repr`, so a variant
+    /// added in the middle shifts every later discriminant and
+    /// `enum_no_repr_variant_discriminant_changed` reads the whole tail as
+    /// broken — measured here, where placing it beside the other config classes
+    /// moved eighteen of them. Position is API; the reading order below is not.
+    ///
+    /// **Deliberately not in [`Native::CONFIG_FAULTS`]**, which is the per-TABLE
+    /// set and is censused in both directions against `config.rs`'s own list. This
+    /// one has no table: it is raised before any table exists, by the parse that
+    /// every table's validator runs after.
+    ///
+    /// # Why it needs a class when the other parse failures do not
+    ///
+    /// A class here is not for `explain` — it is the DISCRIMINATOR the mediated
+    /// boundary acts on (CLOUD-1677). Gates are registered fail-open, and a gate
+    /// that fails open is inert: it neither allows nor denies, it is absent. So a
+    /// config fault is never a choice between refusing and allowing, it is a
+    /// choice between keeping the enforcement surface we still have and losing it
+    /// entirely.
+    ///
+    /// An unknown key, a version this build is too old for, a row whose validator
+    /// refused — each leaves every OTHER row readable and enforceable, and leaves
+    /// an agent that can still be told to repair the one that is broken. Failing
+    /// the whole load there buys nothing and costs the surface that would have
+    /// carried the repair instruction.
+    ///
+    /// A file that is not TOML is the one case with no partial function to
+    /// preserve: zero rows are readable, so refusing the call is the only signal
+    /// left, and the declared hatch is the recovery path. That asymmetry is why
+    /// this class exists and why it is exactly one class wide.
+    ConfigUnreadable,
 }
 
 impl Native {
