@@ -148,6 +148,46 @@ connector shows **all 20 `always_ask`, including read-only `get_session` and
 is `always_ask` is a mandatory-approval connector, not an ungranted one, and no
 local change will move it.
 
+## The fifth state: the proxy demands a per-call approval the harness self-heals and an out-of-band client cannot (2026-09-08)
+
+**The tell is the CLI's own MCP log, and nothing else discriminates it.** Read
+`~/.cache/claude-cli-nodejs/<cwd-slug>/mcp-logs-<Server>/<newest>.jsonl`. In
+this state the harness's OWN calls are answered
+`-32003 needs_approval` and the log says so in as many words —
+`Tool 'save_comment' returned -32003 needs_approval (tool_name=…) — surfacing
+retroactive approval card` — followed by a retry that succeeds. Measured in one
+session: 22 harness Linear calls 20:32Z→21:37Z, **11 refused and retried**, 0 of
+200+ in the same session's earlier logs. In auto mode the card is auto-approved,
+so **the user sees nothing and every interactive call works.** "Nothing is broken
+in any other thread" is therefore TRUE at the same time as "the reduced verb is
+refused on every call", and arguing either point against the other is wasted.
+
+**Why `batten mcp call` fails 100% while the harness fails ~50% and heals.** The
+CLI attaches `_meta["claudecode/toolUseId"]` to every `tools/call`; the proxy's
+`-32003` carries `{tool_name, args_sha256, tool_use_id}`, the harness's retry
+path (`ccrNeedsApprovalRetry`, wire code `no_approval`) approves THAT id and
+re-sends the identical call, which then passes. An out-of-band client sends no
+id and has no approval surface, so nothing it can send is ever approved. The
+`permission_policy` in the injected config read `always_allow` for every refused
+tool throughout — step 1 below does not discriminate this state either, and
+step 2 (a user-level allow entry) is the wrong layer and changed nothing.
+
+**What does and does not end it.** Not a mode change (auto mode spanned both
+success windows), not the binary, not the source row, not the token (rotated
+mid-window, still refused). It ended when the session re-provisioned — new
+injected config, new ingress token, new harness process — and the reduced verb
+answered on the next call. A backgrounded retry loop is refused by
+`run-shape-guard`; the retry is one call per turn, so **do the work that needs
+no receipt (comments still land; `list_issues` still reads) and re-try the
+reduced verb once per turn** rather than sitting on it.
+
+**Consequence for the board**: `an-update-owes-a-recent-read` accepts only the
+receipt the reduced verb mints and `no-raw-issue-read` refuses the interactive
+`get_issue`, so every `save_issue` is blocked for exactly as long as the proxy
+holds this posture. That is the gate refusing correctly over a missing input,
+the same shape as the claim receipt below. Series: CLOUD-178, comment of
+2026-09-08.
+
 ## Recovering a DATA connector (Linear/Gmail/Xero), in order
 
 1. **Find the live names.** The host writes its injected MCP config to
