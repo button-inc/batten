@@ -4136,61 +4136,61 @@ fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
 /// arm pushed that function past its line budget — the split is where the
 /// function already changed subject, from which MOMENT this is to what the
 /// policy says about the call.
-#[expect(
-    clippy::match_same_arms,
-    reason = "CLOUD-777: the arms deliberately repeat `Some(Decision::Allow)` and \
-              must not be merged. Each event answers BY NAME, with its own comment \
-              saying why it decides nothing, and the match is exhaustive with no \
-              wildcard so an eighth `Event` fails to compile until somebody says \
-              what it decides. Merging them is byte-identical at runtime and the \
-              opposite as a contract — a stated no-op collapsed back into a \
-              fall-through, which is the defect this match replaced. Split out of \
-              `adjudicated_gates` by CLOUD-1639, which is when the lint first \
-              had a function small enough to fire on."
-)]
 fn event_decides(event: Event) -> Option<Decision> {
     match event {
         // The one adjudicated event. Everything past this point is its gate
         // chain.
         Event::PreTool => None,
-        // No decision, by design. The post-tool moment has no deny channel on any
-        // surveyed host — the call already happened — and its reader is the drain
-        // (CLOUD-79). Reading a fact off the result is CLOUD-776's, and it lands
-        // as a `Decision` here only once there is something to decide.
-        Event::PostTool | Event::PostToolBatch => Some(Decision::Allow),
-        // Handled ABOVE, before the bypass check, because what is judged there is
-        // not a call but whether the turn's work is finished (CLOUD-85). Stated
-        // rather than folded into the no-ops so this arm cannot silently become
-        // the answer if that early return is ever moved.
-        Event::Stop => Some(Decision::Allow),
-        // No decision, by design, and not a gap waiting on CLOUD-461: neither
-        // moment carries `Decision` semantics on ANY host. There is nothing to
-        // allow or deny at the start of a session or a config reload — what a
-        // policy might want there is advisory, which is a channel rather than a
-        // verdict.
-        Event::SessionStart | Event::ConfigChange => Some(Decision::Allow),
-        // Claude Code's completion signal, and the one event whose exit 2
-        // prevents completion. Batten does not use it yet: the stop gate is the
-        // reconciliation point (house-style §10) and `Capabilities::degrade` maps
-        // this to the Stop family elsewhere, so deciding here as well would give
-        // one question two answers.
-        Event::TaskCompleted => Some(Decision::Allow),
-        // NOT a stated no-op, and the distinction is the point of the arm
-        // (CLOUD-777). Measured 2026-08-21 on this repository's own wiring: the
-        // two bash guards registered here reach `exit 2` on five paths between
-        // them and emit no advisory shape at all, so Claude Code honours a deny
-        // at this moment and the channel is real. What is missing is a rule kind
-        // that selects for it — every kind in `rules.rs` keys on a mediated CALL,
-        // and a submitted prompt is not one — so the honest answer today is
-        // allow, with the gap named rather than dressed as a design decision.
-        // CLOUD-312 owns the retirement of the two guards; when a kind can key on
-        // this event, this arm is where it dispatches.
-        Event::UserPromptSubmit => Some(Decision::Allow),
-        // The host said something this build cannot normalize. Allow, loudly
-        // elsewhere: an unrecognized event is a fact about the host, never a
-        // reason to refuse a call (CLOUD-45), and guessing which moment it stands
-        // for is how a gate fires at one nobody named.
-        Event::Unrecognized => Some(Decision::Allow),
+        // EVERY OTHER EVENT ALLOWS, AND EACH IS STILL NAMED. They share one arm
+        // because `match_same_arms` refuses six copies of the same body and the
+        // lint is right that they are one body; what CLOUD-777 requires is not
+        // six arms but three properties, and all three survive here — the match
+        // is exhaustive with NO WILDCARD, so an eighth `Event` fails to compile
+        // until somebody says what it decides; every event is named; and every
+        // one carries the comment saying why it decides nothing. A fall-through
+        // would have none of the three, which is the defect this replaced.
+        //
+        // `PostTool`/`PostToolBatch`: no decision, by design. The post-tool
+        // moment has no deny channel on any surveyed host — the call already
+        // happened — and its reader is the drain (CLOUD-79). Reading a fact off
+        // the result is CLOUD-776's, and it lands as a `Decision` here only once
+        // there is something to decide.
+        Event::PostTool
+        | Event::PostToolBatch
+        // `Stop`: handled ABOVE, before the bypass check, because what is judged
+        // there is not a call but whether the turn's work is finished
+        // (CLOUD-85). Named here too so it cannot silently become the answer if
+        // that early return is ever moved.
+        | Event::Stop
+        // `SessionStart`/`ConfigChange`: no decision, by design, and not a gap
+        // waiting on CLOUD-461 — neither moment carries `Decision` semantics on
+        // ANY host. There is nothing to allow or deny at the start of a session
+        // or a config reload; what a policy might want there is advisory, which
+        // is a channel rather than a verdict.
+        | Event::SessionStart
+        | Event::ConfigChange
+        // `TaskCompleted`: Claude Code's completion signal, and the one event
+        // whose exit 2 prevents completion. Batten does not use it yet — the
+        // stop gate is the reconciliation point (house-style §10) and
+        // `Capabilities::degrade` maps this to the Stop family elsewhere, so
+        // deciding here as well would give one question two answers.
+        | Event::TaskCompleted
+        // `UserPromptSubmit`: NOT a stated no-op, and the distinction is the
+        // point (CLOUD-777). Measured 2026-08-21 on this repository's own
+        // wiring: the two bash guards registered here reach `exit 2` on five
+        // paths between them and emit no advisory shape at all, so Claude Code
+        // honours a deny at this moment and the channel is real. What is missing
+        // is a rule kind that selects for it — every kind in `rules.rs` keys on
+        // a mediated CALL, and a submitted prompt is not one — so the honest
+        // answer today is allow, with the gap named rather than dressed as a
+        // design decision. CLOUD-312 owns the retirement of the two guards; when
+        // a kind can key on this event, this is where it dispatches.
+        | Event::UserPromptSubmit
+        // `Unrecognized`: the host said something this build cannot normalize.
+        // Allow, loudly elsewhere — an unrecognized event is a fact about the
+        // host, never a reason to refuse a call (CLOUD-45), and guessing which
+        // moment it stands for is how a gate fires at one nobody named.
+        | Event::Unrecognized => Some(Decision::Allow),
     }
 }
 
