@@ -7066,6 +7066,22 @@ severity = "deny"
 # gated are the filter's own CLAIMS, as probes — which paths must re-run these
 # jobs and which must not — because "which files does a job read" is not
 # computable from committed text.
+# CLOUD-767, ported from `mise-tasks/digest-major-agreement.sh` under CLOUD-843.
+# The rule this replaces was a COMMENT, and the comment was wrong: it justified a
+# pin by claiming the next major would put two majors of one hashing substrate in
+# the tree, and the committed lockfile already carried both. What is decidable is
+# narrower and true today — the crypto crates this workspace declares FOR ITSELF
+# compose in one expression, so they must agree with each other. Read from the
+# LOCK, because a caret requirement is not a resolution; the manifest answers only
+# which crates are ours, which is the question the lock cannot answer.
+[[rule]]
+id = "digest-major-agreement"
+kind = "policy"
+scope = "tree"
+line_sources = ["Cargo.toml", "Cargo.lock"]
+module = "policy/digest-major-agreement.rego"
+severity = "deny"
+
 [[rule]]
 id = "rust-paths-check"
 kind = "policy"
@@ -13327,6 +13343,30 @@ id = "task judge silent"
 gloss = "a report task is reachable from the landing path"
 class = """
 A task that reports rather than gates must not be able to redden a landing, and must not be able to green one either — reachability makes its output a verdict nobody intended. Take it off the path, or make it a gate deliberately.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "lock read unclear"
+gloss = "the lockfile does not answer what it resolved for a crate the manifest declares"
+class = """
+A crate declared for this workspace that the lock resolves no dependency for, or a bare entry beside several majors of that dependency, is a lockfile that does not describe the manifest. Nothing can be decided from it — regenerate the lock rather than reading its silence as agreement.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "version resolve other"
+gloss = "the workspace's own crypto crates resolved different majors of one substrate"
+class = """
+The crates this workspace declares for itself compose in a single expression, so splitting them across majors is a type that does not exist and a build that cannot succeed. Bump them together or not at all; a transitive dependency's own major is not this workspace's to keep.
 """
 
 [[verdict.route]]

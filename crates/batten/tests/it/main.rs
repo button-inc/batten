@@ -110,6 +110,7 @@ mod defects;
 mod derived_facts;
 mod design_audit;
 mod dev_profile;
+mod digest_major_agreement;
 mod doctor;
 mod document_facts;
 mod document_read_count;
