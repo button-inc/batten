@@ -44,6 +44,7 @@
 #MUTANT cargo-reach-may-go-uncached|s@not declares_a_cache(path, name)@false@|a_cargo_job_with_no_cache_step_is_refused
 #MUTANT warmed-family-may-be-written|s@not reads_only(step)@false@|a_pull_request_writer_of_a_warmed_family_is_refused
 #MUTANT orphaned-reader-may-pass|s@not [shared_key(step), arch(runner(path, name))] in warmed@false@|a_read_only_consumer_of_an_unwarmed_family_is_refused
+#MUTANT scheduled-writer-may-not-warm|s@trunk_writer(path) if _ := triggers(path).schedule@trunk_writer(path) if false@|a_scheduled_trunk_writer_warms_the_family
 
 # METADATA
 # description: |
@@ -106,15 +107,26 @@ triggers(path) := t if {
 
 on_pull_request(path) if _ := triggers(path).pull_request
 
-# `push` ONLY, AND NOT `schedule`, WHICH IS A DELIBERATE BOUND rather than an
-# oversight. "Warmed" here means an entry a pull request can actually READ, and
-# GitHub scopes a cache read to the run's own ref plus the base branch — so what
-# matters is a writer on the trunk, which in this repository is a push-triggered
-# workflow. The scheduled workflows do write `perf-`, `coverage-` and `fuzz-`,
-# and those families are outside this predicate on purpose: `perf`'s base arm is
-# a separate cache keyed to the merge base, which CLOUD-1331 and CLOUD-1342
-# already settled, and refusing it here would re-open a decision made elsewhere.
-on_push(path) if _ := triggers(path).push
+# A TRUNK WRITER IS ONE THAT RUNS ON THE TRUNK, AND THE TRIGGER IS NOT WHAT
+# DECIDES THAT. The earlier version of this predicate read `push` only and
+# defended the bound by saying trunk writers in this repository are
+# push-triggered. Its own operative sentence refutes it: "GitHub scopes a cache
+# read to the run's own ref plus the base branch" — so what a pull request can
+# read is settled by the writing run's REF, and a `schedule` run on the default
+# branch has ref `refs/heads/main` exactly as a `push` one does. Excluding
+# schedules described the repository's habits rather than the mechanism, and it
+# cost a real reading: `ci.yml`'s `perf` job restores the same `perf-` key, on the
+# same architecture, that `perf.yml` writes daily from `main` — a warm family the
+# model called orphaned, so its pull-request reader kept writing a full
+# `--release` target directory nobody could read.
+#
+# THE CLOUD-1331 CARVE-OUT SURVIVES, AND IT WAS NEVER ABOUT THIS FAMILY. That row
+# and CLOUD-1342 settled `perf`'s BASE ARM, a separate entry keyed to the merge
+# base (`ci.yml:1129-1145`), which no clause here reaches. Naming it in defence of
+# excluding `perf-` conflated two caches that share a job and nothing else.
+trunk_writer(path) if _ := triggers(path).push
+
+trunk_writer(path) if _ := triggers(path).schedule
 
 # --- the steps, and the two facts a cache step carries ------------------------
 
@@ -436,7 +448,7 @@ runner(path, name) := label if {
 
 warmed contains [key, where] if {
 	some entry in job_step
-	on_push(entry[0])
+	trunk_writer(entry[0])
 	key := shared_key(entry[2])
 	where := arch(runner(entry[0], entry[1]))
 }
@@ -668,6 +680,29 @@ test_a_writer_of_an_unwarmed_family_is_not_this_rules_business if {
 	count(violation) == 0 with input as tree(no_writer, pr_reader("cross-", true))
 }
 
+# THE TRIGGER IS NOT WHAT MAKES A WRITER A TRUNK WRITER, and this is the case that
+# pins it. A `schedule` run on the default branch has ref `refs/heads/main`, so a
+# pull request reads its entry exactly as it reads a `push` writer's. Without this
+# case the predicate could drop the `schedule` clause and stay green, which is the
+# state that had `ci.yml`'s `perf` job writing over a family `perf.yml` already
+# warmed daily.
+test_a_scheduled_trunk_writer_warms_the_family if {
+	count(violation) == 0 with input as tree(
+		scheduled_writer,
+		pr_reader_on("ci-", false, "ubuntu-latest"),
+	)
+}
+
+# The other direction, so the widened predicate cannot pass by warming everything:
+# a scheduled writer on ANOTHER architecture is still not this reader's family.
+test_a_scheduled_writer_on_another_architecture_still_leaves_the_reader_empty if {
+	some finding in violation with input as tree(
+		scheduled_writer,
+		pr_reader_on("ci-", false, "ubuntu-24.04-arm"),
+	)
+	finding.rule == "read-family-has-a-warm-writer"
+}
+
 test_a_job_reaching_no_cargo_needs_no_cache if {
 	count(violation) == 0 with input as tree(warm_writer, inert_reader)
 }
@@ -695,6 +730,16 @@ tasks := {
 }
 
 warm_writer := warm_writer_on("ubuntu-latest")
+
+# The same job on the same runner, triggered by `schedule` rather than `push` —
+# `perf.yml`'s shape, and the one the earlier predicate did not count.
+scheduled_writer := {"on": {"schedule": [{"cron": "0 5 * * *"}]}, "jobs": {"cache-warm-linux": {
+	"runs-on": "ubuntu-latest",
+	"steps": [{
+		"uses": "Swatinem/rust-cache@6323deb1",
+		"with": {"shared-key": "ci-"},
+	}],
+}}}
 
 warm_writer_on(label) := {"on": {"push": {"branches": ["main"]}}, "jobs": {"cache-warm-linux": {
 	"runs-on": label,

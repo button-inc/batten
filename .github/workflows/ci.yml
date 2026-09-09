@@ -1118,6 +1118,21 @@ jobs:
         with:
           # The profile is part of the key — see the `ci` job above.
           shared-key: perf-
+          # READ-ONLY, because `perf.yml`'s own job is this family's writer and
+          # always was. It runs daily on a schedule, `runs-on: ubuntu-latest`, and
+          # takes this exact `shared-key` — same key, same architecture — so its
+          # entry sits on `refs/heads/main` and every pull request can read it.
+          # This job was nonetheless writing a full `--release` target directory
+          # on top of that, scoped to `refs/pull/N/merge` where nothing else can
+          # reach it: the largest single entry any reader here produces, for the
+          # profile no other job builds.
+          #
+          # `ci-cache-declared` could not see the writer until this change,
+          # because its `warmed` set counted `push` triggers only. That bound is
+          # now `trunk_writer` — push OR schedule — for the reason recorded in the
+          # module: what a pull request can read follows the writing run's REF,
+          # and a scheduled run on `main` has the same ref a pushed one does.
+          save-if: false
       # CLOUD-1331, corrected by CLOUD-1342. The BASE arm is a pure function of
       # the merge-base SHA, the pinned toolchain and `[profile.release]`, and
       # `main` advances only by fast-forward to already-judged SHAs — so
