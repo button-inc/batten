@@ -12281,8 +12281,71 @@ fn run_hook(
     // arms, ~0.7 ms against a 100 ms budget. `!adjudicable` keeps its old
     // behaviour, because an event with nothing to adjudicate has no protected
     // gate to run either, and that is the arm the hot path actually rides.
+    // A CONFIG THIS BUILD CANNOT READ IS CERTAINTY, AND CERTAINTY DENIES
+    // (CLOUD-1688). `?` here propagated a `UsageError` — exit `1` — and
+    // `exit.rs` makes only `2` a denial precisely so no FAILURE path can block a
+    // call. So the harness read this whole class as a non-blocking hook error
+    // and ran the tool anyway. Measured over one 5-day session: 1,149 calls
+    // proceeded unjudged through seven windows of a mid-edit `batten.toml`, and
+    // ~456 more through a preset this build did not ship (`policy.rs`'s
+    // unknown-preset arm, which raises exactly this error).
+    //
+    // THE DISCRIMINATION IS THE SAME ONE `UNREADABLE_STDIN` SITS ON THE OTHER
+    // SIDE OF, and CLOUD-1572 drew it one level down. Where the engine is
+    // GUESSING about the call — stdin it could not read, a payload that would
+    // not decode, an event the host does not declare — allowing is right,
+    // because nothing is known and refusing would make Batten the reason a
+    // session cannot proceed. Here the engine has READ its own authority and
+    // been told it cannot enforce it: the rule set is named, and unavailable.
+    // Proceeding then is not caution — it is a gate reporting a clean allow over
+    // rules it never ran, which is the false green this engine exists to catch.
+    //
+    // A DECISION, NOT AN ERROR, which is why it RENDERS rather than propagates.
+    // `render` owns the per-harness deny channel, so Claude Code gets its JSON
+    // decision object at exit `0` — where the document is the deny — and the
+    // neutral adapter gets `Violation`. Raising a `Denial` here would send `2`
+    // to a host that reads the document instead, which is the one number that
+    // host does not consult.
+    //
+    // THE HATCH IS HONOURED FIRST, and that is what keeps a container
+    // recoverable rather than bricked. A stale binary meeting a newer config
+    // denies every call until one of them moves, so the operator's declared
+    // escape has to still work — the bootstrap window CLOUD-1688 flags as
+    // needing a decision is exactly this state, and this arm is the part of it
+    // that can be settled without one.
     let (policy, waivers) = if adjudicable {
-        load_policy(overrides, harness)?
+        match load_policy(overrides, harness) {
+            Ok(loaded) => loaded,
+            Err(_) if bypass => (hook::Policy::declaring_nothing(harness), Vec::new()),
+            Err(unreadable) => {
+                // Pointer-only (non-negotiable rule 4): the loader's own message
+                // names the key or path that would not load, never its contents.
+                let refusal = Refusal::new(
+                    "engine-cannot-adjudicate",
+                    format!(
+                        "this build could not load the rules it is registered to enforce, so \
+                         nothing judged this call: {unreadable}"
+                    ),
+                    // No remedy the ENGINE may declare: the repair is rebuilding
+                    // or reinstalling the binary, or fixing the config, and both
+                    // are the consumer's own commands (non-negotiable rule 1).
+                    Fix::None,
+                );
+                let rendering = Rendering {
+                    hatch: hook::BYPASS_ENV,
+                    ceiling: None,
+                };
+                return render(
+                    harness,
+                    &envelope,
+                    hook::Decision::Deny(refusal),
+                    &rendering,
+                    mode,
+                    out,
+                    err,
+                );
+            }
+        }
     } else {
         (hook::Policy::declaring_nothing(harness), Vec::new())
     };
