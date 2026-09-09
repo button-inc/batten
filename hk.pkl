@@ -1145,8 +1145,14 @@ local fixers = new Mapping<String, Step> {
   ["cargo-fmt"] = gate["cargo-fmt"]
 }
 
-// The steps above marked `profiles = List("slow")` are the six that dominate the
-// gate: 111.1s total, 100.3s of it `test:bats` at nproc=4. They are not cheaper
+// The steps above marked `profiles = List("slow")` are the nine that dominate
+// the gate: 111.1s total, 100.3s of it `test:bats` at nproc=4. Counted from the
+// mapping rather than recalled — `coderabbit-config-check`, `hk-contract-check`,
+// `token-bench-check`, `sbom-check`, `test:bats`, `cargo-clippy`, `test`,
+// `batten-check`, `policy-test`. It said "six" from the tier's first shape and
+// three steps joined it afterwards without the count following, which is the
+// same drift `suite-bench-check` exists to keep out of the bats table: a number
+// in prose has no gate behind it and ages silently. They are not cheaper
 // than they look and they are not optional — they simply do not belong on the
 // path a developer pays on every `git commit`, because `hk check --all` (which
 // `mise run ci`, and therefore `verify` and CI, drive over this same mapping)
