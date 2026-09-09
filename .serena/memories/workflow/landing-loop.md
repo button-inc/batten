@@ -175,6 +175,32 @@ means it is a different change wearing the same subject.
 The cheap answer is to redo the amend on the clean pushed commit. It costs one
 gate run and cannot borrow anything.
 
+## Porting a lifecycle: four owner decisions, each a pointer
+
+Recovered from PR #848's session (2026-09-06), where a port carried every STEP
+of `land.sh` and dropped its LIFECYCLE with every gate green. Each rule lives
+on its row; this section is the pointer, not the argument.
+
+- **Crash-only is the architecture** (CLOUD-1558). The lock and the reaper
+  exist because the container crashes and leaves zombies. Recovery is the NEXT
+  instance's job on entry — reap, then reclaim, then register — and `Drop`,
+  `trap` and in-process unwinding are never the mechanism.
+- **Read the retired program line by line** (CLOUD-1559). Every line is a
+  measured decision; each gets `carried`/`changed`/`withdrawn`/`lost`. The
+  losses cluster in trap handlers and top-of-file guards, which no test title
+  covers. The audit's remainder is CLOUD-1561.
+- **No gate but a commit-message gate distinguishes committed from dirty**
+  (CLOUD-1565). `verify` runs over a dirty tree with a content-keyed receipt;
+  `tree-clean` gates the push only. Commit early, push to the draft, rewrite
+  draft history freely; the Stop arm is CLOUD-1503's `commit-or-discard`.
+- **One PR is an efficiency, not a commandment** (CLOUD-1566). A two-merge
+  dependency is a correctness reason for a second PR, claimed in the Ready
+  block's `blockers`, never in a PR body alone.
+
+The composition itself is a declared list with a durable compensation per step
+(CLOUD-1556 carries the Pkl default and its schema; CLOUD-1564 `Push`'s row),
+and the sleep policy that the raced wait needs is CLOUD-1557.
+
 ## Rollout posture
 
 Every mechanism here fails open on a clone that predates it, so none of them
