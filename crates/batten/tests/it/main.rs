@@ -178,6 +178,7 @@ mod mediated_verbs;
 mod memories;
 mod memory_injection;
 mod minted_facts;
+mod mise_action_floor;
 mod mise_pin_agreement;
 mod mise_preset;
 mod module_map;

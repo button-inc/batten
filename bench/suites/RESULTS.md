@@ -94,7 +94,6 @@ to it pays.
 | 0.5 | 0.1% | `tests/timeout-check.bats` |
 | 0.5 | 0.1% | `tests/rust-paths-check.bats` |
 | 0.4 | 0.1% | `tests/git-hook.bats` |
-| 0.4 | 0.1% | `tests/mise-action-floor.bats` |
 | 0.4 | 0.1% | `tests/remedy-payload-source.bats` |
 | 0.3 | 0.1% | `tests/token-bench-check.bats` |
 | 0.3 | 0.1% | `tests/dist.bats` |

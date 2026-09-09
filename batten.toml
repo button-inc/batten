@@ -1694,6 +1694,14 @@ regex = '-v[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)='
 id = "leading-identifier"
 regex = '^[A-Za-z_][A-Za-z0-9_]*'
 
+# A full git object id, lowercase hex. `mise-action-floor` uses it to tell a PINNED
+# coordinate from a floating one: `@v4` carries no sha, so a denylist cannot speak
+# about it at all and reporting green over it would be a claim the gate cannot
+# support.
+[[pattern]]
+id = "git-object-id"
+regex = '^[0-9a-f]{40}$'
+
 [[pattern]]
 id = "release-tag"
 regex = '^v[0-9]+\.[0-9]+\.[0-9]+$'
@@ -7027,6 +7035,22 @@ severity = "deny"
 # branch — feedback deleted, verdict preserved. `line_sources` names both halves
 # because the containment is a pure function of the two committed files, and
 # because editing either one is a reason to re-decide it.
+# CLOUD-404, ported from `mise-tasks/mise-action-floor.sh` under CLOUD-843. The
+# toolchain-install action's pre-retry commit is a reachable BACKSLIDE, not a
+# hypothetical one: the latest release and the floating major both resolve to it,
+# the dependency bot tracks that ecosystem, and this repository lands bot bumps
+# with no human in the loop. So a bump to it would be a silent downgrade to the
+# un-retried install, auto-landed — and the rule that forbids it ships as a gate
+# rather than a note. A denylist rather than a required sha, so every legitimate
+# forward bump stays silent.
+[[rule]]
+id = "mise-action-floor"
+kind = "policy"
+scope = "tree"
+line_sources = [".github/workflows/*.yml"]
+module = "policy/mise-action-floor.rego"
+severity = "deny"
+
 [[rule]]
 id = "glob-containment"
 kind = "policy"
