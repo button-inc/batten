@@ -284,6 +284,7 @@ mod task_prose;
 mod task_receipt;
 mod task_registry;
 mod test_targets;
+mod timeout_budget;
 mod todo_promotion;
 mod tool_selector;
 mod tool_verdict_facts;

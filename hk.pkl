@@ -357,42 +357,6 @@ local gate = new Mapping<String, Step> {
     glob = List("mise.lock", "mise.toml", ".github/workflows/*.yml")
     check = "mise run lock-complete"
   }
-  // Every job already declared a timeout, so the absence of a limit was never
-  // the problem — the numbers were boilerplate, at 3.4x to 75x of measured p95.
-  // A cap at 75x cannot fail a job that is merely broken-slow, and it is inert
-  // as feedback: `ci` could double and every gate would stay green. So this
-  // gates the JUSTIFICATION, not the limit: a budget comment beside each value,
-  // either `grandfathered` (dated debt, visibly not a justification) or a
-  // measured `p95=<n>s x<mult>` whose arithmetic must agree with the declared
-  // minutes. Whether a budget still matches reality is a property of the world
-  // and runs on a clock instead (timeout-drift), the lock-complete split.
-  ["timeout-check"] {
-    glob = List(".github/workflows/*.yml")
-    check = "mise run timeout-check"
-  }
-  // Every agent pays AGENTS.md on every turn, so its size is a per-turn tax
-  // rather than a style question. Counted with any memory declared always-load,
-  // since moving a section into one of those moves the cost without cutting it.
-  //
-  // This was `mise run context-budget`, a ~50-line shell task, until CLOUD-50
-  // moved the predicate into the engine. `batten.toml` now carries the counted
-  // set and both thresholds, so `batten.toml` joins the glob: changing the
-  // budget must re-run the gate that enforces it.
-  //
-  // `.serena/project.yml` joins it for the same reason (CLOUD-899):
-  // `[[budget.instructions.embedded]]` counts its `initial_prompt`, so it is a
-  // real input, and a step that does not list its own input stops running for
-  // exactly the commits it is meant to judge — the shape the `check` tier's
-  // memory glob already records for CLOUD-770. `batten-check` globs it too, but
-  // that step is `slow`-profile and skipped at commit time, so it covered
-  // `verify` and `ci` while the pre-commit tier stayed blind. That went unnoticed
-  // while the value was empty; CLOUD-864 put text in it.
-  //
-  // What is deliberately NOT here: `.serena/memories/always/*.md`, carried over
-  // from the deleted shell task. That directory has never existed — batten.toml
-  // says so where it declares the counted set — and CLOUD-298 removed the
-  // engine-side copy while this one survived, matching nothing and reading to the
-  // next author as evidence of an `always/` convention.
   ["policy-budget"] {
     glob = List("AGENTS.md", ".serena/project.yml", "batten.toml")
     check = "mise run policy-budget"
