@@ -7,10 +7,10 @@ discipline it exists to enforce. This file holds only what binds **every turn**.
 
 ## Authoritative specs — link, never restate
 
-Three internal specs are the source of truth; this file must not re-type what
-they own. Where they disagree the spec wins — fix the pointer, don't fork the
-content. They live on the project tracker and are cited by title, not by link,
-because an outside reader cannot open them and a dead URL is worse than a name.
+Three internal specs are the source of truth; never re-type what they own. Where
+they disagree the spec wins — fix the pointer, don't fork the content. They are
+cited by title, not link: an outside reader cannot open one and a dead URL is
+worse than a name.
 
 - **Batten CLI — the Button house style** — command surface/verbs (§2), effect
   model + read-only allowlist (§5), output/exit contract (§6–§7), config and
@@ -18,8 +18,7 @@ because an outside reader cannot open them and a dead URL is worse than a name.
 - **Definition of Ready & Done** — the refinement gate every issue passes:
   Ready (the mechanism as a computable predicate) and Done (landed on `main` by
   fast-forward, CI-confirmed green).
-- **Agent-neutral attribution** — the three commit-metadata surfaces:
-  accountability, disclosure posture, provenance records.
+- **Agent-neutral attribution** — the three commit-metadata surfaces.
 
 ## Autonomous workflow: do the work without asking
 
@@ -151,16 +150,17 @@ half**: declared work dies too, so **"unsaved?" is `batten doctor session`**.
 ## Non-negotiable project rules
 
 1. **The core stays repo-agnostic.** No consumer-specific identifiers — account
-   numbers, client names, entity paths — anywhere in `crates/batten`. A grep for
-   a specific consumer's names must return zero hits. Consumer facts live in that
-   consumer's own `batten.toml`.
-2. **Rules ship with their mechanism.** A new rule without a runnable gate (a
-   check with an exit code) is half a change. Prose is feedforward only; a log
-   without a gate is sensor only.
-3. **Gates decide, never estimate.** A gate resolves to a command and an exit
-   code over an object it decides, never a model verdict. _(house-style §5.)_
-4. **Output is a pointer, never the payload.** Checks over sensitive content emit
-   a count, `path:line`, or boolean — never the content itself. _(house-style §6.)_
+   numbers, client names, entity paths — anywhere in `crates/batten`; a grep for
+   one must return zero hits. Consumer facts live in its own `batten.toml`.
+2. **Rules ship with their mechanism, which never retires the judgement.** A rule
+   without a runnable gate is half a change. **A green gate says "nothing it can
+   SEE is wrong", never "nothing is wrong"** — reason until you can say why no
+   case escapes it, which `mutate` SHOWS and a surviving mutant refutes; an
+   escape found later is owed to the gate, not to a note.
+3. **Gates decide, never estimate** — a command and an exit code over an object,
+   never a model verdict. _(house-style §5.)_
+4. **Output is a pointer, never the payload** — a count, `path:line`, or boolean,
+   never the content. _(house-style §6.)_
 5. **Exit codes and output follow the one contract** — byte-stable output, the
    `0/1/2/3` table, no per-verb exception. _(house-style §6–§7.)_
 6. **Keep configuration narrow.** One committed authority plus raise-only
@@ -193,6 +193,6 @@ so the routing table lives there, not in this budgeted file (CLOUD-683's own cap
 Batten is a completion gate — **not** a hook runner, file-shape linter, secret
 scanner, AST linter, or reference monitor. Its threat model is honest error: the
 wrong entity, time, or completion signal. Adopt prior art; don't expand the core.
-**Amended, stated not absorbed (CLOUD-1260): it is also an MCP _client_** — it
-dispatches a declared method and returns a declared reduction, because the tracker
-was 73% of one session's tool output, rule 4 unenforced. No server (CLOUD-204).
+**Amended (CLOUD-1260): also an MCP _client_** — it dispatches a declared method
+and returns a declared reduction, the tracker having been 73% of one session's
+tool output. No server (CLOUD-204).

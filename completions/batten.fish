@@ -1327,7 +1327,7 @@ complete -c batten -n "__fish_batten_using_subcommand ready; and not __fish_seen
 complete -c batten -n "__fish_batten_using_subcommand ready; and not __fish_seen_subcommand_from lint help" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand ready; and not __fish_seen_subcommand_from lint help" -f -a "lint" -d 'Refuse an issue whose Ready block fails a checkable clause of the Definition of Ready'
 complete -c batten -n "__fish_batten_using_subcommand ready; and not __fish_seen_subcommand_from lint help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c batten -n "__fish_batten_using_subcommand ready; and __fish_seen_subcommand_from lint" -l issue -d 'Resolve the payload from the capture store by this issue key instead of reading stdin' -r
+complete -c batten -n "__fish_batten_using_subcommand ready; and __fish_seen_subcommand_from lint" -l issue -d 'Read the issue payload from the capture store by key, where `mcp call ... get_issue` put it' -r
 complete -c batten -n "__fish_batten_using_subcommand ready; and __fish_seen_subcommand_from lint" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
@@ -2028,7 +2028,7 @@ complete -c batten -n "__fish_batten_using_subcommand claim; and not __fish_seen
 complete -c batten -n "__fish_batten_using_subcommand claim; and not __fish_seen_subcommand_from check bot race carry help" -f -a "carry" -d 'Attest that this branch only carries licence rows forward, and mint the receipt when it does'
 complete -c batten -n "__fish_batten_using_subcommand claim; and not __fish_seen_subcommand_from check bot race carry help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from check" -l adopt-from -d 'The branch name the receipt being adopted was minted under' -r
-complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from check" -l issue -d 'Resolve the payload from the capture store by this issue key instead of reading stdin' -r
+complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from check" -l issue -d 'Read the issue payload from the capture store by key, where `mcp call ... get_issue` put it' -r
 complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from check" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"

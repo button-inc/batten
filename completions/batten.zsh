@@ -2136,7 +2136,7 @@ trace\:"Add everything"))' \
         case $line[1] in
             (lint)
 _arguments "${_arguments_options[@]}" : \
-'--issue=[Resolve the payload from the capture store by this issue key instead of reading stdin]: :_default' \
+'--issue=[Read the issue payload from the capture store by key, where \`mcp call ... get_issue\` put it]: :_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
@@ -3343,7 +3343,7 @@ trace\:"Add everything"))' \
             (check)
 _arguments "${_arguments_options[@]}" : \
 '--adopt-from=[The branch name the receipt being adopted was minted under]: :_default' \
-'--issue=[Resolve the payload from the capture store by this issue key instead of reading stdin]: :_default' \
+'--issue=[Read the issue payload from the capture store by key, where \`mcp call ... get_issue\` put it]: :_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
