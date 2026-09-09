@@ -278,14 +278,33 @@ pub fn replay(
 ) -> Result<Replay> {
     let tracking = tracking_ref(reference);
     advance(root, remote, reference, &tracking)?;
+    replay_onto(root, &tracking, branch, resolutions)
+}
 
-    let outcome = gitwrite::rebase_resolving(
-        root,
-        &format!("refs/heads/{branch}"),
-        &tracking,
-        resolutions,
-    )
-    .with_context(|| format!("land: replay {branch} onto {tracking}"))?;
+/// The half of [`replay`] that runs once the tracking ref is in place: rebase,
+/// map, record.
+///
+/// **Split out so the property can be tested at all** (CLOUD-1708). The store
+/// this writes is what `rebase-conflict-stops-the-lap` reads, and nothing drove a
+/// REAL conflict through the writer and then read the record — every case
+/// constructed a [`Replay`] and handed it to [`record`], which pins the writer
+/// but not the path that reaches it. The one thing keeping that test from
+/// existing was [`advance`]: it fetches over the forge's HTTP protocol, so an
+/// end-to-end case would need a server rather than a repository.
+///
+/// The fetch is not what the row doubted, and it is the only inch this leaves
+/// unexercised. Everything after it — the rebase, the mapping of each arm, and
+/// the record — is one function a test can drive against a real conflicting
+/// tree.
+pub fn replay_onto(
+    root: &Path,
+    tracking: &str,
+    branch: &str,
+    resolutions: &[String],
+) -> Result<Replay> {
+    let outcome =
+        gitwrite::rebase_resolving(root, &format!("refs/heads/{branch}"), tracking, resolutions)
+            .with_context(|| format!("land: replay {branch} onto {tracking}"))?;
     let replayed = match outcome {
         Rebase::Conflicted { commit, paths } => Replay::Conflicted { commit, paths },
         Rebase::Current => Replay::Current,

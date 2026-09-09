@@ -135,6 +135,66 @@ fn a_conflicted_lap_is_refused_and_a_clean_one_is_not() {
     );
 }
 
+/// **The property the whole family rests on, driven end to end** (CLOUD-1708).
+///
+/// Every other case here hands a constructed [`Replay`] to `land::record`, which
+/// pins the WRITER, and `tests/it/rebase.rs` reaches a real conflict but never
+/// reads the store. So the one thing `rebase-conflict-stops-the-lap` actually
+/// depends on — that a REAL conflict leaves a `rebase conflicted …` line the
+/// module then refuses on — was unpinned end to end, and a regression on the
+/// record call inside `land::replay` would have been invisible.
+///
+/// The row that filed this measured `land::record` as having zero production
+/// callers and concluded the store was dead. It is not: `land::replay` records
+/// on all three arms and has since the feature landed. The measurement counted
+/// QUALIFIED `land::record` references, and the production call is unqualified
+/// from inside `land.rs` itself — so a name-resolution question answered with a
+/// string scan saw only the test callers, every one of which spells it
+/// `land::record`. What was missing was never the writer; it was this case.
+#[test]
+fn a_real_conflict_writes_the_record_the_module_refuses_on() {
+    let repo = repo("land-real-conflict");
+    let branch = branch_of(&repo);
+
+    // Two sides edit one path, which is the shape a replay cannot resolve.
+    common::write(&repo, "shared.txt", "base\n");
+    common::git_in(&repo, &["add", "-A"]);
+    common::git_in(&repo, &["commit", "-q", "-m", "shared"]);
+    common::git_in(&repo, &["branch", "-f", "trunk"]);
+
+    common::write(&repo, "shared.txt", "the branch's line\n");
+    common::git_in(&repo, &["add", "-A"]);
+    common::git_in(&repo, &["commit", "-q", "-m", "branch side"]);
+
+    common::git_in(&repo, &["checkout", "-q", "trunk"]);
+    common::write(&repo, "shared.txt", "the trunk's line\n");
+    common::git_in(&repo, &["add", "-A"]);
+    common::git_in(&repo, &["commit", "-q", "-m", "trunk side"]);
+    common::git_in(&repo, &["checkout", "-q", &branch]);
+
+    // `replay_onto` rather than `replay`: the only difference is the FETCH, which
+    // speaks the forge's HTTP protocol and would need a server rather than a
+    // repository. The fetch is not what this case is about — the rebase, the
+    // mapping and the record are, and they are one function.
+    let outcome = land::replay_onto(&repo, "refs/heads/trunk", &branch, &[])
+        .expect("the replay itself must run");
+    let Replay::Conflicted { .. } = outcome else {
+        panic!("two sides editing one path must conflict, got {outcome:?}");
+    };
+
+    // AND THE STORE CARRIES IT. This is the half nothing asserted: the writer is
+    // reached by the real path, not only by a test handing `record` a value.
+    let (code, out, err) = check(&repo);
+    assert_eq!(
+        code, 2,
+        "a real conflict must reach the module through the record: {err}{out}"
+    );
+    assert!(
+        format!("{out}{err}").contains("rebase-conflict-stops-the-lap"),
+        "the finding names its own predicate, got {out}{err}"
+    );
+}
+
 /// A branch that has recorded no lap at all is not refused.
 ///
 /// The state a fresh clone is in, and the one a gate keyed on the record's
