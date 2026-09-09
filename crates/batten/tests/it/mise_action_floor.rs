@@ -59,7 +59,7 @@ fn floor_repo(name: &str, workflows: &[(&str, &str)]) -> PathBuf {
          id = \"git-object-id\"\n\
          regex = '^[0-9a-f]{40}$'\n\n\
          [[verdict]]\n\
-         id = \"pin read stale\"\n\
+         id = \"version pin stale\"\n\
          gloss = \"a pin resolves behind a fix this repository depends on\"\n\
          class = \"A backslide auto-lands silently and the next occurrence reads as fresh.\"\n\n\
          [[verdict.route]]\n\
@@ -67,7 +67,7 @@ fn floor_repo(name: &str, workflows: &[(&str, &str)]) -> PathBuf {
          kind = \"document\"\n\
          target = \"AGENTS.md\"\n\n\
          [[verdict]]\n\
-         id = \"pin read unread\"\n\
+         id = \"version pin unread\"\n\
          gloss = \"the pin under judgement could not be read\"\n\
          class = \"A gate whose subject can vanish and read as clean is not a gate.\"\n\n\
          [[verdict.route]]\n\

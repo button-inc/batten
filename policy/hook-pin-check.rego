@@ -190,7 +190,7 @@ exempt(task, tool) if {
 
 violation contains {
 	"rule": "hook-pin-check",
-	"verdict": "tool pin missing",
+	"verdict": "tool reach absent",
 	"subjects": [{"artifact": sprintf("%s %s", [task, tool])}],
 } if {
 	some task in by_path
@@ -205,7 +205,7 @@ violation contains {
 # which is the shape of a gate that judges nothing while reporting clean.
 violation contains {
 	"rule": "hook-pin-check",
-	"verdict": "pin table missing",
+	"verdict": "tool list empty",
 	"subjects": [{"path": manifest_path}],
 } if {
 	manifest_lines
@@ -233,7 +233,7 @@ test_a_by_path_hook_calling_a_pinned_tool_is_refused if {
 		"mise.toml": manifest,
 		"mise-tasks/guard.sh": ["jq -r .x <<<\"$payload\""],
 	})
-	v.verdict == "tool pin missing"
+	v.verdict == "tool reach absent"
 }
 
 test_a_runner_registration_is_not_this_gates_business if {
@@ -267,7 +267,7 @@ test_a_backend_coordinate_pins_its_last_segment if {
 		"mise.toml": ["[tools]", "\"aqua:jqlang/jq\" = \"1.7\""],
 		"mise-tasks/guard.sh": ["jq -r .x"],
 	})
-	v.verdict == "tool pin missing"
+	v.verdict == "tool reach absent"
 }
 
 test_a_call_after_a_pipe_is_still_a_call if {
@@ -276,7 +276,7 @@ test_a_call_after_a_pipe_is_still_a_call if {
 		"mise.toml": manifest,
 		"mise-tasks/guard.sh": ["cat file | jq -r .x"],
 	})
-	v.verdict == "tool pin missing"
+	v.verdict == "tool reach absent"
 }
 
 test_a_manifest_pinning_nothing_is_could_not_look if {
@@ -285,7 +285,7 @@ test_a_manifest_pinning_nothing_is_could_not_look if {
 		"mise.toml": ["[env]", "X = \"1\""],
 		"mise-tasks/guard.sh": ["jq -r .x"],
 	})
-	v.verdict == "pin table missing"
+	v.verdict == "tool list empty"
 }
 
 # An exemption for a DIFFERENT tool does not cover this one.
@@ -295,7 +295,7 @@ test_an_exemption_for_another_tool_does_not_cover_this_one if {
 		"mise.toml": manifest,
 		"mise-tasks/guard.sh": ["#PIN-OK: zizmor", "jq -r .x"],
 	})
-	v.verdict == "tool pin missing"
+	v.verdict == "tool reach absent"
 }
 
 # A tool named as a SUBSTRING of another word is not a call to it.
