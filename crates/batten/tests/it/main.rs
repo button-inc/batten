@@ -128,6 +128,7 @@ mod fixture_forks;
 mod fixture_repos;
 mod forced_push;
 mod forge_facts;
+mod forge_window;
 mod fuzz_corpus;
 mod gh_guard;
 mod git_facts;

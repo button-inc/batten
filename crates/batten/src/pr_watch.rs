@@ -817,6 +817,7 @@ mod tests {
     /// of a status, an `ETag` and a poll floor in this crate.
     fn answer(status: u16, etag: Option<&str>, body: &str) -> crate::rest::Answer {
         crate::rest::Answer {
+            headers: std::collections::BTreeMap::new(),
             status,
             etag: etag.map(str::to_owned),
             poll_floor: None,
