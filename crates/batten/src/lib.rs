@@ -7669,6 +7669,11 @@ fn settle_the_bet(
     if !bet.live() {
         return Ok(None);
     }
+    // BEFORE `main_now` AND `base_on_main` ARE READ. Both are questions about the
+    // trunk, and on a stale ref `base_on_main` reads FALSE for a base that has in
+    // fact landed — which sends `speculation::settle` toward `Lost` and unwinds a
+    // bet that actually won. See `advance_trunk`.
+    advance_trunk(root, reference);
     // `land::tracking_ref`, not a second spelling of it — and the second
     // spelling here carried the same last-segment defect it did (review of
     // #848): a trunk named `release/1.x` resolved to `origin/1.x`, so this
@@ -7832,6 +7837,38 @@ fn note_the_push(step: land::Step, code: ExitCode, bet: &mut speculation::Bet) {
     }
 }
 
+/// Refresh the trunk's remote-tracking ref before a speculation reads it.
+///
+/// **EVERY SPECULATION READ OF THE TRUNK WAS ONE LAP BEHIND** (CLOUD-1620's
+/// residue). `Precheck::BetSettled` sits on the `Step::Replay` row, so
+/// `place_the_bet`, `settle_the_bet` and `unwind_the_bet` all run BEFORE
+/// `land::replay`'s own `advance`. Each of them then asked an ancestry question —
+/// or, in the unwind's case, performed a real rebase — against whatever
+/// `origin/main` the PREVIOUS lap happened to leave behind.
+///
+/// The unwind is where that bites, because `gitwrite::replay_range` computes its
+/// patch-id drop set FROM `onto`: a stale `onto` cannot contain a patch that
+/// landed since, so a commit this branch borrowed and the trunk has since taken
+/// is replayed instead of dropped, and then three-way merges against a base that
+/// really does carry it.
+///
+/// Measured 2026-09-09: `6948ad54` (borrowed) and `ccb0c1bf` (its landed twin)
+/// share patch-id `efb28fa7c8c65aaa2a0d4b191676b567e192ec01`. The twin landed at
+/// 23:35:15; this branch was still carrying the borrowed copy and CONFLICTING on
+/// it three and a half hours later, across roughly ten laps — each one reporting
+/// another PR's commits as this branch's own.
+///
+/// **Fail-open, and deliberately silent.** Every caller's existing arms return
+/// on a could-not-look, so a fetch that cannot run must leave the reading exactly
+/// as stale as it was rather than become a refusal — the trunk being unreachable
+/// is not a verdict about the branch.
+fn advance_trunk(root: &Path, reference: &str) {
+    let tracking = land::tracking_ref(reference);
+    if let Ok(terms) = lease::terms(root) {
+        let _ = land::advance(root, &terms.remote, reference, &tracking);
+    }
+}
+
 fn unwind_the_bet(
     root: &Path,
     url: &str,
@@ -7841,6 +7878,9 @@ fn unwind_the_bet(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<Option<ExitCode>> {
+    // BEFORE THE TRACKING REF IS READ, because the arm below rebases onto it and
+    // the drop set is computed from it. See `advance_trunk`.
+    advance_trunk(root, reference);
     // DERIVED HERE rather than handed in, which is one argument and one
     // duplicated derivation fewer: both are functions of what this already
     // holds, and the caller's copies are the same two calls.
@@ -7966,6 +8006,11 @@ fn place_the_bet(
     if !bet.would_rebet(&candidate) {
         return Ok(());
     }
+    // BEFORE BOTH `carries` GUARDS BELOW, which are ancestry questions about the
+    // trunk and were being asked of the previous lap's. See `advance_trunk`: the
+    // second guard's own comment reasons that "`run_land_replay` immediately
+    // fetches a fresh trunk", which it does — one step AFTER this runs.
+    advance_trunk(root, reference);
     let tracking = land::tracking_ref(reference);
     // THE HOLDER ALREADY LANDED. Their head is on the trunk, so an ordinary replay
     // reaches it and a bet would borrow a range that is not borrowed.

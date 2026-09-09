@@ -769,6 +769,96 @@ fn an_adopted_bet_replays_only_this_branchs_own_commits() {
     assert!(dir.join("ours.txt").is_file(), "our own file left the disk");
 }
 
+/// **A BORROWED COMMIT THE TRUNK HAS SINCE TAKEN IS DROPPED — AND A STALE TRUNK
+/// CANNOT SEE THAT.**
+///
+/// The sibling above proves the unwind replays only this branch's own commits
+/// when the range bound is the borrowed base. This proves the other half, which
+/// is what the field actually hit: when the borrowed commit has LANDED under a
+/// different sha, `replay_range`'s patch-id drop set removes it — but that set is
+/// anchored on `onto`, so `onto`'s freshness IS the predicate.
+///
+/// Measured 2026-09-09. `6948ad54`, carried on a speculating branch, and
+/// `ccb0c1bf`, its landed twin on the trunk, share patch-id
+/// `efb28fa7c8c65aaa2a0d4b191676b567e192ec01`. The twin landed at 23:35:15; the
+/// branch was still carrying the borrowed copy — and conflicting on it — three
+/// and a half hours later, across roughly ten laps, each reporting another PR's
+/// commits as its own. The cause was not the unwind's logic but its input: every
+/// speculation read of the trunk ran inside `Precheck::BetSettled`, one step
+/// before the lap's own fetch, so `onto` was always a lap behind.
+///
+/// Two arms over one shape, because the difference between them is the defect.
+#[test]
+fn a_borrowed_commit_the_trunk_took_is_dropped_only_when_onto_is_fresh() {
+    // The twin carries the SAME CHANGE under a different sha, which is what
+    // landing by rebase produces and what patch-id equality is for.
+    let borrowed: Files<'_> = &[("shared.txt", "base\n"), ("from-holder.txt", "theirs\n")];
+    let ours: Files<'_> = &[
+        ("shared.txt", "base\n"),
+        ("from-holder.txt", "theirs\n"),
+        ("ours.txt", "ours\n"),
+    ];
+
+    // ARM ONE — the trunk has taken the twin. The borrowed commit is dropped.
+    let (fresh_dir, fresh) = init("rebase-onto-fresh-trunk");
+    let fresh_base = commit(&fresh, &[], &[("shared.txt", "base\n")]);
+    let fresh_holder = commit(&fresh, &[fresh_base], borrowed);
+    let fresh_tip = commit(&fresh, &[fresh_holder], ours);
+    // The twin: same change, different sha, parented on the base rather than on
+    // the holder — the shape a fast-forward landing of a rebased branch leaves.
+    let twin = commit(&fresh, &[fresh_base], borrowed);
+    point(&fresh_dir, "refs/heads/trunk", twin);
+    point(&fresh_dir, "refs/heads/work", fresh_tip);
+    materialise(&fresh_dir, ours);
+
+    let outcome = gitwrite::replay_onto(
+        &fresh_dir,
+        "refs/heads/work",
+        &fresh_base.to_hex().to_string(),
+        "refs/heads/trunk",
+    )
+    .expect("replay onto a trunk carrying the twin");
+    let Rebase::Replayed { commits, .. } = outcome else {
+        panic!("a fresh trunk must replay, got {outcome:?}");
+    };
+    assert_eq!(
+        commits, 1,
+        "the borrowed commit's patch is already on the trunk, so only this \
+         branch's own commit should replay"
+    );
+
+    // ARM TWO — the trunk is one lap behind and does NOT carry the twin. The
+    // borrowed commit survives, which is the state that reached a push.
+    let (stale_dir, stale) = init("rebase-onto-stale-trunk");
+    let stale_base = commit(&stale, &[], &[("shared.txt", "base\n")]);
+    let stale_holder = commit(&stale, &[stale_base], borrowed);
+    let stale_tip = commit(&stale, &[stale_holder], ours);
+    point(&stale_dir, "refs/heads/trunk", stale_base);
+    point(&stale_dir, "refs/heads/work", stale_tip);
+    materialise(&stale_dir, ours);
+
+    let outcome = gitwrite::replay_onto(
+        &stale_dir,
+        "refs/heads/work",
+        &stale_base.to_hex().to_string(),
+        "refs/heads/trunk",
+    )
+    .expect("replay onto a stale trunk");
+    let Rebase::Replayed { head, commits } = outcome else {
+        panic!("a stale trunk must replay, got {outcome:?}");
+    };
+    assert_eq!(
+        commits, 2,
+        "a trunk that has not seen the twin cannot drop the borrowed commit"
+    );
+    let names = tree_names(&stale, head.parse().expect("replayed head resolves"));
+    assert!(
+        names.contains(&"from-holder.txt".to_owned()),
+        "the borrowed file is what survives a stale trunk, and is what this \
+         branch would then publish as its own: {names:?}"
+    );
+}
+
 /// **A bet this process PLACED unwinds exactly, to the sha it recorded.**
 ///
 /// Not a replay: the undo point is this branch's own last non-speculative HEAD,
