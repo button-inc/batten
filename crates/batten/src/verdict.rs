@@ -1776,9 +1776,11 @@ checked it -- a class a reader believes is worse than one they cannot look up.",
         id: "verdict read dropped",
         gloss: "piping a verdict-bearing command into a pager or filter discards its status",
         class: "The pipeline exits with the FILTER's status, which is 0 whether the command \
-passed or failed. A verdict is read from the harness, never inferred from output. Redirect \
-to a file and read the file in a separate call; a pager over a FILE is fine, a pager over a \
-live task is not.",
+passed or failed. A verdict is read from the harness, never inferred from output. Background \
+the command and read the exit code the notification carries; a pager over a FILE is fine, a \
+pager over a live task is not. DO NOT REDIRECT INSTEAD -- this text prescribed `> file 2>&1` \
+for its whole life, and `background-redirect` now refuses exactly that, because the harness \
+already captures a backgrounded task's output where the human watches.",
         routes: &[read("rule read first", "rules/toolchain.md")],
         applicability: Applicability::Advice,
     },

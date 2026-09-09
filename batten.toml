@@ -3281,13 +3281,18 @@ filters = [
   "wc",
 ]
 reason = """
-The compliant form is the command alone in the call, redirected to a file:
+The compliant form is the command ALONE in the call, backgrounded and \
+unredirected:
 
-  mise run <task> >/tmp/<task>.log 2>&1
+  mise run <task>          with run_in_background on the tool call itself
 
-The tool result IS the verdict — read the log in a SEPARATE call. Pass \
-run_in_background on the tool call itself for anything that can exceed ~2 \
-minutes. A pager over a FILE is fine; a pager over a live task is not."""
+The tool result IS the verdict, and the harness captures the output to a file it \
+names back — read that in a SEPARATE call. THIS TEXT USED TO PRESCRIBE \
+`>/tmp/<task>.log 2>&1` AND THAT FORM IS NOW REFUSED from both sides: \
+`foreground-mise` because the harness kills a foreground call at ~2 minutes, and \
+`background-redirect` because a private log file is one nobody reads while the \
+pane the human watches stays empty. A pager over a FILE is fine; a pager over a \
+live task is not."""
 
 # A task runner: `run` names a task and its exit status is that task's verdict.
 # `mise exec`/`mise x` are not here — they run another program, and the engine's
