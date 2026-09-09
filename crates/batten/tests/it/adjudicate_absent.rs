@@ -70,9 +70,14 @@ fn code(dir: &Path) -> Option<i32> {
 
 #[test]
 fn a_config_this_build_cannot_load_denies_rather_than_failing_open() {
-    // The defect: this was `2` only if the load succeeded. A `?` on the load
-    // raised a `UsageError` — exit `1` — and a harness reads `1` as a
-    // non-blocking hook error, so the mediated tool ran with nothing judging it.
+    // WAS `1`, WHICH A HARNESS READS AS A NON-BLOCKING HOOK ERROR, so the
+    // mediated tool ran with nothing judging it (CLOUD-1677).
+    //
+    // `2` HERE AND `3` ON A DOCUMENT HARNESS, and the split is the protocol
+    // rather than a preference: this adapter's ONLY deny channel is the number,
+    // so the number has to carry the refusal. Where the decision object carries
+    // it instead, the number is free to say could-not-look — the case below
+    // asserts that side.
     let dir = fixture("adjudicate-unloadable", WILL_NOT_PARSE);
     assert_eq!(
         code(&dir),
@@ -142,8 +147,39 @@ fn on_claude_code_the_refusal_is_the_document_rather_than_the_number() {
         &payload(),
     );
     let rendered = String::from_utf8_lossy(&output.stdout);
+    // The row's falsifier names the field rather than the word: a `contains("deny")`
+    // would pass on a document that merely mentioned it, including one that said
+    // the opposite.
     assert!(
-        rendered.contains("deny"),
+        rendered.contains(r#""permissionDecision":"deny""#),
         "the decision object must carry the deny: {rendered}"
+    );
+    // AND THE NUMBER IS FREE TO BE HONEST, which is the half that needs the
+    // document to exist. §6-§7 reserve `3` for could-not-look, and `exit.rs`
+    // keeps `Usage` and `Internal` the only codes a failure of Batten's own may
+    // produce *so that fail-open is structural*. Answering `2` here would buy the
+    // refusal a second time and spend that guarantee for the copy.
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "where the document refuses, the number says nothing was judged"
+    );
+}
+
+#[test]
+fn the_declaration_that_would_not_parse_is_named_without_quoting_it() {
+    // Non-negotiable rule 4, and the row asks for this clause by name: the reason
+    // carries the parse position, never the config's contents. The fixture's body
+    // is `this is not toml`, so its presence in the output would be the leak.
+    let dir = fixture("adjudicate-pointer-only", WILL_NOT_PARSE);
+    let output = run_with_stdin(
+        dir.as_path(),
+        &["adjudicate", "--harness", "claude-code"],
+        &payload(),
+    );
+    let rendered = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !rendered.contains("this is not toml"),
+        "a refusal about an unreadable config must not quote it: {rendered}"
     );
 }
