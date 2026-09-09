@@ -82,6 +82,31 @@ fn allowed(command: &str) {
     );
 }
 
+/// [`allowed`], with the call's backgrounding STATED.
+///
+/// These cases adjudicate against the LIVE root, so every committed row reaches
+/// them — `foreground-mise` included, which refuses a foreground `mise` call with
+/// no fast list. An anti-vacuity case has to survive on this row's own account
+/// rather than by another row's silence, so the posture is stated and the
+/// remaining question is whether THIS row fires.
+fn allowed_backgrounded(command: &str) {
+    let escaped = serde_json::to_string(command).expect("a command is encodable");
+    let payload = format!(
+        "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\
+         \"tool_input\":{{\"command\":{escaped},\"run_in_background\":true}}}}"
+    );
+    let root = common::at_root(".");
+    let out = common::stdout(&common::run_with_stdin(
+        &root,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload,
+    ));
+    assert!(
+        !out.contains("\"deny\""),
+        "the committed policy must allow a backgrounded: {command}\n{out}"
+    );
+}
+
 #[test]
 fn a_local_step_skip_is_refused() {
     // The measured command, as it was actually run on this branch.
@@ -104,7 +129,7 @@ fn the_declared_ci_carve_is_not_judged_here() {
     // hands hk exactly this, and `ci-suite-lane` is the row that governs it. A
     // guard refusing the repository's own declared invocation gets disabled, and
     // then it enforces nothing at all.
-    allowed("HK_SKIP_STEPS=test:bats mise run ci");
+    allowed_backgrounded("HK_SKIP_STEPS=test:bats mise run ci");
 }
 
 #[test]
@@ -120,7 +145,7 @@ fn an_ordinary_command_is_allowed() {
     // ANTI-VACUITY. Without these the denies above are satisfied by a build that
     // refuses every command, which would name this row every time.
     allowed("git commit -m 'an ordinary commit'");
-    allowed("mise run ci");
+    allowed_backgrounded("mise run ci");
     allowed("RUST_LOG=debug git commit -m 'another variable is not this one'");
 }
 

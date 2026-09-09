@@ -40,12 +40,8 @@ setup() {
 }
 
 @test "the commit-time seam is wired: hk.pkl's commit-msg hook runs commit-msg" {
-	# THE CALL IS THE BINARY NOW, NOT `mise run commit-msg` (CLOUD-1397). The
-	# property is the same one — the hook has a call site — and the task it used
-	# to name still exists for CI, where no installed binary does. See
-	# `commit-attribution.bats` for the measurement that moved it.
 	run awk '/^      \["conventional-commit"\] \{$/ { found = 1; next }
-	         found && /batten commit check --message/ { print "wired"; exit }
+	         found && /mise run commit-msg/ { print "wired"; exit }
 	         found && /^      \}$/ { exit }' hk.pkl
 	[ "$status" -eq 0 ]
 	[ "$output" = "wired" ]

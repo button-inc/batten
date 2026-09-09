@@ -19,17 +19,8 @@ setup() {
 @test "the commit-time seam is wired: hk.pkl's commit-msg hook runs the gate" {
 	# Asserted on the step block rather than a bare grep: the surrounding comment
 	# names the task too, and a comment is not a call site.
-	#
-	# THE CALL IS THE BINARY NOW, NOT `mise run commit-attribution-msg`
-	# (CLOUD-1397): a git hook is a batten hook and is held to the published
-	# <=100ms ceiling, which the task layer cannot reach because `mise` alone
-	# costs 105-125ms before a task body runs. The property this case pins is
-	# unchanged — that the commit-msg hook has a call site at all, which is what
-	# CLOUD-216 found missing — so only the spelling it matches moves. The task
-	# still exists and CI still runs it; `both tasks resolve to the engine` below
-	# is what keeps that half honest.
 	run awk '/^      \["commit-attribution"\] \{$/ { found = 1; next }
-	         found && /batten attribution check --message/ { print "wired"; exit }
+	         found && /mise run commit-attribution-msg/ { print "wired"; exit }
 	         found && /^      \}$/ { exit }' hk.pkl
 	[ "$status" -eq 0 ]
 	[ "$output" = "wired" ]
