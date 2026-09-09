@@ -121,6 +121,52 @@ impl ExitCode {
         }
     }
 
+    /// The one fold from "what did the run see" to "what code does it take"
+    /// (CLOUD-1718).
+    ///
+    /// [`verdict`] answers the two-valued question a findings pipeline asks.
+    /// This answers the THREE-valued one every gate epilogue actually has, and
+    /// it exists because 82 shell programs were each re-spelling it by hand —
+    /// on a table that is the INVERSE of this one, where `1` is a violation and
+    /// `2` is could-not-look. A caller reading the wrong table does not get a
+    /// worse message, it gets the opposite verdict: a blind spot read as a
+    /// finding, or a finding read as a blind spot. Those are the two things a
+    /// completion gate most needs to keep apart, which is what
+    /// [`crate::findings::Observation::NotObserved`] exists to say.
+    ///
+    /// # A BLIND SPOT OUTRANKS A FINDING, and this is the one place that is
+    /// decided
+    ///
+    /// CLOUD-251 settled it and one shell program deliberately inverted it, so
+    /// two files could disagree about which wins with nothing noticing. The
+    /// direction is not a preference: a run that could not read part of its
+    /// subject has an INCOMPLETE answer, and reporting the findings it did reach
+    /// as though they were the whole answer is the vacuous green this repository
+    /// refuses everywhere else. A caller told `Violation` fixes what it names
+    /// and sees green; a caller told `Internal` learns the gate did not run. The
+    /// findings are on stderr either way, so nothing is lost by ranking the
+    /// blind spot first.
+    ///
+    /// # Never [`Usage`]
+    ///
+    /// Its range is `Success`, `Violation` and `Internal` — the three answers
+    /// ABOUT THE REPOSITORY. `Usage` is a statement about the invocation, and no
+    /// count of findings or of unreadable subjects can make an invocation
+    /// malformed.
+    ///
+    /// [`verdict`]: ExitCode::verdict
+    /// [`Usage`]: ExitCode::Usage
+    #[must_use]
+    pub const fn combine(findings: usize, unjudgeable: usize) -> Self {
+        if unjudgeable > 0 {
+            ExitCode::Internal
+        } else if findings > 0 {
+            ExitCode::Violation
+        } else {
+            ExitCode::Success
+        }
+    }
+
     #[must_use]
     pub const fn verdict(blocking: bool) -> Self {
         if blocking {
@@ -245,6 +291,50 @@ mod tests {
             assert_ne!(code, ExitCode::Usage);
             assert_ne!(code, ExitCode::Internal);
         }
+    }
+
+    #[test]
+    fn combine_ranks_a_blind_spot_above_a_finding() {
+        // THE PRECEDENCE, ASSERTED ONCE (CLOUD-251, CLOUD-1718). One shell
+        // program deliberately inverted this and nothing could notice, because
+        // the rule lived in prose in each epilogue rather than in a function.
+        // A run that could not read part of its subject has an incomplete
+        // answer, and reporting the findings it did reach as the whole answer is
+        // the vacuous green refused everywhere else here.
+        assert_eq!(ExitCode::combine(3, 1), ExitCode::Internal);
+        assert_eq!(ExitCode::combine(0, 1), ExitCode::Internal);
+        assert_eq!(ExitCode::combine(3, 0), ExitCode::Violation);
+        assert_eq!(ExitCode::combine(0, 0), ExitCode::Success);
+    }
+
+    #[test]
+    fn combine_never_reports_a_failure_of_battens_own() {
+        // The range is the guarantee, exactly as it is for `verdict`: no count
+        // of findings or of unreadable subjects makes an INVOCATION malformed,
+        // so `Usage` is unreachable through this fold.
+        for findings in [0_usize, 1, 7] {
+            for unjudgeable in [0_usize, 1, 7] {
+                let code = ExitCode::combine(findings, unjudgeable);
+                assert_ne!(code, ExitCode::Usage, "{findings}/{unjudgeable}");
+            }
+        }
+    }
+
+    #[test]
+    fn combine_and_the_shell_convention_disagree_on_every_nonclean_answer() {
+        // THE INVERSION ITSELF, which is CLOUD-1718's discriminating case. The
+        // retiring corpus reads `1` as a violation and `2` as could-not-look;
+        // this table reads `2` as a violation and `3` as could-not-look. A port
+        // that carried the old fold across would not report a worse code, it
+        // would report the OPPOSITE meaning — so the two codes are asserted
+        // different here rather than left to a reader to notice.
+        let shell_violation = 1;
+        let shell_could_not_look = 2;
+        assert_ne!(ExitCode::combine(1, 0).code(), shell_violation);
+        assert_ne!(ExitCode::combine(0, 1).code(), shell_could_not_look);
+        // And the collision that makes the inversion dangerous rather than
+        // merely different: the shell's could-not-look IS this table's violation.
+        assert_eq!(ExitCode::Violation.code(), shell_could_not_look);
     }
 
     #[test]
