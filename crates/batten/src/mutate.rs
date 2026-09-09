@@ -934,39 +934,63 @@ fn spawn(dir: &Path, program: &str, args: &[String], env: &[(String, String)]) -
     let mut child = command
         .spawn()
         .with_context(|| format!("mutate: could not run {program}"))?;
-    let bound = suite_bound();
-    let deadline = std::time::Instant::now() + bound;
-    let status = loop {
-        if let Some(status) = child
-            .try_wait()
-            .with_context(|| format!("mutate: could not wait for {program}"))?
-        {
-            break status;
-        }
-        if std::time::Instant::now() >= deadline {
-            reap(&mut child);
-            break child
-                .wait()
-                .with_context(|| format!("mutate: could not reap {program}"))?;
-        }
-        // A poll rather than a signal handler: a handler here would race the
-        // reaper `exec.rs` already installs for the whole process.
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "a poll bounded by a real terminal state, not a timer standing in for one: the loop above exits on `try_wait` reporting the child gone, and this delay only decides how often that is asked. The wall-clock stop is `suite_bound`, which is what a hanging suite runs into"
-        )]
-        std::thread::sleep(std::time::Duration::from_millis(10));
+    // A BLOCKING WAIT WITH A DEADLINE, NOT A POLL. `std::thread::sleep` is a
+    // denied method here (`clippy.toml`) and the ban draws exactly the right
+    // line: "a poll bounded by a real terminal state is legitimate, a timer
+    // standing in for an exit condition is not". A poll loop would have needed
+    // an exemption, and `delay-waivers-not-growing` refuses a twelfth — rightly,
+    // because this wait has a terminal state to block on and therefore needs no
+    // delay at all.
+    //
+    // The worker owns the child and calls `wait`; the receive carries the bound.
+    // A suite that returns wakes this immediately, and one that hangs runs into
+    // `recv_timeout` — no interval, nothing to tune, and no sleep.
+    let pid = child.id();
+    let (send_status, statuses) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let status = child.wait();
+        // The receiver is gone only when this call already timed out and the
+        // caller stopped listening, which is the hang path below; the status it
+        // would have carried is the kill this function reports.
+        let _ = send_status.send(status);
+    });
+    let Ok(reported) = statuses.recv_timeout(suite_bound()) else {
+        // The bound ran out, so the suite is hung. Kill it and take the status
+        // the worker's `wait` returns once it does.
+        reap(pid);
+        let reaped = statuses
+            .recv()
+            .map_err(|_| anyhow::anyhow!("mutate: the wait for {program} was lost"))?
+            .with_context(|| format!("mutate: could not reap {program}"))?;
+        let _ = worker.join();
+        return Ok(finish(reaped, &out_path, &err_path, &capture));
     };
-    let mut output = fs::read_to_string(&out_path).unwrap_or_default();
-    output.push_str(&fs::read_to_string(&err_path).unwrap_or_default());
+    let status = reported.with_context(|| format!("mutate: could not wait for {program}"))?;
+    // The worker is finished: it has sent, so its `wait` returned.
+    let _ = worker.join();
+    Ok(finish(status, &out_path, &err_path, &capture))
+}
+
+/// Read back what the child wrote and drop the capture.
+///
+/// One place, because both the ordinary exit and the hang path answer with the
+/// same shape and a second copy is how the two drift apart.
+fn finish(
+    status: std::process::ExitStatus,
+    out_path: &Path,
+    err_path: &Path,
+    capture: &Path,
+) -> Ran {
+    let mut output = fs::read_to_string(out_path).unwrap_or_default();
+    output.push_str(&fs::read_to_string(err_path).unwrap_or_default());
     // Best effort: a capture left behind is a few bytes under the system temp
     // directory, and failing a sweep over housekeeping would trade a real
     // verdict for tidiness.
-    let _ = fs::remove_dir_all(&capture);
-    Ok(Ran {
+    let _ = fs::remove_dir_all(capture);
+    Ran {
         ok: status.success(),
         output,
-    })
+    }
 }
 
 /// Distinguishes concurrent captures within one process; the pid separates
@@ -993,22 +1017,34 @@ fn suite_bound() -> std::time::Duration {
 
 /// Stop the child, best effort.
 ///
-/// THE DIRECT CHILD ONLY, AND NEVER ITS PROCESS GROUP. An earlier version of
-/// this made the child a group leader and signalled the group, reasoning that
-/// bats forks twice and the leader alone leaves the rest orphaned. That is true
-/// and it is not worth the hazard: `kill(-pid)` addresses whatever group carries
-/// that id, so if the group never formed — the call is best effort and its
-/// failure is invisible here — the signal lands on the group this process is
-/// already in, which under a parallel test runner is its SIBLINGS. Measured: the
+/// THE DIRECT CHILD ONLY, AND NEVER ITS PROCESS GROUP. An earlier version made
+/// the child a group leader and signalled the group, reasoning that bats forks
+/// twice and the leader alone leaves the rest orphaned. That is true and it is
+/// not worth the hazard: `kill(-pid)` addresses whatever group carries that id,
+/// so if the group never formed — the call is best effort and its failure is
+/// invisible here — the signal lands on the group this process is already in,
+/// which under a parallel test runner is its SIBLINGS. Measured: the
 /// group-signalling version reddened three `symbols` cases in CI with "the
 /// analyser did not resolve", a suite that shares nothing with this module
 /// except that it was running at the same time.
 ///
 /// What an orphan costs by comparison is bounded: a `sleep` under a staged tree
 /// this sweep is about to replace, which exits on its own.
-fn reap(child: &mut std::process::Child) {
-    let _ = child.kill();
+///
+/// Best effort is the honest contract, for `exec.rs`'s stated reason: the
+/// process may already have gone, which is the outcome being asked for, and
+/// `ESRCH` on the way out is not a failure anyone can act on.
+#[cfg(unix)]
+fn reap(pid: u32) {
+    if let Some(pid) = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap_or_default()) {
+        let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+    }
 }
+
+/// Off unix there is no `kill(2)` to reach for here, and the wait above has
+/// already stopped listening — the worker thread is what still holds the child.
+#[cfg(not(unix))]
+fn reap(_pid: u32) {}
 
 // ---------------------------------------------------------------------------
 // Running a suite.

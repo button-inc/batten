@@ -7695,6 +7695,12 @@ expires = "2026-10-31"
 # the third surface keyed off a different id from the one `--rule` selects.
 [[waiver]]
 rule = "platform-gated-test-added"
+path = "crates/batten/tests/it/mutate.rs"
+reason = "the sweep's own watchdog needs a suite that never returns, and every part of that fixture is already unix-only: the case reaches `TOY_GATE` (:107), `CAUGHT` (:134) and `lend_bats` (:177), each carrying `#[cfg(unix)]` because bats is a bash program with no extension that Windows can neither symlink nor execute. So the `cfg!` arm this rule prefers would not type-check — the three items do not exist on that target — and the attribute is required rather than chosen to silence a leg, which is the one bar this route is held to. The case it covers is the anti-vacuity for CLOUD-1726: `BATS_TEST_TIMEOUT` was removed because the runner does not reap its `sleep N` watchdog on a FAILING case and a caught mutation is a failing case, so without a bound of our own a hanging mutant would hold a sweep forever. `base = \"origin/main\"` makes this floor itself on landing, so the row is expected to lapse unused."
+expires = "2026-10-31"
+
+[[waiver]]
+rule = "platform-gated-test-added"
 path = "crates/batten/src/provision.rs"
 reason = "the relink case asserts over `std::os::unix::fs::MetadataExt::ino`, a symbol absent on the Windows target, so the `cfg!` arm this rule prefers would not type-check and the attribute is required rather than chosen to silence a leg. `base = \"origin/main\"` makes this floor itself on landing, so the row is expected to lapse unused."
 expires = "2026-10-31"
