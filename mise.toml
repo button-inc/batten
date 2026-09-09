@@ -1843,8 +1843,12 @@ description = "Effect: run each declared third-party validator OUTSIDE the engin
 # reads `.git/batten-forge/<sha>`; both shipped with no writer but a test, so
 # `validator-verdict-clean` and `forge-verdict-required` — two registered
 # `severity = "deny"` rows — resolved `null` on every real checkout and decided
-# nothing. Each row says so at its own site in `batten.toml`: "SILENT UNTIL A
-# PRODUCER WRITES."
+# nothing.
+#
+# BOTH HALVES ARE WRITTEN HERE NOW. The tool half landed with this task
+# (CLOUD-1265); the forge half is the arm at the end of this body (CLOUD-1707),
+# and until it landed this file closed one of the two gaps its own header
+# described and left the other open.
 #
 # THE RUN IS HERE BECAUSE IT CANNOT BE IN THE ENGINE. House style §5 makes
 # `check` `read` and structurally incapable of spawning, so the validator stays a
@@ -1954,6 +1958,72 @@ jq -r --slurpfile full "$full" '
 	| ($full[0].steps[] | select(.name == $name) | .status) as $under
 	| "\($name) \($under // "absent")"
 ' <"$fast" | record hk-plan
+
+# THE FORGE'S OWN VERDICT, and the row it feeds had never been fed (CLOUD-1707).
+# `crates/batten/src/forge.rs` reads `.git/batten-forge/<sha>` and
+# `batten record forge` writes it, but nothing invoked the writer — so
+# `input.tree.forge` was `null` on every checkout, the module's `is_object` guard
+# never held, and `forge-verdict-required` decided NOTHING while registered at
+# `severity = "deny"`. A dead gate is byte-identical to a clean tree.
+#
+# THE REF IS `HEAD`, AND THAT IS THE WHOLE DECLARED SET. Two rows read this fact
+# — `forge-verdict-required` and the re-grade row above it — and each declares
+# exactly `forge = ["HEAD"]`. Recording HEAD is scoped to what is asked rather
+# than narrowed below it. A row that later declares a second ref must add it here
+# in the same change; an under-scoped record is the same silent pass in a new
+# costume.
+#
+# THE FAN-IN IS THE GATE ON WRITING AT ALL, and this is the load-bearing half.
+# `$CI_FANIN_CHECK` is the check every other required job feeds, so until IT has
+# concluded the forge has not finished judging this commit. Recording a partial
+# reading would be a record PRESENT without a passing fan-in, which
+# `forge-verdict-required` refuses — and that refusal would fire in the two places
+# it must never fire:
+#   * local `verify`, which runs against a freshly minted SHA CI has not graded,
+#     turning every pre-push check red;
+#   * CI itself, where `verify` runs while the fan-in is by construction still
+#     pending, so the record would refuse the very run that wrote it.
+# Absent is could-not-look and is the correct reading for both. So a failed fetch
+# writes nothing, and a commit whose fan-in has not concluded writes nothing.
+#
+# A NAME WITH A SPACE CANNOT BE SPELLED HERE, and is dropped rather than mangled.
+# The record's byte format is `<name> <token>` split on the first whitespace run,
+# so `action (ubuntu-latest) success` would record the name `action` with the
+# conclusion `(ubuntu-latest)` — a wrong verdict under a name three checks collide
+# on. Nine of `$CI_REQUIRED_CHECKS` carry spaces. The fan-in both rows read is one
+# token by construction, so nothing a consumer reads is lost; the COUNT of dropped
+# names goes to stderr (rule 4 — a count, never the payload) so the limit stays
+# visible rather than silent.
+forge_sha=$(git rev-parse HEAD 2>/dev/null || true)
+forge_fanin="${CI_FANIN_CHECK:-}"
+if [ -n "$forge_sha" ] && [ -n "$forge_fanin" ]; then
+	forge_repo="${REPO:-}"
+	[ -n "$forge_repo" ] || forge_repo='{owner}/{repo}'
+	# LATEST RUN PER NAME, and the reduction belongs here rather than in the
+	# reader. A re-run adds a second check-run under the SAME name, so the raw
+	# listing carries `fast-forward-release-pr success` and `… skipped` for one
+	# commit — and `forge::parse` folds a record into a map, so whichever line came
+	# last would win by listing order rather than by recency. `checks-green` draws
+	# the same distinction with `started_at` and `id`; this is that reduction,
+	# spelled once, at the producer.
+	if forge_runs=$(gh api "repos/$forge_repo/commits/$forge_sha/check-runs?per_page=100" \
+		--jq '.check_runs | map(select(.conclusion != null)) | group_by(.name) | map(max_by([(.started_at // ""), (.id // 0)])) | .[] | "\(.name)\t\(.conclusion)"' 2>/dev/null); then
+		# The fan-in decides whether ANY record is written; the name filter then
+		# decides what the record may spell.
+		forge_graded=$(printf '%s\n' "$forge_runs" |
+			awk -F'\t' -v fanin="$forge_fanin" 'NF == 2 && $1 == fanin {found = 1} END {print found + 0}')
+		if [ "$forge_graded" -eq 1 ]; then
+			forge_dropped=$(printf '%s\n' "$forge_runs" |
+				awk -F'\t' 'NF == 2 && $1 ~ /[[:space:]]/ {n++} END {print n + 0}')
+			if [ "$forge_dropped" -gt 0 ]; then
+				echo "record-verdicts: $forge_dropped check-run name(s) carry a space and have no spelling in a forge record; dropped" >&2
+			fi
+			printf '%s\n' "$forge_runs" |
+				awk -F'\t' 'NF == 2 && $1 !~ /[[:space:]]/ {print $1 " " $2}' |
+				cargo run --quiet -p batten -- record forge HEAD
+		fi
+	fi
+fi
 '''
 
 # The perf producer and the perf gate (CLOUD-207, ported off

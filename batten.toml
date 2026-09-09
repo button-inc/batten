@@ -5629,6 +5629,13 @@ severity = "deny"
 # green fires this and not that; a commit graded red fires both, and they say
 # different things — do not re-run it, and do not land it.
 #
+# BOTH READINGS NEEDED A PRODUCER, and until CLOUD-1707 neither had one: nothing
+# invoked `batten record forge`, so this fact was `null` and the paragraph above
+# described a discrimination no checkout could make. `mise run record-verdicts`
+# writes it, and writes it ONLY once the fan-in has concluded — so "nothing was
+# recorded at all" now means the forge has not finished judging, which is the
+# could-not-look both rows read it as.
+#
 # `warn`, NOT `deny`, AND THE FIRST LANDING IS THE REASON. `land` re-verifies and
 # re-waits every lap by design, because a rebase mints a new SHA and the receipts
 # keyed to the old one are gone — so the loop legitimately reaches graded commits,
@@ -6597,6 +6604,12 @@ looked at it."""
 # bytes at this version — absent from the map, not a verdict — which is what a
 # checkout gets if the producer was skipped or died. The row that wants a verdict
 # to be REQUIRED is `forge-verdict-required`'s shape and is not this one.
+#
+# THAT CONTRAST ONLY BECAME REAL WITH CLOUD-1707. `forge-verdict-required` had no
+# producer, so it refused nothing and the sentence above named a shape rather than
+# a behaviour. Both rows are fed by `mise run record-verdicts` now, and they still
+# read absence the same way — what differs is what each does with a record that IS
+# present, which is the distinction this block was always drawing.
 [[rule]]
 id = "validator-verdict-clean"
 kind = "policy"
