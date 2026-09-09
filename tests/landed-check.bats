@@ -34,6 +34,13 @@ setup() {
 	# rule over this directory and would fire on its own explanation.
 	git init -q -b work "$REPO"
 	cd "$REPO" || return 1
+	# THE COMMITTED CONFIG, because the claim derivation is an ENGINE leaf now
+	# (CLOUD-1711). `claimed-keys.sh` carried the key grammar inline and answered
+	# in any tree; `batten claim keys` resolves `ready-issue-key` and the closing
+	# rows from the `[[pattern]]` registry, so a fixture with no `batten.toml`
+	# resolves nothing, returns no keys, and every case asserting a REFUSAL passes
+	# for the wrong reason.
+	cp "$BATS_TEST_DIRNAME/../batten.toml" "$REPO/batten.toml"
 	git config user.email t@t
 	git config user.name t
 	git commit -q --allow-empty -m "chore: init"

@@ -19,6 +19,13 @@ setup() {
 	export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 	git init -q -b work "$REPO"
 	cd "$REPO" || return 1
+	# THE COMMITTED CONFIG, because the claim derivation is an ENGINE leaf now
+	# (CLOUD-1711). `claimed-keys.sh` carried the key grammar inline and answered
+	# in any tree; `batten claim keys` resolves `ready-issue-key` and the closing
+	# rows from the `[[pattern]]` registry, so a fixture with no `batten.toml`
+	# resolves nothing, returns no keys, and every case asserting a REFUSAL passes
+	# for the wrong reason.
+	cp "$BATS_TEST_DIRNAME/../batten.toml" "$REPO/batten.toml"
 	git config user.email t@t
 	git config user.name t
 	git commit -q --allow-empty -m "chore: init"
@@ -354,14 +361,38 @@ Closes CLOUD-179"
 	mkdir -p "$stub"
 	cp "$BATS_TEST_DIRNAME/../mise-tasks/in-progress-drain.sh" "$stub/in-progress-drain.sh"
 	cp "$BATS_TEST_DIRNAME/../mise-tasks/landed-check.sh" "$stub/landed-check.sh"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/claimed-keys.sh" "$stub/claimed-keys.sh"
-	printf '#!/usr/bin/env bash\nprintf "CLOUD-179\\t42\\n"\n' >"$stub/merged-pr-keys.sh"
-	chmod +x "$stub/merged-pr-keys.sh"
+	# `claimed-keys.sh` and `merged-pr-keys.sh` are retired (CLOUD-1711); the
+	# drain reaches `batten claim merged` now. So the stub SHADOWS THE BINARY and
+	# dispatches: the one verb under test is faked and every other call — the
+	# `claim keys` that `landed-check` makes one hop down — reaches the real one.
+	# A blanket stub would answer for both and the case would prove nothing.
+	batten_stub "$stub" 'printf "CLOUD-179\t42\n"'
+
 	land "fix: work with no closing key in the commit"
 	unset DRAIN_MERGED_PRS
-	run bash -c "printf '%s' '[$(row CLOUD-179 2026-08-20T10:00:00.000Z feat/x '')]' | $stub/in-progress-drain.sh"
+	run bash -c "PATH='$stub:$PATH' printf '%s' '[$(row CLOUD-179 2026-08-20T10:00:00.000Z feat/x '')]' | PATH='$stub:$PATH' $stub/in-progress-drain.sh"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"CLOUD-179"* ]]
+}
+
+# A `batten` that answers ONE verb and defers the rest to the real binary.
+#
+# `$1` is the directory to place it in — put first on PATH by the case — and
+# `$2` is the body run for `claim merged`. Everything else `exec`s the batten
+# resolved outside this directory, so the gate under test keeps its real
+# `claim keys`, its real config loading and its real exit contract.
+batten_stub() {
+	local dir="$1" body="$2" real
+	real="$(PATH="${PATH#"$dir":}" command -v batten)"
+	cat >"$dir/batten" <<-STUB
+		#!/usr/bin/env bash
+		if [ "\$1" = "claim" ] && [ "\$2" = "merged" ]; then
+			$body
+			exit 0
+		fi
+		exec "$real" "\$@"
+	STUB
+	chmod +x "$dir/batten"
 }
 
 @test "a failed gather is could-not-look, never a short sweep" {
@@ -369,11 +400,13 @@ Closes CLOUD-179"
 	mkdir -p "$stub"
 	cp "$BATS_TEST_DIRNAME/../mise-tasks/in-progress-drain.sh" "$stub/in-progress-drain.sh"
 	cp "$BATS_TEST_DIRNAME/../mise-tasks/landed-check.sh" "$stub/landed-check.sh"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/claimed-keys.sh" "$stub/claimed-keys.sh"
-	printf '#!/usr/bin/env bash\nexit 2\n' >"$stub/merged-pr-keys.sh"
-	chmod +x "$stub/merged-pr-keys.sh"
+	# The same shadowing stub, refusing (CLOUD-1711). `batten claim merged` exits
+	# non-zero on a truncated or empty forge answer, and that is what must become
+	# the drain's own 2 rather than a short sweep reported as clean.
+	batten_stub "$stub" 'exit 2'
+
 	unset DRAIN_MERGED_PRS
-	run bash -c "printf '%s' '[$(row CLOUD-179 2026-08-20T10:00:00.000Z feat/x '')]' | $stub/in-progress-drain.sh"
+	run bash -c "PATH='$stub:$PATH' printf '%s' '[$(row CLOUD-179 2026-08-20T10:00:00.000Z feat/x '')]' | PATH='$stub:$PATH' $stub/in-progress-drain.sh"
 	[ "$status" -eq 2 ]
 	[[ "$output" == *"merged-pr-keys"* ]]
 }
