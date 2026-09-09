@@ -39,6 +39,12 @@ Characters are what is emitted. The token column is `budget::estimate_tokens`, t
 
 **Every class here pays a real margin**, so a residency protocol has something to withhold on each of them: a first sighting carries the class's own explanation and a repeat carries the bare line. That was not true of every renderer this benchmark has measured — a first sighting used to append `command` routes ONLY, which left a document-route class rendering the identical line cold and warm — so the margin is a property of the renderer under measurement rather than of the strategy table.
 
+## The verdict
+
+**RETAIN the first-sighting/repeat split.** No measured strategy emits less on a repeat than the shipped one: `FirstFullThenCompact` is byte-identical to `Current` on every arm, and `FullEveryTime` — the control — is the one that costs more. The split is already the cheapest of the three on the firing that recurs.
+
+**What a successor would have to own.** Everything above is a saving per REPEAT, and `Cold`/`Warm` are inputs here: nothing in this repository detects residency, so no behaviour can currently act on the difference. A successor must name an explicit epoch authority of its own — `DecisionRecord.config_epoch` is a configuration hash, not a session one — and it inherits the split CLOUD-1386 draws: the declared ceiling bounds the line read on EVERY firing, deliberately not the once-per-session sighting, so the headroom a residency protocol could spend is on the sighting side alone. CLOUD-417 owns session-level repetition; CLOUD-1117 owns whether any of it improves completion, which this benchmark does not claim.
+
 ## What is NOT priced here, and why it is not an omission
 
 - **Provider-side prefill and KV-cache cost.** Those are the serving work a request does; this measures logical occupancy of the agent's active context, which survives caching and is what shortens a run. One number serving both would be honest about neither.

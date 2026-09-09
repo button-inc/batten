@@ -2394,6 +2394,73 @@ fn refusal_render_margin_note(records: &[RenderRecord]) -> String {
     out
 }
 
+/// The answer the benchmark exists to produce: retain the shipped behaviour, or
+/// replace it — and what a successor would have to own to do better.
+///
+/// **DERIVED WHERE IT CAN BE, which is the whole of why it is here rather than in
+/// prose somebody maintains.** CLOUD-1606's last acceptance clause asks the final
+/// result to record this, and a verdict written by hand beside a generated table
+/// is exactly the pairing that went stale twice on this branch already — the
+/// ceiling paragraph and the zero-margin paragraph both survived the measurement
+/// that falsified them. The retain/replace call reads off the records, so it
+/// cannot outlive them.
+fn refusal_render_verdict(records: &[RenderRecord]) -> String {
+    use std::fmt::Write as _;
+
+    let arm = |class: &str, strategy: Strategy, residency: Residency| {
+        records.iter().find(|record| {
+            record.class == class && record.strategy == strategy && record.residency == residency
+        })
+    };
+    // The shipped behaviour is worth keeping exactly while no measured strategy
+    // emits less on a repeat than it does. `FirstFullThenCompact` ties by
+    // construction and `FullEveryTime` is the control.
+    let beaten: Vec<&str> = MEASURED_CLASSES
+        .iter()
+        .filter(|(class, _)| {
+            let current = arm(class, Strategy::Current, Residency::Warm);
+            Strategy::ALL.iter().any(|strategy| {
+                match (current, arm(class, *strategy, Residency::Warm)) {
+                    (Some(current), Some(other)) => other.characters < current.characters,
+                    _ => false,
+                }
+            })
+        })
+        .map(|(class, _)| *class)
+        .collect();
+
+    let mut out = String::new();
+    out.push_str("## The verdict\n\n");
+    if beaten.is_empty() {
+        out.push_str(
+            "**RETAIN the first-sighting/repeat split.** No measured strategy emits less on a \
+             repeat than the shipped one: `FirstFullThenCompact` is byte-identical to `Current` \
+             on every arm, and `FullEveryTime` — the control — is the one that costs more. The \
+             split is already the cheapest of the three on the firing that recurs.\n\n",
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "**REPLACE the first-sighting/repeat split for {}**: a measured strategy emits less \
+             on a repeat than the shipped one does there.\n",
+            beaten.join(", ")
+        );
+    }
+
+    out.push_str(
+        "**What a successor would have to own.** Everything above is a saving per REPEAT, and \
+         `Cold`/`Warm` are inputs here: nothing in this repository detects residency, so no \
+         behaviour can currently act on the difference. A successor must name an explicit epoch \
+         authority of its own — `DecisionRecord.config_epoch` is a configuration hash, not a \
+         session one — and it inherits the split CLOUD-1386 draws: the declared ceiling bounds \
+         the line read on EVERY firing, deliberately not the once-per-session sighting, so the \
+         headroom a residency protocol could spend is on the sighting side alone. CLOUD-417 owns \
+         session-level repetition; CLOUD-1117 owns whether any of it improves completion, which \
+         this benchmark does not claim.\n\n",
+    );
+    out
+}
+
 /// Render the committed report from a set of records.
 ///
 /// **THE BYTES ARE THE CONTRACT.** The tier re-renders this in-process and
@@ -2475,6 +2542,7 @@ pub fn refusal_render_report(
     out.push('\n');
 
     out.push_str(&refusal_render_margin_note(records));
+    out.push_str(&refusal_render_verdict(records));
 
     out.push_str(
         "## What is NOT priced here, and why it is not an omission\n\n\
