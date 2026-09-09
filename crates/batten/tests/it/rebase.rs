@@ -804,9 +804,28 @@ fn a_borrowed_commit_the_trunk_took_is_dropped_only_when_onto_is_fresh() {
     let fresh_base = commit(&fresh, &[], &[("shared.txt", "base\n")]);
     let fresh_holder = commit(&fresh, &[fresh_base], borrowed);
     let fresh_tip = commit(&fresh, &[fresh_holder], ours);
-    // The twin: same change, different sha, parented on the base rather than on
-    // the holder — the shape a fast-forward landing of a rebased branch leaves.
-    let twin = commit(&fresh, &[fresh_base], borrowed);
+    // THE TWIN NEEDS A DIFFERENT PARENT, or it is not a twin — it is the same
+    // commit. `commit` fixes the timestamp and the message, so a tree and a
+    // parent determine the sha exactly; parenting the twin on the holder's own
+    // parent reproduces the holder bit for bit and leaves `work..trunk` empty,
+    // which is a fixture that tests nothing. An unrelated trunk commit underneath
+    // gives the twin a distinct sha while its DIFF — adding `from-holder.txt` —
+    // stays the holder's, which is what patch-id equality is about and what a
+    // rebased landing actually produces.
+    let trunk_moved = commit(
+        &fresh,
+        &[fresh_base],
+        &[("shared.txt", "base\n"), ("unrelated.txt", "trunk\n")],
+    );
+    let twin = commit(
+        &fresh,
+        &[trunk_moved],
+        &[
+            ("shared.txt", "base\n"),
+            ("unrelated.txt", "trunk\n"),
+            ("from-holder.txt", "theirs\n"),
+        ],
+    );
     point(&fresh_dir, "refs/heads/trunk", twin);
     point(&fresh_dir, "refs/heads/work", fresh_tip);
     materialise(&fresh_dir, ours);
@@ -833,7 +852,17 @@ fn a_borrowed_commit_the_trunk_took_is_dropped_only_when_onto_is_fresh() {
     let stale_base = commit(&stale, &[], &[("shared.txt", "base\n")]);
     let stale_holder = commit(&stale, &[stale_base], borrowed);
     let stale_tip = commit(&stale, &[stale_holder], ours);
-    point(&stale_dir, "refs/heads/trunk", stale_base);
+    // THE TRUNK MUST HAVE MOVED, or the range is empty and `replay_range`
+    // short-circuits to `Current` before any drop set is consulted — which is
+    // correct behaviour and models nothing. Stale does not mean motionless: it
+    // means this clone's view advanced far enough to be doing real work and still
+    // predates the landing of the twin, which is exactly one lap behind.
+    let stale_trunk = commit(
+        &stale,
+        &[stale_base],
+        &[("shared.txt", "base\n"), ("unrelated.txt", "trunk\n")],
+    );
+    point(&stale_dir, "refs/heads/trunk", stale_trunk);
     point(&stale_dir, "refs/heads/work", stale_tip);
     materialise(&stale_dir, ours);
 
