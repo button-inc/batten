@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.156](https://github.com/button-inc/batten/compare/v0.0.155...v0.0.156) - 2026-09-09
+
+### Added
+
+- *(surface)* declare `doctor gate`'s exit set
+- *(surface)* declare `policy rule`'s exit set
+- *(surface)* every leaf verb declares the exit codes it may produce
+
+### Fixed
+
+- *(mcp)* a failed tool result is not a successful call
+
+### Other
+
+- *(mutant)* enforce the two engine gates, and declare the landing verbs' exits
+
 ## [0.0.155](https://github.com/button-inc/batten/compare/v0.0.154...v0.0.155) - 2026-09-09
 
 ### Fixed
