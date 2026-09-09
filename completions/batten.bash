@@ -3232,13 +3232,29 @@ _batten() {
             return 0
             ;;
         batten__subcmd__exec)
-            opts="-q -v -y -h --capture-only --tee --jobs --continue-on-error --format --style --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --capture-only --tee --jobs --continue-on-error --lock --lock-path --lock-attempts --lock-label --format --style --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
                 --jobs)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --lock)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --lock-path)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --lock-attempts)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --lock-label)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;

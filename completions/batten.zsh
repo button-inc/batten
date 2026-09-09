@@ -120,6 +120,10 @@ trace\:"Add everything"))' \
 (exec)
 _arguments "${_arguments_options[@]}" : \
 '--jobs=[How many of a \`\:\:\:\` bundle'\''s commands run at once]: :_default' \
+'--lock=[Hold this clone'\''s named singleton lock for the child'\''s lifetime]: :_default' \
+'--lock-path=[Hold the lock at this path, for a resource the clone does not own]: :_default' \
+'--lock-attempts=[How many times to ask for the lock before reporting it held]: :_default' \
+'--lock-label=[What the wait is for, named by the caller for the refusal line]: :_default' \
 '--format=[How Batten'\''s own record is encoded (hk'\''s axis)]: :((human\:"Pointer lines, one per fact"
 json\:"One JSON document"
 jsonl\:"One JSON record per line"))' \

@@ -1036,6 +1036,38 @@ expression: stdout_of(&output)
           "help": "How many of a `:::` bundle's commands run at once"
         },
         {
+          "name": "lock",
+          "short": null,
+          "long": "lock",
+          "takes_value": true,
+          "positional": false,
+          "help": "Hold this clone's named singleton lock for the child's lifetime"
+        },
+        {
+          "name": "lock_attempts",
+          "short": null,
+          "long": "lock-attempts",
+          "takes_value": true,
+          "positional": false,
+          "help": "How many times to ask for the lock before reporting it held"
+        },
+        {
+          "name": "lock_label",
+          "short": null,
+          "long": "lock-label",
+          "takes_value": true,
+          "positional": false,
+          "help": "What the wait is for, named by the caller for the refusal line"
+        },
+        {
+          "name": "lock_path",
+          "short": null,
+          "long": "lock-path",
+          "takes_value": true,
+          "positional": false,
+          "help": "Hold the lock at this path, for a resource the clone does not own"
+        },
+        {
           "name": "style",
           "short": null,
           "long": "style",

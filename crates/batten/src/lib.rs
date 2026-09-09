@@ -8586,11 +8586,40 @@ fn run_land_replay(
 ) -> Result<ExitCode> {
     match land::replay(root, url, reference, branch, resolve)? {
         land::Replay::Conflicted { commit, paths } => {
+            // THE STOP NAMES ITS ROUTE, which this line did not (CLOUD-1586's
+            // mechanism, CLOUD-1050's rule). It reported the conflict and the
+            // first path and stopped there — so a reader with no `--resolve` in
+            // their head reached for `git rebase --continue`, which cannot
+            // exist here, and then for a hand rebase, which
+            // `rebase-not-hand-stepped` denies. Measured on this very branch: a
+            // session concluded the loop was defective and was one step from
+            // cherry-picking around it, which would have completed the replay
+            // and written no lap record at all.
+            //
+            // EVERY PATH, not the first: the caller has to author a resolution
+            // for each one, and a count they cannot enumerate is not actionable.
+            // Paths are pointers, so rule 4 is untouched — no hunk, no marker,
+            // no content.
             writeln!(
                 out,
-                "land: replay of {branch} onto {reference} conflicted at {commit} in {} path(s); first is {}",
-                paths.len(),
-                paths.first().map_or("-", String::as_str)
+                "land: replay of {branch} onto {reference} conflicted at {commit} in {} path(s):",
+                paths.len()
+            )?;
+            for path in &paths {
+                writeln!(out, "  {path}")?;
+            }
+            writeln!(
+                out,
+                "land: the replay is STATELESS — nothing is half-replayed, so there is no rebase in \
+                 progress and nothing to `--continue`. Merge each path in the worktree and name it: \
+                 `batten land replay {reference} --resolve <path>`. The whole range re-runs from its \
+                 base, so the merged bytes are supplied up front."
+            )?;
+            writeln!(
+                out,
+                "land: a path that conflicts at MORE THAN ONE commit needs one entry per conflict, \
+                 in order — `--resolve <path>=<file>` names bytes authored for a single merge, where \
+                 a bare `--resolve <path>` spends the worktree's copy on the first one only."
             )?;
             Ok(ExitCode::Violation)
         }
@@ -15413,10 +15442,71 @@ fn run_exec(
             })?;
     }
     settings.continue_on_error = settings.continue_on_error || request.continue_on_error;
+    // THE LOCK IS HELD ACROSS THE CHILD, AND THE GUARD IS WHAT MAKES THAT TRUE
+    // ON EVERY RETURN (CLOUD-1710). A wrapped command that fails comes back as
+    // `Err(Passthrough)`, so releasing after the call would leak the lock on
+    // exactly the path that matters most — the shell named the same defect and
+    // used a trap: *"a failure that leaves the lock held wedges every later
+    // caller for the full timeout, turning one red run into a stuck repo."*
+    let _held = match exec::hold(exec_lock(request)?.as_ref(), err)? {
+        exec::LockOutcome::Refused(code) => return Ok(code),
+        taken => taken,
+    };
     // The report goes to the ERROR channel, never `out`: stdout belongs to the
     // wrapped command (CLOUD-285), so a pointer line there would corrupt a
     // document the caller may be parsing.
     exec::run_with(&request.command, &patterns, &settings, err)
+}
+
+/// What `--lock` asked for, as the value [`exec::hold`] takes.
+///
+/// Parsed HERE rather than in `exec.rs`, for `--jobs`' reason and in `--jobs`'
+/// place: a bad value owes a `UsageError` naming what was wrong with it, and
+/// the boundary is where this crate turns typed argv into declared values.
+///
+/// # Errors
+///
+/// [`UsageError`] when `--lock-attempts` is not a positive whole number.
+fn exec_lock(request: &cli::ExecRequest) -> Result<Option<exec::Lock>> {
+    let place = match (request.lock.as_deref(), request.lock_path.as_deref()) {
+        (None, None) => return Ok(None),
+        (Some(key), None) => exec::LockPlace::Key(key.to_owned()),
+        (None, Some(path)) => exec::LockPlace::Path(std::path::PathBuf::from(path)),
+        // A refusal rather than a precedence rule: the two answer "where should
+        // the queue form" differently, and silently picking one would serialize
+        // the wrong thing — which is the failure mode a lock exists to prevent.
+        (Some(_), Some(_)) => {
+            return Err(UsageError::raise(
+                "exec: --lock and --lock-path name two different queues; give one",
+            ));
+        }
+    };
+    let attempts = match request.lock_attempts.as_ref() {
+        Some(raw) => raw
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .filter(|n| *n > 0)
+            .ok_or_else(|| {
+                UsageError::raise(format!(
+                    "exec: --lock-attempts wants a positive whole number, not `{raw}`"
+                ))
+            })?,
+        None => exec::LOCK_ATTEMPTS_DEFAULT,
+    };
+    let named = match &place {
+        exec::LockPlace::Key(key) => key.clone(),
+        exec::LockPlace::Path(path) => path.display().to_string(),
+    };
+    Ok(Some(exec::Lock {
+        place,
+        attempts,
+        // The caller names what the wait was FOR, and the key is the fallback
+        // rather than the message: `the toolchain lock (aarch64-apple-darwin)`
+        // is a pointer to the thing a reader has to reason about, where a bare
+        // key is a pointer to a directory.
+        label: request.lock_label.clone().unwrap_or(named),
+    }))
 }
 
 fn load_exec_settings(

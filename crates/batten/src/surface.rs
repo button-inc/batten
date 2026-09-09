@@ -855,6 +855,94 @@ const JOBS: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--lock` on `exec` (CLOUD-1710), the key one clone's singleton lock is named
+/// by.
+///
+/// A KEY, never a path. `mise-tasks/with-lock.sh` took a lock directory and its
+/// callers pointed one at the rust sysroot, so a toolchain swap could not
+/// deadlock on a stale path. The key carries that distinction where it belongs —
+/// in the name (`target-ensure-<triple>`) — and lets the lock live under
+/// `$GIT_DIR` with every other one this clone holds, which is what
+/// `batten singleton` and `mise run alive` already read.
+const LOCK: FlagDecl = FlagDecl {
+    id: "lock",
+    long: Some("lock"),
+    short: None,
+    help: "Hold this clone's named singleton lock for the child's lifetime",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--lock-path` on `exec` (CLOUD-1710): a lock guarding something the clone
+/// does not own.
+///
+/// The sibling of `--lock`, and the two are not interchangeable. A KEY names a
+/// lock under `$GIT_DIR`, which is right for "one task per clone". A PATH names
+/// one wherever the resource being serialized actually lives — the retiring
+/// shell's two callers both needed that, `doctor`'s lock sitting under
+/// `$MISE_DATA_DIR` and `target-ensure`'s inside the rust sysroot, because a
+/// mise install tree and a rustup toolchain are the MACHINE's and are shared by
+/// every clone on it. Keying those per clone would let two checkouts install a
+/// target concurrently and roll each other back (CLOUD-220).
+const LOCK_PATH: FlagDecl = FlagDecl {
+    id: "lock_path",
+    long: Some("lock-path"),
+    short: None,
+    help: "Hold the lock at this path, for a resource the clone does not own",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--lock-attempts` on `exec` (CLOUD-1710): how long the queue is, as a COUNT.
+///
+/// The bound is a number of asks separated by a declared interval, never a wall
+/// clock — `land`'s shape, for `land`'s reason. The shell spelled it
+/// `WITH_LOCK_TIMEOUT` in seconds and divided by its own `sleep 0.1`; the
+/// default here is that same arithmetic already done (600s ⇒ 6000 asks).
+const LOCK_ATTEMPTS: FlagDecl = FlagDecl {
+    id: "lock_attempts",
+    long: Some("lock-attempts"),
+    short: None,
+    help: "How many times to ask for the lock before reporting it held",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--lock-label` on `exec` (CLOUD-1710): what the wait was FOR.
+///
+/// Carried verbatim from the shell, which states why: *"A lock path is a pointer
+/// to a file; 'the toolchain lock (aarch64-apple-darwin)' is a pointer to the
+/// thing a reader has to reason about, and moving the wait out of the caller
+/// must not cost that."*
+const LOCK_LABEL: FlagDecl = FlagDecl {
+    id: "lock_label",
+    long: Some("lock-label"),
+    short: None,
+    help: "What the wait is for, named by the caller for the refusal line",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 /// `--continue-on-error` on `exec` (CLOUD-430), likewise mise's.
 const CONTINUE_ON_ERROR: FlagDecl = FlagDecl {
     id: "continue_on_error",
@@ -2477,6 +2565,10 @@ pub const SURFACE: &[CommandDecl] = &[
             TEE,
             JOBS,
             CONTINUE_ON_ERROR,
+            LOCK,
+            LOCK_PATH,
+            LOCK_ATTEMPTS,
+            LOCK_LABEL,
             FlagDecl::defaulted_enum(
                 "format",
                 "format",

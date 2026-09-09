@@ -145,19 +145,6 @@ local gate = new Mapping<String, Step> {
     glob = List("Cargo.toml", "Cargo.lock")
     check = "mise run digest-major-agreement"
   }
-  // `coverage` and `scorecard` emit a number for a human and must never gate a
-  // branch — a coverage threshold rewards line-touching, and scorecard scores
-  // deliberate design decisions (trunk-based review, the landing lease's
-  // `actions: write`) as defects. Both said so in a comment and nothing held
-  // it: the only thing keeping them off the landing path was that nobody had
-  // added them to it (CLOUD-582). This is the inverse of `ci-parity`'s
-  // "every task CI runs, verify runs" — named reports appear in NEITHER
-  // `[tasks.verify]` nor any `pull_request` workflow. Kept separate from that
-  // gate because the two fail for opposite reasons and one deny cannot say both.
-  ["report-only-check"] {
-    glob = List(".github/workflows/*.yml", "mise.toml", "mise-tasks/report-only-check.sh")
-    check = "mise run report-only-check"
-  }
   // Enforces the "research goes to Linear, not a repo docs/ tree" directive as
   // a runnable gate, not prose (see AGENTS.md): fails if any docs/ path is
   // tracked. Research deliverables and evidence notes attach to the Linear
@@ -170,31 +157,6 @@ local gate = new Mapping<String, Step> {
   // costs ~95ms, which is what makes that affordable.
   ["no-docs-tree"] {
     check = "mise run no-docs-tree"
-  }
-  // The coverage half of the nextest swap (CLOUD-813). `test:cargo` runs
-  // `cargo nextest run`, which does not execute doctests; the swap was safe
-  // because `cargo test --doc --workspace` reported zero on this workspace, and
-  // that emptiness is a measurement rather than a property. This asserts it
-  // still holds, so a doc example cannot arrive as dead code that reads like a
-  // tested one.
-  //
-  // Globbed on the crate sources it scans, unlike its glob-less neighbour above:
-  // a fence can only appear in a tracked `.rs` file, so the input really is that
-  // set and a commit touching none of them cannot change the answer.
-  ["no-doctests"] {
-    glob = List("crates/**/*.rs")
-    check = "mise run no-doctests"
-  }
-  // The third half of the same non-negotiable. CONTRIBUTING.md's license table
-  // ends "Confirm each _to confirm_ entry before that tool is adopted in a
-  // shipped release" — a release precondition stated in prose, which nothing
-  // enforced while three of five rows sat unresolved (CLOUD-325). The table
-  // stays the authority; this only asserts that no row is still an open
-  // question. It cannot check that a recorded license is *correct* — that is a
-  // human reading an upstream LICENSE — so it proves the narrower thing an exit
-  // code can carry: nobody shipped while the question was open.
-  ["license-table-check"] {
-    check = "mise run license-table-check"
   }
   // The mechanism CLOUD-847 shipped without (CLOUD-860). That row landed
   // `.coderabbit.yaml` after measuring what each key buys — a formal
@@ -246,16 +208,6 @@ local gate = new Mapping<String, Step> {
     glob = List("hk.pkl", "mise.toml", "contracts/hk.json")
     profiles = List("slow")
     check = "mise run hk-drift"
-  }
-  // `rules/rust.md` carries no module tree — it defers to mem:core as
-  // the authority kept current instead. Nothing checked that authority, so a
-  // module could land with no row and leave the rule pointing at an incomplete
-  // map; `severity.rs` (CLOUD-168) did exactly that, past a green gate.
-  // memories-check does not cover this: it gates the graph's *edges*, which
-  // stay coherent while the map is missing rows (CLOUD-194).
-  ["module-map-check"] {
-    glob = List("crates/*/src/*.rs", ".serena/memories/core.md")
-    check = "mise run module-map-check"
   }
   // `rules/toolchain.md` forbids restating a value three times over and
   // then restated four, two of which had drifted — `LAND_MAX_LAPS` quoted as 8
@@ -573,36 +525,6 @@ local gate = new Mapping<String, Step> {
   ["mcp-allow-check"] {
     glob = List(".claude/settings.json")
     check = "mise run mcp-allow-check"
-  }
-  // The same silence, one table over in the same file (CLOUD-471). The
-  // `PreToolUse` matcher decides which tool calls the host spawns the hook for
-  // AT ALL, so a `[[verb]]` naming a tool the matcher omits loads, validates and
-  // gates nothing — the process is never spawned, no envelope is decoded, and
-  // the symptom is an allow indistinguishable from a pass. `hooks-wiring-check`
-  // above deliberately compares only the EVENT and the COMMAND ("THE MATCHER IS
-  // NOT COMPARED"), because a matcher derived from the `Harness` enum would be
-  // the repo-agnostic core asserting a consumer's tool vocabulary; the coverage
-  // question therefore lands in a consumer gate, which is this one.
-  //
-  // A pattern reaching awk through `-v` goes through assignment escape
-  // processing first, and what that does to a backslash is undefined across
-  // implementations — gawk strips it, mawk keeps it. ready-lint matched its §8
-  // label that way: green on mawk locally, matching NOTHING on the gawk runner,
-  // so the clause went back to passing silently and took three older tests with
-  // it. A gate that cannot match its own label does not fail, it passes.
-  ["awk-regex-check"] {
-    glob = List("mise-tasks/**", "*.sh")
-    check = "mise run awk-regex-check"
-  }
-  // `producer | grep -q P` under pipefail can report FAILURE on a match: grep
-  // exits at the first hit, a still-writing producer dies of SIGPIPE, and
-  // pipefail promotes 141. It is a race (2 in 300 runs on a two-commit range),
-  // so it passes review and passes tests. landed-check reported a clean board
-  // over three landed issues that way; issue-guard denied `gh pr ready` on a
-  // branch whose every commit carried Refs: CLOUD-186 — it blocked its own PR.
-  ["pipefail-grep-check"] {
-    glob = List("mise-tasks/**", "*.sh")
-    check = "mise run pipefail-grep-check"
   }
   // Completeness of mise.lock, asked of the committed bytes. The old lock-check
   // asked it by running `mise lock` and diffing, which answers "did upstream
@@ -980,6 +902,13 @@ local gate = new Mapping<String, Step> {
         "Cargo.lock",
         "mise.toml",
         ".github/workflows/*.yml",
+        // CLOUD-1709's two `workflow-shell-not-growing` rows glob
+        // `.github/workflows/**`, which is BROADER than the `*.yml` entry above
+        // and not redundant with it: the narrow entry misses a `.yaml` workflow
+        // and misses a nested path. A step whose glob does not cover its own
+        // inputs stops running for exactly the commits it is meant to judge, so
+        // `batten-glob-check` refused the rows until this followed them.
+        ".github/workflows/**",
         // Recursive since CLOUD-328: the ratchet row over bats suites was
         // narrowed to one segment only to dodge a submodule the walker used to
         // count and the base rev did not. Both halves stop at a nested

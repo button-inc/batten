@@ -811,13 +811,20 @@ reason = """
 Rebasing onto `main` by hand is a lap of the loop `mise run land` drives, and \
 taking it off the task is the race the contract refuses rather than a repair. \
 Background `mise run land`; it fetches, rebases, verifies, pushes and waits, \
-and stops only for a rebase conflict, a failed `verify`, or red CI. TWO \
-SPELLINGS ARE LEFT ALONE, and neither is a lap: the conflict exits \
-(`--continue`, `--abort`, `--skip`) name no target at all, and \
-`git rebase --onto <newbase> <upstream> <branch>` is a range move this loop \
-cannot perform. A CONFLICT is the one step that is yours, and this row denies \
-rather than warns because a warn row on this surface reaches nobody — so the \
-conflict stop is a limit this row names rather than one it can soften."""
+and stops only for a rebase conflict, a failed `verify`, or red CI. A CONFLICT \
+is the one step that is yours, and the route is \
+`batten land replay <ref> --resolve <path>`: merge the path in the worktree and \
+name it, or `--resolve <path>=<file>` for a path that conflicts at more than \
+one commit, one entry per conflict in order. THE REPLAY IS STATELESS, so there \
+is no rebase in progress and `--continue`, `--abort` and `--skip` cannot apply \
+to it — this row used to name those three as the way out, which is a remedy \
+that does not exist (CLOUD-1050's class, measured when a session read it, \
+concluded the loop was broken, and reached for a cherry-pick that would have \
+completed the replay while writing no lap record). \
+`git rebase --onto <newbase> <upstream> <branch>` stays open and is not a lap: \
+it is a range move this loop cannot perform, which is what `unless_contains` \
+admits. This row denies rather than warns because a warn row on this surface \
+reaches nobody."""
 
 # The toolchain pin, given a mechanism (CLOUD-271). AGENTS.md has said "never a
 # bare `cargo`" since long before anything enforced it, which non-negotiable
@@ -1655,6 +1662,37 @@ regex = '(^|/)tasks/[A-Za-z0-9._-]+\.output$'
 [[pattern]]
 id = "egress-resolver-host"
 regex = 'api\.github\.com'
+
+# CLOUD-843's port of `pipefail-grep-check`. Three static halves; the flag
+# CLUSTER is read letter by letter in the module rather than enumerated here,
+# because "a short-flag cluster containing q or l" is a decision and not a
+# spelling — an enumeration is the thing that would rot.
+[[pattern]]
+id = "shell-enables-pipefail"
+regex = '^[[:space:]]*set[[:space:]]+-[a-z]*o?[a-z]*[[:space:]]*.*pipefail'
+
+# A REAL pipe, never the second bar of `||`. The predecessor scanned
+# `\|[[:space:]]*grep`, which matched `a || grep -q ... <<<"$x"` — the very
+# remedy the gate recommends — and reported it as the defect. Measured on
+# `ready-lint.sh` (CLOUD-852).
+[[pattern]]
+id = "pipe-into-grep"
+regex = '(^|[^|])\|[[:space:]]*grep([[:space:]]|$)'
+
+# CLOUD-843's port of `awk-regex-check`. The NAME is a capture rather than the
+# whole match: the module compares full identifiers so that a name which merely
+# prefixes another is never confused for it, which the shell approximated with a
+# trailing character class.
+[[pattern]]
+id = "awk-v-assignment"
+regex = '-v[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)='
+
+# The leading identifier of a fragment, used to read what follows `~` or a comma
+# inside `match(...)`. A whole-token comparison is what makes the prefix case
+# decidable without a per-name regex, which a `[[pattern]]` row cannot express.
+[[pattern]]
+id = "leading-identifier"
+regex = '^[A-Za-z_][A-Za-z0-9_]*'
 
 [[pattern]]
 id = "release-tag"
@@ -4999,9 +5037,16 @@ no_fix_reason = "migrate the predicate onto a rule kind, or declare `# stays-bas
 # TWO SURFACES ARE DELIBERATELY EXEMPT, and the reasons differ, so a later reader
 # finds a decision rather than a gap:
 #
-#   .github/workflows/**  bash is allowed. A workflow step is the one place a
-#                         shell line is the native spelling, and there is no
-#                         engine surface it could migrate onto.
+#   .github/workflows/**  bash is allowed, and since CLOUD-1709 it is COUNTED.
+#                         A workflow step is the one place a shell line is the
+#                         native spelling, and there is no engine surface it
+#                         could migrate onto — so it is exempt from THIS row,
+#                         which globs `mise-tasks/**`. It is not exempt from
+#                         measurement: `workflow-shell-not-growing` and its
+#                         `-bare` sibling ratchet the step count. Allowed and
+#                         uncounted are different claims, and reading the first
+#                         as the second is what 497 duplicated lines were
+#                         written under.
 #   install.sh            it cannot be a policy module by construction: it is how
 #                         the binary reaches a host that does not have it yet, so
 #                         it runs before the engine exists.
@@ -5115,6 +5160,91 @@ base = "origin/main"
 severity = "deny"
 scope = "tree"
 no_fix_reason = "migrate the predicate onto a rule kind, or waive the increase deliberately with a reason and an expiry; which of the two is the whole question"
+
+# CLOUD-1709. THE THIRD SURFACE, AND THE LARGEST. `bash-surface-not-growing`
+# globs `mise-tasks/**`; CLOUD-1137 closed the `mise.toml` and `.claude/**` holes
+# above. `.github/workflows/**` was left, and it is bigger than either: 28 files
+# carrying 135 shell steps, on a surface nothing counted.
+#
+# THE EXEMPTION ABOVE IS ABOUT MIGRATION, NOT ABOUT COUNTING, and these rows are
+# the correction of that inference rather than of the exemption itself. Workflow
+# bash stays allowed — a step is the native spelling and there is no engine
+# surface it could move onto. What does not follow is that it need not be
+# MEASURED, and 41% byte-identical duplication is what that inference bought.
+#
+# WHAT IS COUNTED IS THE STEP, NOT THE LINE, and the row body's 1,215-line figure
+# is deliberately NOT the predicate. A ratchet `pattern` is a literal substring
+# counted with `str::matches` (CLOUD-1058) — it cannot see where a YAML block
+# ends, so "lines inside a `run:` block" is not expressible here. The step is,
+# and it is the right unit anyway: `#MISE description=` counts programs for the
+# same reason one line up.
+#
+# TWO LITERALS FOR ONE CONCEPT, exactly as the `mise.toml` pair above, and for
+# the same CLOUD-1058 reason. Measured over the 28 workflows, `run:` appears at
+# precisely two indentations and no others: `\n        run:` (the key under a
+# `- name:` step) 111 times, and `\n      - run:` (the bare step) 24 times.
+# Both are newline-anchored, which is load-bearing: the unanchored literal also
+# matches `workflow_run:` and `check_run:`, 15 of them today, so it would count
+# trigger declarations as shell.
+#
+# THE BLIND SPOTS, STATED RATHER THAN DISCOVERED LATER (DoR §2). A `run:` at any
+# third indentation is not counted — none exists today, and a nested one inside a
+# composite action would need its own row. `.github/actions/**` is not globbed at
+# all, because no composite action exists yet; the follow-up that deduplicates
+# the 497 lines into one will have to add it, and that is the point at which this
+# row would otherwise report a fall it did not earn.
+#
+# THE FIRING RATE, replayed before the severity was chosen (DoR §7). Over all
+# 2,574 commits on `origin/main`, 181 of which touch a workflow: the 8-space row
+# fired 59 times, the dash row 21. As a share of all commits that is 2.3% and
+# 0.8%, against the `mise.toml` pair's 1.6% and 0.07%.
+#
+# AND THE FALSE POSITIVES ARE REAL HERE, which the `mise.toml` rows did not have
+# to answer for and which decides the `admits_with` column below. At least five
+# firings are THIS CAMPAIGN SUCCEEDING: retiring a shell program onto a verb
+# leaves a workflow step invoking it, so the step count rises while real bash
+# falls. `4b8fc385f` (`retire land-lock-check.sh onto batten lease check`, +1),
+# `8a90687a3` (`the perf budget is a rule, not a shell program`, +1) and
+# `c5346097d` (`move the latency family into the perf namespace`, +1) on the
+# 8-space row; `1e1d19874` (`retire ci-drift onto the verb it was already
+# calling`, +1) and `c5346097d` again on the dash row. That is the exact class
+# `batten.toml` rejected the wider `run = ` literal for one block up — *"a row
+# that denies its own campaign's wins is worse than the hole it closes."*
+#
+# SO THE PERMIT IS CARRIED RATHER THAN THE SEVERITY LOWERED. `warn` would answer
+# the false positives by making every firing advisory, including the 75 that are
+# real net-new shell. `admits_with` answers only the firings an author is willing
+# to sign for, and the cardinality objection that keeps it off both `mise.toml`
+# rows does not apply: those glob exactly ONE file, so the first permit spent
+# switches the row off forever, whereas this globs a DIRECTORY, which is the
+# per-file semantics the column was designed for. A retirement that adds a step
+# declares it in the workflow it added it to, and every other workflow stays
+# ratcheted.
+[[rule]]
+id = "workflow-shell-not-growing"
+kind = "ratchet"
+glob = ".github/workflows/**"
+pattern = "\n        run:"
+direction = "non_increasing"
+base = "origin/main"
+admits_with = "# workflow-shell:"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "move the step's body into a composite action or a batten verb, or declare `# workflow-shell: <issue> <why>` in the workflow and own the increase; which of the two is the whole question"
+
+# The other spelling of the same concept — see the block above for why it is a
+# second row rather than a second pattern on the first.
+[[rule]]
+id = "workflow-shell-not-growing-bare"
+kind = "ratchet"
+glob = ".github/workflows/**"
+pattern = "\n      - run:"
+direction = "non_increasing"
+base = "origin/main"
+admits_with = "# workflow-shell:"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "move the step's body into a composite action or a batten verb, or declare `# workflow-shell: <issue> <why>` in the workflow and own the increase; which of the two is the whole question"
 
 # The `.claude/**` half. `#!` rather than a shebang's text, because the programs
 # there do not share a spelling — `#!/usr/bin/env bash` twice today, and the file
@@ -6813,6 +6943,89 @@ documents = ["bench/agentic/trials.toml", "bench/agentic/method.toml"]
 module = "policy/agentic-experiment-record.rego"
 severity = "deny"
 
+# CLOUD-194, ported from `mise-tasks/module-map-check.sh` under CLOUD-843. The
+# module's own header carries the predicate and why a missing map is reported
+# once; it is not restated here.
+#
+# `line_sources` NAMES ONE FILE, and `tracked` is not declared at all because it
+# is not a per-path fact — the module asks which paths exist, which the tree
+# surface answers for the whole tree. Declaring the crate sources as
+# `line_sources` would read every module's TEXT to learn only its NAME, which is
+# the payload-for-a-pointer trade non-negotiable rule 4 refuses.
+# CLOUD-813, ported from `mise-tasks/no-doctests.sh` under CLOUD-843. The
+# module's own header carries the predicate, the parity rule and why `no_run`
+# counts as non-running; it is not restated here.
+#
+# `line_sources` RATHER THAN `sources`: the predicate is over the TEXT of a doc
+# comment, and no `Format` owns `.rs` — a `documents` reading would resolve to
+# nothing and the rule would load clean over a workspace it never scanned.
+# Ported from `mise-tasks/awk-regex-check.sh` under CLOUD-843. The module's own
+# header carries the predicate and why identifiers are compared whole.
+#
+# The glob is the shell corpus plus the two root programs and the task manifest —
+# the same set the predecessor scanned. It SHRINKS as CLOUD-843 retires programs,
+# which is the campaign working: what is left at the end is `install.sh`,
+# `mise.toml` and the five programs that stay bash.
+# Ported from `mise-tasks/pipefail-grep-check.sh` under CLOUD-843. The module's
+# own header carries the race, the two instances that landed before the class was
+# named, and why the flag cluster is read letter by letter.
+# Ported from `mise-tasks/license-table-check.sh` under CLOUD-843. The module's
+# own header carries the predicate and why zero rows is a failure.
+# CLOUD-582, ported from `mise-tasks/report-only-check.sh` under CLOUD-843. The
+# module's own header carries the predicate, the task list and why only the
+# `pull_request` trigger is judged.
+#
+# `sources` RATHER THAN `line_sources`: the predicate is over PARSED structure —
+# `verify`'s `depends` list, a workflow's trigger map — which is what removes the
+# span-carving and the word-boundary the shell needed.
+[[rule]]
+id = "report-only"
+kind = "policy"
+scope = "tree"
+sources = ["mise.toml", ".github/workflows/*.yml", ".github/workflows/*.yaml"]
+module = "policy/report-only.rego"
+severity = "deny"
+
+[[rule]]
+id = "license-table"
+kind = "policy"
+scope = "tree"
+line_sources = ["CONTRIBUTING.md"]
+module = "policy/license-table.rego"
+severity = "deny"
+
+[[rule]]
+id = "pipefail-grep"
+kind = "policy"
+scope = "tree"
+line_sources = ["mise-tasks/**", "*.sh"]
+module = "policy/pipefail-grep.rego"
+severity = "deny"
+
+[[rule]]
+id = "awk-regex"
+kind = "policy"
+scope = "tree"
+line_sources = ["mise-tasks/**", "*.sh", "mise.toml"]
+module = "policy/awk-regex.rego"
+severity = "deny"
+
+[[rule]]
+id = "no-doctests"
+kind = "policy"
+scope = "tree"
+line_sources = ["crates/**/*.rs"]
+module = "policy/no-doctests.rego"
+severity = "deny"
+
+[[rule]]
+id = "module-map"
+kind = "policy"
+scope = "tree"
+line_sources = [".serena/memories/core.md"]
+module = "policy/module-map.rego"
+severity = "deny"
+
 [[rule]]
 id = "release-tag-shape"
 kind = "policy"
@@ -8373,14 +8586,39 @@ measured = "2026-09-07"
 # COLD'S BASIS MOVES WITH WARM'S, for the 2026-09-06 entry's measured reason:
 # refreshing one and not the other made the very next lap refuse on the other arm
 # with warm never breached.
+# THE 2026-09-09 RETIREMENT MOVE, 244 -> 256, BOTH BASES, AND NEITHER FLOOR MOVES.
+#
+# WHAT MOVED THE COUNT is CLOUD-843's own campaign, which is what the block at the
+# head of this table predicted the count would do: six shell gates retired onto
+# policy modules, and each owes a `crates/batten/tests/it/*.rs` tier. Eight tiers
+# landed in one commit — `exec_lock`, `module_map`, `no_doctests`, `awk_regex`,
+# `pipefail_grep`, `license_table`, `report_only` and `workflow_shell_census` —
+# and `target-prune` refused at `declared 244, live 256, tolerance 10`, the
+# staleness arm rather than the disk: 15111 MB were free against a floor of 11140.
+#
+# THE FLOORS DO NOT MOVE, on the two entries above's stated grounds rather than a
+# fresh judgement. The prescribed method is `du -sm target` immediately after a
+# successful prune, and this prune ESCALATED — the same disqualification the
+# 2026-09-08 entry records, so the reading is of a post-escalation tree and not
+# the retained state 11140 was measured against. Scaling 11140 by 256/244 is what
+# BOTH entries above name as the same staleness wearing a newer number, so it is
+# not taken either. The independent measurement stays OWED to CLOUD-1158.
+#
+# THE COUNT WILL KEEP MOVING FOR THE REST OF THIS CAMPAIGN, one tier per retired
+# gate against 39 in this branch's brief, so a `tolerance` of 10 will be reached
+# again within it. That is the gate working — it is a trend counter — and the
+# entry that finally moves a floor should be the one that can take the ordinary
+# post-prune `du`, not the one that happens to trip the tolerance.
+#
+# COLD'S BASIS MOVES WITH WARM'S, for the 2026-09-06 entry's measured reason.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 244
+count = 256
 tolerance = 10
 
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 244
+count = 256
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops

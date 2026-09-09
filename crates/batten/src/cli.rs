@@ -900,6 +900,23 @@ pub struct ExecRequest {
     /// Whether a bundle keeps going past a failure. `false` when unasked, which
     /// the committed table may still turn on.
     pub continue_on_error: bool,
+    /// The key of this clone's singleton lock to hold for the child's lifetime
+    /// (CLOUD-1710). `None` is the ordinary unlocked run.
+    pub lock: Option<String>,
+    /// A lock path, for a resource the clone does not own. Mutually exclusive
+    /// with `lock`; naming both is a usage refusal rather than a precedence
+    /// rule, because the two answer "where should the queue form" differently
+    /// and silently picking one would serialize the wrong thing.
+    pub lock_path: Option<String>,
+    /// How many times to ask for that lock before reporting it held, as the
+    /// caller typed it. Unparsed for `jobs`' reason: a bad value owes a
+    /// `UsageError` naming it, and reading it as the default would queue for a
+    /// length nobody asked for.
+    pub lock_attempts: Option<String>,
+    /// What the wait is FOR, for the refusal line. A lock key is a pointer to a
+    /// file; "the toolchain lock (aarch64-apple-darwin)" is a pointer to the
+    /// thing a reader has to reason about.
+    pub lock_label: Option<String>,
 }
 
 /// Subcommands of `lint` — one arm per *kind* of artifact, which is what the
@@ -2242,6 +2259,38 @@ fn pr_of(matches: &ArgMatches) -> Option<PrCommand> {
     }
 }
 
+/// The `exec` arm, lifted out of [`command_of`] so that stays a table.
+///
+/// One line per verb is what makes `command_of` readable, and `exec` carries
+/// nine flags — the same reason [`ExecRequest`] is a struct rather than nine
+/// variant fields, applied one level up.
+fn exec_of(matches: &ArgMatches) -> Option<Command> {
+    let command: Vec<String> = matches
+        .get_many::<String>("command")
+        .map(|values| values.cloned().collect())
+        .unwrap_or_default();
+    if command.is_empty() {
+        return None;
+    }
+    Some(Command::Exec(ExecRequest {
+        command,
+        capture_only: flag(matches, "capture_only"),
+        tee: matches.get_flag("tee"),
+        // Read through the VALUE SOURCE, not the value: clap fills
+        // `defaulted_enum`'s default in, so `get_one` always answers and a
+        // config-set default would be overwritten on every call by a flag
+        // nobody typed.
+        format: supplied(matches, "format").copied(),
+        style: supplied(matches, "style").copied(),
+        jobs: matches.get_one::<String>("jobs").cloned(),
+        continue_on_error: matches.get_flag("continue_on_error"),
+        lock: matches.get_one::<String>("lock").cloned(),
+        lock_path: matches.get_one::<String>("lock_path").cloned(),
+        lock_attempts: matches.get_one::<String>("lock_attempts").cloned(),
+        lock_label: matches.get_one::<String>("lock_label").cloned(),
+    }))
+}
+
 fn capture_of(matches: &ArgMatches) -> Option<CaptureCommand> {
     match matches.subcommand()? {
         ("show", matches) => Some(CaptureCommand::Show {
@@ -2435,29 +2484,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         // token after `--` is a separate value and the child's argv is the whole
         // list. An empty list is unreachable — clap enforces `num_args(1..)` —
         // and is mapped to `None` rather than an empty exec.
-        "exec" => {
-            let command: Vec<String> = matches
-                .get_many::<String>("command")
-                .map(|values| values.cloned().collect())
-                .unwrap_or_default();
-            if command.is_empty() {
-                None
-            } else {
-                Some(Command::Exec(ExecRequest {
-                    command,
-                    capture_only: flag(matches, "capture_only"),
-                    tee: matches.get_flag("tee"),
-                    // Read through the VALUE SOURCE, not the value: clap fills
-                    // `defaulted_enum`'s default in, so `get_one` always answers
-                    // and a config-set default would be overwritten on every
-                    // call by a flag nobody typed.
-                    format: supplied(matches, "format").copied(),
-                    style: supplied(matches, "style").copied(),
-                    jobs: matches.get_one::<String>("jobs").cloned(),
-                    continue_on_error: matches.get_flag("continue_on_error"),
-                }))
-            }
-        }
+        "exec" => exec_of(matches),
         "capture" => capture_of(matches).map(|command| Command::Capture { command }),
         "mcp" => mcp_of(matches).map(|command| Command::Mcp { command }),
         "show" => show_of(matches),
