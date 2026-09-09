@@ -33,6 +33,8 @@
 #MUTANT dependabot-may-return|s@not dependabot_absent@false@|a_returned_dependabot_config_is_refused
 #MUTANT cache-path-may-carry-the-base|s@^\tpath_varies_between_runs(step)$@\tfalse@|a_cached_path_carrying_an_expression_is_refused
 #MUTANT lander-may-not-abandon|s@not lander_calls_abandon@false@|a_lander_that_never_abandons_is_refused
+#MUTANT cover-may-be-asserted-unchecked|s@\tnot covering_holds(task, covering)@\tfalse@|a_declared_cover_whose_bodies_no_longer_hold_is_refused
+#MUTANT cover-may-skip-the-reach|s@\tlane_reaches(covering)@\ttrue@|a_covered_lane_verify_never_reaches_is_still_refused
 #
 #MUTANT-SUITE crates/batten/tests/it/ci_parity.rs
 
@@ -188,6 +190,97 @@ violation contains {
 	governed
 	some [path, task] in ci_task_used
 	not contains(verify_text, task)
+	not covered_by_a_lane_verify_runs(task)
+}
+
+# --- a task verify does not NAME may still be one verify RUNS -----------------
+#
+# THE PROPERTY IS "CI DISCOVERS NOTHING A FREE LOCAL RUN WOULD HAVE CAUGHT", and
+# the name search above is a PROXY for it. The proxy is wrong in one direction
+# that costs real time: two lanes where one is the other with a filter applied.
+# CI selects between them (`ci.yml`, on `steps.slow.outputs.needed`); a local
+# `verify` that named both would run every step of the narrow lane twice, once on
+# its own and once inside the wide one, and the wide lane is this repository's
+# single most expensive gate. So the manifest is asked the question the proxy was
+# standing in for: is there a lane verify runs of which this one is a subset.
+#
+# THE RELATION IS OVER TWO DECLARED BODIES, NEVER A WALK OF THE GRAPH. The header
+# refuses a reader that follows `mise run` transitively — "a second authority on
+# the task graph mise owns" — and that refusal stands here. Nothing below resolves
+# a task or expands a dependency chain: it reads two `run` strings that mise has
+# already written down and compares them. A shape this cannot see leaves the
+# relation FALSE and the original clause fires, which is the direction a miss must
+# fail in.
+#
+# THE PAIRS ARE DATA AND SMALL ON PURPOSE, like `maintained_ecosystems` above and
+# for the same reason: a claim of coverage cannot be detected as absent against an
+# open world, so the claim is stated and then CHECKED. The pair is not the gate —
+# it says which coverage this repository asserts, and `covering_holds` is what
+# makes the assertion earn itself against the bodies as they are today.
+#
+# `ci:quick` is `hk check --all --profile '!slow'`; `hooks`, which `ci` depends on
+# and `verify:gated` names, is `hk check --all`. Every step the profile selects,
+# the unfiltered run selects too.
+covering_lane := {"ci:quick": "hooks"}
+
+task_run(name) := object.get(input.tree.documents["mise.toml"].tasks, [name, "run"], "")
+
+# NARROWING IS A PREFIX, AND THE DIRECTION IS THE WHOLE SOUNDNESS OF IT. `covered`
+# holds when the COVERING body is a prefix of the covered one — the covered lane
+# invokes the same program, in the same words, and then adds arguments. The
+# reverse reading would admit a body that merely starts the same way and then
+# does something else entirely.
+#
+# PREFIX IS NECESSARY AND NOT SUFFICIENT, and this comment is where that is
+# admitted rather than glossed. An appended argument usually narrows and sometimes
+# WIDENS — `--all-features` is the standing counter-example — so the prefix alone
+# does not prove containment for an arbitrary pair. What makes it decisive HERE is
+# that the pair is declared: a human states the two lanes stand in this relation
+# and gives the reason, and this predicate is the sensor that the bodies still
+# bear it out. Adding a pair is a judgement; keeping one is mechanised. Do not
+# generalise this into an undeclared prefix rule over every task — that would
+# silently admit the widening case.
+covering_holds(task, covering) if {
+	narrowed := task_run(task)
+	full := task_run(covering)
+	narrowed != ""
+	full != ""
+	startswith(narrowed, full)
+	narrowed != full
+}
+
+# `verify` reaches a lane it NAMES, or one named in the `depends` of a task it
+# names. Exactly one level, which is the depth this tree has
+# (`verify:gated` -> `ci` -> `hooks`); a third link leaves this undefined and the
+# parity clause fires, rather than this quietly following the graph.
+lane_reaches(lane) if contains(verify_text, lane)
+
+lane_reaches(lane) if {
+	some name, task in input.tree.documents["mise.toml"].tasks
+	contains(verify_text, name)
+	lane in object.get(task, "depends", [])
+}
+
+covered_by_a_lane_verify_runs(task) if {
+	covering := covering_lane[task]
+	covering_holds(task, covering)
+	lane_reaches(covering)
+}
+
+# ANTI-VACUITY, and it is the half that keeps the data above from becoming a
+# permanent exemption. A declared pair whose bodies no longer stand in the
+# relation is a task exempted from parity for a reason that has stopped being
+# true — which is exactly the silent hole the pair was allowed in order to avoid.
+# It fires on a retired task, a renamed one, and a `ci:quick` respelled to
+# something `hooks` does not subsume.
+violation contains {
+	"rule": "ci-task-parity",
+	"verdict": "task cover stale",
+	"subjects": [{"path": "mise.toml"}, {"artifact": task}],
+} if {
+	governed
+	some task, covering in covering_lane
+	not covering_holds(task, covering)
 }
 
 # --- the required roster names exactly the pull-request jobs (property 5) -----
@@ -819,8 +912,15 @@ violation contains {
 sound_manifest := {
 	"tasks": {
 		"verify": {"run": "mise run verify:gated\nmise run test:bats"},
-		"verify:gated": {"run": "mise run lint"},
+		"verify:gated": {"run": "mise run lint", "depends": ["ci"]},
 		"test:cargo": {"run": "if ! cargo nextest run --workspace; then exit 1; fi"},
+		# THE TWO LANES THE COVERING RELATION IS ABOUT. The anti-vacuity clause
+		# judges every declared pair against the manifest, so a fixture omitting
+		# them would report a stale cover over a tree that simply has no lanes —
+		# and `test_a_sound_tree_is_clean` would be pinning that, not cleanliness.
+		"ci": {"depends": ["hooks", "deny"]},
+		"hooks": {"run": "hk check --all"},
+		"ci:quick": {"run": "hk check --all --profile '!slow'"},
 	},
 	"env": {
 		"CI_REQUIRED_CHECKS": "ci,final",
@@ -959,6 +1059,101 @@ test_a_ci_task_verify_does_not_run_is_refused if {
 	f.verdict == "task run missing"
 	some s in f.subjects
 	s.artifact == "smoke"
+}
+
+# --- a lane verify runs by containment rather than by name --------------------
+
+# THE SUBTRACTION THIS RELATION EXISTS FOR. `ci:quick` is `hooks` with a profile
+# filter, so a `verify` that names both runs every non-slow step twice. Naming
+# only the wide lane has to stay parity-clean, or the duplication is load-bearing.
+test_a_ci_job_running_the_narrowed_lane_is_covered if {
+	wf := {
+		"on": {"pull_request": {"types": ["opened"]}},
+		"jobs": {"ci": {"name": "ci", "runs-on": "ubuntu-latest", "steps": [lease_first, {"run": "mise run ci:quick"}]}},
+	}
+	found := violation with input as swap(".github/workflows/ci.yml", wf)
+	every f in found {
+		f.verdict != "task run missing"
+	}
+}
+
+# THE ANTI-VACUITY TERM FOR THE DATA. A declared pair is an exemption from
+# parity, and an exemption whose reason has stopped being true is the silent hole
+# the pair was permitted in order to avoid. Here `ci:quick` is respelled to a body
+# `hooks` does not subsume — the shape a lane gains when someone changes what it
+# runs and forgets it was claimed as covered.
+test_a_declared_cover_whose_bodies_no_longer_hold_is_refused if {
+	# NOT MERELY A DIFFERENT PROFILE: `hk check --all --profile slow` is still
+	# `hooks`' body with words appended, so it would satisfy the relation and this
+	# case would pass over a predicate that never fired. The drift that matters is
+	# a lane that stops being the same invocation at all.
+	drifted := object.union(sound_manifest.tasks, {"ci:quick": {"run": "cargo nextest run --workspace"}})
+	found := violation with input as swap("mise.toml", object.union(sound_manifest, {"tasks": drifted}))
+	some f in found
+	f.verdict == "task cover stale"
+	some sub in f.subjects
+	sub.artifact == "ci:quick"
+}
+
+# THE PREFIX HAS A DIRECTION. `hooks` must be a prefix of `ci:quick`, never the
+# other way about: a covering body that merely STARTS like the covered one proves
+# nothing about what the rest of it does. With the bodies swapped the assertion is
+# false and must be refused rather than read as coverage in either direction.
+test_the_covering_body_must_be_the_prefix_not_the_suffix if {
+	swapped := object.union(sound_manifest.tasks, {
+		"hooks": {"run": "hk check --all --profile '!slow'"},
+		"ci:quick": {"run": "hk check --all"},
+	})
+	found := violation with input as swap("mise.toml", object.union(sound_manifest, {"tasks": swapped}))
+	some f in found
+	f.verdict == "task cover stale"
+}
+
+# A RETIRED LANE IS A STALE COVER, not a vacuous pass. The pair names two tasks; a
+# manifest that no longer declares one of them cannot bear the relation out, and
+# reading an absent body as satisfied is how the exemption would outlive its
+# subject.
+test_a_cover_naming_a_task_the_manifest_dropped_is_refused if {
+	gone := object.remove(sound_manifest.tasks, ["ci:quick"])
+	found := violation with input as swap("mise.toml", object.union(object.remove(sound_manifest, ["tasks"]), {"tasks": gone}))
+	some f in found
+	f.verdict == "task cover stale"
+}
+
+# CONTAINMENT IS NOT ENOUGH ON ITS OWN: the covering lane has to be one `verify`
+# ACTUALLY REACHES. `ci:quick` is still a subset of `hooks` here, but nothing
+# verify runs reaches `hooks` at all, so CI would be discovering a failure no local
+# run could have caught — which is the property, and it must still fire.
+test_a_covered_lane_verify_never_reaches_is_still_refused if {
+	# `object.union` is a DEEP merge, so unioning `{"run": ...}` over `verify:gated`
+	# would KEEP the `depends` that reaches `ci` and this case would be the sound
+	# tree wearing a different hat. The key has to be removed outright.
+	detached := object.union(
+		object.remove(sound_manifest.tasks, ["verify:gated"]),
+		{"verify:gated": {"run": "mise run lint"}},
+	)
+	m := object.union(object.remove(sound_manifest, ["tasks"]), {"tasks": detached})
+
+	# AND THE SAME DEEP MERGE ONE LEVEL UP: unioning a replacement `mise.toml` over
+	# `documents` merges it INTO the original, so `verify:gated` would get its
+	# `depends` back and this case would test the sound tree again. Both documents
+	# are removed before being put back.
+	docs := object.union(
+		object.remove(sound_input.tree.documents, ["mise.toml", ".github/workflows/ci.yml"]),
+		{
+			"mise.toml": m,
+			".github/workflows/ci.yml": {
+				"on": {"pull_request": {"types": ["opened"]}},
+				"jobs": {"ci": {"name": "ci", "runs-on": "ubuntu-latest", "steps": [lease_first, {"run": "mise run ci:quick"}]}},
+			},
+		},
+	)
+	tree := object.union(object.remove(sound_input.tree, ["documents"]), {"documents": docs})
+	found := violation with input as {"tree": tree}
+	some f in found
+	f.verdict == "task run missing"
+	some sub in f.subjects
+	sub.artifact == "ci:quick"
 }
 
 # THE FOREIGN-RUNNER EXEMPTION, and it is an allowlist of foreign labels rather

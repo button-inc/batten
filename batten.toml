@@ -11719,6 +11719,27 @@ kind = "command"
 target = "mise run verify"
 
 [[verdict]]
+id = "task cover stale"
+gloss = "a lane is exempted from parity by a claim the manifest no longer bears out"
+class = """
+`ci-task-parity` asks whether CI runs a task a local `verify` does not, and one \
+shape defeats the name search it asks that with: two lanes where one is the \
+other with a filter applied. CI selects between them, so naming both locally \
+would run every step of the narrow lane twice. The manifest may therefore \
+DECLARE that one lane covers another, and this is the sensor on that \
+declaration — the covering body must still be a prefix of the covered one. A \
+pair whose bodies have drifted apart is no longer a statement about \
+containment; it is a task exempted from parity for a reason that has stopped \
+being true, which is the silent hole the declaration was allowed in order to \
+avoid. Adding a pair is a judgement. Keeping one is mechanised.
+"""
+
+[[verdict.route]]
+id = "task read first"
+kind = "document"
+target = "mise.toml"
+
+[[verdict]]
 id = "check name unknown"
 gloss = "the required roster names a check no job creates, so a wait never terminates"
 class = """
