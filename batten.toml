@@ -12247,7 +12247,7 @@ target = "until <test>; do sleep 1; done — where <test> reads something the ha
 [[verdict.route]]
 id = "task run other"
 kind = "command"
-target = "mise run alive"
+target = "mise run alive, backgrounded"
 
 # CLOUD-821. NOT a narrower `sleep run blocked`: backgrounding is the remedy for
 # that one and the subject of this one, so an author reading the wrong class here
@@ -12274,7 +12274,7 @@ target = "until <test>; do sleep 1; done — where <test> reads something the ha
 [[verdict.route]]
 id = "task run other"
 kind = "command"
-target = "mise run alive"
+target = "mise run alive, backgrounded"
 
 # THE OTHER HALF OF THE ROW ABOVE, and it exists because that row's own exemption
 # was the escape (CLOUD-1337). `timer run refused` allows a backgrounded `sleep`
@@ -12316,7 +12316,45 @@ target = "delete the loop and end the turn — the backgrounded task wakes you o
 [[verdict.route]]
 id = "task watch other"
 kind = "command"
-target = "mise run alive"
+target = "mise run alive, backgrounded"
+
+# THE DURATION ESTIMATE, RETIRED. `sleep run blocked` and this row are the same
+# failure at two ends: there the caller waits in the foreground, here it WORKS in
+# the foreground, and both are killed at ~2 minutes with the turn spent. The
+# difference is who makes the mistake — a `sleep` names its own duration, while
+# `mise run` asks the caller to predict one, and every task on this repo can
+# exceed the bound behind a cold `cargo` build nobody can see coming.
+[[verdict]]
+id = "task run blocked"
+gloss = "a foreground `mise` call is killed at ~2 minutes, so it fails rather than runs slowly"
+class = """
+The harness kills a foreground command at about two minutes, so a `mise` task that runs longer does not run slowly — it FAILS, and takes the turn with it. Every task here can cross that bound behind a cargo build the caller cannot see coming, which is why this is not a duration to estimate: pass `run_in_background` on the tool call itself and act on the exit notification, delivered 523 of 524 in one session including every failure. THERE IS NO FAST LIST, and `alive` is not on one either: a carve-out is a judgement call handed back to the caller this rule exists to stop consulting, and backgrounding a short task costs one turn and returns the same text.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "re-issue the same command with run_in_background on the tool call"
+
+[[verdict.route]]
+id = "task run other"
+kind = "command"
+target = "mise run alive, backgrounded"
+
+# CLOUD-1722's other half, and it is `verdict-not-discarded` in a new spelling:
+# there a pipe hands the exit status to the pager, here a redirect hands the
+# OUTPUT to a file the human is not looking at.
+[[verdict]]
+id = "redirect write unread"
+gloss = "a backgrounded call redirecting its own output writes a second file nobody reads"
+class = """
+The harness already captures a backgrounded task's output to a file it names back to the caller, and surfaces it where the HUMAN watches. A `> log 2>&1` inside the command substitutes a private file for that one: the exit notification still fires, the pane the human reads is empty, and the run they were meant to be able to see over is gone. Drop the redirect and read the harness's own output file. AN INPUT REDIRECT IS NOT THIS CLASS — reading a file into a backgrounded command discards nothing and is untouched.
+"""
+
+[[verdict.route]]
+id = "redirect write first"
+kind = "command"
+target = "drop the `> file 2>&1` and read the output file the harness names back"
 
 [[verdict]]
 id = "workflow parse broken"

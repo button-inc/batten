@@ -209,7 +209,29 @@ fn fixture(name: &str) -> PathBuf {
             "[[verdict.route]]\n",
             "id = \"task run first\"\n",
             "kind = \"command\"\n",
-            "target = \"until <test>; do sleep 1; done\"\n",
+            "target = \"until <test>; do sleep 1; done\"\n\n",
+            "[[verdict]]\n",
+            "id = \"task run blocked\"\n",
+            "gloss = \"a foreground `mise` call is killed at ~2 minutes, so it fails rather than runs slowly\"\n",
+            "class = \"\"\"\n",
+            "Every task here can cross the bound behind a cargo build nobody sees coming. \\\n",
+            "Pass run_in_background on the tool call and act on the exit notification.\n",
+            "\"\"\"\n\n",
+            "[[verdict.route]]\n",
+            "id = \"task run first\"\n",
+            "kind = \"command\"\n",
+            "target = \"re-issue the same command with run_in_background\"\n\n",
+            "[[verdict]]\n",
+            "id = \"redirect write unread\"\n",
+            "gloss = \"a backgrounded call redirecting its own output writes a second file nobody reads\"\n",
+            "class = \"\"\"\n",
+            "The harness already captures a backgrounded task's output where the human \\\n",
+            "watches. A private file replaces the run they were meant to see over.\n",
+            "\"\"\"\n\n",
+            "[[verdict.route]]\n",
+            "id = \"redirect write first\"\n",
+            "kind = \"command\"\n",
+            "target = \"drop the redirect and read the harness's own output file\"\n",
         ),
     )
     .expect("write the fixture authority");
@@ -742,5 +764,72 @@ fn a_process_read_outside_a_loop_is_not_a_wait() {
     // it would refuse its own remedy.
     let root = fixture("reads-a-process-once");
     allowed_background(&root, "pgrep -f mise", true);
-    allowed(&root, "mise run alive");
+    // BACKGROUNDED, and it was foreground until `foreground-mise` landed: the
+    // probe is still the remedy this class recommends, and it is now a
+    // backgrounded one like every other `mise` call.
+    allowed_background(&root, "mise run alive", true);
+}
+
+// --- the foreground `mise` call, and the backgrounded call that hides its own
+// --- output ------------------------------------------------------------------
+
+#[test]
+fn a_foreground_mise_run_is_refused() {
+    // The harness kills a foreground call at ~2 minutes, so this does not run
+    // slowly — it FAILS, and takes the turn with it.
+    let root = fixture("foreground-mise");
+    denied_background(&root, "mise run verify", false);
+    // AND WITH THE HOST SAYING NOTHING, which is the ordinary envelope: an
+    // unknown posture over a call that can spend the whole turn is the case to
+    // be strict about.
+    denied(&root, "mise run ci");
+}
+
+#[test]
+fn a_short_mise_task_is_refused_just_the_same() {
+    // THE CASE THAT SAYS THERE IS NO FAST LIST. `alive` is the prescribed
+    // liveness probe and returns in well under a second — and exempting it would
+    // hand the duration judgement back to the caller this rule exists to stop
+    // consulting. Backgrounding it costs one turn and returns the same text.
+    let root = fixture("foreground-mise-alive");
+    denied_background(&root, "mise run alive", false);
+}
+
+#[test]
+fn a_backgrounded_mise_run_is_allowed() {
+    let root = fixture("background-mise");
+    allowed_background(&root, "mise run verify", true);
+}
+
+#[test]
+fn a_program_merely_spelt_near_mise_is_not_a_mise_call() {
+    // The program is anchored on `programs`, never on a word: a path mentioning
+    // mise is an argument, and `mise` inside a quoted span is prose.
+    let root = fixture("mise-word");
+    allowed(&root, "cat mise.toml");
+    allowed(&root, "grep -n 'mise run verify' AGENTS.md");
+}
+
+#[test]
+fn a_backgrounded_call_redirecting_its_own_output_is_refused() {
+    // The harness captures a backgrounded task's output and surfaces it where
+    // the HUMAN watches; `> log 2>&1` substitutes a private file for that one.
+    let root = fixture("background-redirect");
+    denied_background(&root, "cargo build > /tmp/log 2>&1", true);
+    denied_background(&root, "cargo build 2> /tmp/err", true);
+}
+
+#[test]
+fn a_foreground_redirect_is_not_this_rule() {
+    // Nothing is captured for a foreground call, so a redirect there discards
+    // no output anyone was going to read.
+    let root = fixture("foreground-redirect");
+    allowed_background(&root, "cargo build > /tmp/log 2>&1", false);
+}
+
+#[test]
+fn a_backgrounded_input_redirect_is_untouched() {
+    // Reading a file INTO a backgrounded command discards nothing.
+    let root = fixture("background-stdin");
+    allowed_background(&root, "cargo build < /tmp/answers", true);
 }

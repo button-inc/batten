@@ -67,6 +67,10 @@ rules contains "background-timer"
 
 rules contains "polls-a-local-process"
 
+rules contains "foreground-mise"
+
+rules contains "background-redirect"
+
 # CLOUD-613's three, and none of them is over a program NAME — a mutation on the
 # `sleep` or `git` token survives, because every ALLOW row already fails some
 # other conjunct. Each of these corrupts the conjunct that carries the verdict.
@@ -86,6 +90,8 @@ rules contains "polls-a-local-process"
 #MUTANT single-quoted-span-judged|s@^single_scrubbed := quoted_out(code_lines.*@single_scrubbed := code_lines@|a_git_commit_inside_a_quoted_span_is_prose
 #MUTANT-SUITE crates/batten/tests/it/run_shape.rs
 #MUTANT process-poll-unread|s@^\tcount(process_probes) > 0$@\tfalse@|a_backgrounded_wait_polling_a_process_is_refused
+#MUTANT mise-background-unread|s@^\tinput.call\["run-in-background"\] != true$@\ttrue@|a_backgrounded_mise_run_is_allowed
+#MUTANT redirect-background-unread|s@^\tinput.call\["run-in-background"\] == true$@\ttrue@|a_foreground_redirect_is_not_this_rule
 #MUTANT bracket-is-an-exit|s@^\tcondition_program(segment) in {"pgrep", "pkill", "ps", "jobs"}$@\tcondition_program(segment) in {"pgrep", "pkill", "ps", "jobs"}; not contains(segment.raw, "[")@|a_bracketed_pattern_is_refused_just_the_same
 
 violation contains {
@@ -179,6 +185,64 @@ violation contains {
 	waits_on_condition
 	count(process_probes) > 0
 }
+
+# EVERY `mise` CALL IS BACKGROUNDED, WITH NO EXEMPTION LIST.
+#
+# AGENTS.md has carried the rule as a duration — "any command that can exceed ~2
+# minutes" — and a duration is a prediction the caller makes about a task it has
+# not run. The prediction is wrong in the direction that costs: a foreground call
+# is KILLED at ~2 minutes rather than run slowly, so the mis-estimate does not
+# cost the difference between the guess and the truth, it costs the whole run
+# plus the turn. And on this repo the estimate is over `mise`, whose tasks are
+# the gate itself: `verify`, `ci`, `land`, a cold `cargo` build behind any of
+# them.
+#
+# NO CARVE-OUT FOR THE FAST TASKS, deliberately, and `alive` is the one worth
+# naming since it is the prescribed liveness probe. Backgrounding it costs one
+# turn and returns the same text; a carve-out costs a list that every new task
+# has to be judged against, by the same caller whose judgement this rule exists
+# to stop consulting. A predicate with no list cannot be argued with, which is
+# the property (house style §5).
+violation contains {
+	"rule": "foreground-mise",
+	"verdict": "task run blocked",
+} if {
+	some program in input.call.programs
+	basename(program.program) == "mise"
+
+	# `!= true` for the same three-valued read `foreground-sleep` takes: `null`
+	# is "the host said nothing", and an unknown posture over a call that can
+	# spend the whole turn is the case to be strict about.
+	input.call["run-in-background"] != true
+}
+
+# A BACKGROUNDED CALL THAT REDIRECTS ITS OWN OUTPUT WRITES WHERE NOBODY READS.
+#
+# The harness already captures a backgrounded task's output to a file it names
+# back to the caller AND surfaces where the HUMAN watches. A `> log 2>&1` inside
+# the command substitutes a second, private file for that one: the notification
+# still fires, the output pane is empty, and the human loses the run they were
+# meant to be able to see over.
+#
+# It is also how a verdict gets discarded. `mise run ci > log 2>&1` under a shell
+# that is later piped or chained hands the exit status to the redirect's own
+# element, which is the `verdict-not-discarded` family in a new spelling.
+#
+# JUDGED ON THE REDIRECTION TOKENS, which the segment carries as words of its own
+# — `>` and its target are two words, `2>&1` is one (CLOUD-1382's parse). An
+# INPUT redirect is untouched: reading a file into a backgrounded command
+# discards nothing.
+violation contains {
+	"rule": "background-redirect",
+	"verdict": "redirect write unread",
+} if {
+	input.call["run-in-background"] == true
+	some segment in input.call.segments
+	some word in segment.words
+	output_redirect(word)
+}
+
+output_redirect(word) if word in {">", ">>", "&>", "&>>", "2>", "2>>", "2>&1", ">&2", "1>", "1>>"}
 
 # ---------------------------------------------------------------------------
 # CLOUD-613's terms, over `input.call.segments`.

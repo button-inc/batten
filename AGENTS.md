@@ -125,11 +125,9 @@ pushing: a red run means verify was skipped, and a webhook's silence is not succ
 
 ## Background the slow path; never block the foreground
 
-**Any command that can exceed ~2 minutes goes to the background**
-(`run_in_background`): `mise run ci|verify|cross-check`, a full test suite, a cold
-`cargo` build, a provision/install, or waiting on any external result. Enforced, not
-stylistic — foreground `sleep` is blocked and a foreground command is killed at ~2
-minutes, so it does not run slower, it _fails_.
+**EVERY `mise` call is backgrounded** (`run_in_background`), **and so is anything
+else past ~2 minutes**: a test suite, a cold build, a provision, a remote wait. Gated — `sleep` is blocked, `foreground-mise` the rest, and a foreground command
+is _killed_ at ~2 min. **No fast list, `alive` included.**
 **The exit notification IS the wake-up; waiting for it costs nothing.** A
 backgrounded task re-invokes you when it exits (measured 523/524, failures
 included), so the turn in between is the _designed_ state, not one to fill —
@@ -142,7 +140,8 @@ by `run-shape-guard`. To ask what a live task is _doing_, `mise run alive`.
 **Two habits defeat this silently, both failing green:** piping a `mise run` into
 a pager (the exit status becomes the pager's) or detaching it with `nohup`/`&`
 (the wake-up is lost). Put `run_in_background` on the long command, never a launcher, and
-**never redirect it** — the harness captures where the HUMAN watches. `verdict-not-discarded`.
+**never redirect it** — the harness captures where the HUMAN watches, so `>log
+2>&1` writes where nobody reads. `verdict-not-discarded`, `background-redirect`.
 **Never** use a foreground `sleep`, spin a foreground busy-poll, or end a turn idle
 "to watch" something — background it, act on its exit, and commit first, since
 **committed-and-pushed is the only state surviving a reclaim, and that is the TREE's
