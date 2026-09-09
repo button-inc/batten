@@ -246,7 +246,7 @@ at(path, line) := {"path": path, "line": line, "lint": "clippy::disallowed_types
 # The case the rule exists for: a spawn in a module nobody placed.
 test_a_spawn_in_an_unplaced_module_is_refused if {
 	some v in violation with input as census([at("crates/batten/src/git.rs", 12)])
-	v.rule == "spawn-adapters"
+	v.rule == "adapter place missing"
 }
 
 # And the placement is the point. `exec` is the sanctioned boundary; a spawn
@@ -300,7 +300,7 @@ test_an_empty_census_is_a_real_clean if {
 # tree with no unplaced spawns.
 test_an_absent_census_refuses_rather_than_passing if {
 	some v in violation with input as {"tree": {"symbols": null}}
-	v.rule == "spawn-adapters"
+	v.rule == "adapter place missing"
 }
 
 # The same answer when the key is missing altogether, which is what a row that

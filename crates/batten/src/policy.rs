@@ -856,12 +856,7 @@ pub fn load(
                 check_tree_paths_are_emittable(rule, &bundle, source_key)?;
                 check_no_inline_regex(rule, &bundle, &declared_patterns, source_key)?;
                 check_verdicts_are_declared(rule, &bundle, &registry, source_key)?;
-                let raised = emitted_verdicts(&bundle);
-                per_rule
-                    .entry(rule.id.clone())
-                    .or_default()
-                    .extend(raised.iter().cloned());
-                emitted.extend(raised);
+                record_raised(rule, &bundle, &mut emitted, &mut per_rule);
             }
             claim_ids(&mut ids, &declared, source_key)?;
             bundles.push(bundle.with_severity(rule));
@@ -890,12 +885,7 @@ pub fn load(
             check_tree_paths_are_emittable(rule, &bundle, where_it_came_from)?;
             check_no_inline_regex(rule, &bundle, &declared_patterns, where_it_came_from)?;
             check_verdicts_are_declared(rule, &bundle, &registry, where_it_came_from)?;
-            let raised = emitted_verdicts(&bundle);
-            per_rule
-                .entry(rule.id.clone())
-                .or_default()
-                .extend(raised.iter().cloned());
-            emitted.extend(raised);
+            record_raised(rule, &bundle, &mut emitted, &mut per_rule);
         }
 
         claim_ids(&mut ids, &declared, where_it_came_from)?;
@@ -905,17 +895,7 @@ pub fn load(
 
     if checks == ModuleChecks::Run {
         check_registry_is_exhausted(verdicts, &emitted)?;
-        let tokens: BTreeSet<String> = verdicts
-            .iter()
-            .filter(|entry| !entry.retired())
-            .map(|entry| entry.id.clone())
-            .chain(
-                crate::verdict::native_tokens()
-                    .iter()
-                    .map(|t| (*t).to_owned()),
-            )
-            .collect();
-        check_collapse(rules, &per_rule, &tokens)?;
+        check_collapse(rules, &per_rule, &collidable_tokens(verdicts))?;
     }
     Ok(bundles)
 }
@@ -1630,6 +1610,44 @@ fn check_tree_paths_are_emittable(rule: &Rule, bundle: &Bundle, source: &str) ->
 /// # Errors
 ///
 /// A [`UsageError`] (exit `1`) naming the unraised tokens.
+/// Record what one bundle raised, in the two shapes the checks below need.
+///
+/// `emitted` answers "is every declared class raised"; `per_rule` answers how
+/// many classes ONE row raises, which the collapse predicate needs and a set
+/// already merged cannot give back (CLOUD-1638). Both arms of [`load`]'s loop
+/// owe this, and a second copy is where the two drift.
+fn record_raised(
+    rule: &Rule,
+    bundle: &Bundle,
+    emitted: &mut BTreeSet<String>,
+    per_rule: &mut BTreeMap<String, BTreeSet<String>>,
+) {
+    let classes = emitted_verdicts(bundle);
+    per_rule
+        .entry(rule.id.clone())
+        .or_default()
+        .extend(classes.iter().cloned());
+    emitted.extend(classes);
+}
+
+/// Every class token a rule id could collide with: declared, live, and native.
+///
+/// A RETIRED class is excluded deliberately — its token is a tombstone rather
+/// than a name in use, and refusing a row for spelling one would refuse a name
+/// nothing answers to.
+fn collidable_tokens(verdicts: &[crate::verdict::DeclaredVerdict]) -> BTreeSet<String> {
+    verdicts
+        .iter()
+        .filter(|entry| !entry.retired())
+        .map(|entry| entry.id.clone())
+        .chain(
+            crate::verdict::native_tokens()
+                .iter()
+                .map(|token| (*token).to_owned()),
+        )
+        .collect()
+}
+
 /// One name where a rule and a class name one thing (CLOUD-1638).
 ///
 /// # The predicate is a property of the PAIR, in both directions

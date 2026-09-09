@@ -760,7 +760,7 @@ test_the_documented_cycle_claim_is_refused if {
 		"crates/batten/src/rules.rs",
 		[internal("hook", 52)],
 	)
-	v.rule == "module-layering"
+	v.rule == "layer place wrong"
 }
 
 # The row's own acceptance clause, spelled as a case.

@@ -84,7 +84,7 @@ test_the_verb_in_command_position_is_refused if {
 		"arguments": ["merge-base"],
 		"line": 88,
 	}]}}}
-	v.rule == "ancestry-decides-nothing"
+	v.rule == "patch judge wrong"
 }
 
 test_every_spelling_is_refused if {
