@@ -88,7 +88,10 @@ fn a_record_under_another_key_does_not_answer() {
     // compared: a record from other inputs lives under a name nothing opens, so
     // staleness cannot be a comparison a caller forgets to make.
     let dir = repo("keying");
-    run_with_stdin(&dir, &["record", "keyed", "steps", "key-a"], "answer-a\n");
+    // Asserted rather than discarded: a setup write that failed would leave the
+    // store empty, and `miss` below would then pass for the wrong reason.
+    let written = run_with_stdin(&dir, &["record", "keyed", "steps", "key-a"], "answer-a\n");
+    assert!(written.status.success(), "the setup write lands");
 
     let other = run(&dir, &["record", "show", "steps", "key-b"]);
     assert_eq!(
@@ -106,7 +109,10 @@ fn a_half_written_append_is_not_a_record() {
     // `reclaim-census` classifies a boot from the KIND of the last record under
     // it, which is precisely the value a torn tail corrupts.
     let dir = repo("torn");
-    run_with_stdin(&dir, &["record", "journal", "census"], "h 1000 boot-a\n");
+    // Same reason: the torn tail below is appended to THIS record, so a failed
+    // write would leave nothing for the fold to be wrong about.
+    let written = run_with_stdin(&dir, &["record", "journal", "census"], "h 1000 boot-a\n");
+    assert!(written.status.success(), "the setup write lands");
 
     // Append a torn tail the way a crash would: no trailing newline.
     let shards = shard_dir(&dir, "census");
