@@ -378,48 +378,117 @@ fn the_committed_records_satisfy_this_gate() {
     );
 }
 
-#[test]
-fn a_replay_over_the_committed_records_fires_on_every_required_key() {
-    // CLOUD-1116'S ACCEPTANCE CLAUSE, run rather than written up. Each required
-    // key is removed from the committed record set in turn and the gate must fire;
-    // a key whose removal is SILENT is a required key nothing requires, which is
-    // the dead-clause shape this repository keeps re-meeting.
-    //
-    // Removal is by line and by first occurrence per trial block, so the count
-    // below is mutations rather than deleted lines.
+/// The trial blocks this file replays, one `#[test]` each.
+///
+/// **THE SPLIT IS THE PERFORMANCE FIX AND THIS CONSTANT IS ITS SAFETY CATCH**
+/// (CLOUD-1745). One `#[test]` looping every block ran the whole replay serially
+/// inside a single test binary invocation, so `cargo nextest`'s per-test
+/// parallelism could not reach it: 89.0s isolated, 133.4s under `verify`'s load,
+/// on four cores with three of them idle. Split per block, the runner schedules
+/// them.
+///
+/// A constant rather than a count taken at runtime, because the population this
+/// file replays is fixed by how many `#[test]` functions are WRITTEN below.
+/// [`the_replay_covers_every_trial_block`] is what refuses a corpus that grew
+/// past them — without it, adding a seventh `[[trial]]` row would silently leave
+/// that row unswept while every existing test stayed green, which is the
+/// coverage-shaped nothing this whole replay exists to refuse.
+const REPLAYED_BLOCKS: usize = 6;
+
+/// CLOUD-1116's acceptance clause for one trial block, run rather than written up.
+///
+/// Each required key is removed from that block in turn and the gate must fire; a
+/// key whose removal is SILENT is a required key nothing requires, which is the
+/// dead-clause shape this repository keeps re-meeting. Removal is by line and by
+/// first occurrence within the block, so the count is mutations rather than
+/// deleted lines.
+///
+/// **THE SCRATCH REPOSITORY IS BUILT ONCE PER BLOCK AND THE RECORD REWRITTEN IN
+/// PLACE, AND THIS IS THE LARGER HALF OF THE FIX.** 78 [`repo`] builds became 6.
+///
+/// A first pass timed `git init` alone at ~5.4ms and concluded the rebuilds were
+/// worth ~0.4s of the 89s. That measurement was of the wrong thing: [`repo`] also
+/// writes the config and both records, copies the module, and then `git add -A`
+/// and commits the whole tree — about 1.0s of each iteration's 1.14s. The `batten
+/// check` subprocess, which the first pass blamed, is ~0.15s.
+///
+/// Recorded because the wrong number is the tempting one: timing the cheap
+/// primitive a helper calls, rather than the helper, reads as rigour and is not.
+fn replay_block(block: usize) {
     let trials = std::fs::read_to_string(common::at_root(TRIALS)).expect("the trials record");
     let method = std::fs::read_to_string(common::at_root(METHOD)).expect("the method record");
 
-    let blocks: Vec<&str> = trials.split("\n[[trial]]").collect();
-    let mut examined = 0_usize;
+    let dir = repo(&format!("replay-{block}"), Some(&trials), Some(&method));
     let mut fired = 0_usize;
 
-    for (block, _) in blocks.iter().enumerate().skip(1) {
-        examined += 1;
-        for (key, line) in REQUIRED_LINES.iter().enumerate() {
-            let mutated = remove_first_line_starting_with(&trials, block, line);
-            assert_ne!(
-                mutated, trials,
-                "the replay must actually mutate: trial block {block} carries no `{line}` line, \
-                 so this key is declared required and is not present to be removed"
-            );
-            let dir = repo(
-                &format!("replay-{block}-{key}"),
-                Some(&mutated),
-                Some(&method),
-            );
-            if findings(&dir).contains("agentic-record-incomplete") {
-                fired += 1;
-            }
+    for line in &REQUIRED_LINES {
+        let mutated = remove_first_line_starting_with(&trials, block, line);
+        assert_ne!(
+            mutated, trials,
+            "the replay must actually mutate: trial block {block} carries no `{line}` line, \
+             so this key is declared required and is not present to be removed"
+        );
+        // The record is rewritten under a repository that already exists. A gate
+        // reads the WORKING bytes of a tracked path, so the mutation is visible
+        // without a second commit — and if that were ever untrue this assertion
+        // would go to zero rather than quietly passing.
+        write(&dir, TRIALS, &mutated);
+        if findings(&dir).contains("agentic-record-incomplete") {
+            fired += 1;
         }
     }
 
-    let mutations = examined * REQUIRED_LINES.len();
     assert_eq!(
-        fired, mutations,
-        "every required key's removal must be caught: {fired} of {mutations} mutations fired \
-         over {examined} trial rows"
+        fired,
+        REQUIRED_LINES.len(),
+        "every required key's removal must be caught: {fired} of {} mutations fired over trial \
+         block {block}",
+        REQUIRED_LINES.len()
     );
+}
+
+#[test]
+fn the_replay_covers_every_trial_block() {
+    // THE ANTI-VACUITY OF THE SPLIT. Six `#[test]` functions replay six blocks by
+    // name; nothing else notices a seventh. A corpus that outgrows them must fail
+    // HERE rather than shrink the replay silently.
+    let trials = std::fs::read_to_string(common::at_root(TRIALS)).expect("the trials record");
+    let blocks = trials.split("\n[[trial]]").count() - 1;
+    assert_eq!(
+        blocks, REPLAYED_BLOCKS,
+        "{blocks} trial block(s) are committed and {REPLAYED_BLOCKS} are replayed: add or remove \
+         a `replay_block` test so every block is swept"
+    );
+}
+
+#[test]
+fn a_replay_over_trial_block_1_fires_on_every_required_key() {
+    replay_block(1);
+}
+
+#[test]
+fn a_replay_over_trial_block_2_fires_on_every_required_key() {
+    replay_block(2);
+}
+
+#[test]
+fn a_replay_over_trial_block_3_fires_on_every_required_key() {
+    replay_block(3);
+}
+
+#[test]
+fn a_replay_over_trial_block_4_fires_on_every_required_key() {
+    replay_block(4);
+}
+
+#[test]
+fn a_replay_over_trial_block_5_fires_on_every_required_key() {
+    replay_block(5);
+}
+
+#[test]
+fn a_replay_over_trial_block_6_fires_on_every_required_key() {
+    replay_block(6);
 }
 
 /// Remove the first line inside trial block `block` (1-indexed, as
