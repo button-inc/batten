@@ -3643,6 +3643,13 @@ pub const COLUMN_CENSUS: &[ColumnCensus] = &[
         declares: Declares::NotFactBearing("states why a row declares no fix"),
     },
     ColumnCensus {
+        field: "no_retry_reason",
+        declares: Declares::NotFactBearing(
+            "states why a repaired call has nothing to re-issue, so the row's \
+             class may be `silent` rather than `retry` (CLOUD-1639)",
+        ),
+    },
+    ColumnCensus {
         field: "checks",
         // Hook-surface: the boundary already resolves receipt verdicts for the
         // typed rule table, which is what makes `ready-guard` a mediated row.
