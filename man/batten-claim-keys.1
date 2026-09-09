@@ -1,0 +1,28 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-claim-keys 1  batten 
+.SH NAME
+batten\-claim\-keys \- The issue keys this branch CLAIMS, as distinct from the ones it merely mentions
+.SH SYNOPSIS
+\fBbatten claim keys\fR [\fB\-\-branch\fR] [\fB\-\-title\fR] [\fB\-\-log\fR] [\fB\-\-closing\-only\fR] [\fB\-\-refs\-first\-only\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+The issue keys this branch CLAIMS, as distinct from the ones it merely mentions
+.SH OPTIONS
+.TP
+\fB\-\-branch\fR
+The head branch, standing in for source 2
+.TP
+\fB\-\-title\fR
+The pull request title, also source 2 — a body is not, because a body cites evidence
+.TP
+\fB\-\-log\fR
+Commit messages, standing in for sources 1 and 3
+.TP
+\fB\-\-closing\-only\fR
+Answer from a closing keyword alone, never falling through to the branch or a trailer
+.TP
+\fB\-\-refs\-first\-only\fR
+Answer from the first key of each `Refs:` trailer alone, never sources 1 or 2
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
