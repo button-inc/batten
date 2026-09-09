@@ -3450,14 +3450,13 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
     // state is written by the case rather than inherited from whatever is running
     // — and `another_task_is_none_of_this_gates_business` beside it is what keeps
     // the row from becoming a blanket refusal of `mise run`.
-    for command in ["gh pr view 42"] {
-        let output = run_hook_in(&root, "exit-code", &claude_payload(command), false);
-        assert_eq!(
-            output.status.code(),
-            Some(0),
-            "the committed policy must allow {command:?}"
-        );
-    }
+    let command = "gh pr view 42";
+    let output = run_hook_in(&root, "exit-code", &claude_payload(command), false);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the committed policy must allow {command:?}"
+    );
 
     // THE `mise` CALLS MOVED TO THE BACKGROUNDED FORM, and the move is the rule
     // rather than an accommodation of it. `foreground-mise` refuses every

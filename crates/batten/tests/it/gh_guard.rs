@@ -97,6 +97,15 @@ fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
+/// [`bash_payload`] with `run_in_background` stated true.
+fn bash_payload_backgrounded(command: &str) -> String {
+    let escaped = serde_json::to_string(command).expect("a command is encodable");
+    format!(
+        "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\
+         \"tool_input\":{{\"command\":{escaped},\"run_in_background\":true}}}}"
+    )
+}
+
 /// A Claude Code `PreToolUse` envelope carrying a shell command.
 fn bash_payload(command: &str) -> String {
     let escaped = serde_json::to_string(command).expect("a command is encodable");
@@ -153,6 +162,24 @@ fn allowed(command: &str) {
     assert!(
         !out.contains("\"deny\""),
         "the committed policy must allow: {command}\n{out}"
+    );
+}
+
+/// [`allowed`], with the call's backgrounding STATED.
+///
+/// For a command another committed row reads the posture of. `foreground-mise`
+/// refuses every foreground `mise` invocation with no fast list, so a case whose
+/// property is something else entirely — wrapper look-through, here — has to
+/// carry the posture or it measures that row instead of its own.
+fn allowed_backgrounded(command: &str) {
+    let out = stdout(&run_with_stdin_at_real_root(
+        &root(),
+        &["adjudicate", "--harness", "claude-code"],
+        &bash_payload_backgrounded(command),
+    ));
+    assert!(
+        !out.contains("\"deny\""),
+        "the committed policy must allow a backgrounded: {command}\n{out}"
     );
 }
 
@@ -301,8 +328,13 @@ fn a_task_name_is_not_a_wrapped_program() {
     // it, so the case names one no lock is ever taken for. That `land` itself is
     // allowed when unheld is `singleton_gate.rs::an_unheld_task_starts`, where
     // the lock state is written rather than inherited.
-    allowed("mise run fmt");
-    allowed("mise exec --");
+    // BACKGROUNDED, because `foreground-mise` now refuses the foreground form of
+    // both and this case is not about that: the property under test is that
+    // `mise run` names a TASK while `mise exec` runs another program, and the
+    // look-through is what decides it. Left foreground, the case would measure
+    // the newer row and report the older one broken.
+    allowed_backgrounded("mise run fmt");
+    allowed_backgrounded("mise exec --");
 }
 
 // --- the hook's own document contract -----------------------------------------
