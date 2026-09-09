@@ -210,6 +210,22 @@ pub enum Precheck {
     /// A precheck rather than a `Step` because it spends nothing and cannot land:
     /// it reads refs and the lease, and either keeps the tree or rewinds it.
     BetSettled,
+    /// Do we still hold the lease we are about to move `main` under?
+    ///
+    /// **THE LEASE IS ACQUIRED ONCE AND THE TRUNK IS MOVED MINUTES LATER.** It is
+    /// held from `Step::Lease` through the commit point, but the only thing that
+    /// re-reads the ref in between is the heartbeat inside `Step::Wait`'s poll —
+    /// so the step that actually advances `main` has never checked, and a holder
+    /// whose lease was stolen or reaped mid-wait would fast-forward anyway. That
+    /// is the failure a stall steal makes REACHABLE rather than one it causes:
+    /// before CLOUD-1703 no holder could be stolen from at all, so nothing else
+    /// had to hold.
+    ///
+    /// **Fails CLOSED, alone among the prechecks.** [`Self::BaseMoved`] fails open
+    /// because a probe that cannot answer costs only a wasted matrix; this one
+    /// guards two landers writing one trunk, so a lease it cannot read is a lease
+    /// it will not move `main` under.
+    LeaseHeld,
 }
 
 /// A declared landing pipeline.
@@ -439,7 +455,11 @@ impl Default for Pipeline {
                     step: COMMIT_POINT,
                     effectful: true,
                     compensate: Compensation::Nothing,
-                    precheck: None,
+                    // THE LAST MOMENT THE LEASE STILL MEANS ANYTHING. Every other
+                    // row can be re-run; this one writes `main`, so the authority
+                    // granted at `Step::Lease` is re-read here rather than assumed
+                    // to have survived the wait.
+                    precheck: Some(Precheck::LeaseHeld),
                 },
             ],
         }

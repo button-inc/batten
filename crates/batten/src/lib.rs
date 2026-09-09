@@ -7206,6 +7206,20 @@ fn run_land_lap(
                 unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
                 continue 'laps;
             }
+            // THE ROW'S OWN QUESTION, AND THE ONE THAT FAILS CLOSED. A lap that no
+            // longer holds its lease must not write `main`: the holder it lost to
+            // is landing under the same trunk. This STOPS rather than laps —
+            // another lap would re-reach the same commit point without the
+            // authority to use it, and re-running CI to discover that is a matrix
+            // spent on a question one ref read already answered.
+            if row.precheck == Some(pipeline::Precheck::LeaseHeld) && !still_holds_lease(root) {
+                writeln!(
+                    err,
+                    "::error:: land: the lease is no longer held by this clone; not fast-forwarding {branch}"
+                )?;
+                unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
+                return Ok(exit::ExitCode::Violation);
+            }
             // THE PHASE, PUSHED BEFORE THE STEP RUNS RATHER THAN AFTER IT. A step
             // is what this lap is doing WHILE it blocks, and the whole reason a
             // reader wants it is that a gate can hold for minutes — so announcing
@@ -9680,9 +9694,27 @@ fn run_land_wait(
 /// Terms that will not resolve leave this inert, which is the same fail-open the
 /// rest of the lease surface takes: a clone that cannot read its lease never
 /// acquired one to renew.
+/// # IT PUBLISHES ITS OWN PROGRESS, AND READS IT BY ITS OWN PID
+///
+/// A beat that renews without publishing progress leaves `body.progress` empty
+/// for the whole life of the lease, which disarms the steal arm in
+/// [`lease::turn`] and leaves the TTL as the only reaper — so a holder that beats
+/// and does not land is unstealable by anyone (CLOUD-1703). The token comes from
+/// [`lease::progress_of`] over the task registry this same lap already writes
+/// (`task::register`, then `guard.phase` per step), keyed on `std::process::id()`.
+///
+/// **The pid is this process's own, never a configured one.** The heartbeat runs
+/// INSIDE the land it serves, so a self-read cannot be unset, stale or recycled —
+/// which is exactly what went wrong with `LAND_LOCK_HOLDER_PID`, a variable whose
+/// only binder was the shell heartbeat that `policy/shell-retirement.rego`
+/// retired, leaving one reader and no writer.
 struct Heartbeat<'clone> {
     root: &'clone Path,
     terms: Option<lease::Terms>,
+    /// Where the task registry lives; `None` leaves the beat renewing without a
+    /// token, the same fail-open the rest of this struct takes.
+    git_dir: Option<PathBuf>,
+    pid: u32,
     last: std::sync::atomic::AtomicI64,
 }
 
@@ -9691,8 +9723,17 @@ impl<'clone> Heartbeat<'clone> {
         Self {
             root,
             terms: lease::terms(root).ok(),
+            git_dir: crate::git::git_dir(root).ok(),
+            pid: std::process::id(),
             last: std::sync::atomic::AtomicI64::new(0),
         }
+    }
+
+    /// This lap's own progress token, or `None` when the registry has nothing to
+    /// read — which [`lease::progress_of`] documents as the honest answer for a
+    /// lap whose bookkeeping never registered, not as evidence of a stall.
+    fn progress(&self) -> Option<String> {
+        lease::own_progress(self.git_dir.as_ref()?, self.pid)
     }
 
     /// Renew if a beat has elapsed. Silent and best-effort in every arm — see
@@ -9706,10 +9747,41 @@ impl<'clone> Heartbeat<'clone> {
             return;
         }
         self.last.store(now, std::sync::atomic::Ordering::Relaxed);
+        let progress = self.progress();
         // Bound rather than dropped: `beat` answers a `bool`, and dropping a
         // `Copy` is a lint of its own.
-        let _renewed = lease::beat(self.root, terms, now);
+        let _renewed = lease::beat(self.root, terms, progress.as_deref(), now);
     }
+}
+
+/// Does this clone still hold the lease it took at `Step::Lease`?
+///
+/// # [`lease::holds_now`], NEVER `authorises_this_clone`
+///
+/// The two are complements rather than negations, and this caller wants the one
+/// that is easy to get wrong here: `authorises_this_clone` answers *may this
+/// clone proceed* and is `true` for a lease that is absent, released or expired,
+/// because nobody is in the way. A lap about to move `main` is asking the other
+/// question — *do I still own what I took* — and every one of those states
+/// answers `false`, since a lease this clone let lapse is one somebody else may
+/// already hold.
+///
+/// **Could-not-look is `false`.** Terms that will not resolve, an identity that
+/// will not read, a ref that will not fetch: the rest of the lease surface fails
+/// open on these because the cost is a wasted matrix, but the cost here is two
+/// landers writing one trunk (`pipeline::Precheck::LeaseHeld`).
+fn still_holds_lease(root: &Path) -> bool {
+    let Ok(terms) = lease::terms(root) else {
+        return false;
+    };
+    let Ok((_, holder)) = lease_identity(root) else {
+        return false;
+    };
+    let Ok(observed) = lease::observe(&terms) else {
+        return false;
+    };
+    let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
+    lease::holds_now(&observed, &holder, now)
 }
 
 /// How many beats a holder may stop progressing before its lease is disbelieved.

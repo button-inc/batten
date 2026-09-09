@@ -195,3 +195,118 @@ fn no_path_echoes_a_lease_body() {
         }
     }
 }
+
+// ─── CLOUD-1703: THE PROGRESS TOKEN A BEAT PUBLISHES ─────────────────────────
+//
+// These three run over the LIBRARY rather than the binary, which the header
+// above says this tier is not for — and they are here anyway because the Ready
+// block names this suite and because the property is not `lease check`'s. Stated
+// rather than left as an inconsistency: the subject is `own_progress`, whose
+// whole point is that it joins two already-tested halves, so a case for it
+// belongs wherever the join is asserted rather than wherever the halves are.
+
+/// A land publishes the token its own registry entry carries.
+///
+/// **This is the anti-vacuity case, and it is the reason the tier is here at
+/// all.** `progress_of` and `Progress::token` were both correct and both tested
+/// while `body.progress` was empty on every lease in the fleet, because nothing
+/// called one with the other. A case that exercised either half alone would have
+/// passed throughout the defect — so this one drives the join, by the same
+/// `std::process::id()` route the heartbeat uses.
+#[test]
+fn a_land_publishes_its_own_progress_token() {
+    let dir = repo("lease-health-own-progress");
+    let git_dir = dir.join(".git");
+    let pid = std::process::id();
+    std::fs::create_dir_all(git_dir.join("batten-tasks")).expect("registry dir");
+    std::fs::write(
+        git_dir.join("batten-tasks").join(pid.to_string()),
+        "phase_since: 1700000000\ntick_at: 1700000030\n",
+    )
+    .expect("registry entry");
+
+    let published = batten::lease::own_progress(&git_dir, pid);
+    assert_eq!(
+        published.as_deref(),
+        Some("1700000000.1700000030"),
+        "a beat publishes the registry's stamps, not an empty token"
+    );
+}
+
+/// A lap whose bookkeeping never registered publishes nothing, and that is a
+/// reading rather than a stall.
+///
+/// The complement matters as much as the case above: if an absent entry answered
+/// with some placeholder token, every land that had not yet registered would look
+/// like one that had stopped moving, and `turn`'s steal arm tests the token for
+/// EQUALITY OVER TIME — a constant would make every holder stealable.
+#[test]
+fn a_land_with_no_registry_entry_publishes_nothing() {
+    let dir = repo("lease-health-no-registry");
+    let git_dir = dir.join(".git");
+    assert_eq!(
+        batten::lease::own_progress(&git_dir, std::process::id()),
+        None,
+        "no entry is no token, never a placeholder"
+    );
+}
+
+/// A holder that beats without landing is stealable ONCE its beat publishes.
+///
+/// The steal arm in `turn` has been written and unit-tested throughout the
+/// defect and could never fire, because it opens with
+/// `!body.progress.is_empty()` and no lease ever carried a token. So this asserts
+/// the arm against a body shaped the way a published beat now shapes it, and the
+/// empty-token twin below is what proves the guard is the thing that was
+/// disarming it.
+#[test]
+fn a_stalled_holder_is_stealable_once_its_beat_has_published() {
+    use batten::lease::{Body, Observed, Terms, Turn, turn};
+
+    let terms = Terms::default();
+    let stall = 60;
+    let stalled_for = stall * terms.beat + 1;
+    let body = |progress: &str| Body {
+        holder: String::from("clone-a"),
+        expires: 2_000_000,
+        branch: String::from("claude/some-branch"),
+        head: String::from("abc1234"),
+        next: String::new(),
+        progress: progress.to_owned(),
+        nonce: String::from("n1"),
+    };
+    let observed = |progress: &str| Observed::Held {
+        sha: String::from("f".repeat(40)),
+        body: body(progress),
+    };
+
+    let took = turn(
+        &terms,
+        &observed("1700000000.1700000030"),
+        "clone-b",
+        stalled_for,
+        stalled_for,
+        stall,
+        1_999_999,
+    );
+    assert!(
+        matches!(took, Turn::Take(_)),
+        "a live-but-stalled holder is stealable: {took:?}"
+    );
+
+    // THE DISARMED SHAPE, which is what every lease in the fleet looked like.
+    let waited = turn(
+        &terms,
+        &observed(""),
+        "clone-b",
+        stalled_for,
+        stalled_for,
+        stall,
+        1_999_999,
+    );
+    assert_eq!(
+        waited,
+        Turn::Wait,
+        "an empty token is what made a stalled holder unstealable"
+    );
+}

@@ -1255,6 +1255,15 @@ pub fn authorises(observed: Option<&Observed>, want: &str, now: i64) -> Authorit
     // GARBAGE FAILS OPEN HERE like everything else this arm cannot read. It is the
     // health gate's finding, not this one's: stopping the fleet over a ref
     // somebody mis-pushed is the cost this arm exists never to pay.
+    //
+    // READ IT WITH `turn`'S GARBAGE ARM, WHICH ANSWERS `Turn::Wait`. Neither arm
+    // is the whole reading and this one alone is the more reassuring half. An
+    // unparseable body is UNHELD AND UNCONTESTED: every reader runs (here), and
+    // nobody takes the ref (there), so `main` can take two landers at once. That
+    // is the cost a stricter `parse_body` would spend — a body a newer build
+    // writes and an older one rejects is not a lease the older one waits for, it
+    // is one it ignores while landing. Anyone weighing that change reads both
+    // arms, or reads half the consequence (CLOUD-1703).
     let observed = match observed {
         Observed::Held { body, .. } => body,
         Observed::Garbage { .. } => {
@@ -1978,10 +1987,21 @@ pub fn renewal(terms: &Terms, body: &Body, progress: Option<&str>, now: i64) -> 
 /// survivable. What a caller does with a run of failures is the caller's; one is
 /// not news.
 ///
-/// Progress is carried forward rather than rewritten, for [`renewal`]'s own
-/// reason: a beat that erased it would make the lease unstealable to every rival.
+/// # `progress` IS THE WHOLE POINT OF THE BEAT, NOT AN EXTRA
+///
+/// `None` carries the stored token forward, for [`renewal`]'s own reason: a beat
+/// that erased it would make the lease unstealable to every rival. But a caller
+/// that passes `None` FOREVER never populates it either, and an always-empty
+/// token disarms [`turn`]'s steal arm, which tests `!body.progress.is_empty()`
+/// before it will disbelieve a holder. That is not hypothetical: the port to an
+/// in-process heartbeat left `None` hardcoded here, so no lease in the fleet ever
+/// carried a token, and a holder that beat without landing could not be stolen
+/// from by anyone (CLOUD-1703). A caller that CAN compute its own progress —
+/// [`crate::run_land_singleton`]'s heartbeat reads it from the task registry with
+/// [`progress_of`] — must pass it, and only a caller with nothing to say passes
+/// `None`.
 #[must_use]
-pub fn beat(root: &Path, terms: &Terms, now: i64) -> bool {
+pub fn beat(root: &Path, terms: &Terms, progress: Option<&str>, now: i64) -> bool {
     let Ok((_, holder)) = crate::lease_identity(root) else {
         return false;
     };
@@ -1994,7 +2014,7 @@ pub fn beat(root: &Path, terms: &Terms, now: i64) -> bool {
     let Observed::Held { body, .. } = &observed else {
         return false;
     };
-    let renewed = renewal(terms, body, None, now);
+    let renewed = renewal(terms, body, progress, now);
     matches!(cas(terms, &observed, &renewed, now), Ok(Outcome::Applied))
 }
 
@@ -2179,6 +2199,14 @@ pub fn turn(
     // taking a ref nobody can read means overwriting whatever a stray push put
     // there, and a well-meant fix that races a real holder is worse than waiting
     // out a TTL. The health gate reports it; nothing here repairs it.
+    //
+    // AND `authorises` ANSWERS `Run` ON THE SAME REF, which is the half this arm
+    // does not say on its own. Waiting here does not hold the fleet back — it
+    // declines to CONTEST a ref that every reader is already running past. So an
+    // unparseable body is unheld and uncontested at once, and two landers can
+    // write one trunk under it. Deliberate: both arms fail toward motion, and the
+    // health gate is what makes the state visible rather than either of them.
+    // Stated because the pair is the reading, not either arm (CLOUD-1703).
     let body = match observed {
         Observed::Held { body, .. } => body,
         Observed::Garbage { .. } => return Turn::Wait,
@@ -2270,6 +2298,31 @@ pub fn progress_of(git_dir: &std::path::Path, pid: u32) -> Option<Progress> {
         advance,
         tick_at: field("tick_at"),
     })
+}
+
+/// The token a land publishes about ITSELF, read by its own pid.
+///
+/// # Why this is a function and not two lines at the call site
+///
+/// It is the composition that was missing, not either half. [`progress_of`] and
+/// [`Progress::token`] both existed and were both tested, and `body.progress` was
+/// still empty on every lease in the fleet, because nothing joined them to a
+/// heartbeat (CLOUD-1703). A defect of wiring is only catchable where the wiring
+/// has a name, so this has one.
+///
+/// **`pid` is the caller's own `std::process::id()`.** A heartbeat runs inside
+/// the land it serves, so it reads the entry it is itself writing; the predecessor
+/// took the pid from `LAND_LOCK_HOLDER_PID`, a variable whose only binder was the
+/// retired shell heartbeat, which is how it came to have a reader and no writer.
+///
+/// `None` wherever there is nothing to read, which [`progress_of`] documents as
+/// the honest answer for a lap whose bookkeeping never registered rather than as
+/// evidence of a stall.
+#[must_use]
+//MUTANT-SUITE crates/batten/tests/it/lease_health.rs
+//MUTANT progress-never-published|s@    progress_of(git_dir, pid).map(Progress::token)@    None@|a_land_publishes_its_own_progress_token
+pub fn own_progress(git_dir: &std::path::Path, pid: u32) -> Option<String> {
+    progress_of(git_dir, pid).map(Progress::token)
 }
 
 /// What the heartbeat should do about the land it serves.
