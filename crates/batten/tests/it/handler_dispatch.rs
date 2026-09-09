@@ -32,7 +32,7 @@ use crate::common;
 
 use std::path::PathBuf;
 
-use common::{git_in, scratch, stdout, write};
+use common::{scratch, stdout, write};
 
 /// ONE ROW, and no `[[rule]]` at all — `connector_allow_door`'s discipline, for
 /// its reason: nothing in the engine may produce a verdict of its own and be
@@ -127,7 +127,7 @@ fn bench(name: &str, verdict: &str) -> Bench {
     std::fs::create_dir_all(&repo).unwrap();
     write(&repo, "batten.toml", CONFIG);
     write(&repo, "a.txt", "x\n");
-    git_in(&repo, &["init", "-q", "-b", "main", "."]);
+    common::init_repo(&repo);
 
     let ran = repo.join("handler-ran");
     let body = if verdict.is_empty() {
