@@ -4,7 +4,7 @@
 .SH NAME
 batten\-exec \- Run a command — or a `:::` bundle — and report a pointer to what it wrote
 .SH SYNOPSIS
-\fBbatten exec\fR [\fB\-\-capture\-only\fR] [\fB\-\-tee\fR] [\fB\-\-jobs\fR] [\fB\-\-continue\-on\-error\fR] [\fB\-\-format\fR] [\fB\-\-style\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIcommand\fR> 
+\fBbatten exec\fR [\fB\-\-capture\-only\fR] [\fB\-\-tee\fR] [\fB\-\-jobs\fR] [\fB\-\-continue\-on\-error\fR] [\fB\-\-lock\fR] [\fB\-\-lock\-path\fR] [\fB\-\-lock\-attempts\fR] [\fB\-\-lock\-label\fR] [\fB\-\-format\fR] [\fB\-\-style\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIcommand\fR> 
 .SH DESCRIPTION
 Run a command — or a `:::` bundle — and report a pointer to what it wrote
 .SH OPTIONS
@@ -20,6 +20,18 @@ How many of a `:::` bundle\*(Aqs commands run at once
 .TP
 \fB\-\-continue\-on\-error\fR
 Run the rest of a `:::` bundle after a command fails
+.TP
+\fB\-\-lock\fR
+Hold this clone\*(Aqs named singleton lock for the child\*(Aqs lifetime
+.TP
+\fB\-\-lock\-path\fR
+Hold the lock at this path, for a resource the clone does not own
+.TP
+\fB\-\-lock\-attempts\fR
+How many times to ask for the lock before reporting it held
+.TP
+\fB\-\-lock\-label\fR
+What the wait is for, named by the caller for the refusal line
 .TP
 \fB\-\-format\fR [default: human]
 How Batten\*(Aqs own record is encoded (hk\*(Aqs axis)
