@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.159](https://github.com/button-inc/batten/compare/v0.0.158...v0.0.159) - 2026-09-09
+
+### Added
+
+- *(hook)* [**breaking**] a handler may select on the command, not only the tool name
+- *(bench)* the report answers the question it was built to ask
+- *(bench)* the post-CLOUD-1637 numbers, and prose derived from them
+- *(bench)* price refusal rendering by strategy and explicit residency
+- *(wiring)* [**breaking**] disarm declared launcher scripts, not just their registrations
+- *(run-shape)* every mise call is backgrounded, and a backgrounded call keeps its own output
+
+### Fixed
+
+- *(rules)* hoist the order key out of run, where it was a statement
+- *(rules)* make the finding order a function of the set, not of the walk
+- *(bench)* the report drops the crate version, which no release could leave stable
+- *(mutate)* a second sweep over the persisted staged tree is not a broken harness
+- *(land)* fetch the trunk before the speculation reads it
+- *(test)* ask the portable question, and drop the waiver it needed
+- *(test)* open the shim spawn's annotation with its verdict
+- *(test)* build the disarm fixture's paths as literal TOML strings
+- *(hook)* make the cross-turn pointers survive a coloured log
+- *(policy)* a task-output poll is the same duplicate as a process poll
+- *(trust)* give the wiring table a weakening verdict, and the suite its shapes
+- *(wiring)* refuse an unloadable config, and label a conservative disarm honestly
+- *(verdict)* the discard family stops prescribing the form background-redirect refuses
+- *(pipeline-shapes)* move the prescribed form to backgrounded-and-unredirected, since two rows now refuse the old one
+- *(tests)* move the live-root mise cases to the backgrounded form, and follow the commit-msg call site
+- *(run-shape)* exercise both new predicates, and stop asserting a foreground mise call is allowed
+- *(checks-green)* the winner is a function of the set, not the slice order
+- *(mutate)* the bound blocks on a channel, so no delay waiver is needed
+- *(mutate)* the watchdog signalled a group it did not own
+- *(tests)* the hoisted vocabulary is already a reference
+- *(core)* keep the consumer's artifact names out of the core's comments
+- *(mutate)* the sweep owns its suite bound, and the row that proves it
+- *(checks)* a run that completed without judging cannot erase a verdict
+
+### Other
+
+- *(ci-parity)* the engine fixture declares the two lanes the cover names
+- *(snapshots)* accept the spec snapshot the `--issue` help-text change moves
+- stop caching another system's facts in prose, and point at the one dated authority
+- *(hook)* build the fixture from the template rather than forking git
+- *(hook)* assert the door's real channels, not the assumed ones
+- *(bench)* the projection loses its lint escape, and the tier its new gated test
+- *(bench)* the projection keeps its rows, and the report splits its halves
+- *(rebase)* build a twin git will not collapse, and a trunk that moved
+- rustfmt the disarm pass and its suite
+- *(hooks)* the commit-msg steps stay on the task, because respelling them requires an edit shell-retirement refuses
+- *(mutate)* the runner's bound is a sleep it never reaps on a red case
+- *(tests)* replay the record gate in-process instead of over 78 spawns
+- *(tests)* split the record replay per trial block and build its repo once
+
 ## [0.0.158](https://github.com/button-inc/batten/compare/v0.0.157...v0.0.158) - 2026-09-09
 
 ### Added
