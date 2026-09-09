@@ -1213,6 +1213,33 @@ pub enum Native {
     // moment it fires. That also makes them resolvable from `vendored()` with
     // no config load, which is what keeps `policy explain` usable over a config
     // that will not parse.
+    /// The declaration could not be READ AT ALL — not valid TOML.
+    ///
+    /// **Deliberately not in [`Native::CONFIG_FAULTS`]**, which is the per-TABLE
+    /// set and is censused in both directions against `config.rs`'s own list. This
+    /// one has no table: it is raised before any table exists, by the parse that
+    /// every table's validator runs after.
+    ///
+    /// # Why it needs a class when the other parse failures do not
+    ///
+    /// A class here is not for `explain` — it is the DISCRIMINATOR the mediated
+    /// boundary acts on (CLOUD-1677). Gates are registered fail-open, and a gate
+    /// that fails open is inert: it neither allows nor denies, it is absent. So a
+    /// config fault is never a choice between refusing and allowing, it is a
+    /// choice between keeping the enforcement surface we still have and losing it
+    /// entirely.
+    ///
+    /// An unknown key, a version this build is too old for, a row whose validator
+    /// refused — each leaves every OTHER row readable and enforceable, and leaves
+    /// an agent that can still be told to repair the one that is broken. Failing
+    /// the whole load there buys nothing and costs the surface that would have
+    /// carried the repair instruction.
+    ///
+    /// A file that is not TOML is the one case with no partial function to
+    /// preserve: zero rows are readable, so refusing the call is the only signal
+    /// left, and the declared hatch is the recovery path. That asymmetry is why
+    /// this class exists and why it is exactly one class wide.
+    ConfigUnreadable,
     /// The `[[verb]]` table would not load.
     VerbTableRefused,
     /// The `[[pattern]]` table would not load.
@@ -1291,6 +1318,7 @@ impl Native {
         Native::CallFixSilent,
         Native::ContentRefused,
         Native::KeyMissing,
+        Native::ConfigUnreadable,
         Native::VerbTableRefused,
         Native::PatternTableRefused,
         Native::VerdictTableRefused,
@@ -1373,6 +1401,7 @@ impl Native {
             Native::CallFixSilent => "call fix silent",
             Native::ContentRefused => "input write refused",
             Native::KeyMissing => "issue name missing",
+            Native::ConfigUnreadable => "config read refused",
             Native::VerbTableRefused => "verb declare refused",
             Native::PatternTableRefused => "pattern declare refused",
             Native::VerdictTableRefused => "verdict declare refused",
@@ -1892,6 +1921,20 @@ it serves.",
     // fault is edited in exactly one file, and a `command` route would have to
     // name a task that can run over a config that does not load.
     VendoredVerdict {
+        id: "config read refused",
+        gloss: "the declaration is not TOML, so no rule in it could be read",
+        class: "Every other config fault leaves the rest of the file deciding -- an unknown key \
+costs its own row, a table whose validator refuses names that table, and a version this build \
+is too old for still says so. Each of those keeps a working gate surface and an agent that can \
+be told to repair the broken part. This one has no partial function to preserve: the bytes are \
+not TOML, so zero rows are readable and nothing is enforced. That is why it is the one class \
+the mediated boundary refuses a call under, rather than reporting and proceeding -- a gate that \
+fails open is inert, and an inert gate over an unreadable authority is the false green this \
+engine exists to catch.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
         id: "verb declare refused",
         gloss: "the verb table would not load",
         class: "`[[verb]]` is how a consumer names the commands their harness mediates and \
@@ -2367,6 +2410,7 @@ mod tests {
                 | Native::VerdictTrailing
                 | Native::RunOrphaned
                 | Native::CeilingExceeded
+                | Native::ConfigUnreadable
                 | Native::ShapeRefused
                 | Native::CallRetryNow
                 | Native::CallFixSilent

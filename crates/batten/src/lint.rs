@@ -401,7 +401,7 @@ pub fn smells(
     // same message it would anywhere else rather than this module's own.
     let config = config::parse(text, source)?;
     let located: Located =
-        toml::from_str(text).map_err(|err| config::config_error(source, &err))?;
+        toml::from_str(text).map_err(|err| config::config_error(source, text, &err))?;
 
     let mut found = Vec::new();
 

@@ -658,14 +658,33 @@ fn the_report_never_tells_the_reader_to_install_an_older_release() {
 /// fault from a well-formed row naming a key from a newer schema, and collapsing
 /// the two is what produced the defect — a prune that swallowed a syntax error
 /// would load "no rules configured" over a broken file.
+///
+/// **AND SINCE CLOUD-1677 THE REFUSAL REACHES THE CALL.** The claim above is
+/// unchanged and is exactly why: a newer-schema row leaves every other row
+/// readable, so the file still decides and an agent can be told to repair the one
+/// key. A file that is not TOML leaves nothing — zero rows readable, nothing
+/// enforced — and a gate that fails open there is inert, which is the false green
+/// the engine exists to catch. So this is the one config fault that denies.
+///
+/// It was `1`: the usage code, non-blocking, and the `rm /` below simply ran.
 #[test]
 fn a_file_that_is_not_toml_is_still_refused() {
     let dir = repo("config-forward-broken", "[[rule\nbroken\n");
-    let (code, _, stderr) = adjudicate(&dir);
-    assert_eq!(code, Some(1), "malformed TOML is a usage error: {stderr}");
+    let (code, stdout, stderr) = adjudicate(&dir);
+    // THE DENY IS THE JSON, as the case above states for this harness. What
+    // differs here is the number beside it: with the document carrying the
+    // refusal, the code is free to say could-not-look — §6-§7's `3` — rather than
+    // claiming a verdict was reached. `exit.rs` keeps `Usage` and `Internal` the
+    // only codes a Batten failure produces, so refusing costs that guarantee
+    // nothing.
+    assert_eq!(code, Some(3), "nothing could be judged: {stdout} {stderr}");
     assert!(
-        stderr.contains("TOML parse error"),
-        "the refusal says the file is not TOML: {stderr}"
+        stdout.contains(r#""permissionDecision":"deny""#),
+        "a call under an unreadable authority is refused: {stdout}"
+    );
+    assert!(
+        format!("{stdout}{stderr}").contains("TOML parse error"),
+        "the refusal says the file is not TOML: {stdout} {stderr}"
     );
 }
 

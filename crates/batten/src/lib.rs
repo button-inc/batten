@@ -12115,8 +12115,7 @@ fn run_hook(
     // The note rides the ladder above `normal`, because on the hosts where this
     // is reachable it is the ordinary state rather than news.
     let capabilities = harness.capabilities();
-    if !capabilities.emits(envelope.event) && envelope.event != hook::Event::Unrecognized {
-        let note = unsupported_event_note(harness, &capabilities, envelope.event);
+    if let Some(note) = undeclared_event_note(harness, &capabilities, envelope.event) {
         output::message(mode, Verbosity::Verbose, err, &note)?;
         return Ok(ExitCode::Success);
     }
@@ -12245,18 +12244,38 @@ fn run_hook(
     // arms, ~0.7 ms against a 100 ms budget. `!adjudicable` keeps its old
     // behaviour, because an event with nothing to adjudicate has no protected
     // gate to run either, and that is the arm the hot path actually rides.
-    // A config this build cannot read is CERTAINTY, and certainty denies rather
-    // than exiting non-zero — `deny_unadjudicable` carries the whole argument,
-    // including why the hatch is read first.
+    // A DECLARATION NOTHING COULD READ IS THE ONE FAULT THAT REFUSES, and the
+    // narrowness is the decision rather than caution (CLOUD-1677).
+    //
+    // Gates are registered fail-open, so a gate that fails open is INERT — it
+    // neither allows nor denies, it is absent. A config fault is therefore never
+    // a choice between refusing and allowing: it is a choice between keeping the
+    // enforcement surface we still have and losing it entirely. An unknown key, a
+    // version this build is too old for, a table whose validator refused — each
+    // leaves every other row readable and enforceable, and leaves an agent that
+    // can still be TOLD to repair the broken one. Refusing there would trade a
+    // working partial surface for nothing.
+    //
+    // `Native::ConfigUnreadable` is the one class with no partial function left:
+    // the file is not TOML, so no row is readable and none can be enforced. Then
+    // the refusal is the only signal available, and the hatch below is how the
+    // container gets back.
     //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
-    //MUTANT unloadable-config-allows|s@            Err(_) if bypass => (hook::Policy::declaring_nothing(harness), Vec::new()),@            Err(_) => (hook::Policy::declaring_nothing(harness), Vec::new()),@|a_config_this_build_cannot_load_denies_rather_than_failing_open
+    //MUTANT unloadable-config-allows|s@            Err(unreadable) if unreadable_declaration(\&unreadable) => {@            Err(unreadable) if false \&\& unreadable_declaration(\&unreadable) => {@|a_config_this_build_cannot_load_denies_rather_than_failing_open
     let (policy, waivers) = if adjudicable {
         match load_policy(overrides, harness) {
             Ok(loaded) => loaded,
+            // The declared hatch, read before the refusal so a stale binary
+            // meeting a newer config leaves a container recoverable, not bricked.
             Err(_) if bypass => (hook::Policy::declaring_nothing(harness), Vec::new()),
-            Err(unreadable) => {
+            Err(unreadable) if unreadable_declaration(&unreadable) => {
                 return deny_unadjudicable(harness, &envelope, &unreadable, mode, out, err);
             }
+            // EVERY OTHER FAULT KEEPS ITS OLD BEHAVIOUR, deliberately. Today that
+            // is still a whole-file refusal at exit `1`, which is the outcome the
+            // argument above says is wrong — making these actually preserve the
+            // rows they can read is its own change, over `prune_unresolvable`.
+            Err(other) => return Err(other),
         }
     } else {
         (hook::Policy::declaring_nothing(harness), Vec::new())
@@ -12499,6 +12518,25 @@ fn run_hook(
     render(harness, &envelope, decision, &rendering, mode, out, err)
 }
 
+/// The note for an event this host does not declare, or `None` to carry on.
+///
+/// **`Unrecognized` is not undeclared**, and collapsing the two is why this is a
+/// named predicate rather than an inline `&&`: an event nobody could parse has
+/// no capability row to be absent from, so it falls through to the ordinary
+/// path instead of being reported as a host that offers less.
+///
+/// Returning the note rather than a `bool` keeps [`unsupported_event_note`]'s
+/// call beside the condition that earns it — a caller that tested one and
+/// rendered the other could report an event the table actually declares.
+fn undeclared_event_note(
+    harness: hook::Harness,
+    capabilities: &hook::Capabilities,
+    event: hook::Event,
+) -> Option<String> {
+    (!capabilities.emits(event) && event != hook::Event::Unrecognized)
+        .then(|| unsupported_event_note(harness, capabilities, event))
+}
+
 /// Whether this envelope has anything for the config to decide about.
 ///
 /// **The gate on whether a call pays a config read at all**, which is why the
@@ -12527,7 +12565,25 @@ fn is_adjudicable(envelope: &hook::Envelope) -> bool {
         || (envelope.event == hook::Event::PreTool && !envelope.raw_tool.is_empty())
 }
 
-/// Refuse a call whose rules this build could not load (CLOUD-1688).
+/// Whether this load failure is a declaration nothing could read at all.
+///
+/// **Positively identified, never inferred from an absence.** The tempting
+/// spelling is "carries no declared class", and it is wrong: the
+/// unsupported-version and `min_batten_version` refusals carry none either, and
+/// both leave every row in the file readable. Keying on absence would refuse
+/// those too — and every future unclassed refusal after them, silently widening
+/// what denies.
+///
+/// So the loader says which one this is. `config_error` already separates a
+/// syntax failure from an unknown key, and since CLOUD-1677 its syntax arm raises
+/// under [`verdict::Native::ConfigUnreadable`].
+fn unreadable_declaration(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<UsageError>()
+        .and_then(|usage| usage.verdict)
+        .is_some_and(|class| class == verdict::Native::ConfigUnreadable)
+}
+
+/// Refuse a call whose rules this build could not load (CLOUD-1677).
 ///
 /// Lifted out of [`run_hook`] rather than left inline because that function is
 /// already at its line budget, and a boundary this load-bearing should be
@@ -12585,16 +12641,32 @@ fn deny_unadjudicable(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    // Pointer-only (non-negotiable rule 4): the loader's own message names the
-    // key or the path that would not load, never the file's contents. The
-    // existing `max_age = 0` and unknown-key diagnostics ride through here
-    // unchanged, which is what keeps the operator's repair as findable as it was
-    // when this arm exited `1`.
+    // THE FIRST LINE ONLY, AND THAT IS NON-NEGOTIABLE RULE 4 RATHER THAN BREVITY.
+    //
+    // A `toml` parse error renders as a multi-line span — a header naming the
+    // position, then the OFFENDING SOURCE LINE with a caret under it. Interpolating
+    // the whole thing puts a byte of the unreadable config into a refusal that
+    // reaches the model, the host's log and the transcript, which is exactly the
+    // payload rule 4 keeps out of every report this engine writes. Measured by
+    // `the_declaration_that_would_not_parse_is_named_without_quoting_it`, which
+    // fails on the un-truncated form.
+    //
+    // The first line is the POINTER and loses nothing an operator needs: for a
+    // parse failure it is `TOML parse error at line L, column C`, and for the
+    // skew and unknown-key arms the whole message is one line already — the
+    // `max_age = 0` and `command_matcher` diagnostics ride through intact, which
+    // is what keeps the repair as findable as it was when this arm exited `1`.
+    let pointer = unreadable
+        .to_string()
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_owned();
     let refusal = Refusal::new(
         "engine-cannot-adjudicate",
         format!(
             "this build could not load the rules it is registered to enforce, so nothing judged \
-             this call: {unreadable}"
+             this call: {pointer}"
         ),
         // No remedy the ENGINE may declare: the repair is rebuilding or
         // reinstalling the binary, or fixing the config, and each is the
@@ -12605,7 +12677,16 @@ fn deny_unadjudicable(
         hatch: hook::BYPASS_ENV,
         ceiling: None,
     };
-    render(
+    // WHICH CHANNEL CARRIED THE REFUSAL IS `render`'S OWN ANSWER, and reading it
+    // here is what lets the number say could-not-look without ever spending the
+    // refusal to do it (CLOUD-1677's exit-code half).
+    //
+    // `render` denies through the host's protocol: a document harness gets its
+    // decision object and answers `Ok`, while the neutral adapter's ONLY deny
+    // channel is the number, so it answers `Err(Denial)` — `run_hook`'s own
+    // contract says as much. The two arms below are therefore not a preference
+    // between codes, they are the two protocols.
+    match render(
         harness,
         envelope,
         hook::Decision::Deny(refusal),
@@ -12613,7 +12694,25 @@ fn deny_unadjudicable(
         mode,
         out,
         err,
-    )
+    ) {
+        // The DOCUMENT already refuses, so the number is free to be honest: §6–§7
+        // reserve `3` for could-not-look, and nothing was judged about this call.
+        // `Internal` rather than `Violation` also keeps `exit.rs`'s guarantee
+        // whole — `Usage` and `Internal` are the only codes a failure of Batten's
+        // own may produce, *so that fail-open is structural* — and an unreadable
+        // declaration is such a failure. Answering `2` here would have bought the
+        // refusal twice and spent that guarantee for the second copy.
+        Ok(_) => Ok(ExitCode::Internal),
+        // THE NUMBER IS THIS HARNESS'S ONLY CHANNEL, so it stays the deny. Turning
+        // it into `3` would be honest about the cause and silent about the verdict,
+        // which is the fail-open this row exists to close.
+        //
+        // **The cost is stated rather than absorbed** (CLOUD-1677's Replay asks for
+        // the per-harness table): on this adapter the boundary cannot say BOTH
+        // "refused" and "nothing could be read", so the could-not-look half is
+        // unavailable there until that protocol grows a way to carry it.
+        Err(denial) => Err(denial),
+    }
 }
 
 /// Run the refusing row's declared repair, and say what the boundary decides now.
