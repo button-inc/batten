@@ -1036,6 +1036,38 @@ expression: stdout_of(&output)
           "help": "How many of a `:::` bundle's commands run at once"
         },
         {
+          "name": "lock",
+          "short": null,
+          "long": "lock",
+          "takes_value": true,
+          "positional": false,
+          "help": "Hold this clone's named singleton lock for the child's lifetime"
+        },
+        {
+          "name": "lock_attempts",
+          "short": null,
+          "long": "lock-attempts",
+          "takes_value": true,
+          "positional": false,
+          "help": "How many times to ask for the lock before reporting it held"
+        },
+        {
+          "name": "lock_label",
+          "short": null,
+          "long": "lock-label",
+          "takes_value": true,
+          "positional": false,
+          "help": "What the wait is for, named by the caller for the refusal line"
+        },
+        {
+          "name": "lock_path",
+          "short": null,
+          "long": "lock-path",
+          "takes_value": true,
+          "positional": false,
+          "help": "Hold the lock at this path, for a resource the clone does not own"
+        },
+        {
           "name": "style",
           "short": null,
           "long": "style",
@@ -2938,6 +2970,32 @@ expression: stdout_of(&output)
       ]
     },
     {
+      "path": "verdict",
+      "id": "verdict",
+      "about": "Fold a run's findings and blind spots into this tool's exit code",
+      "effect": "read",
+      "data_channel": false,
+      "flags": [
+        {
+          "name": "findings",
+          "short": null,
+          "long": "findings",
+          "takes_value": true,
+          "positional": false,
+          "help": "How many blocking findings the run produced"
+        },
+        {
+          "name": "unjudgeable",
+          "short": null,
+          "long": "unjudgeable",
+          "takes_value": true,
+          "positional": false,
+          "help": "How many subjects the run could not read"
+        }
+      ],
+      "subcommands": []
+    },
+    {
       "path": "wiring",
       "id": "wiring",
       "about": "Repair a host's hook registrations",
@@ -3238,6 +3296,10 @@ expression: stdout_of(&output)
     {
       "id": "task.read",
       "path": "task read"
+    },
+    {
+      "id": "verdict",
+      "path": "verdict"
     },
     {
       "id": "worktree.status",

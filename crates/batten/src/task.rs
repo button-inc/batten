@@ -682,7 +682,7 @@ pub fn report(
 // immediately and holds nothing, exactly as the shell did.
 
 /// Where one clone's singleton locks live.
-const SINGLETON_DIR: &str = "batten-singleton";
+pub(crate) const SINGLETON_DIR: &str = "batten-singleton";
 
 /// What an acquire attempt found.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -771,56 +771,143 @@ pub fn singleton_acquire(
     recheck: std::time::Duration,
 ) -> Claim {
     let lock = singleton_lock(git_dir, task);
-    let dir = git_dir.join(SINGLETON_DIR);
-    if std::fs::create_dir_all(&dir).is_err() {
-        return Claim::CouldNotLook(dir);
-    }
-    if take(&lock, pid) {
-        return Claim::Taken;
-    }
-
-    // An EMPTY pid file is a holder caught between its create and its write, not
-    // a corpse: absence of evidence is "held", never "free".
-    let Some(holder) = holder_of(&lock) else {
-        return Claim::Held {
-            holder: "unknown".to_owned(),
+    match singleton_acquire_at(&lock, pid, recheck, 1) {
+        // The registry's word about what the holder is DOING, and it is added
+        // here rather than in the path-taking core because only a clone-scoped
+        // lock has a registry to ask. A lock guarding a machine-global resource
+        // has no such entry, and inventing one would be a second authority over
+        // a layout this module owns.
+        Claim::Held {
+            holder,
             phase: None,
-        };
-    };
+        } => {
+            let phase = read_field(git_dir, &holder, "phase").filter(|phase| !phase.is_empty());
+            Claim::Held { holder, phase }
+        }
+        answered => answered,
+    }
+}
 
-    // There is deliberately NO early live-holder fast path. It read as a safety
-    // property and was not one: with it deleted a live holder still falls
-    // through to the refusal below, so no test could tell the two apart and it
-    // survived its own mutant. One refusal path is worth more than the pause.
-    //
-    // First sighting of a dead pid. Look again before reclaiming, so a holder
-    // that exited cleanly between the read and the check — its own trap already
-    // removing the directory — is never mistaken for one that died holding, and
-    // a NEW holder that took the lock in between is never robbed of it.
-    // An INVENTORY ROW, and it is neither of the two shapes CLOUD-1177 separates.
-    // It is not a poll — nothing is re-attempted on a schedule — and it is not a
-    // timer standing in for an exit condition, because there is no condition to
-    // wait for: the two sightings must be separated by elapsed time or they are
-    // one sighting. The bound is `--recheck-ms`, a single pause the caller
-    // declares, and the interval IS the safety margin rather than a guess at how
-    // long something takes.
+/// [`singleton_acquire`] over a lock at an explicit PATH.
+///
+/// **The core, and the split is behaviour rather than tidiness** (CLOUD-1710).
+/// `singleton_acquire`'s lock lives under `$GIT_DIR`, which is right for "one
+/// task per clone" and wrong for a lock guarding something the clone does not
+/// own. The two locks `mise-tasks/with-lock.sh` was written for are both of the
+/// second kind — `doctor`'s sits under `$MISE_DATA_DIR` and `target-ensure`'s
+/// inside the rust sysroot it protects — because the resources they serialize
+/// are the MACHINE's, shared by every clone on it. Keying those per clone would
+/// let two checkouts install a rustup target concurrently and roll each other
+/// back, which is CLOUD-220 returning by another route.
+///
+/// Every decision is the same one `singleton_acquire` makes; only where the lock
+/// lives differs.
+#[must_use]
+pub fn singleton_acquire_at(
+    lock: &Path,
+    pid: &str,
+    recheck: std::time::Duration,
+    attempts: usize,
+) -> Claim {
+    // A lock with no parent is not a lock: could-not-look, never "free".
+    let Some(parent) = lock.parent() else {
+        return Claim::CouldNotLook(lock.to_path_buf());
+    };
+    if std::fs::create_dir_all(parent).is_err() {
+        return Claim::CouldNotLook(parent.to_path_buf());
+    }
+
+    // At least one ask, so `attempts = 0` is a single non-blocking attempt rather
+    // than a silent "never look" that would report a free lock as held.
+    let rounds = attempts.max(1);
+    let mut round = 0_usize;
+    loop {
+        round += 1;
+        let last = round >= rounds;
+        if take(lock, pid) {
+            return Claim::Taken;
+        }
+
+        // An EMPTY pid file is a holder caught between its create and its write,
+        // not a corpse: absence of evidence is "held", never "free".
+        let Some(holder) = holder_of(lock) else {
+            if last {
+                return Claim::Held {
+                    holder: "unknown".to_owned(),
+                    phase: None,
+                };
+            }
+            sleep_once(recheck);
+            continue;
+        };
+
+        // There is deliberately NO early live-holder fast path. It read as a safety
+        // property and was not one: with it deleted a live holder still falls
+        // through to the refusal below, so no test could tell the two apart and it
+        // survived its own mutant. One refusal path is worth more than the pause.
+        //
+        // First sighting of a dead pid. Look again before reclaiming, so a holder
+        // that exited cleanly between the read and the check — its own trap already
+        // removing the directory — is never mistaken for one that died holding, and
+        // a NEW holder that took the lock in between is never robbed of it.
+        // An INVENTORY ROW, and it is neither of the two shapes CLOUD-1177 separates.
+        // It is not a poll — nothing is re-attempted on a schedule — and it is not a
+        // timer standing in for an exit condition, because there is no condition to
+        // wait for: the two sightings must be separated by elapsed time or they are
+        // one sighting. The bound is `--recheck-ms`, a single pause the caller
+        // declares, and the interval IS the safety margin rather than a guess at how
+        // long something takes.
+        sleep_once(recheck);
+        if may_reclaim(&holder, holder_of(lock).as_deref())
+            && std::fs::remove_dir_all(lock).is_ok()
+            && take(lock, pid)
+        {
+            return Claim::Reclaimed(holder);
+        }
+
+        // The lock changed under us, or a live holder took it: whoever holds it
+        // now is real. Re-read rather than reporting the corpse seen a moment
+        // ago.
+        if last {
+            return Claim::Held {
+                holder: holder_of(lock).unwrap_or_else(|| "unknown".to_owned()),
+                phase: None,
+            };
+        }
+    }
+}
+
+/// The one declared pause in this module, and the only waived delay it owns.
+///
+/// **One site rather than two, and that is a rule rather than tidiness.**
+/// `delay-waivers-not-growing` ratchets how many waiver annotations stand over a
+/// sleep in this crate, because *a ban you can waive at will is not a ban*
+/// (CLOUD-1148). A queue written as its own loop with its own sleep would have
+/// spent a twelfth waiver to express a pause this function already owns.
+///
+/// The annotation below is deliberately not spelled anywhere in this prose: that
+/// row's `pattern` is an unanchored literal, so a doc comment naming it counts
+/// as a waiver. Measured — the first draft of this comment took the count to 12
+/// on its own, which is `no-new-ignores`' documented hazard (*"a bare `#[ignore]`
+/// is a literal substring, so it also matches every prose mention"*) arriving in
+/// the row that did not anchor for it.
+///
+/// It serves both readings, and they are the same pause seen from two sides: the
+/// interval separating the two sightings a reclaim requires, and the interval
+/// between two asks for a lock somebody else holds. Neither is a poll standing
+/// in for an exit condition (CLOUD-1177) — the bound is `attempts`, a count the
+/// caller declares, exactly as `land` bounds its laps.
+fn sleep_once(interval: std::time::Duration) {
     #[expect(
         clippy::disallowed_methods,
-        reason = "the bound is `--recheck-ms`: a single declared pause separating the two sightings a reclaim requires, not a poll and not a timer standing in for an exit condition"
+        reason = "the module's one declared pause: it separates the two sightings a reclaim requires AND the two asks a queue makes, bounded by `attempts` rather than by a clock, so it is neither a poll nor a timer standing in for an exit condition"
     )]
-    std::thread::sleep(recheck);
-    if may_reclaim(&holder, holder_of(&lock).as_deref())
-        && std::fs::remove_dir_all(&lock).is_ok()
-        && take(&lock, pid)
-    {
-        return Claim::Reclaimed(holder);
-    }
+    std::thread::sleep(interval);
+}
 
-    // The lock changed under us, or a live holder took it: whoever holds it now
-    // is real. Re-read rather than reporting the corpse seen a moment ago.
-    let holder = holder_of(&lock).unwrap_or_else(|| "unknown".to_owned());
-    let phase = read_field(git_dir, &holder, "phase").filter(|phase| !phase.is_empty());
-    Claim::Held { holder, phase }
+/// Drop a lock at an explicit path, whether or not it was ever taken.
+pub fn singleton_release_at(lock: &Path) {
+    let _ = std::fs::remove_dir_all(lock);
 }
 
 /// May the lock be taken from the pid seen at the FIRST sighting?

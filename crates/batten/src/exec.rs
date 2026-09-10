@@ -193,7 +193,7 @@
 
 use std::ffi::OsString;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 #[expect(
     clippy::disallowed_types,
     reason = "stays: `batten exec -- <cmd>` IS the spawn — the verb's whole contract is a transparent passthrough of a caller's argv, streams and exit code (CLOUD-285)"
@@ -211,6 +211,7 @@ use crate::capture::{self, Stream};
 use crate::error::{Passthrough, UsageError};
 use crate::exit::ExitCode;
 use crate::outputs::{self, Hit, OutputPattern};
+use crate::task;
 
 /// The exit code a POSIX shell reports for a process killed by a signal.
 ///
@@ -1587,6 +1588,161 @@ pub fn run_in_with_env(
     report_bundle(&bundle, &outcomes, patterns, settings, report)
 }
 
+// -- The named lock a child may be held under (CLOUD-1710) -------------------
+//
+// `mise-tasks/with-lock.sh` is retired onto this. Everything about WHAT a lock
+// means stays in `task.rs` — the atomic create-or-fail, the empty pid file that
+// reads as held rather than free, the two-sighting dead-holder reclaim — because
+// a second implementation of a lock is the two-authorities class CLOUD-857
+// measured. What lives here is the WRAPPING the shell also had and
+// `task::singleton_acquire` does not: hold it across a child, and drop it on
+// every exit path.
+//
+// The mutations target the two decisions a naive lock loses, which are exactly
+// the two `tests/with-lock.bats` asserted and which acquire/release cannot tell
+// apart. The third targets the verdict, which is the whole product of a wrapper.
+//MUTANT exec-lock-empty-holder-read-as-free|s@Claim::Taken | task::Claim::Reclaimed(_)@Claim::Taken | task::Claim::Reclaimed(_) | task::Claim::Held { .. }@|an_empty_holder_file_is_held_not_free
+//MUTANT exec-lock-dead-holder-not-reclaimed|s@attempts@1@|a_dead_holder_is_reclaimed_rather_than_waited_out
+//MUTANT exec-lock-verdict-discarded|s@let _held =@let _unheld =@|the_wrapped_exit_code_survives_the_lock
+//MUTANT-SUITE crates/batten/tests/it/exec_lock.rs
+
+/// How long the queue is when the caller does not say — the shell's own default
+/// (600s at one ask per 100ms), stated as the count it always was.
+pub const LOCK_ATTEMPTS_DEFAULT: usize = 6000;
+
+/// The interval between two asks for a held lock.
+///
+/// `mise-tasks/with-lock.sh`'s `sleep 0.1`, carried unchanged. Fixed rather than
+/// a flag: `--lock-attempts` is the bound a caller has a reason to move, and a
+/// second knob over the same wait would let two callers spell one length two
+/// ways.
+const LOCK_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Where a lock lives, which decides what it serializes.
+///
+/// **Two arms because the resource decides, not the caller's taste.** A lock
+/// under `$GIT_DIR` serializes one clone's own work, which is
+/// `batten singleton`'s "one task per clone" and what `mise run alive` can
+/// enumerate. A lock at a path serializes a resource the clone does not own —
+/// a mise install tree, a rustup toolchain — where every checkout on the machine
+/// has to form one queue or CLOUD-220 returns by another route.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LockPlace {
+    /// Keyed under `$GIT_DIR`, scoped to this clone.
+    Key(String),
+    /// At an explicit path, scoped to whatever lives there.
+    Path(PathBuf),
+}
+
+/// What `--lock` asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Lock {
+    /// Where the lock lives.
+    pub place: LockPlace,
+    /// How many times to ask before reporting it held.
+    pub attempts: usize,
+    /// What the wait is FOR, for the refusal line.
+    pub label: String,
+}
+
+/// Holds one clone's singleton lock for as long as this value lives.
+///
+/// **A `Drop` rather than a release at each return**, which is the shell's exit
+/// trap expressed in the type system: the caller has several exits and one of
+/// them is an error path carrying the child's own code, and a release a reader
+/// has to find on all of them is one a later edit drops. The shell names the
+/// cost of getting this wrong: *"a failure that leaves the lock held wedges
+/// every later caller for the full timeout, turning one red run into a stuck
+/// repo."*
+///
+/// The residual is a `SIGKILL`, where no destructor runs and no trap fired
+/// either. That is not a gap this needs to close, and the shell says why: an
+/// abandoned lock is reclaimed by the dead-holder sighting in
+/// [`task::singleton_queue`], so it costs one ask rather than the whole queue.
+#[derive(Debug)]
+pub struct HeldLock {
+    lock: PathBuf,
+}
+
+impl Drop for HeldLock {
+    fn drop(&mut self) {
+        task::singleton_release_at(&self.lock);
+    }
+}
+
+/// What asking for a lock produced.
+///
+/// Three arms rather than an `Option`, because "no lock was asked for" and "the
+/// lock was asked for and refused" are opposite answers an `Option` would spell
+/// the same way — and the second carries a code the first has no business
+/// naming.
+#[derive(Debug)]
+pub enum LockOutcome {
+    /// No lock was asked for; this is an ordinary unlocked run.
+    Unlocked,
+    /// The lock is this process's until the guard drops.
+    ///
+    /// The value is never read, and that is the mechanism rather than an
+    /// oversight: what it does happens in [`HeldLock::drop`], so the field is
+    /// the lock's lifetime expressed as a binding.
+    Held(HeldLock),
+    /// The lock could not be taken, and this is what to exit.
+    Refused(ExitCode),
+}
+
+/// Take the lock `want` names, queueing behind a live holder.
+///
+/// A held lock is a verdict about this clone and reports as
+/// [`ExitCode::Violation`]; an unresolvable git dir is could-not-look and
+/// reports as [`ExitCode::Internal`] — never "nothing holds it", which is how
+/// two of them start. Both readings are [`crate::task::report_claim`]'s rather
+/// than restated here, so the lock has one authority on what its answers mean.
+///
+/// **Ported onto the engine's exit table, not the corpus's.** The retiring shell
+/// spelled a held lock `1`; `crate::exit` spells a verdict `2`, and carrying the
+/// inversion across would be the defect CLOUD-1718 exists to name.
+///
+/// # Errors
+///
+/// Propagates a write failure on the report channel.
+pub fn hold(want: Option<&Lock>, err: &mut dyn Write) -> Result<LockOutcome> {
+    let Some(want) = want else {
+        return Ok(LockOutcome::Unlocked);
+    };
+    let pid = std::process::id().to_string();
+    let (lock, claim) = match &want.place {
+        LockPlace::Key(key) => {
+            let Ok(git_dir) = crate::git::git_dir(Path::new(".")) else {
+                writeln!(
+                    err,
+                    "::error:: exec: --lock names a lock under the git dir, and this is not a git repository — use --lock-path for a lock outside one"
+                )?;
+                return Ok(LockOutcome::Refused(ExitCode::Internal));
+            };
+            let lock = git_dir.join(task::SINGLETON_DIR).join(key);
+            let claim = task::singleton_acquire_at(&lock, &pid, LOCK_POLL, want.attempts);
+            (lock, claim)
+        }
+        LockPlace::Path(path) => {
+            let claim = task::singleton_acquire_at(path, &pid, LOCK_POLL, want.attempts);
+            (path.clone(), claim)
+        }
+    };
+    match claim {
+        task::Claim::Taken | task::Claim::Reclaimed(_) => Ok(LockOutcome::Held(HeldLock { lock })),
+        // Stdout belongs to the child even on the path where there is no child:
+        // a caller parsing this command's stdout must not find a lock's
+        // narration in it, so the success channel is a sink here.
+        refused => Ok(LockOutcome::Refused(task::report_claim(
+            &refused,
+            &want.label,
+            &mut std::io::sink(),
+            err,
+        )?)),
+    }
+}
+
 /// Run a command and report WHICH declared patterns its output matched,
 /// whatever it exited.
 ///
@@ -1886,6 +2042,86 @@ pub(crate) fn detached(program: &Path, args: &[String], env: &[(&str, &str)]) {
     }
     // SPAWNED AND DROPPED. No `wait`, no `status`, no handle kept.
     drop(builder.spawn());
+}
+
+/// Become `argv`: replace this process, or say why it could not be.
+///
+/// # Why this is a THIRD shape beside `piped` and `detached`
+///
+/// Both of those leave this process alive — one waiting, one not — and there is
+/// a caller for whom that is the defect rather than the mechanism. `mcp spawn`
+/// records a launch and then hands the process to the server, and CLOUD-714's
+/// whole constraint is that nothing survives to supervise it: not a retry, not a
+/// keepalive. A shim that recovered from a failed launch would hide the failure
+/// it exists to expose. `exec` is what makes that structural instead of a
+/// promise — after it there is no process left that could restart anything.
+///
+/// So the guarantee is a PROPERTY OF THE SYSCALL, not of the code above it,
+/// which is why the launch line goes through here rather than through a spawn a
+/// later edit could quietly wrap in a loop.
+///
+/// # Placed here rather than widening the adapter table
+///
+/// `policy/spawn-adapters.rego` names `exec` as *"the sanctioned child-process
+/// boundary"*, and its own prose records why the table is not the place to grow:
+/// two rows were once added by a branch whose justification was false, with every
+/// sensor green over them. `mcp` calling this reaches the boundary that already
+/// exists; adding `mcp` to that set would cost `spawn-widening`'s refusal for a
+/// capability the placed adapter already owns.
+///
+/// # Errors
+///
+/// Only when the replacement fails — a program that is not on `PATH`, or not
+/// executable. Success does not return.
+#[cfg(unix)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: becoming the named program IS the verb, on `provision::become_process`'s reading — there is no in-process form of somebody else's binary (CLOUD-320)"
+)]
+pub fn become_argv(argv: &[String]) -> Result<std::convert::Infallible> {
+    use std::os::unix::process::CommandExt as _;
+    // An empty argv is unreachable — the surface declares the trailing list
+    // `num_args(1..)` — and is a refusal rather than a panic, because a launch
+    // line nobody named must never read as a launch that happened.
+    let Some((program, rest)) = argv.split_first() else {
+        return Err(UsageError::raise(
+            "mcp spawn: no launch line to become, so nothing was started".to_owned(),
+        ));
+    };
+    let mut command = Command::new(program);
+    command.args(rest);
+    // `exec` returns only on failure, so reaching the next line IS the error.
+    let failed = command.exec();
+    Err(UsageError::raise(format!(
+        "mcp spawn: could not become `{program}`: {failed}"
+    )))
+}
+
+/// The same, where a process cannot be replaced.
+///
+/// **A refusal rather than a spawn**, and the difference from
+/// `provision::become_process`'s fallback is deliberate: that one runs the child
+/// and takes its status, which is right for a launcher. It is wrong here. The
+/// caller's whole guarantee is that no supervisor survives the launch, and a
+/// parent waiting on a child IS a supervisor — one that a later edit could give a
+/// restart loop without any gate noticing. Refusing says the guarantee cannot be
+/// made on this host instead of quietly making a weaker one.
+///
+/// Nothing in this repository links on such a host today; the arm exists so the
+/// cross-target build is honest about it.
+///
+/// # Errors
+///
+/// Always.
+#[cfg(not(unix))]
+pub fn become_argv(argv: &[String]) -> Result<std::convert::Infallible> {
+    let _ = argv;
+    Err(UsageError::raise(
+        "mcp spawn: this host cannot replace a process, and the launch guarantee is that no \
+         supervisor survives it — running the server as a child would be a weaker promise wearing \
+         the same name"
+            .to_owned(),
+    ))
 }
 
 /// Whether a spawn's stderr joins its stdout, and it is per CALL SITE.

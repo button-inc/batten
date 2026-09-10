@@ -811,13 +811,20 @@ reason = """
 Rebasing onto `main` by hand is a lap of the loop `mise run land` drives, and \
 taking it off the task is the race the contract refuses rather than a repair. \
 Background `mise run land`; it fetches, rebases, verifies, pushes and waits, \
-and stops only for a rebase conflict, a failed `verify`, or red CI. TWO \
-SPELLINGS ARE LEFT ALONE, and neither is a lap: the conflict exits \
-(`--continue`, `--abort`, `--skip`) name no target at all, and \
-`git rebase --onto <newbase> <upstream> <branch>` is a range move this loop \
-cannot perform. A CONFLICT is the one step that is yours, and this row denies \
-rather than warns because a warn row on this surface reaches nobody — so the \
-conflict stop is a limit this row names rather than one it can soften."""
+and stops only for a rebase conflict, a failed `verify`, or red CI. A CONFLICT \
+is the one step that is yours, and the route is \
+`batten land replay <ref> --resolve <path>`: merge the path in the worktree and \
+name it, or `--resolve <path>=<file>` for a path that conflicts at more than \
+one commit, one entry per conflict in order. THE REPLAY IS STATELESS, so there \
+is no rebase in progress and `--continue`, `--abort` and `--skip` cannot apply \
+to it — this row used to name those three as the way out, which is a remedy \
+that does not exist (CLOUD-1050's class, measured when a session read it, \
+concluded the loop was broken, and reached for a cherry-pick that would have \
+completed the replay while writing no lap record). \
+`git rebase --onto <newbase> <upstream> <branch>` stays open and is not a lap: \
+it is a range move this loop cannot perform, which is what `unless_contains` \
+admits. This row denies rather than warns because a warn row on this surface \
+reaches nobody."""
 
 # The toolchain pin, given a mechanism (CLOUD-271). AGENTS.md has said "never a
 # bare `cargo`" since long before anything enforced it, which non-negotiable
@@ -1655,6 +1662,126 @@ regex = '(^|/)tasks/[A-Za-z0-9._-]+\.output$'
 [[pattern]]
 id = "egress-resolver-host"
 regex = 'api\.github\.com'
+
+# CLOUD-843's port of `pipefail-grep-check`. Three static halves; the flag
+# CLUSTER is read letter by letter in the module rather than enumerated here,
+# because "a short-flag cluster containing q or l" is a decision and not a
+# spelling — an enumeration is the thing that would rot.
+[[pattern]]
+id = "shell-enables-pipefail"
+regex = '^[[:space:]]*set[[:space:]]+-[a-z]*o?[a-z]*[[:space:]]*.*pipefail'
+
+# A REAL pipe, never the second bar of `||`. The predecessor scanned
+# `\|[[:space:]]*grep`, which matched `a || grep -q ... <<<"$x"` — the very
+# remedy the gate recommends — and reported it as the defect. Measured on
+# `ready-lint.sh` (CLOUD-852).
+[[pattern]]
+id = "pipe-into-grep"
+regex = '(^|[^|])\|[[:space:]]*grep([[:space:]]|$)'
+
+# CLOUD-843's port of `awk-regex-check`. The NAME is a capture rather than the
+# whole match: the module compares full identifiers so that a name which merely
+# prefixes another is never confused for it, which the shell approximated with a
+# trailing character class.
+[[pattern]]
+id = "awk-v-assignment"
+regex = '-v[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)='
+
+# The leading identifier of a fragment, used to read what follows `~` or a comma
+# inside `match(...)`. A whole-token comparison is what makes the prefix case
+# decidable without a per-name regex, which a `[[pattern]]` row cannot express.
+[[pattern]]
+id = "leading-identifier"
+regex = '^[A-Za-z_][A-Za-z0-9_]*'
+
+# A full git object id, lowercase hex. `mise-action-floor` uses it to tell a PINNED
+# coordinate from a floating one: `@v4` carries no sha, so a denylist cannot speak
+# about it at all and reporting green over it would be a claim the gate cannot
+# support.
+[[pattern]]
+id = "git-object-id"
+regex = '^[0-9a-f]{40}$'
+
+# The two spellings a registry credential takes in a workflow. The
+# alternate-registry form carries the registry's own name in its middle segment,
+# so it is matched on its shape rather than enumerated.
+[[pattern]]
+id = "cargo-registry-token"
+regex = 'CARGO_REGISTRY_TOKEN|CARGO_REGISTRIES_[A-Z0-9_]*_TOKEN'
+
+# A login call, bounded on both sides so a word merely containing it does not
+# fire.
+[[pattern]]
+id = "cargo-login-call"
+regex = '(^|[^A-Za-z0-9_-])cargo login([^A-Za-z0-9_-]|$)'
+
+# The OIDC permission as a KEY, so the phrase in a comment cannot satisfy the
+# implication it discharges.
+[[pattern]]
+id = "oidc-token-permission"
+regex = '^[[:space:]]+id-token:[[:space:]]*write[[:space:]]*(#.*)?$'
+
+# A workflow JOB key, anchored at exactly two spaces. The indent is what makes it
+# a job rather than a step's field.
+[[pattern]]
+id = "workflow-job-key"
+regex = '^  [A-Za-z0-9_-]+:[[:space:]]*$'
+
+# A top-level workflow key, which is what ends the jobs block.
+[[pattern]]
+id = "workflow-top-level-key"
+regex = '^[a-z][A-Za-z0-9_-]*:'
+
+# A JOB-level timeout, at exactly four spaces. A step-level one sits deeper and
+# is the step's business; matching it here would let a step satisfy a job's
+# obligation.
+[[pattern]]
+id = "job-timeout-line"
+regex = '^    timeout-minutes:[[:space:]]*[0-9]+'
+
+# The measured budget form, capturing the p95 and the multiplier so the
+# arithmetic can be checked. Matched WHOLE, so a comment that merely mentions the
+# word cannot pass.
+[[pattern]]
+id = "timeout-budget-measured"
+regex = '^#[[:space:]]*budget:[[:space:]]*p95=([0-9]+)s[[:space:]]+x([0-9]+)[[:space:]]+measured=([0-9]{4}-[0-9]{2}-[0-9]{2})[[:space:]]*$'
+
+# The grandfathered form. Not a synonym for exempt: it says the value predates
+# measurement and nobody has justified it yet, which reads as debt.
+[[pattern]]
+id = "timeout-budget-grandfathered"
+regex = '^#[[:space:]]*budget:[[:space:]]*grandfathered[[:space:]]+measured=[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]]*$'
+
+# An install list, which is a one-line plain scalar by the workflows' own
+# convention: a block scalar would need continuation tracking, and several tool
+# names carry a backend prefix so they read as new keys under any such heuristic.
+[[pattern]]
+id = "install-args-line"
+regex = '^[ \t]*install_args:'
+
+# The trigger that puts a workflow on the pull-request path, which is the scope
+# the install-list rows are argued for.
+[[pattern]]
+id = "workflow-pull-request-trigger"
+regex = '^[ \t]*pull_request:'
+
+# The ASSIGNMENT set to false, not a mention. A substring search would pass a
+# workflow whose only occurrence is the comment explaining why the variable
+# matters, and would pass one setting it true — the same hole in a fix's clothing.
+[[pattern]]
+id = "mise-task-auto-install-off"
+regex = '^[ \t]*MISE_TASK_RUN_AUTO_INSTALL:[ \t]*"?false"?[ \t]*$'
+
+# The other half of the same binding.
+[[pattern]]
+id = "mise-exec-auto-install-off"
+regex = '^[ \t]*MISE_EXEC_AUTO_INSTALL:[ \t]*"?false"?[ \t]*$'
+
+# A tool a rule's own check spawns, which no install list reads and no `[tools]`
+# scan can see.
+[[pattern]]
+id = "mise-exec-spawn"
+regex = 'mise exec -- [a-z][a-z0-9._-]*'
 
 [[pattern]]
 id = "release-tag"
@@ -4999,9 +5126,16 @@ no_fix_reason = "migrate the predicate onto a rule kind, or declare `# stays-bas
 # TWO SURFACES ARE DELIBERATELY EXEMPT, and the reasons differ, so a later reader
 # finds a decision rather than a gap:
 #
-#   .github/workflows/**  bash is allowed. A workflow step is the one place a
-#                         shell line is the native spelling, and there is no
-#                         engine surface it could migrate onto.
+#   .github/workflows/**  bash is allowed, and since CLOUD-1709 it is COUNTED.
+#                         A workflow step is the one place a shell line is the
+#                         native spelling, and there is no engine surface it
+#                         could migrate onto — so it is exempt from THIS row,
+#                         which globs `mise-tasks/**`. It is not exempt from
+#                         measurement: `workflow-shell-not-growing` and its
+#                         `-bare` sibling ratchet the step count. Allowed and
+#                         uncounted are different claims, and reading the first
+#                         as the second is what 497 duplicated lines were
+#                         written under.
 #   install.sh            it cannot be a policy module by construction: it is how
 #                         the binary reaches a host that does not have it yet, so
 #                         it runs before the engine exists.
@@ -5115,6 +5249,91 @@ base = "origin/main"
 severity = "deny"
 scope = "tree"
 no_fix_reason = "migrate the predicate onto a rule kind, or waive the increase deliberately with a reason and an expiry; which of the two is the whole question"
+
+# CLOUD-1709. THE THIRD SURFACE, AND THE LARGEST. `bash-surface-not-growing`
+# globs `mise-tasks/**`; CLOUD-1137 closed the `mise.toml` and `.claude/**` holes
+# above. `.github/workflows/**` was left, and it is bigger than either: 28 files
+# carrying 135 shell steps, on a surface nothing counted.
+#
+# THE EXEMPTION ABOVE IS ABOUT MIGRATION, NOT ABOUT COUNTING, and these rows are
+# the correction of that inference rather than of the exemption itself. Workflow
+# bash stays allowed — a step is the native spelling and there is no engine
+# surface it could move onto. What does not follow is that it need not be
+# MEASURED, and 41% byte-identical duplication is what that inference bought.
+#
+# WHAT IS COUNTED IS THE STEP, NOT THE LINE, and the row body's 1,215-line figure
+# is deliberately NOT the predicate. A ratchet `pattern` is a literal substring
+# counted with `str::matches` (CLOUD-1058) — it cannot see where a YAML block
+# ends, so "lines inside a `run:` block" is not expressible here. The step is,
+# and it is the right unit anyway: `#MISE description=` counts programs for the
+# same reason one line up.
+#
+# TWO LITERALS FOR ONE CONCEPT, exactly as the `mise.toml` pair above, and for
+# the same CLOUD-1058 reason. Measured over the 28 workflows, `run:` appears at
+# precisely two indentations and no others: `\n        run:` (the key under a
+# `- name:` step) 111 times, and `\n      - run:` (the bare step) 24 times.
+# Both are newline-anchored, which is load-bearing: the unanchored literal also
+# matches `workflow_run:` and `check_run:`, 15 of them today, so it would count
+# trigger declarations as shell.
+#
+# THE BLIND SPOTS, STATED RATHER THAN DISCOVERED LATER (DoR §2). A `run:` at any
+# third indentation is not counted — none exists today, and a nested one inside a
+# composite action would need its own row. `.github/actions/**` is not globbed at
+# all, because no composite action exists yet; the follow-up that deduplicates
+# the 497 lines into one will have to add it, and that is the point at which this
+# row would otherwise report a fall it did not earn.
+#
+# THE FIRING RATE, replayed before the severity was chosen (DoR §7). Over all
+# 2,574 commits on `origin/main`, 181 of which touch a workflow: the 8-space row
+# fired 59 times, the dash row 21. As a share of all commits that is 2.3% and
+# 0.8%, against the `mise.toml` pair's 1.6% and 0.07%.
+#
+# AND THE FALSE POSITIVES ARE REAL HERE, which the `mise.toml` rows did not have
+# to answer for and which decides the `admits_with` column below. At least five
+# firings are THIS CAMPAIGN SUCCEEDING: retiring a shell program onto a verb
+# leaves a workflow step invoking it, so the step count rises while real bash
+# falls. `4b8fc385f` (`retire land-lock-check.sh onto batten lease check`, +1),
+# `8a90687a3` (`the perf budget is a rule, not a shell program`, +1) and
+# `c5346097d` (`move the latency family into the perf namespace`, +1) on the
+# 8-space row; `1e1d19874` (`retire ci-drift onto the verb it was already
+# calling`, +1) and `c5346097d` again on the dash row. That is the exact class
+# `batten.toml` rejected the wider `run = ` literal for one block up — *"a row
+# that denies its own campaign's wins is worse than the hole it closes."*
+#
+# SO THE PERMIT IS CARRIED RATHER THAN THE SEVERITY LOWERED. `warn` would answer
+# the false positives by making every firing advisory, including the 75 that are
+# real net-new shell. `admits_with` answers only the firings an author is willing
+# to sign for, and the cardinality objection that keeps it off both `mise.toml`
+# rows does not apply: those glob exactly ONE file, so the first permit spent
+# switches the row off forever, whereas this globs a DIRECTORY, which is the
+# per-file semantics the column was designed for. A retirement that adds a step
+# declares it in the workflow it added it to, and every other workflow stays
+# ratcheted.
+[[rule]]
+id = "workflow-shell-not-growing"
+kind = "ratchet"
+glob = ".github/workflows/**"
+pattern = "\n        run:"
+direction = "non_increasing"
+base = "origin/main"
+admits_with = "# workflow-shell:"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "move the step's body into a composite action or a batten verb, or declare `# workflow-shell: <issue> <why>` in the workflow and own the increase; which of the two is the whole question"
+
+# The other spelling of the same concept — see the block above for why it is a
+# second row rather than a second pattern on the first.
+[[rule]]
+id = "workflow-shell-not-growing-bare"
+kind = "ratchet"
+glob = ".github/workflows/**"
+pattern = "\n      - run:"
+direction = "non_increasing"
+base = "origin/main"
+admits_with = "# workflow-shell:"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "move the step's body into a composite action or a batten verb, or declare `# workflow-shell: <issue> <why>` in the workflow and own the increase; which of the two is the whole question"
 
 # The `.claude/**` half. `#!` rather than a shebang's text, because the programs
 # there do not share a spelling — `#!/usr/bin/env bash` twice today, and the file
@@ -6759,10 +6978,86 @@ input = "target/release/batten"
 # `error: test run failed`, exit 100.
 #
 # SO THIS ROW GUARDS A DECLARATION RATHER THAN A DURATION, and that division is
-# deliberate. `mise-tasks/suite-bench-check.sh` records why a duration gate is the
-# wrong instrument — it "would be red on every second run and would be bypassed
-# within a day" — and CLOUD-1419 wrote an aggregate ratchet and withdrew it in the
-# same branch. nextest measures and decides; batten refuses the weakening.
+# deliberate. `policy/suite-cost-corpus.rego` records why a duration gate is the
+# wrong instrument — it "would be red on every second run and switched off within
+# a day" — and CLOUD-1419 wrote an aggregate ratchet and withdrew it in the same
+# branch. nextest measures and decides; batten refuses the weakening.
+#
+# The membership half of that division is the row below, ported off
+# `mise-tasks/suite-bench-check.sh` under CLOUD-1753.
+
+# The per-suite cost corpus covers exactly the tracked suites (CLOUD-352).
+#
+# THE DIVISION THE ROW ABOVE NAMES, from the other side. Wall clock is a CLOCK and
+# belongs in a drift job; MEMBERSHIP is deterministic and belongs in a gate. A
+# suite added and never recorded is invisible to everything that reads the corpus,
+# and a row naming a deleted suite is a figure attached to nothing — both decidable
+# from committed text at no runtime cost.
+#
+# `lines` NAMES ONE LITERAL PATH, on `nextest-slow`'s reading directly above: a
+# tree without the corpus still acquires the declared source, so the could-not-look
+# arm fires on the absent document instead of leaving the rule SKIPPED. That is the
+# arm that matters most here — an absent corpus is precisely the state where
+# nothing records what a suite costs.
+#
+# The producer is `batten record suites`, and the path is a contract between the
+# two halves rather than an implementation detail of either: `suites.rs` spells it
+# as `CORPUS` and this row spells it here.
+[[rule]]
+id = "suite-cost-corpus"
+kind = "policy"
+scope = "tree"
+lines = ["bench/suites/RESULTS.md"]
+module = "policy/suite-cost-corpus.rego"
+severity = "deny"
+
+[[verdict]]
+id = "suite count unread"
+gloss = "the per-suite cost corpus is absent or carries no row, so nothing records what a suite costs"
+class = """
+Could-not-look, never a clean corpus — the whole subject of the gate is that a cost is recorded, so an unreadable corpus is the state it exists to report. Run `mise run test:bats`, then `batten record suites --write`.
+"""
+
+[[verdict.route]]
+id = "suite measure now"
+kind = "command"
+target = "batten record suites --write"
+
+[[verdict]]
+id = "suite list empty"
+gloss = "no tracked bats suite exists, so the cost corpus has no subject to cover"
+class = """
+Could-not-look rather than a corpus that covers everything there is. Reporting green over a tree with nothing to measure is the collapse that lets a gate pass on ignorance.
+"""
+
+[[verdict.route]]
+id = "test add first"
+kind = "document"
+target = "tests/"
+
+[[verdict]]
+id = "suite count absent"
+gloss = "a tracked suite has no row in the cost corpus, so an author editing it is told nothing about what it costs"
+class = """
+The corpus is read to answer "is the file I am about to add a case to expensive". A suite it does not name is invisible to that question. Regenerate after a run that covered it.
+"""
+
+[[verdict.route]]
+id = "suite measure now"
+kind = "command"
+target = "batten record suites --write"
+
+[[verdict]]
+id = "suite count dead"
+gloss = "the cost corpus records a suite this tree does not track — a figure attached to nothing"
+class = """
+Either the suite retired and the corpus was not regenerated, or the report it was derived from predates the tree. The producer refuses the second case by name, so regenerating is the whole remedy.
+"""
+
+[[verdict.route]]
+id = "suite measure now"
+kind = "command"
+target = "batten record suites --write"
 #
 # `lines` NAMES ONE FILE AND THAT IS SAFE HERE, unlike `landing-roster-guarded`
 # which had to declare a whole directory. That module's absent-source arm was dead
@@ -6811,6 +7106,265 @@ kind = "policy"
 scope = "tree"
 documents = ["bench/agentic/trials.toml", "bench/agentic/method.toml"]
 module = "policy/agentic-experiment-record.rego"
+severity = "deny"
+
+# CLOUD-194, ported from `mise-tasks/module-map-check.sh` under CLOUD-843. The
+# module's own header carries the predicate and why a missing map is reported
+# once; it is not restated here.
+#
+# `line_sources` NAMES ONE FILE, and `tracked` is not declared at all because it
+# is not a per-path fact — the module asks which paths exist, which the tree
+# surface answers for the whole tree. Declaring the crate sources as
+# `line_sources` would read every module's TEXT to learn only its NAME, which is
+# the payload-for-a-pointer trade non-negotiable rule 4 refuses.
+# CLOUD-813, ported from `mise-tasks/no-doctests.sh` under CLOUD-843. The
+# module's own header carries the predicate, the parity rule and why `no_run`
+# counts as non-running; it is not restated here.
+#
+# `line_sources` RATHER THAN `sources`: the predicate is over the TEXT of a doc
+# comment, and no `Format` owns `.rs` — a `documents` reading would resolve to
+# nothing and the rule would load clean over a workspace it never scanned.
+# Ported from `mise-tasks/awk-regex-check.sh` under CLOUD-843. The module's own
+# header carries the predicate and why identifiers are compared whole.
+#
+# The glob is the shell corpus plus the two root programs and the task manifest —
+# the same set the predecessor scanned. It SHRINKS as CLOUD-843 retires programs,
+# which is the campaign working: what is left at the end is `install.sh`,
+# `mise.toml` and the five programs that stay bash.
+# Ported from `mise-tasks/pipefail-grep-check.sh` under CLOUD-843. The module's
+# own header carries the race, the two instances that landed before the class was
+# named, and why the flag cluster is read letter by letter.
+# Ported from `mise-tasks/license-table-check.sh` under CLOUD-843. The module's
+# own header carries the predicate and why zero rows is a failure.
+# CLOUD-582, ported from `mise-tasks/report-only-check.sh` under CLOUD-843. The
+# module's own header carries the predicate, the task list and why only the
+# `pull_request` trigger is judged.
+#
+# `sources` RATHER THAN `line_sources`: the predicate is over PARSED structure —
+# `verify`'s `depends` list, a workflow's trigger map — which is what removes the
+# span-carving and the word-boundary the shell needed.
+[[rule]]
+id = "report-only"
+kind = "policy"
+scope = "tree"
+sources = ["mise.toml", ".github/workflows/*.yml", ".github/workflows/*.yaml"]
+module = "policy/report-only.rego"
+severity = "deny"
+
+[[rule]]
+id = "license-table"
+kind = "policy"
+scope = "tree"
+line_sources = ["CONTRIBUTING.md"]
+module = "policy/license-table.rego"
+severity = "deny"
+
+[[rule]]
+id = "pipefail-grep"
+kind = "policy"
+scope = "tree"
+line_sources = ["mise-tasks/**", "*.sh"]
+module = "policy/pipefail-grep.rego"
+severity = "deny"
+
+[[rule]]
+id = "awk-regex"
+kind = "policy"
+scope = "tree"
+line_sources = ["mise-tasks/**", "*.sh", "mise.toml"]
+module = "policy/awk-regex.rego"
+severity = "deny"
+
+[[rule]]
+id = "no-doctests"
+kind = "policy"
+scope = "tree"
+line_sources = ["crates/**/*.rs"]
+module = "policy/no-doctests.rego"
+severity = "deny"
+
+# CLOUD-224, ported from `mise-tasks/batten-glob-check.sh` under CLOUD-843. The
+# `batten-check` step's `glob` is a SECOND authority over the set this config
+# already defines, and a second authority narrows silently: add a `[[rule]]` whose
+# glob names a path the step does not select, and the gate stops running for
+# commits that touch only that path with nothing going red. The whole-tree run in
+# CI still covers it, so the symptom is a rule that quietly does not gate a
+# branch — feedback deleted, verdict preserved. `line_sources` names both halves
+# because the containment is a pure function of the two committed files, and
+# because editing either one is a reason to re-decide it.
+# CLOUD-404, ported from `mise-tasks/mise-action-floor.sh` under CLOUD-843. The
+# toolchain-install action's pre-retry commit is a reachable BACKSLIDE, not a
+# hypothetical one: the latest release and the floating major both resolve to it,
+# the dependency bot tracks that ecosystem, and this repository lands bot bumps
+# with no human in the loop. So a bump to it would be a silent downgrade to the
+# un-retried install, auto-landed — and the rule that forbids it ships as a gate
+# rather than a note. A denylist rather than a required sha, so every legitimate
+# forward bump stays silent.
+# CLOUD-479's own trap, ported from `mise-tasks/hook-pin-check.sh` under
+# CLOUD-843. A hook registered BY PATH does not get the task runner's env, so a
+# tool `[tools]` pins resolves unpinned or not at all — and every hook here is
+# fail-open by design, so an absent one allows SILENTLY rather than erroring. The
+# pairing is what is refused, never either half alone. `line_sources` names three
+# shapes because the judgement is the join across them: which hooks are registered
+# by path, which tools are pinned, and what those scripts actually call.
+# CLOUD-593 and CLOUD-658, ported from `mise-tasks/msrv-pin-agreement.sh` under
+# CLOUD-843. Since CLOUD-593 the toolchain pin is the AUTHORITY and the declared
+# floor is its derived copy, so the predicate is a text equality over the compiler
+# LINE rather than a second compile of the whole workspace at a second toolchain.
+# CLOUD-658 added the third copy: the dependency bot's own updater does not read
+# the floor from the manifest, so MSRV-aware resolution survives the handover only
+# while the number is written into its config — a copy is not the defect, an
+# UNGATED copy is.
+# CLOUD-398, ported from `mise-tasks/rust-paths-check.sh` under CLOUD-843. This
+# is the one glob that decides whether a JOB RUNS AT ALL, and its failure is
+# silent in the dangerous direction: too wide costs money and shows in the bill;
+# too narrow leaves the jobs ABSENT, which the required-checks reader accepts by
+# design, so a platform regression lands with every required check green. What is
+# gated are the filter's own CLAIMS, as probes — which paths must re-run these
+# jobs and which must not — because "which files does a job read" is not
+# computable from committed text.
+# CLOUD-767, ported from `mise-tasks/digest-major-agreement.sh` under CLOUD-843.
+# The rule this replaces was a COMMENT, and the comment was wrong: it justified a
+# pin by claiming the next major would put two majors of one hashing substrate in
+# the tree, and the committed lockfile already carried both. What is decidable is
+# narrower and true today — the crypto crates this workspace declares FOR ITSELF
+# compose in one expression, so they must agree with each other. Read from the
+# LOCK, because a caret requirement is not a resolution; the manifest answers only
+# which crates are ours, which is the question the lock cannot answer.
+# CLOUD-593, ported from `mise-tasks/cap-drift.sh` under CLOUD-843. A cap and the
+# bot-side rule that mirrors it are one decision written twice, and the HALF-LIFT
+# is the direction that lands green: lift the manifest side alone and the bot goes
+# on withholding a version the manifest now admits, so the crate silently never
+# advances and no check anywhere is red. Set equality in both directions, and
+# still load-bearing with both sets empty — it is a ratchet over the next cap
+# either file gains.
+# CLOUD-860, the missing half of CLOUD-847, ported from
+# `mise-tasks/coderabbit-config-check.sh` under CLOUD-843. Three keys carry the
+# review lifecycle: the formal-review workflow (without it the forge's review
+# decision stays null), review of DRAFTS (the free phase, since every CI job here
+# is conditioned on not-a-draft), and the secret scanner (the only scanning a
+# draft gets, for the same reason). ABSENT IS NOT PASSING for the first two —
+# their defaults are the values this refuses — and the scanner is the inverse,
+# since its default is already enabled.
+# CLOUD-109, ported from `mise-tasks/publish-credential-check.sh` under CLOUD-843.
+# The load-bearing rule is the IMPLICATION, not the literal: while publishing is
+# off the OIDC permission is not required, and requiring it would be requiring a
+# capability no step uses. The moment publishing becomes true this refuses the
+# commit unless the release job carries it — so publishing cannot be switched on
+# except through OIDC, in the same commit that switches it. An absent `publish`
+# key is NOT false: the release tool's own default is to publish, so a config that
+# says nothing publishes.
+# CLOUD-266, ported from `mise-tasks/timeout-check.sh` under CLOUD-843. Every job
+# already declares a timeout, so the ABSENCE of a limit was never the problem: the
+# numbers are boilerplate, with measured headroom over p95 ranging from 3.4x to
+# 75x. A cap at 75x cannot fail a job that is merely broken-slow, and it never
+# tells anyone the job got slower. So this gates the JUSTIFICATION rather than the
+# limit, beside the value it bounds. The retiring program asked whether this could
+# be a `[[rule]]` row and answered honestly that it could not — `forbid` matches a
+# substring and cannot compare integers. A policy module is exactly the missing
+# capability, and rule 1 holds because the arithmetic is this consumer's.
+# CLOUD-180, CLOUD-812 and CLOUD-480, ported from `mise-tasks/ci-tools-check.sh`
+# under CLOUD-843. Narrowing the per-job install set is the largest CI speed-up
+# here, and its cost is a SECOND place tool names are written down. Three
+# directions, because each of the first two is blind to the next: names in a list
+# can be judged, a workflow with NO list has no names to judge (CLOUD-812 measured
+# two such workflows installing everything on every push, with nothing red), and
+# neither can see a tool a `[[rule]]` row itself spawns — which with auto-install
+# off fails CLOSED in CI while passing locally (CLOUD-480, two runs).
+[[rule]]
+id = "ci-tools"
+kind = "policy"
+scope = "tree"
+line_sources = ["mise.toml", "batten.toml", ".github/workflows/*.yml"]
+module = "policy/ci-tools.rego"
+severity = "deny"
+
+[[rule]]
+id = "timeout-budget"
+kind = "policy"
+scope = "tree"
+line_sources = [".github/workflows/*.yml"]
+module = "policy/timeout-budget.rego"
+severity = "deny"
+
+[[rule]]
+id = "publish-credential"
+kind = "policy"
+scope = "tree"
+line_sources = ["release-plz.toml", ".github/workflows/*.yml"]
+module = "policy/publish-credential.rego"
+severity = "deny"
+
+[[rule]]
+id = "coderabbit-config"
+kind = "policy"
+scope = "tree"
+line_sources = [".coderabbit.yaml"]
+module = "policy/coderabbit-config.rego"
+severity = "deny"
+
+[[rule]]
+id = "cap-drift"
+kind = "policy"
+scope = "tree"
+line_sources = ["Cargo.toml", "renovate.json5"]
+module = "policy/cap-drift.rego"
+severity = "deny"
+
+[[rule]]
+id = "digest-major-agreement"
+kind = "policy"
+scope = "tree"
+line_sources = ["Cargo.toml", "Cargo.lock"]
+module = "policy/digest-major-agreement.rego"
+severity = "deny"
+
+[[rule]]
+id = "rust-paths-check"
+kind = "policy"
+scope = "tree"
+line_sources = [".github/workflows/rust.yml"]
+module = "policy/rust-paths-check.rego"
+severity = "deny"
+
+[[rule]]
+id = "msrv-pin-agreement"
+kind = "policy"
+scope = "tree"
+line_sources = ["Cargo.toml", "mise.toml", "renovate.json5"]
+module = "policy/msrv-pin-agreement.rego"
+severity = "deny"
+
+[[rule]]
+id = "hook-pin-check"
+kind = "policy"
+scope = "tree"
+line_sources = [".claude/settings.json", "mise.toml", "mise-tasks/*.sh"]
+module = "policy/hook-pin-check.rego"
+severity = "deny"
+
+[[rule]]
+id = "mise-action-floor"
+kind = "policy"
+scope = "tree"
+line_sources = [".github/workflows/*.yml"]
+module = "policy/mise-action-floor.rego"
+severity = "deny"
+
+[[rule]]
+id = "glob-containment"
+kind = "policy"
+scope = "tree"
+line_sources = ["batten.toml", "hk.pkl"]
+module = "policy/glob-containment.rego"
+severity = "deny"
+
+[[rule]]
+id = "module-map"
+kind = "policy"
+scope = "tree"
+line_sources = [".serena/memories/core.md"]
+module = "policy/module-map.rego"
 severity = "deny"
 
 [[rule]]
@@ -8373,14 +8927,52 @@ measured = "2026-09-07"
 # COLD'S BASIS MOVES WITH WARM'S, for the 2026-09-06 entry's measured reason:
 # refreshing one and not the other made the very next lap refuse on the other arm
 # with warm never breached.
+# THE SECOND 2026-09-09 RETIREMENT MOVE, 256 -> 268, BOTH BASES, NEITHER FLOOR.
+#
+# The entry below predicted this: "the count will keep moving for the rest of this
+# campaign, one tier per retired gate against 39 in this branch's brief, so a
+# tolerance of 10 will be reached again within it." It was, twelve tiers later.
+# That is the gate working as a trend counter rather than drifting.
+#
+# THE FLOORS DO NOT MOVE, on the same grounds the three entries below state and
+# not on a fresh judgement: the prescribed post-prune `du` is disqualified when the
+# prune ESCALATED, and scaling is what those entries name as the same staleness
+# wearing a newer number. The independent measurement stays OWED to CLOUD-1158,
+# and the entry that finally moves a floor should be the one that can take the
+# ordinary reading — not the one that happens to trip the tolerance.
+# THE 2026-09-09 RETIREMENT MOVE, 244 -> 256, BOTH BASES, AND NEITHER FLOOR MOVES.
+#
+# WHAT MOVED THE COUNT is CLOUD-843's own campaign, which is what the block at the
+# head of this table predicted the count would do: six shell gates retired onto
+# policy modules, and each owes a `crates/batten/tests/it/*.rs` tier. Eight tiers
+# landed in one commit — `exec_lock`, `module_map`, `no_doctests`, `awk_regex`,
+# `pipefail_grep`, `license_table`, `report_only` and `workflow_shell_census` —
+# and `target-prune` refused at `declared 244, live 256, tolerance 10`, the
+# staleness arm rather than the disk: 15111 MB were free against a floor of 11140.
+#
+# THE FLOORS DO NOT MOVE, on the two entries above's stated grounds rather than a
+# fresh judgement. The prescribed method is `du -sm target` immediately after a
+# successful prune, and this prune ESCALATED — the same disqualification the
+# 2026-09-08 entry records, so the reading is of a post-escalation tree and not
+# the retained state 11140 was measured against. Scaling 11140 by 256/244 is what
+# BOTH entries above name as the same staleness wearing a newer number, so it is
+# not taken either. The independent measurement stays OWED to CLOUD-1158.
+#
+# THE COUNT WILL KEEP MOVING FOR THE REST OF THIS CAMPAIGN, one tier per retired
+# gate against 39 in this branch's brief, so a `tolerance` of 10 will be reached
+# again within it. That is the gate working — it is a trend counter — and the
+# entry that finally moves a floor should be the one that can take the ordinary
+# post-prune `du`, not the one that happens to trip the tolerance.
+#
+# COLD'S BASIS MOVES WITH WARM'S, for the 2026-09-06 entry's measured reason.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 244
+count = 268
 tolerance = 10
 
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 244
+count = 268
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
@@ -9540,23 +10132,67 @@ owner = "CLOUD-1079"
 expires = "2027-02-28"
 
 [[hook.handler]]
-id = "session-container-preflight"
+id = "session-egress"
 on = "session-start"
-run = ["mise", "run", "container-preflight"]
+run = ["batten", "doctor", "egress"]
+# THE FIRST OF THE TWO ROWS `session-container-preflight` ALWAYS WAS (CLOUD-1753).
+#
 # LAST OF THE STEPS THAT CAN HALT, and that position is the whole point
 # (CLOUD-261). "The toolchain installed" and "this container can do the work" are
 # different questions, and the second used to be answered three tasks in, by a
-# failure wearing someone else's name.
+# failure wearing someone else's name. The pair keeps that position; splitting it
+# does not move it.
+#
+# WHY TWO ROWS AND NOT ONE. The retired script asked two unrelated questions —
+# can mise resolve a release, and does the credential carry the read claims the
+# lifecycle needs — and collected both answers so a reader saw the whole list. It
+# had to collect them, because one process reporting two causes has to remember
+# to keep looking after the first; that is why `set -e` was deliberately absent
+# from it. The door already does that for free: every row is dispatched and every
+# refusal reaches the same reply. So the collection loop was the SHELL'S problem,
+# not the property's, and the property is better served by two rows that each
+# name their own failure than by one script that owned neither.
+#
+# THE VERB RATHER THAN A TASK, and the difference is load-bearing. The script
+# read `NO_PROXY` from inside a process `mise` had already corrected, so it
+# graded the REPAIRED value and called an unfenced container fenced. `batten` is
+# invoked directly here, so this reads what the container actually shipped —
+# which `doctor.rs` records as the whole reason the verb exists.
 #
 # THE `--degraded` ARM IS GONE AND THAT IS A FIDELITY LOSS, recorded here rather
 # than glossed. The script tracked a `fail` variable across its steps and passed
 # `--degraded` when an earlier one had failed, telling the preflight not to trust
 # toolchain-dependent probes. Handlers do not share state — each is its own
-# process with its own outcome — so this now always runs the full probe set. The
-# consequence is a preflight that may report a toolchain-dependent probe failing
-# on a container whose install already failed: a second symptom of one cause
-# rather than a wrong answer, and both refusals are in the same reply. Recovering
-# the arm needs a fact the door does not carry today.
+# process with its own outcome — so the pair below always runs the full probe
+# set. The consequence is a preflight that may report a toolchain-dependent probe
+# failing on a container whose install already failed: a second symptom of one
+# cause rather than a wrong answer, and both refusals are in the same reply.
+# Recovering the arm needs a fact the door does not carry today.
+#
+# The bound is the verb's, not a guess: it reads two environment variables and
+# resolves a no-proxy list by string, opening no network and building nothing.
+timeout_ms = 30000
+owner = "CLOUD-312"
+expires = "2027-02-28"
+
+[[hook.handler]]
+id = "session-credential"
+on = "session-start"
+run = ["mise", "run", "gh-preflight"]
+# THE SECOND ROW, and it is a straight invocation of a program this campaign is
+# NOT retiring. `gh-preflight` walks the read endpoints the lifecycle tasks call
+# and reports the claim GitHub itself names in each 403; it is the diagnosis and
+# it already exits non-zero. What the retired script added was running it, and a
+# handler runs it with nothing in between — which is the adopt-prior-art reading
+# rather than rebuilding a probe set inside the engine.
+#
+# AFTER THE EGRESS ROW, because a container that cannot reach the API at all
+# fails both, and the reader wants the cause before the symptom. Both answers
+# still arrive in the same reply, so the ordering buys legibility rather than
+# information.
+#
+# ITS TIMEOUT IS THE PAIR'S LARGE HALF: this one opens the network and walks
+# several endpoints, which is what the retired script's 120s was actually for.
 timeout_ms = 120000
 owner = "CLOUD-312"
 expires = "2027-02-28"
@@ -9570,16 +10206,23 @@ run = ["mise", "run", "session:census"]
 # running when the container we replaced went down (CLOUD-451) — so its stdout is
 # deliberately left to become advisory text.
 #
-# THE OTHER IS `session-container-preflight`, and the count was wrong here until
-# it was measured: dispatching these rows for real on 2026-09-01 returned
-# `signing-posture: …` and `container-preflight: egress fenced, …` in the
-# advisory, where this comment claimed one line. Both were the retired script's
-# behaviour too — it ran `container-preflight` and the census directly and
-# `step`-wrapped everything else — so the preflight's line stays and the signing
-# row was repointed at a wrapped task to restore the silence it had. The lesson is
-# the one this file keeps re-learning: a claim about what a row PRINTS is a
-# measurement, and every other row above is silent by construction only because a
-# task makes it so.
+# THE OTHER IS `session-egress`, and the count was wrong here until it was
+# measured: dispatching these rows for real on 2026-09-01 returned
+# `signing-posture: …` and the preflight's own all-clear line in the advisory,
+# where this comment claimed one line. Both were the retired script's behaviour
+# too — it ran the preflight and the census directly and `step`-wrapped
+# everything else — so the preflight's line stays and the signing row was
+# repointed at a wrapped task to restore the silence it had. The lesson is the one
+# this file keeps re-learning: a claim about what a row PRINTS is a measurement,
+# and every other row above is silent by construction only because a task makes
+# it so.
+#
+# THE SPEAKING ROW MOVED WITH CLOUD-1753 AND THE COUNT DID NOT. The preflight
+# split into `session-egress` and `session-credential`, and only the first is
+# unconditionally chatty: `doctor egress` prints `egress ok` on the clean path
+# where `gh-preflight` is silent unless a claim is missing. That is a claim about
+# what a row prints, so it is owed the same measurement the paragraph above
+# demanded of its predecessor rather than being read as settled here.
 #
 # It is also the only row that cannot fail the session: the task swallows both
 # its exits, because a verdict about a PAST container is not a provisioning
@@ -12781,6 +13424,438 @@ kind = "document"
 target = ".serena/memories/core.md"
 
 [[verdict]]
+id = "step cover missing"
+gloss = "the hook step's trigger does not select a path the config makes an input"
+class = """
+A trigger narrower than the rule set it serves deletes feedback while preserving the verdict: the gate simply stops running for commits that touch only that path, and nothing goes red. Add the path to the step's `glob = List(...)`, or narrow the rule that demands it.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "step select missing"
+gloss = "the step that runs the gate declares no trigger at all"
+class = """
+A glob-less step runs on every commit, which is what the trigger removed. Its absence is a regression rather than a default: declare the list, or accept the cost deliberately and say so.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "config parse unread"
+gloss = "the config this containment is read out of yielded no rule glob and no budget path"
+class = """
+A config a containment check parses nothing out of is a failed parse, never a config with no inputs — passing on it is the vacuous green such a check produces most easily. Fix the parse, or the config.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "version pin stale"
+gloss = "a workflow pins an action commit known to predate a fix this repository depends on"
+class = """
+A bump resolving back to that commit is a silent downgrade, and this repository lands bot bumps with no human in the loop — so the next occurrence of the defect reads as fresh. Move the pin forward; never remove the denylist entry, because a commit does not stop predating the fix.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "version pin unread"
+gloss = "no judgeable pin of the action under test was found in the workflows"
+class = """
+A floating ref carries no sha, so the denylist cannot speak about it; a tree with no pin of the action at all is a question this gate could not ask. Either is unreadable rather than clean, because a gate whose subject can vanish and read as green is not a gate.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "tool reach absent"
+gloss = "a hook registered BY PATH shells out to a tool the manifest pins"
+class = """
+A by-path invocation does not get the task runner's env, so that tool resolves unpinned or not at all — and every hook here fails OPEN, so an absent one allows silently instead of erroring. Register it through the runner and pay the startup, drop the dependency, or assert the tool yourself and declare `#PIN-OK: <tool>` beside the assertion.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "tool list empty"
+gloss = "the manifest pins no tool, so no by-path hook can be judged against it"
+class = """
+With the pinned set empty every by-path registration passes vacuously, which is a gate judging nothing while reporting clean. Restore the `[tools]` table, or point the rule at the manifest that has one.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "version declare other"
+gloss = "a derived copy of the toolchain pin names a different compiler line"
+class = """
+The pin is the authority and the declared floor and the bot's constraint are its copies; a copy that drifts switches off the resolution it was written for, silently. Raise the pin, then set both copies to its major.minor — the comparison is equality, not a bound, and a patch component is not a difference.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "version declare missing"
+gloss = "a file that must carry the toolchain number carries none"
+class = """
+Silence on any one of the three would read as agreement, which is the failure this family exists to prevent. An absent bot constraint in particular is MSRV-aware resolution switched off rather than a neutral omission, because that updater does not read the manifest floor.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "input select missing"
+gloss = "a workflow's paths filter does not select an input its jobs read"
+class = """
+A filter that selects too narrowly does not fail: the jobs are simply ABSENT, the required-checks reader accepts absent by design, and the regression lands with every check green. Add the path, or drop the probe that claims the job reads it.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "input select loose"
+gloss = "a workflow's paths filter selects a diff its jobs cannot be affected by"
+class = """
+Every widening is invisible except as a bill, which is why it erodes silently. Narrow the entry that reaches this path, or move the probe if the job really did gain the input.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "workflow read unclear"
+gloss = "the paths filter could not be read, or carries a shape this matcher cannot decide"
+class = """
+A workflow with no filter runs on every pull request — safe and expensive — and reading that as `every probe honoured` reports on a filter that does not exist. A negation, a character class or a star anywhere but the end is refused rather than guessed, because a guessed selection here is the silent false-absent the gate exists to stop: extend the matcher in the same commit as the pattern.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "module list missing"
+gloss = "a crate source module is absent from the module map"
+class = """
+An unmapped module is not one with no constraints — it is one whose constraints nobody wrote down, and the map is the single authority the layering prose defers to. Add its row, or narrow the rule's selector so the module is honestly out of scope.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "test place wrong"
+gloss = "a runnable doctest exists in a workspace whose runner does not execute doctests"
+class = """
+The scheduler here does not run doctests, so one written as a test is a test nothing runs — an assertion that reads as coverage and can never fail. Move the assertion into a real test target, or mark the block so it is documentation rather than a test.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "pattern carry unsafe"
+gloss = "a shell program hands awk a regex through a `-v` assignment"
+class = """
+A pattern passed that way goes through the assignment's own escape handling before awk ever sees it, and that handling is implementation-defined — so the same program matches differently under different awks. Pass the pattern positionally, or inline it in the program text where the escaping is awk's alone.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "spawn read broken"
+gloss = "a producer is piped into an early-exiting grep under pipefail"
+class = """
+An early-exiting grep signals its producer on the first match, and under pipefail that makes the pipeline report FAILURE on a match — so the verdict inverts, and the more reliably the larger the input. Read the producer into a variable first, or drop the early exit.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "tool grade unclear"
+gloss = "an adopted tool's licence row is unresolved"
+class = """
+The release precondition is that every adopted tool's licence is confirmed, and an unresolved row is a confirmation nobody made rather than a licence that is fine. Resolve the row, or drop the tool.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "task guard missing"
+gloss = "a report task carries no declaration keeping it off the landing path"
+class = """
+A report is a report by a decision no exit code holds unless something declares it. Without the declaration the task's non-gate status is a convention, and a convention is what the next edit walks through.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "task judge silent"
+gloss = "a report task is reachable from the landing path"
+class = """
+A task that reports rather than gates must not be able to redden a landing, and must not be able to green one either — reachability makes its output a verdict nobody intended. Take it off the path, or make it a gate deliberately.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "lock read unclear"
+gloss = "the lockfile does not answer what it resolved for a crate the manifest declares"
+class = """
+A crate declared for this workspace that the lock resolves no dependency for, or a bare entry beside several majors of that dependency, is a lockfile that does not describe the manifest. Nothing can be decided from it — regenerate the lock rather than reading its silence as agreement.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "version resolve other"
+gloss = "the workspace's own crypto crates resolved different majors of one substrate"
+class = """
+The crates this workspace declares for itself compose in a single expression, so splitting them across majors is a type that does not exist and a build that cannot succeed. Bump them together or not at all; a transitive dependency's own major is not this workspace's to keep.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "bound carry missing"
+gloss = "an upper bound exists in one of its two files and not the other"
+class = """
+A cap and the withholding rule that mirrors it are one decision written twice, and either half alone is wrong in its own way: a cap with no rule lets the bot propose a version the manifest refuses, reddening a whole grouped batch; a rule with no cap withholds a version the manifest admits, so the crate silently never advances and nothing goes red. The second is the half-lift, and it is the direction with no symptom. Add the missing half, or remove both.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "config carry empty"
+gloss = "the review config declares none of the keys the lifecycle rests on"
+class = """
+A key nobody wrote and a key someone deleted are the same file, and both leave the tool's DEFAULT in force — which is the value these rows exist to refuse. A config carrying no keys at all satisfies every assertion about a key by having nothing to judge, which is the vacuous pass this refuses first. Declare the key with its value.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "config state wrong"
+gloss = "a review-config key is set to the value that switches the lifecycle off"
+class = """
+Flipping one of these back is a one-line diff whose symptom is SILENCE: reviews stop happening, which looks exactly like nobody having pushed, and the gate that consumes the review then refuses every pull request for want of an answer the config quietly stopped producing. The visible failure would be the gate rather than the cause. Restore the value, or accept the consequence deliberately and record it.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "grant carry unsafe"
+gloss = "a workflow can reach a long-lived registry credential"
+class = """
+A credential stored as a secret is the thing trusted publishing exists to retire, and it reaches every job that can read the secret rather than the one step that needs it. Remove the reference and authenticate through OIDC in the same change; a finding here names a key class and a line, never the matched text, because the class of thing being looked for is the class that must not reach a log.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "lane grant missing"
+gloss = "publishing is on without the credential-free way to do it"
+class = """
+The release tool will authenticate to a registry, and the only route that needs no stored credential is the OIDC permission on the job that publishes. Add it and register this repository as a trusted publisher; do not add a registry token. While publishing is off the permission is NOT required — granting it then would be a capability no step uses, which an excessive-permissions audit reads as a finding of its own.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "timer declare missing"
+gloss = "a workflow job declares no timeout at all"
+class = """
+A job with no wall-clock bound can burn a runner until the forge's own ceiling stops it. Declare one, with the budget comment that justifies it.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "timer carry unnamed"
+gloss = "a timeout carries no budget comment beside it"
+class = """
+A limit with no justification is boilerplate: it cannot fail a job that is merely broken-slow, only one that is fully wedged, and it never tells anyone the job got slower. Add the comment beside the value it bounds — grandfathered if the number predates measurement, which is honest debt rather than an exemption.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "timer parse unclear"
+gloss = "a budget comment does not match either accepted form"
+class = """
+The two grammars are matched WHOLE, so a comment that merely mentions the word cannot pass — a budget a reader cannot parse is one a gate cannot check. Write the grandfathered form or the measured one.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "timer count wrong"
+gloss = "a measured budget's declared minutes disagree with its own stated p95"
+class = """
+The declared value must equal the ceiling of the p95 times the repository multiplier, in minutes. A budget whose arithmetic does not hold is a justification for a different number than the one enforced.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "timer count other"
+gloss = "a measured budget uses a multiplier other than the repository's"
+class = """
+The multiplier is ONE repository-wide constant rather than a per-job field, because a per-job multiplier is a per-job argument — the point of a single number is that loosening it anywhere is visible as loosening it everywhere. Move the constant if the headroom is genuinely wrong.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "job list empty"
+gloss = "a workflow declares no jobs this rule can read"
+class = """
+A file that cannot be parsed as a workflow is not a workflow with no jobs, and a silent pass over it is the failure this arm exists for. Fix the file, or narrow the rule's selector so it is honestly out of scope.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "tool name unknown"
+gloss = "an install list names a tool the manifest does not declare"
+class = """
+The installer does not fail on an unknown name, so the drift surfaces much later as a missing command in whichever step needed it — a missing TOOL wearing a missing-STEP costume. Correct the name in the list, or declare the tool.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "tool select missing"
+gloss = "a pull-request workflow runs the installer without an install list"
+class = """
+A workflow with no list installs the whole toolchain on every push, and judging the names IN a list can never see it — that is a hole in the trigger rather than in the predicate. Narrow the list to the tools that job invokes.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "tool pin loose"
+gloss = "an install list is declared without the variables that make it bind"
+class = """
+The runner re-installs the missing tools at task time, so the list decides nothing: one job installed a single tool in 13s and then rebuilt the whole toolchain inside the work step. Set both auto-install variables to false, in the same workflow as the list.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "spawn reach absent"
+gloss = "a policy row spawns a declared tool no install list installs"
+class = """
+With auto-install off making the list binding, such a row does not run slowly — it fails CLOSED, at deny, while passing locally where the tool is installed, and the landing loop reads that as a verify/CI disagreement with nothing naming the cause. Add the tool to the list of the job that runs the row.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
 id = "module place missing"
 gloss = "a module is judged by the layering rule and absent from its table"
 class = """
@@ -13345,13 +14420,20 @@ target = "policy/spawn-adapters.rego"
 #
 # FOUR FACTS MAKE THE MOVE BEHAVIOUR-PRESERVING, each read rather than assumed:
 #
-#   1. stdout carries 79 bytes on the all-clear path — `container-preflight`
-#      announces its own success there — which behind the door is an advisory
-#      delivered every session whose whole content is "nothing is wrong". Moving
-#      that line to stderr is an edit to a governed file, so it belongs to that
-#      file's retirement rather than to this move. Stated as a precondition of the
-#      move rather than as something already done: an earlier draft of this comment
-#      claimed the line "now goes to stderr", and it does not.
+#   1. stdout carries 79 bytes on the all-clear path — the preflight announces
+#      its own success there — which behind the door is an advisory delivered
+#      every session whose whole content is "nothing is wrong". Moving that line
+#      to stderr was an edit to a governed file, so it belonged to that file's
+#      retirement rather than to this move. Stated as a precondition of the move
+#      rather than as something already done: an earlier draft of this comment
+#      claimed the line "now goes to stderr", and it did not.
+#
+#      CLOUD-1753 RETIRED THAT FILE AND THE PRECONDITION IS STILL OPEN, said
+#      plainly rather than letting a retirement read as a fix. The program is gone
+#      and its egress half is `batten doctor egress`, whose all-clear line goes to
+#      STDOUT under the same output contract every verb follows (§6). The byte
+#      count moved and the CHANNEL did not, so the advisory-every-session cost
+#      this fact was measuring is unchanged and still owed a decision.
 #   2. A failure is exit 1 with `::error::` lines on stderr, which `interpret`
 #      reads as `Outcome::Reported` — and that joins `Dispatched::advice()`, which
 #      `AdvisoryReach` delivers on `SessionStart` for this host. So the failure

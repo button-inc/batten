@@ -855,6 +855,94 @@ const JOBS: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--lock` on `exec` (CLOUD-1710), the key one clone's singleton lock is named
+/// by.
+///
+/// A KEY, never a path. `mise-tasks/with-lock.sh` took a lock directory and its
+/// callers pointed one at the rust sysroot, so a toolchain swap could not
+/// deadlock on a stale path. The key carries that distinction where it belongs —
+/// in the name (`target-ensure-<triple>`) — and lets the lock live under
+/// `$GIT_DIR` with every other one this clone holds, which is what
+/// `batten singleton` and `mise run alive` already read.
+const LOCK: FlagDecl = FlagDecl {
+    id: "lock",
+    long: Some("lock"),
+    short: None,
+    help: "Hold this clone's named singleton lock for the child's lifetime",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--lock-path` on `exec` (CLOUD-1710): a lock guarding something the clone
+/// does not own.
+///
+/// The sibling of `--lock`, and the two are not interchangeable. A KEY names a
+/// lock under `$GIT_DIR`, which is right for "one task per clone". A PATH names
+/// one wherever the resource being serialized actually lives — the retiring
+/// shell's two callers both needed that, `doctor`'s lock sitting under
+/// `$MISE_DATA_DIR` and `target-ensure`'s inside the rust sysroot, because a
+/// mise install tree and a rustup toolchain are the MACHINE's and are shared by
+/// every clone on it. Keying those per clone would let two checkouts install a
+/// target concurrently and roll each other back (CLOUD-220).
+const LOCK_PATH: FlagDecl = FlagDecl {
+    id: "lock_path",
+    long: Some("lock-path"),
+    short: None,
+    help: "Hold the lock at this path, for a resource the clone does not own",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--lock-attempts` on `exec` (CLOUD-1710): how long the queue is, as a COUNT.
+///
+/// The bound is a number of asks separated by a declared interval, never a wall
+/// clock — `land`'s shape, for `land`'s reason. The shell spelled it
+/// `WITH_LOCK_TIMEOUT` in seconds and divided by its own `sleep 0.1`; the
+/// default here is that same arithmetic already done (600s ⇒ 6000 asks).
+const LOCK_ATTEMPTS: FlagDecl = FlagDecl {
+    id: "lock_attempts",
+    long: Some("lock-attempts"),
+    short: None,
+    help: "How many times to ask for the lock before reporting it held",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--lock-label` on `exec` (CLOUD-1710): what the wait was FOR.
+///
+/// Carried verbatim from the shell, which states why: *"A lock path is a pointer
+/// to a file; 'the toolchain lock (aarch64-apple-darwin)' is a pointer to the
+/// thing a reader has to reason about, and moving the wait out of the caller
+/// must not cost that."*
+const LOCK_LABEL: FlagDecl = FlagDecl {
+    id: "lock_label",
+    long: Some("lock-label"),
+    short: None,
+    help: "What the wait is for, named by the caller for the refusal line",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 /// `--continue-on-error` on `exec` (CLOUD-430), likewise mise's.
 const CONTINUE_ON_ERROR: FlagDecl = FlagDecl {
     id: "continue_on_error",
@@ -910,6 +998,45 @@ const NO_CACHE: FlagDecl = FlagDecl {
 /// That one SELECTS a row to run and is optional; this one NAMES a row to print
 /// and is required, so sharing a `FlagDecl` would make one row's `required` a
 /// lie about the other.
+/// `--findings <n>`: how many blocking findings the caller's own run produced.
+///
+/// A COUNT rather than a boolean, because the caller already has one and a
+/// boolean would make it fold twice — once to a flag and once here — which is the
+/// hand-fold this verb exists to remove.
+const VERDICT_FINDINGS: FlagDecl = FlagDecl {
+    id: "findings",
+    long: Some("findings"),
+    short: None,
+    help: "How many blocking findings the run produced",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--unjudgeable <n>`: how many subjects the caller could not read.
+///
+/// Separate from `--findings` rather than folded into it, because the whole
+/// point of the verb is that the two are DIFFERENT answers: a blind spot is not
+/// a small finding, and a caller that adds them together has already lost the
+/// distinction this decides.
+const VERDICT_UNJUDGEABLE: FlagDecl = FlagDecl {
+    id: "unjudgeable",
+    long: Some("unjudgeable"),
+    short: None,
+    help: "How many subjects the run could not read",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const RULE_ID_ARG: FlagDecl = FlagDecl {
     id: "id",
     long: None,
@@ -1867,6 +1994,27 @@ const ISSUE: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// Write the derived corpus to its committed path instead of to stdout.
+///
+/// **Off by default, which is the safer direction for a verb whose product is a
+/// tracked file.** A caller who wants to SEE what would be recorded — a reviewer
+/// diffing a proposed corpus against the committed one — must not have to dirty
+/// the tree to do it, and `receipt clean` is one of the things that would then
+/// refuse.
+const SUITES_WRITE: FlagDecl = FlagDecl {
+    id: "write",
+    long: Some("write"),
+    short: None,
+    help: "Write the corpus to its committed path instead of printing it",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
 /// The roster `checks green` decides against (CLOUD-1143).
 ///
 /// **Flags rather than environment variables, and that is rule 1 rather than
@@ -2477,6 +2625,10 @@ pub const SURFACE: &[CommandDecl] = &[
             TEE,
             JOBS,
             CONTINUE_ON_ERROR,
+            LOCK,
+            LOCK_PATH,
+            LOCK_ATTEMPTS,
+            LOCK_LABEL,
             FlagDecl::defaulted_enum(
                 "format",
                 "format",
@@ -2658,6 +2810,45 @@ pub const SURFACE: &[CommandDecl] = &[
             FlagDecl::positional_optional(
                 "params",
                 "The method's arguments, as a JSON object; omitted is `{}`",
+            ),
+        ],
+    },
+    // The spawn ledger and the launch, ported off `mise-tasks/serena-mcp.sh`
+    // under CLOUD-1753 (CLOUD-714 is the defect it exists for).
+    //
+    // WHAT THIS MUST NEVER BECOME is the whole of CLOUD-714 and it survives the
+    // port structurally rather than by prose: not a retry, not a supervisor, not
+    // a keepalive. It records and it EXECS, and after an exec there is no process
+    // left that could restart anything. A shim that recovered from a failed
+    // launch would hide the defect it was written to expose.
+    //
+    // `Unclassified` on `exec`'s own reading, and it is the honest one twice
+    // over: the verb replaces this process with a command the CONSUMER named, so
+    // its reach is whatever that command's is, and it writes a per-clone ledger
+    // besides. An optimistic `read` here would put a process-replacing verb on
+    // the derived allowlist.
+    //
+    // `data_channel` is FALSE and here it is load-bearing beyond `exec`'s reason:
+    // STDOUT IS THE MCP TRANSPORT. One stray byte corrupts the JSON-RPC stream
+    // and takes the server down looking exactly like the bug this records. So
+    // Batten emits nothing on stdout at all, and the record it keeps is a file.
+    CommandDecl {
+        path: "mcp spawn",
+        id: "mcp.spawn",
+        about: "Record that a client actually spawned this server, then exec the launch line unchanged",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Unclassified,
+        flags: &[
+            // Declared BEFORE the trailing argv, on `exec`'s note: a
+            // `trailing_var_arg` swallows everything after the first free token.
+            FlagDecl::positional(
+                "server",
+                "The server this launch is for, as the spawn ledger and `mcp-attach-check` name it",
+            ),
+            FlagDecl::trailing(
+                "command",
+                "The launch line, run verbatim — Batten execs it and does not supervise it",
             ),
         ],
     },
@@ -3375,6 +3566,32 @@ pub const SURFACE: &[CommandDecl] = &[
     // its entire purpose, and the text is the config author's own declaration —
     // the class `config show` exists to echo — not content read out of a subject
     // file.
+    // CLOUD-1718's shape (a). There are two exit-code contracts in this tree and
+    // they are INVERSES: this binary reads `1` as usage and `2` as a violation,
+    // and 82 shell programs read `1` as a violation and `2` as could-not-look.
+    // A caller on the wrong side of that boundary does not get a worse message,
+    // it gets the opposite verdict — a blind spot read as a finding, or a finding
+    // read as a blind spot.
+    //
+    // The bug dies with each program that retires, so this verb is justified by
+    // what does NOT retire: the workflow tree, which is permanently bash by
+    // declaration; the installer, which is bash by construction; and CONSUMER
+    // repositories, whose gates hit the identical inversion with no campaign to
+    // save them. Each of those still needs the fold, and this is the one place it
+    // is decided.
+    //
+    // `read` structurally and in the strongest sense available: it opens no file,
+    // walks no tree and spawns nothing. It reads two integers off its own command
+    // line and returns a code.
+    CommandDecl {
+        path: "verdict",
+        id: "verdict",
+        about: "Fold a run's findings and blind spots into this tool's exit code",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[VERDICT_FINDINGS, VERDICT_UNJUDGEABLE],
+    },
     CommandDecl {
         path: "policy explain",
         id: "policy.explain",
@@ -4333,6 +4550,31 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Unclassified,
         flags: &[],
     },
+    // The precondition, asked on its own — ported off `mise-tasks/tree-clean.sh`
+    // under CLOUD-1753.
+    //
+    // ONE PREDICATE, TWO CALLERS, AND THAT IS NOT A SECOND AUTHORITY. `receipt
+    // record` refuses a dirty tree itself, which is the load-bearing end: it is
+    // the verb that writes the receipt, so it is the only place the question is
+    // both askable and answerable at the moment it matters. This row is the CHEAP
+    // end, and the retiring program's own caller shows why both are needed —
+    // `verify:gated` asks it in `depends` so a dirty tree fails in seconds rather
+    // than after the ~170s the gate set costs, and `depends` completes before the
+    // body starts, so a tree dirtied MID-RUN is invisible to it. Both call
+    // `receipt::tree_state`; neither re-derives it.
+    //
+    // `read` in §5's strong sense: it counts what `git status` reports and writes
+    // nothing, which is what lets `verify` ask it without the ask itself becoming
+    // a reason the answer changes.
+    CommandDecl {
+        path: "receipt clean",
+        id: "receipt.clean",
+        about: "Refuse when the working tree differs from HEAD, so a receipt keyed to HEAD would attest bytes no commit contains",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Read,
+        flags: &[],
+    },
     // Creates state the caller can recreate by re-running the check.
     CommandDecl {
         path: "receipt record",
@@ -4672,6 +4914,33 @@ pub const SURFACE: &[CommandDecl] = &[
     // could supply the wrong one", and this composes the same key with the same two
     // functions. The negative half falls out for free: a record for a tool nobody
     // declared is unspellable.
+    // The per-suite cost corpus (CLOUD-352), ported off `mise-tasks/suite-bench.sh`
+    // under CLOUD-1753.
+    //
+    // A LEAF UNDER `record` RATHER THAN A NOUN OF ITS OWN, and the noun already
+    // means what this does: write down what happened. The two neighbours key
+    // their records by tool and by forge; this one keys by suite, and the store
+    // is a committed file because the READER is a person deciding whether the
+    // file they are about to edit is expensive.
+    //
+    // IT RUNS NOTHING. The corpus is derived from the report `test:bats` leaves
+    // behind — re-executing the suite to measure it would cost more than the
+    // waste it reports and would be a second authority over a run that already
+    // happened. So this reads one file and writes one file, and reaches
+    // `policy/spawn-adapters.rego` not at all.
+    //
+    // `--write` rather than always writing: without it the corpus goes to stdout,
+    // which is what lets a caller diff a proposed corpus against the committed
+    // one without touching the tree.
+    CommandDecl {
+        path: "record suites",
+        id: "record.suites",
+        about: "Derive what each bats suite costs from the report the runner wrote, and record it where an author reads it",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[SUITES_WRITE],
+    },
     CommandDecl {
         path: "record tool",
         id: "record.tool",

@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-verdict 1  batten 
+.SH NAME
+batten\-verdict \- Fold a run\*(Aqs findings and blind spots into this tool\*(Aqs exit code
+.SH SYNOPSIS
+\fBbatten verdict\fR [\fB\-\-findings\fR] [\fB\-\-unjudgeable\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Fold a run\*(Aqs findings and blind spots into this tool\*(Aqs exit code
+.SH OPTIONS
+.TP
+\fB\-\-findings\fR
+How many blocking findings the run produced
+.TP
+\fB\-\-unjudgeable\fR
+How many subjects the run could not read
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

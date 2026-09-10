@@ -278,14 +278,33 @@ pub fn replay(
 ) -> Result<Replay> {
     let tracking = tracking_ref(reference);
     advance(root, remote, reference, &tracking)?;
+    replay_onto(root, &tracking, branch, resolutions)
+}
 
-    let outcome = gitwrite::rebase_resolving(
-        root,
-        &format!("refs/heads/{branch}"),
-        &tracking,
-        resolutions,
-    )
-    .with_context(|| format!("land: replay {branch} onto {tracking}"))?;
+/// The half of [`replay`] that runs once the tracking ref is in place: rebase,
+/// map, record.
+///
+/// **Split out so the property can be tested at all** (CLOUD-1708). The store
+/// this writes is what `rebase-conflict-stops-the-lap` reads, and nothing drove a
+/// REAL conflict through the writer and then read the record — every case
+/// constructed a [`Replay`] and handed it to [`record`], which pins the writer
+/// but not the path that reaches it. The one thing keeping that test from
+/// existing was [`advance`]: it fetches over the forge's HTTP protocol, so an
+/// end-to-end case would need a server rather than a repository.
+///
+/// The fetch is not what the row doubted, and it is the only inch this leaves
+/// unexercised. Everything after it — the rebase, the mapping of each arm, and
+/// the record — is one function a test can drive against a real conflicting
+/// tree.
+pub fn replay_onto(
+    root: &Path,
+    tracking: &str,
+    branch: &str,
+    resolutions: &[String],
+) -> Result<Replay> {
+    let outcome =
+        gitwrite::rebase_resolving(root, &format!("refs/heads/{branch}"), tracking, resolutions)
+            .with_context(|| format!("land: replay {branch} onto {tracking}"))?;
     let replayed = match outcome {
         Rebase::Conflicted { commit, paths } => Replay::Conflicted { commit, paths },
         Rebase::Current => Replay::Current,
@@ -2026,47 +2045,6 @@ impl Ledger {
     }
 }
 
-/// Was this head's CI failure a provisioning transient rather than a verdict?
-///
-/// `records` is one line per failed run, as the non-verdict scanner reported them.
-/// **A run is absorbed only if EVERY record is a non-verdict**: one line naming a
-/// verdict means the branch was judged, and re-running would spend jobs to
-/// re-learn a real refusal.
-///
-/// `None` for could-not-look, and the causes are deliberately one reading: no
-/// failed runs, a scan that produced nothing, a scan that answered with a
-/// verdict, and a record this reader does not recognise. A caller cannot act
-/// differently on which, and inventing a distinction would invite one to.
-///
-/// **AN UNRECOGNISED RECORD IS COULD-NOT-LOOK, NOT AN ABSENT VERDICT.** The
-/// filter used to keep the `nonverdict` lines and DROP everything else, so a
-/// scanner error, a truncated record or a shape added later read as *every
-/// record is a non-verdict* — the permissive answer, which re-runs the matrix on
-/// a head that may well have been judged. Absorbing is the expensive direction,
-/// so the reading that cannot be justified must not reach it.
-#[must_use]
-pub fn absorbed(records: &[String]) -> Option<Vec<String>> {
-    let lines: Vec<&str> = records
-        .iter()
-        .flat_map(|record| record.lines())
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect();
-    if lines.is_empty() {
-        return None;
-    }
-    if lines.iter().any(|line| line.starts_with("verdict")) {
-        return None;
-    }
-    // EVERY line must be one this reader knows. `nonverdict` does not begin with
-    // `verdict`, so the two prefixes partition cleanly and anything outside the
-    // pair is a record nobody here can classify.
-    if !lines.iter().all(|line| line.starts_with("nonverdict")) {
-        return None;
-    }
-    Some(lines.iter().map(|line| (*line).to_owned()).collect())
-}
-
 // ---------------------------------------------------------------------------
 // CLOUD-900 / CLOUD-1338: abandoning the matrix a red check made worthless.
 // ---------------------------------------------------------------------------
@@ -2513,54 +2491,6 @@ pub fn buys_a_matrix(
             | crate::checks_green::Pending::Unregistered(_) => Spend::Refire,
         },
     }
-}
-
-/// The runs on a head that failed, as ids.
-///
-/// **NO PAGE SIZE, deliberately, and the predecessor says why in a sentence
-/// worth carrying:** `tests/land.bats`'s keyed-verdict sensor asserts the lander
-/// carries no windowed page size, because the fast-forward verdict must be found
-/// by its KEY rather than by a window. This is a different endpoint that needs
-/// none — a head sha's failed runs are a handful — so the sensor stays exact
-/// instead of being spelled past.
-///
-/// `None` is could-not-look, and the caller reads it as *not absorbed*: a
-/// transient is a claim about the runs, and a claim over a list nobody could
-/// read is not one.
-#[must_use]
-pub fn failed_runs(repo: &str, sha: &str) -> Option<Vec<String>> {
-    let answer = crate::rest::get(
-        &format!("repos/{repo}/actions/runs?head_sha={sha}&status=failure"),
-        None,
-    )?;
-    let document = serde_json::from_str::<serde_json::Value>(&answer.body).ok()?;
-    let runs = document.get("workflow_runs")?.as_array()?;
-    let ids: Vec<String> = runs
-        .iter()
-        .filter_map(|run| {
-            let id = run.get("id")?;
-            id.as_u64()
-                .map(|found| found.to_string())
-                .or_else(|| id.as_str().map(str::to_owned))
-        })
-        .collect();
-    // AN EMPTY LIST IS NOT AN ANSWER HERE. The predecessor returns non-zero on
-    // one, and it is right to: "no failed runs" cannot support "the failure was
-    // a transient", because there is no failure to have been one.
-    (!ids.is_empty()).then_some(ids)
-}
-
-/// Ask the forge to re-run one run's failed jobs.
-///
-/// `false` where the forge refused. **Reported rather than swallowed**, unlike
-/// the tap: the predecessor dies here with a remedy naming the exact command,
-/// because a lap that believed it re-ran and did not would wait forever for a
-/// run nobody started.
-#[must_use]
-pub fn rerun_failed(repo: &str, run: &str) -> bool {
-    crate::rest::post(&format!(
-        "repos/{repo}/actions/runs/{run}/rerun-failed-jobs"
-    ))
 }
 
 #[cfg(test)]
@@ -3249,47 +3179,6 @@ mod tests {
         let mut ledger = Ledger::default();
         assert_eq!(ledger.unknown(5), Charge::Lap);
         assert_eq!(ledger.laps, 0);
-    }
-
-    /// **The discriminating pair: every record a non-verdict is absorbed, one
-    /// verdict is not.**
-    ///
-    /// A run that reached a verdict was a judgement on this branch, and
-    /// re-running it would spend jobs to re-learn a real refusal.
-    #[test]
-    fn a_failure_before_any_verdict_is_absorbed_and_one_after_is_not() {
-        let absorbed_runs = absorbed(&[
-            String::from("nonverdict 111 provision\n"),
-            String::from("nonverdict 222 checkout\n"),
-        ]);
-        assert_eq!(
-            absorbed_runs,
-            Some(vec![
-                String::from("nonverdict 111 provision"),
-                String::from("nonverdict 222 checkout"),
-            ]),
-            "neither run reached a verdict, so neither judged the branch"
-        );
-
-        assert_eq!(
-            absorbed(&[
-                String::from("nonverdict 111 provision\n"),
-                String::from("verdict 222 test-failed\n"),
-            ]),
-            None,
-            "ONE verdict means the branch was judged; absorbing the pair would \
-             re-run a real refusal"
-        );
-    }
-
-    /// Could-not-look is one reading, and its three causes are deliberately
-    /// indistinguishable: no failed runs, an empty scan, and a scan that
-    /// answered nothing. No caller can act differently on which.
-    #[test]
-    fn an_empty_scan_is_could_not_look_rather_than_an_absorbed_transient() {
-        assert_eq!(absorbed(&[]), None);
-        assert_eq!(absorbed(&[String::new()]), None);
-        assert_eq!(absorbed(&[String::from("   \n\n")]), None);
     }
 
     /// **THE FIXTURE NAMES ARE GENERIC, and that is rule 1 rather than taste.**

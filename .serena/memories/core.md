@@ -64,6 +64,22 @@ err)` takes **both** channels and the resolved `Mode`, so a verb can write a
   (CLOUD-208; it closed CLOUD-42's G10, "nothing emits at `Verbose` or above
   yet"). `out` is the answer, `err` the messaging — `batten exec` reports its
   output matches through `err` for that reason.
+- `suites.rs` — the per-suite cost corpus (CLOUD-352), derived from the report
+  the bats runner already wrote. **IT RUNS NOTHING**: re-executing a
+  multi-thousand-case suite to measure it would cost more than the waste it
+  reports and would be a second authority over a run that already happened, so
+  this opens one file and writes one file and reaches
+  `policy/spawn-adapters.rego` not at all. The corpus path is a CONTRACT with
+  `policy/suite-cost-corpus.rego`, which reads the same bytes as a declared
+  `lines` source — the producer decides cost, the gate decides MEMBERSHIP, and
+  neither half can see the other. That division is the design: wall clock is a
+  clock and belongs in a drift job, membership is deterministic and belongs in a
+  gate. THREE STATES ARE COULD-NOT-LOOK, never an empty corpus — an absent
+  report (the ordinary state after a receipt-gated no-op lap), a report carrying
+  no readable `<testsuite>`, and a report naming a suite the tree no longer
+  tracks. The last one is what makes the gate's remedy reachable: a suite retired
+  while the report still named it once produced a corpus carrying a cost attached
+  to nothing, so the gate refused the very file its own remedy had just written.
 - `surface.rs` — house-style §11, CLOUD-27: the command tree declared **once**,
   as data (`ROOT` + `SURFACE`) — path, summary, effect, and flags (with each
   flag's env equivalent, so §8 precedence is inspectable data). `command()`
@@ -384,6 +400,22 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   whole-set reading let one dead glob contribute nothing while the rest counted
   and still reported green (CLOUD-298). A config declaring no budget is exit 1
   too — a budget verb that measured nothing must not report `0`.
+- `arm.rs` — the declared-arm harness (CLOUD-1714): run N declared things,
+  reduce each to a named `Observable`, hand back one `Outcome` per arm. The
+  primitive `perf.rs` and `mutate.rs` were each one instance of, plus the two the
+  bash corpus held. **`percentile` is owned here** — four copies existed between
+  the four instances, and `perf::summarise` now calls this one, so CLOUD-1712's
+  fetched-duration percentiles have no fifth. It takes the quantile as a RATIO OF
+  INTEGERS and ranks with `div_ceil`, which is why the rank arithmetic carries no
+  lint escape: the `f64` form needed three, and `spawn-widening` counts an added
+  escape as inventory growth whatever the reasoning behind it. `Isolation::at`
+  sets `HOME`, `XDG_DATA_HOME`, `APPDATA` and `LOCALAPPDATA` together, because an
+  arm inheriting one of them measures the ambient toolchain instead of the
+  subject. **A FAILED ARM IS `NotObserved`, NEVER A ZERO**: a zero measurement is
+  the could-not-look collapse CLOUD-251 names, and it reads as the fastest arm in
+  the table. Stability is checked BEFORE a byte count is reduced, so a run set
+  that disagrees is reported `Unstable` with its distinct count rather than
+  averaged into one plausible number.
 - `attribution.rs` — what produced commits may carry about the tooling that made
   them (CLOUD-274), the mechanism for the attribution decision record
   (CLOUD-268). Judges author/committer identity, every trailer and the message

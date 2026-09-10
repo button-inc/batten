@@ -120,6 +120,10 @@ trace\:"Add everything"))' \
 (exec)
 _arguments "${_arguments_options[@]}" : \
 '--jobs=[How many of a \`\:\:\:\` bundle'\''s commands run at once]: :_default' \
+'--lock=[Hold this clone'\''s named singleton lock for the child'\''s lifetime]: :_default' \
+'--lock-path=[Hold the lock at this path, for a resource the clone does not own]: :_default' \
+'--lock-attempts=[How many times to ask for the lock before reporting it held]: :_default' \
+'--lock-label=[What the wait is for, named by the caller for the refusal line]: :_default' \
 '--format=[How Batten'\''s own record is encoded (hk'\''s axis)]: :((human\:"Pointer lines, one per fact"
 json\:"One JSON document"
 jsonl\:"One JSON record per line"))' \
@@ -1998,6 +2002,37 @@ esac
         esac
     ;;
 esac
+;;
+(verdict)
+_arguments "${_arguments_options[@]}" : \
+'--findings=[How many blocking findings the run produced]: :_default' \
+'--unjudgeable=[How many subjects the run could not read]: :_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
 ;;
 (commit)
 _arguments "${_arguments_options[@]}" : \
@@ -6351,6 +6386,10 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(verdict)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (commit)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__help__subcmd__commit_commands" \
@@ -7059,6 +7098,7 @@ _batten_commands() {
 'perf:Measure this repository'\''s own invocation cost' \
 'mutate:Decide whether this repository'\''s gates discriminate, rather than merely parse' \
 'policy:Inspect the thresholds and path sets this repository holds itself to' \
+'verdict:Fold a run'\''s findings and blind spots into this tool'\''s exit code' \
 'commit:The shape a commit must take here\: what its subject may say' \
 'ready:Whether an issue'\''s Ready block satisfies the checkable clauses of the gate' \
 'landed:Whether a board column is honest about what git and the forge already did' \
@@ -7671,6 +7711,7 @@ _batten__subcmd__help_commands() {
 'perf:Measure this repository'\''s own invocation cost' \
 'mutate:Decide whether this repository'\''s gates discriminate, rather than merely parse' \
 'policy:Inspect the thresholds and path sets this repository holds itself to' \
+'verdict:Fold a run'\''s findings and blind spots into this tool'\''s exit code' \
 'commit:The shape a commit must take here\: what its subject may say' \
 'ready:Whether an issue'\''s Ready block satisfies the checkable clauses of the gate' \
 'landed:Whether a board column is honest about what git and the forge already did' \
@@ -8543,6 +8584,11 @@ _batten__subcmd__help__subcmd__task__subcmd__tick_commands() {
 _batten__subcmd__help__subcmd__task__subcmd__unregister_commands() {
     local commands; commands=()
     _describe -t commands 'batten help task unregister commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__verdict_commands] )) ||
+_batten__subcmd__help__subcmd__verdict_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help verdict commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__wiring_commands] )) ||
 _batten__subcmd__help__subcmd__wiring_commands() {
@@ -9864,6 +9910,11 @@ _batten__subcmd__task__subcmd__tick_commands() {
 _batten__subcmd__task__subcmd__unregister_commands() {
     local commands; commands=()
     _describe -t commands 'batten task unregister commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__verdict_commands] )) ||
+_batten__subcmd__verdict_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten verdict commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__wiring_commands] )) ||
 _batten__subcmd__wiring_commands() {

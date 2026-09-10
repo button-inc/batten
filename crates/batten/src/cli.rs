@@ -121,6 +121,14 @@ pub enum Command {
         /// The output format for the spec.
         format: SpecFormat,
     },
+    /// Fold a run's findings and blind spots into this tool's exit code
+    /// (CLOUD-1718).
+    Verdict {
+        /// How many blocking findings the caller's run produced.
+        findings: usize,
+        /// How many subjects the caller could not read.
+        unjudgeable: usize,
+    },
     /// Report what an agent may do in this repository (CLOUD-1180).
     ShowAgent {
         /// Emit the data document rather than pointer lines.
@@ -900,6 +908,23 @@ pub struct ExecRequest {
     /// Whether a bundle keeps going past a failure. `false` when unasked, which
     /// the committed table may still turn on.
     pub continue_on_error: bool,
+    /// The key of this clone's singleton lock to hold for the child's lifetime
+    /// (CLOUD-1710). `None` is the ordinary unlocked run.
+    pub lock: Option<String>,
+    /// A lock path, for a resource the clone does not own. Mutually exclusive
+    /// with `lock`; naming both is a usage refusal rather than a precedence
+    /// rule, because the two answer "where should the queue form" differently
+    /// and silently picking one would serialize the wrong thing.
+    pub lock_path: Option<String>,
+    /// How many times to ask for that lock before reporting it held, as the
+    /// caller typed it. Unparsed for `jobs`' reason: a bad value owes a
+    /// `UsageError` naming it, and reading it as the default would queue for a
+    /// length nobody asked for.
+    pub lock_attempts: Option<String>,
+    /// What the wait is FOR, for the refusal line. A lock key is a pointer to a
+    /// file; "the toolchain lock (aarch64-apple-darwin)" is a pointer to the
+    /// thing a reader has to reason about.
+    pub lock_label: Option<String>,
 }
 
 /// Subcommands of `lint` — one arm per *kind* of artifact, which is what the
@@ -1259,6 +1284,13 @@ pub enum McpCommand {
         /// The method's arguments as a JSON object. `None` is an empty object.
         params: Option<String>,
     },
+    /// Record that a client spawned this server, then exec the launch line.
+    Spawn {
+        /// The server this launch is for, as the ledger names it.
+        server: String,
+        /// The launch line, verbatim. Never empty — the surface requires it.
+        command: Vec<String>,
+    },
 }
 
 /// Subcommands of `target` (CLOUD-1030).
@@ -1332,6 +1364,11 @@ pub enum StateCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RecordCommand {
+    /// Derive what each bats suite costs and record it where an author reads it.
+    Suites {
+        /// Write the corpus to its committed path instead of printing it.
+        write: bool,
+    },
     /// Record a declared tool row's verdict.
     Tool {
         /// The `[[rule.tools]]` id whose verdict is being recorded.
@@ -1366,6 +1403,12 @@ pub enum RecordCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ReceiptCommand {
+    /// Is the working tree the bytes at HEAD, so a receipt could name them?
+    ///
+    /// The cheap end of a pair `record` completes: this is asked before a long
+    /// gate set runs, and `record`'s own guard closes the window a tree dirtied
+    /// mid-run opens.
+    Clean,
     /// Record that the named check concluded pass against the current HEAD.
     Record {
         /// The check whose conclusion is being recorded.
@@ -2035,6 +2078,9 @@ fn receipt_of(matches: &ArgMatches) -> Option<ReceiptCommand> {
     // make this whole function answer `None` for it, and a sub-verb that parses
     // to nothing is a verb that silently does not exist.
     match name {
+        // Takes no positional, like `verified` below and for its reason: the
+        // subject is the tree, which the verb resolves for itself.
+        "clean" => Some(ReceiptCommand::Clean),
         "record" => Some(ReceiptCommand::Record {
             check: matches.get_one::<String>("check")?.clone(),
         }),
@@ -2242,6 +2288,38 @@ fn pr_of(matches: &ArgMatches) -> Option<PrCommand> {
     }
 }
 
+/// The `exec` arm, lifted out of [`command_of`] so that stays a table.
+///
+/// One line per verb is what makes `command_of` readable, and `exec` carries
+/// nine flags — the same reason [`ExecRequest`] is a struct rather than nine
+/// variant fields, applied one level up.
+fn exec_of(matches: &ArgMatches) -> Option<Command> {
+    let command: Vec<String> = matches
+        .get_many::<String>("command")
+        .map(|values| values.cloned().collect())
+        .unwrap_or_default();
+    if command.is_empty() {
+        return None;
+    }
+    Some(Command::Exec(ExecRequest {
+        command,
+        capture_only: flag(matches, "capture_only"),
+        tee: matches.get_flag("tee"),
+        // Read through the VALUE SOURCE, not the value: clap fills
+        // `defaulted_enum`'s default in, so `get_one` always answers and a
+        // config-set default would be overwritten on every call by a flag
+        // nobody typed.
+        format: supplied(matches, "format").copied(),
+        style: supplied(matches, "style").copied(),
+        jobs: matches.get_one::<String>("jobs").cloned(),
+        continue_on_error: matches.get_flag("continue_on_error"),
+        lock: matches.get_one::<String>("lock").cloned(),
+        lock_path: matches.get_one::<String>("lock_path").cloned(),
+        lock_attempts: matches.get_one::<String>("lock_attempts").cloned(),
+        lock_label: matches.get_one::<String>("lock_label").cloned(),
+    }))
+}
+
 fn capture_of(matches: &ArgMatches) -> Option<CaptureCommand> {
     match matches.subcommand()? {
         ("show", matches) => Some(CaptureCommand::Show {
@@ -2290,6 +2368,21 @@ fn capture_of(matches: &ArgMatches) -> Option<CaptureCommand> {
 /// `show` is a noun over one leaf today, so an absent subcommand is a usage
 /// error rather than a default action — `surface::is_noun` marks it and clap
 /// refuses the bare invocation before this runs.
+/// A non-negative count off the command line, absent reading as zero.
+///
+/// A value that is not a whole number reads as zero too, and deliberately: this
+/// verb's whole job is to be callable from a shell epilogue, where an unset
+/// variable expands to the empty string. Refusing that would put the caller back
+/// to hand-folding the very case it came here to avoid — and the safe direction
+/// is the one that reports LESS, since a miscounted finding is still reported by
+/// the caller's own stderr while a usage error replaces the verdict entirely.
+fn count_of(matches: &ArgMatches, id: &str) -> usize {
+    matches
+        .get_one::<String>(id)
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .unwrap_or(0)
+}
+
 fn show_of(matches: &ArgMatches) -> Option<Command> {
     match matches.subcommand()? {
         ("agent", matches) => Some(Command::ShowAgent {
@@ -2309,6 +2402,17 @@ fn mcp_of(matches: &ArgMatches) -> Option<McpCommand> {
             server: matches.get_one::<String>("server").cloned()?,
             method: matches.get_one::<String>("method").cloned()?,
             params: matches.get_one::<String>("params").cloned(),
+        }),
+        // The trailing argv is `num_args(1..)` in the surface, so clap has
+        // already refused an empty launch line: a spawn verb with nothing to
+        // exec would record a launch that never happened, which is the exact
+        // false reading CLOUD-714's ledger exists to make impossible.
+        ("spawn", matches) => Some(McpCommand::Spawn {
+            server: matches.get_one::<String>("server").cloned()?,
+            command: matches
+                .get_many::<String>("command")?
+                .cloned()
+                .collect::<Vec<_>>(),
         }),
         _ => None,
     }
@@ -2350,6 +2454,9 @@ fn state_of(matches: &ArgMatches) -> Option<StateCommand> {
 /// inside their arms — [`state_of`]'s shape rather than [`receipt_of`]'s.
 fn record_of(matches: &ArgMatches) -> Option<RecordCommand> {
     match matches.subcommand()? {
+        ("suites", matches) => Some(RecordCommand::Suites {
+            write: flag(matches, "write"),
+        }),
         ("tool", matches) => Some(RecordCommand::Tool {
             id: matches.get_one::<String>("id")?.clone(),
         }),
@@ -2435,31 +2542,18 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         // token after `--` is a separate value and the child's argv is the whole
         // list. An empty list is unreachable — clap enforces `num_args(1..)` —
         // and is mapped to `None` rather than an empty exec.
-        "exec" => {
-            let command: Vec<String> = matches
-                .get_many::<String>("command")
-                .map(|values| values.cloned().collect())
-                .unwrap_or_default();
-            if command.is_empty() {
-                None
-            } else {
-                Some(Command::Exec(ExecRequest {
-                    command,
-                    capture_only: flag(matches, "capture_only"),
-                    tee: matches.get_flag("tee"),
-                    // Read through the VALUE SOURCE, not the value: clap fills
-                    // `defaulted_enum`'s default in, so `get_one` always answers
-                    // and a config-set default would be overwritten on every
-                    // call by a flag nobody typed.
-                    format: supplied(matches, "format").copied(),
-                    style: supplied(matches, "style").copied(),
-                    jobs: matches.get_one::<String>("jobs").cloned(),
-                    continue_on_error: matches.get_flag("continue_on_error"),
-                }))
-            }
-        }
+        "exec" => exec_of(matches),
         "capture" => capture_of(matches).map(|command| Command::Capture { command }),
         "mcp" => mcp_of(matches).map(|command| Command::Mcp { command }),
+        // Two integers off the command line and a code back: no file, no tree,
+        // no spawn. A missing count is ZERO rather than a usage error, because
+        // the caller that has only findings to report should not have to say it
+        // saw no blind spots — and zero is the honest reading of an absent count,
+        // not a default standing in for one.
+        "verdict" => Some(Command::Verdict {
+            findings: count_of(matches, "findings"),
+            unjudgeable: count_of(matches, "unjudgeable"),
+        }),
         "show" => show_of(matches),
         "target" => target_of(matches).map(|command| Command::Target { command }),
         "adjudicate" => matches

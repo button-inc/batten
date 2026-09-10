@@ -10,6 +10,61 @@
 //!
 //! Kept out of `tests/cli.rs` deliberately — that file is the exit-code and
 //! output-contract suite, and other work appends to it.
+//!
+//! # CLOUD-1753: the egress pair retires here
+//!
+//! `doctor egress` was written as a PARALLEL authority to
+//! `mise-tasks/egress-check.sh` and this module said so in as many words — "not a
+//! widening, and deliberately not an edit to it". That was the right posture
+//! while the shell was live: a migration replaces a shell gate, it does not
+//! maintain one. The retirement is what settles it, and the three-arm
+//! classification wins.
+//!
+//! WHAT CHANGES, STATED RATHER THAN ABSORBED. The shell answered two verdicts and
+//! this answers three: `Partial` — a proxy fencing the GitHub hosts and carrying
+//! everything else — is a state the shell could not express, and it is the one
+//! that reads as health. And the two disagree on `*.api.github.com`: the shell
+//! matched the host as a SUBSTRING, so a wildcard covering only subdomains read
+//! as fenced, while `fetch::is_direct` compares whole entries and reads it
+//! `Unfenced`. The successor is the stricter of the two in the direction that
+//! matters, which is why the disagreement is a `// changed:` arm rather than a
+//! carry.
+//!
+//! `container-preflight` is the shell's one caller, and it retires with it. Its
+//! egress half becomes the `session-egress` handler running this verb; its
+//! credential half becomes `session-credential` running `gh-preflight`, which is
+//! not this campaign's to retire and is invoked directly rather than through a
+//! wrapper that only forwarded it. Splitting the row is what the port BUYS: the
+//! shell collected both causes so a reader saw the whole list, and two handlers
+//! report both in one reply for the same reason, with each failure named by the
+//! row that owns it instead of by a script that owned neither.
+//
+// carried: mise-tasks/egress-check.sh crates/batten/src/doctor.rs kind:mechanism crates/batten/tests/it/doctor.rs runs:batten+doctor+egress
+// carried: tests/egress-check.bats crates/batten/src/doctor.rs kind:mechanism crates/batten/tests/it/doctor.rs runs:batten+doctor+egress
+// carried: mise-tasks/container-preflight.sh crates/batten/src/doctor.rs kind:mechanism crates/batten/tests/it/doctor.rs runs:batten+doctor+egress
+// carried: tests/container-preflight.bats crates/batten/src/doctor.rs kind:mechanism crates/batten/tests/it/doctor.rs runs:batten+doctor+egress
+//
+// carried: "the check is executable" crates/batten/src/doctor.rs
+// carried: "no proxy is ok — the ordinary machine has nothing to fence" crates/batten/src/doctor.rs
+// carried: "no proxy is ok even with an unrelated NO_PROXY" crates/batten/src/doctor.rs
+// carried: "a proxy with api.github.com fenced is ok" crates/batten/src/doctor.rs
+// carried: "a proxy without the fence is unfenced — the measured broken container" crates/batten/src/doctor.rs
+// carried: "a proxy with an empty NO_PROXY is unfenced" crates/batten/src/doctor.rs
+// changed: "wildcard and dot-prefixed NO_PROXY forms are honoured" crates/batten/src/doctor.rs from `tests/egress-check.bats`. The dot-prefixed half carries: `.api.github.com` is a suffix entry and `fetch::bypassed` honours it. The WILDCARD half does not, and the successor is deliberately stricter — the shell read `*.api.github.com` as fenced by matching the host anywhere in the list, and `fetch::bypassed` compares whole entries, so a wildcard covering only subdomains leaves the bare host proxied. `a_wildcard_entry_is_neither_a_total_bypass_nor_a_fence_for_the_bare_host` is where the two answers are written down side by side
+// changed: "a malformed call is exit 2, distinct from any verdict" crates/batten/src/doctor.rs from `tests/egress-check.bats`. The shell took the two values as ARGUMENTS, so it had a malformed call to refuse. The verb takes none — it reads the environment, which is the whole reason it exists (a value passed through a task runner is the REPAIRED value, which is the defect `container-preflight` had) — so the malformed call is not representable. What survives is the exit contract itself, and `Egress::code` is where §7's mapping lives
+// carried: "it never reads the live environment" crates/batten/src/doctor.rs
+// carried: "it makes no network call" crates/batten/src/doctor.rs
+//
+// carried: "the task is executable" crates/batten/src/doctor.rs
+// carried: "a fenced container with every claim passes, quietly" crates/batten/src/doctor.rs
+// carried: "a missing read claim halts with exit 1" crates/batten/src/doctor.rs
+// carried: "the credential failure names land and ci-wait, the tasks that break" crates/batten/src/doctor.rs
+// carried: "an unreachable API is reported as a fork, never as a bad token" crates/batten/src/doctor.rs
+// carried: "an unfenced proxy halts, and names the ambient NO_PROXY as the repair" crates/batten/src/doctor.rs
+// changed: "both causes are reported together, not one at a time" crates/batten/src/doctor.rs from `tests/container-preflight.bats`. The property survives and its MECHANISM is the opposite one. The shell collected causes into an array and printed the list, which is why it could not use `set -e`; two handlers reach the same outcome because the door dispatches every row and reports every refusal in one reply, so neither failure can hide the other and neither needs a script to remember to keep looking
+// withdrawn: "--degraded skips the GitHub probes — a missing gh is not a missing permission" crates/batten/src/doctor.rs from `tests/container-preflight.bats`. The arm it tested is already gone and `batten.toml` records why: handlers do not share state, so no row can be told that an earlier one failed. Recovering it needs a fact the door does not carry today. Keeping the case would be testing an argument nothing passes
+// changed: "it halts and never repairs — the opposite of doctor" crates/batten/src/doctor.rs from `tests/container-preflight.bats`. The property is now structural rather than asserted: `doctor egress` is `Effect::Read` and `Egress` has no repair arm at all, where the shell had to be trusted not to grow one. `a_proxy_with_no_github_fence_is_unfenced` shows the refusal without a write
+// withdrawn: "it tells the reader not to rewrite the repo around a broken container" crates/batten/src/doctor.rs from `tests/container-preflight.bats`. The case asserted a paragraph of advisory prose in the script's output, and non-negotiable rule 4 is why it cannot be carried: the successor emits one pointer line and a reason id. The advice it carried is true and its home is the issue, not a gate's stdout
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

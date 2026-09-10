@@ -37,62 +37,8 @@ local gate = new Mapping<String, Step> {
     glob = List("hk.pkl", "mise.toml")
     check = "mise run hk-version"
   }
-  // CI installs a narrow, per-job tool set instead of the whole toolchain
-  // (ci.yml, install_args). That is worth ~10s per job, and its cost is a
-  // second place tool names are written down. `mise install` does not fail on
-  // an unknown name, so drift between the two files surfaces late as "command
-  // not found". This is that rule's mechanism: the names must resolve.
-  // The glob is every workflow, not `ci.yml` alone: since CLOUD-812 this gate
-  // also asks whether a `pull_request` workflow runs the mise action with no
-  // `install_args` at all, and that question is about files `ci.yml` does not
-  // name. A glob narrower than the subject means the pre-commit tier never
-  // selects the step that would have caught the very file being added.
-  ["ci-tools-check"] {
-    glob = List(".github/workflows/*.yml", "mise.toml")
-    check = "mise run ci-tools-check"
-  }
-  // The honesty gate for `rust.yml`'s `paths:` filter (CLOUD-398). It ships with
-  // the filter because a filter that is too NARROW fails silently: the four jobs
-  // are absent, `checks-green` accepts absent by design, and the run is green
-  // without their verdict. `mise.toml` is in the glob because the filter has to
-  // select it — the jobs invoke `mise run` tasks — so a change here is a change
-  // to what the filter must cover.
-  ["rust-paths-check"] {
-    glob = List(".github/workflows/rust.yml", "mise.toml")
-    check = "mise run rust-paths-check"
-  }
-  // The per-suite cost corpus, held to the tree it describes (CLOUD-352). Not
-  // `slow`: the predicate is set membership over committed text and answers in
-  // milliseconds — it re-runs NOTHING. The durations themselves are a clock and
-  // are deliberately not gated, since wall clock is not reproducible and a gate
-  // demanding byte equality on one would be red on every second run.
-  //
-  // NO GLOB, AND THAT IS THE WHOLE POINT (CLOUD-1216). It was globbed on the
-  // corpus and on the suites, because both directions rot — a suite added
-  // without regenerating is a file nothing records, and a suite deleted leaves a
-  // cost attached to nothing. **The glob could only ever deliver the first
-  // half.** hk selects a step by matching CHANGED PATHS against it, and a
-  // deleted path is not there to match, so the one commit shape the reverse
-  // direction exists for was the one shape that did not select the step.
-  //
-  // Measured on #770: `f45e214` deleted `tests/derived-check.bats`, passed the
-  // full pre-commit gate, and left the corpus recording a suite the tree no
-  // longer tracked — the exact state this check exists to refuse. It survived
-  // four more commits, every one of them green, and was found by running the
-  // task by hand.
-  //
-  // THE COST, measured rather than asserted, because the comment this replaces
-  // said "milliseconds" and a reader reads that as ~10: **531ms** (three runs,
-  // 531/530/531). That is the price of the step on every commit, and hk runs
-  // steps concurrently so the marginal wall-clock cost is usually less. It is
-  // paid to close a direction that was structurally unreachable, which is worth
-  // half a second.
-  //
-  // The class is wider than this step — any predicate about a file's ABSENCE, or
-  // about set equality against a tracked listing, inherits it. CLOUD-1216 carries
-  // the survey.
   ["suite-bench-check"] {
-    check = "mise run suite-bench-check"
+    check = "cargo run --quiet -p batten -- check --rule suite-cost-corpus"
   }
   // CLOUD-266's rule reaches the one budget nobody had looked at (CLOUD-668).
   // The MCP startup budget was the host's 30000ms default, never measured, and
@@ -104,132 +50,9 @@ local gate = new Mapping<String, Step> {
     glob = List(".claude/settings.json", "mise-tasks/mcp-timeout-budget.sh")
     check = "mise run mcp-timeout-budget"
   }
-  // The floor is a derived copy of the toolchain pin (CLOUD-593), so the two
-  // must agree. This REPLACES the `msrv` job, which answered the same question
-  // by compiling the workspace a second time at a second toolchain — right while
-  // the numbers were independent, and pure cost once they are coupled. Note what
-  // the old gate could not catch: it was green through all twelve releases the
-  // pin sat stale, because the two numbers agreed. Agreeing on a stale number is
-  // what it was built to confirm.
-  ["msrv-pin-agreement"] {
-    glob = List("Cargo.toml", "mise.toml", "renovate.json5")
-    check = "mise run msrv-pin-agreement"
-  }
-  // An MSRV cap lives in two files — the manifest bound and the bot-side
-  // `allowedVersions` rule that mirrors it, because the bot cannot read a
-  // manifest cap. That mirror moved from `.github/dependabot.yml` to
-  // `renovate.json5` with CLOUD-660, which retired the bot the old file
-  // configured; the predicate is unchanged and both sets are still empty.
-  // Lift only the manifest side and everything passes while the crate stays
-  // frozen: the bot keeps withholding a version the manifest now admits, and
-  // nothing is red. That half-lift is the direction with no symptom, and it is
-  // why the row is set equality both ways rather than a one-sided check.
-  //
-  // Both sets are empty as of CLOUD-593, and the row is still load-bearing: it
-  // is a ratchet on the next cap added to either file. A gate that only worked
-  // while a list was non-empty would have been deleted with the list.
-  ["cap-drift"] {
-    glob = List("Cargo.toml", "renovate.json5")
-    check = "mise run cap-drift"
-  }
-  // The sibling question about the same two files, asked of the RESOLUTION
-  // rather than the requirement (CLOUD-767). `cap-drift` decides whether the
-  // manifest and the bot config agree about what may be proposed;
-  // `digest-major-agreement` decides whether what was actually resolved still
-  // composes. A caret requirement is silent on the second, which is why this
-  // reads `Cargo.lock` and that one does not.
-  //
-  // The rule it carries was a `Cargo.toml` comment asserting something untrue
-  // for as long as `gix` had been a dependency. Prose is feedforward only.
-  ["digest-major-agreement"] {
-    glob = List("Cargo.toml", "Cargo.lock")
-    check = "mise run digest-major-agreement"
-  }
-  // `coverage` and `scorecard` emit a number for a human and must never gate a
-  // branch — a coverage threshold rewards line-touching, and scorecard scores
-  // deliberate design decisions (trunk-based review, the landing lease's
-  // `actions: write`) as defects. Both said so in a comment and nothing held
-  // it: the only thing keeping them off the landing path was that nobody had
-  // added them to it (CLOUD-582). This is the inverse of `ci-parity`'s
-  // "every task CI runs, verify runs" — named reports appear in NEITHER
-  // `[tasks.verify]` nor any `pull_request` workflow. Kept separate from that
-  // gate because the two fail for opposite reasons and one deny cannot say both.
-  ["report-only-check"] {
-    glob = List(".github/workflows/*.yml", "mise.toml", "mise-tasks/report-only-check.sh")
-    check = "mise run report-only-check"
-  }
-  // Enforces the "research goes to Linear, not a repo docs/ tree" directive as
-  // a runnable gate, not prose (see AGENTS.md): fails if any docs/ path is
-  // tracked. Research deliverables and evidence notes attach to the Linear
-  // issue; the repo carries code and its close-in config, not research prose.
-  //
-  // Deliberately keeps NO glob where its two glob-less neighbours got one
-  // (CLOUD-224). Its input genuinely is the whole index: it fails on any TRACKED
-  // docs/ path, including one an earlier commit left behind, so a glob would let
-  // a violation persist unreported for every commit that did not touch it. It
-  // costs ~95ms, which is what makes that affordable.
   ["no-docs-tree"] {
     check = "mise run no-docs-tree"
   }
-  // The coverage half of the nextest swap (CLOUD-813). `test:cargo` runs
-  // `cargo nextest run`, which does not execute doctests; the swap was safe
-  // because `cargo test --doc --workspace` reported zero on this workspace, and
-  // that emptiness is a measurement rather than a property. This asserts it
-  // still holds, so a doc example cannot arrive as dead code that reads like a
-  // tested one.
-  //
-  // Globbed on the crate sources it scans, unlike its glob-less neighbour above:
-  // a fence can only appear in a tracked `.rs` file, so the input really is that
-  // set and a commit touching none of them cannot change the answer.
-  ["no-doctests"] {
-    glob = List("crates/**/*.rs")
-    check = "mise run no-doctests"
-  }
-  // The third half of the same non-negotiable. CONTRIBUTING.md's license table
-  // ends "Confirm each _to confirm_ entry before that tool is adopted in a
-  // shipped release" — a release precondition stated in prose, which nothing
-  // enforced while three of five rows sat unresolved (CLOUD-325). The table
-  // stays the authority; this only asserts that no row is still an open
-  // question. It cannot check that a recorded license is *correct* — that is a
-  // human reading an upstream LICENSE — so it proves the narrower thing an exit
-  // code can carry: nobody shipped while the question was open.
-  ["license-table-check"] {
-    check = "mise run license-table-check"
-  }
-  // The mechanism CLOUD-847 shipped without (CLOUD-860). That row landed
-  // `.coderabbit.yaml` after measuring what each key buys — a formal
-  // CHANGES_REQUESTED review so a verdict exists at all, review on drafts so it
-  // exists in the phase that costs nothing, and `gitleaks` kept because
-  // `mise run ci` is `if: draft == false` and a draft would otherwise have no
-  // secret scanning. Nothing then held the file to those readings, and the
-  // failure is silent in the worst direction: reviews simply stop, which looks
-  // exactly like nobody having pushed.
-  //
-  // Globbed on the one file it reads, unlike its glob-less neighbours above: a
-  // commit touching nothing else cannot change the answer, so the whole-index
-  // scan they need would only cost time here.
-  ["coderabbit-config-check"] {
-    glob = List(".coderabbit.yaml")
-    check = "mise run coderabbit-config-check"
-  }
-  // The two-tier gate ships with its mechanism (non-negotiable 2). The steps
-  // below marked `profiles = List("slow")` are skipped at pre-commit and run by
-  // `check`, and the dangerous direction is not the obvious one: a tier that
-  // stops being SKIPPED merely makes commits slow, while a tier that stops being
-  // RUN by `check` removes clippy, the test suite and `batten-check` from
-  // `mise run ci`, `verify` and CI at once — green everywhere, nothing tested.
-  // Deleting the config-level `profiles` line does exactly that, silently. This
-  // reds it, reading the plan rather than a timing, since a timing cannot tell a
-  // skipped step from a cached one (CLOUD-509).
-  //
-  // Globbed on both files that can move the verdict: hk.pkl declares the tier,
-  // and the hook is the one place it is switched off. A glob on hk.pkl alone
-  // would let the `--profile` flag be deleted from the hook with nothing red —
-  // the step would not even run for that commit.
-  // The step keeps its name and its glob and records rather than decides: the
-  // verdict is `policy/hook-profile.rego`'s now, off the `hk-plan` row
-  // (CLOUD-509, retired under CLOUD-1199). Only the plan half needs a producer —
-  // `hook-missing-profile-flag` reads this step's other globbed file directly.
   ["hook-profile-check"] {
     glob = List("hk.pkl", ".claude/hooks/git-hook.sh")
     check = "mise run record-verdicts"
@@ -247,42 +70,6 @@ local gate = new Mapping<String, Step> {
     profiles = List("slow")
     check = "mise run hk-drift"
   }
-  // `rules/rust.md` carries no module tree — it defers to mem:core as
-  // the authority kept current instead. Nothing checked that authority, so a
-  // module could land with no row and leave the rule pointing at an incomplete
-  // map; `severity.rs` (CLOUD-168) did exactly that, past a green gate.
-  // memories-check does not cover this: it gates the graph's *edges*, which
-  // stay coherent while the map is missing rows (CLOUD-194).
-  ["module-map-check"] {
-    glob = List("crates/*/src/*.rs", ".serena/memories/core.md")
-    check = "mise run module-map-check"
-  }
-  // `rules/toolchain.md` forbids restating a value three times over and
-  // then restated four, two of which had drifted — `LAND_MAX_LAPS` quoted as 8
-  // where `land` defaults to 2, and `contract-drift` described as running on an
-  // event nothing wires (CLOUD-506). These files are read by an agent that then
-  // acts without re-deriving, so a stale parenthetical is a false premise
-  // carrying the rule's authority. It fails a claim that is present and WRONG,
-  // never one that is absent: the file's own rule is to defer, and a gate
-  // pushing toward completeness would invert it.
-  // CLOUD-479. Same glob as `rules-drift` below and for the same reason: the
-  // verdict moves when a registration moves, when a task's tool use changes, or
-  // when `mise.toml` pins something new. Sub-second, so it declares no profile —
-  // `hook-profile-check`'s `slow-tier-empty` rule would refuse one.
-  ["hook-pin-check"] {
-    glob = List(".claude/settings.json", "mise-tasks/*", "mise.toml")
-    check = "mise run hook-pin-check"
-  }
-  // CLOUD-480. The census, never `mutant` itself: this step decides whether every
-  // gate in the tree is DECLARED, which is a property of the commit and costs one
-  // pass over the `#MISE description` lines. `mutant` proves the declarations
-  // DISCRIMINATE, which is a property of the suites and costs two filtered bats
-  // runs per row, so it stays off the landing path — the same split
-  // `lock-complete` and `lock-currency` were separated along.
-  //
-  // The glob is the three surfaces the verdict is a function of: a gate added or
-  // renamed, a module added, and the set itself. Without `mise.toml` a commit that
-  // only shortened the set would not fire the step that reads it.
   ["mutant-census"] {
     glob = List("mise-tasks/**", "policy/*.rego", "mise.toml")
     check = "mise run mutant-census"
@@ -524,38 +311,6 @@ local gate = new Mapping<String, Step> {
       )
     check = "mise run install-check"
   }
-  // Publishing to a registry with a long-lived token is the thing OIDC exists to
-  // retire, and today this repository does neither — `publish = false`, and no
-  // registry secret exists (CLOUD-109). That makes the rule an implication
-  // rather than an edit: while publishing is off the OIDC permission is not
-  // required, and the commit that turns publishing ON must carry
-  // `id-token: write` or fail here. Globbed on the config that decides it and on
-  // every workflow, since a registry credential is refused wherever it appears.
-  ["publish-credential-check"] {
-    glob = List("release-plz.toml", ".github/workflows/*")
-    check = "mise run publish-credential-check"
-  }
-  // The release job publishes a tag; this is what keeps it telling Linear so
-  // (CLOUD-618). Both invocations must be present, SHA-pinned, and bound to the
-  // tag, over a checkout deep enough to carry the commit range the action reads —
-  // each of those failing produces a GREEN job and either no release record or
-  // one with no issues attached, which is why prose could not hold it. The
-  // release path must also REFRESH tags before resolving one, and that assertion
-  // is an ordering rather than a presence: the tag is pushed from a clone the
-  // runner cannot see, so a refresh placed after the resolver is the workflow
-  // that ran 32 times and recorded nothing. Wiring it here rather than as a
-  // CI-only step is what puts it in `mise run ci` -> `verify` -> CI, so
-  // `ci-parity`'s "every task CI runs is one `verify` runs" keeps holding.
-  //
-  // Globbed on BOTH workflows it judges as well as the script that decides, for
-  // the reason the timeout budget below states: a gate that does not re-run when
-  // its subject is edited stops running for exactly the commits it exists to
-  // judge. `linear-release-backfill.yml` is the second subject — the operator
-  // path that records a tag which shipped before the recording worked — and it
-  // needs its own trigger here or it would be judged only when the release path
-  // happened to change. The batten.toml row's glob names only the script — that
-  // one is the rule's subject, and `batten-glob-check` must be able to prove it
-  // covered.
   ["release-tracking-check"] {
     glob =
       List(
@@ -574,36 +329,6 @@ local gate = new Mapping<String, Step> {
     glob = List(".claude/settings.json")
     check = "mise run mcp-allow-check"
   }
-  // The same silence, one table over in the same file (CLOUD-471). The
-  // `PreToolUse` matcher decides which tool calls the host spawns the hook for
-  // AT ALL, so a `[[verb]]` naming a tool the matcher omits loads, validates and
-  // gates nothing — the process is never spawned, no envelope is decoded, and
-  // the symptom is an allow indistinguishable from a pass. `hooks-wiring-check`
-  // above deliberately compares only the EVENT and the COMMAND ("THE MATCHER IS
-  // NOT COMPARED"), because a matcher derived from the `Harness` enum would be
-  // the repo-agnostic core asserting a consumer's tool vocabulary; the coverage
-  // question therefore lands in a consumer gate, which is this one.
-  //
-  // A pattern reaching awk through `-v` goes through assignment escape
-  // processing first, and what that does to a backslash is undefined across
-  // implementations — gawk strips it, mawk keeps it. ready-lint matched its §8
-  // label that way: green on mawk locally, matching NOTHING on the gawk runner,
-  // so the clause went back to passing silently and took three older tests with
-  // it. A gate that cannot match its own label does not fail, it passes.
-  ["awk-regex-check"] {
-    glob = List("mise-tasks/**", "*.sh")
-    check = "mise run awk-regex-check"
-  }
-  // `producer | grep -q P` under pipefail can report FAILURE on a match: grep
-  // exits at the first hit, a still-writing producer dies of SIGPIPE, and
-  // pipefail promotes 141. It is a race (2 in 300 runs on a two-commit range),
-  // so it passes review and passes tests. landed-check reported a clean board
-  // over three landed issues that way; issue-guard denied `gh pr ready` on a
-  // branch whose every commit carried Refs: CLOUD-186 — it blocked its own PR.
-  ["pipefail-grep-check"] {
-    glob = List("mise-tasks/**", "*.sh")
-    check = "mise run pipefail-grep-check"
-  }
   // Completeness of mise.lock, asked of the committed bytes. The old lock-check
   // asked it by running `mise lock` and diffing, which answers "did upstream
   // change" instead — and never removes or repairs an existing entry, so a
@@ -618,70 +343,9 @@ local gate = new Mapping<String, Step> {
     glob = List("mise.lock", "mise.toml", ".github/workflows/*.yml")
     check = "mise run lock-complete"
   }
-  // Every job already declared a timeout, so the absence of a limit was never
-  // the problem — the numbers were boilerplate, at 3.4x to 75x of measured p95.
-  // A cap at 75x cannot fail a job that is merely broken-slow, and it is inert
-  // as feedback: `ci` could double and every gate would stay green. So this
-  // gates the JUSTIFICATION, not the limit: a budget comment beside each value,
-  // either `grandfathered` (dated debt, visibly not a justification) or a
-  // measured `p95=<n>s x<mult>` whose arithmetic must agree with the declared
-  // minutes. Whether a budget still matches reality is a property of the world
-  // and runs on a clock instead (timeout-drift), the lock-complete split.
-  ["timeout-check"] {
-    glob = List(".github/workflows/*.yml")
-    check = "mise run timeout-check"
-  }
-  // We pin an UNRELEASED toolchain-install commit —
-  // uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b — because it is
-  // the one that added the download retry, and that action ships its own built
-  // dist. The pin therefore no longer matches a release tag — while renovate.json5
-  // tracks the github-actions ecosystem and auto-bot-land.yml lands bot bumps
-  // with no human in the loop. A bump resolving back to the pre-retry commit
-  // would be a silent downgrade, auto-landed, and the next transient would read
-  // as fresh. So the rule ships with its mechanism: this reds such a pin at check
-  // time, which is what stops that PR going green (CLOUD-404). A denylist rather
-  // than a required sha, so a real forward bump needs no edit here.
-  ["mise-action-floor"] {
-    glob = List(".github/workflows/*.yml")
-    check = "mise run mise-action-floor"
-  }
-  // Every agent pays AGENTS.md on every turn, so its size is a per-turn tax
-  // rather than a style question. Counted with any memory declared always-load,
-  // since moving a section into one of those moves the cost without cutting it.
-  //
-  // This was `mise run context-budget`, a ~50-line shell task, until CLOUD-50
-  // moved the predicate into the engine. `batten.toml` now carries the counted
-  // set and both thresholds, so `batten.toml` joins the glob: changing the
-  // budget must re-run the gate that enforces it.
-  //
-  // `.serena/project.yml` joins it for the same reason (CLOUD-899):
-  // `[[budget.instructions.embedded]]` counts its `initial_prompt`, so it is a
-  // real input, and a step that does not list its own input stops running for
-  // exactly the commits it is meant to judge — the shape the `check` tier's
-  // memory glob already records for CLOUD-770. `batten-check` globs it too, but
-  // that step is `slow`-profile and skipped at commit time, so it covered
-  // `verify` and `ci` while the pre-commit tier stayed blind. That went unnoticed
-  // while the value was empty; CLOUD-864 put text in it.
-  //
-  // What is deliberately NOT here: `.serena/memories/always/*.md`, carried over
-  // from the deleted shell task. That directory has never existed — batten.toml
-  // says so where it declares the counted set — and CLOUD-298 removed the
-  // engine-side copy while this one survived, matching nothing and reading to the
-  // next author as evidence of an `always/` convention.
   ["policy-budget"] {
     glob = List("AGENTS.md", ".serena/project.yml", "batten.toml")
     check = "mise run policy-budget"
-  }
-  // The other half of `batten-check`'s glob (CLOUD-224). That list is derived
-  // from batten.toml — every `[[rule]]` glob, every declared budget file — so
-  // writing it here makes hk.pkl a second authority over a set the config
-  // already defines, and a second authority narrows SILENTLY: add a rule whose
-  // glob names a path outside the list and the step stops running for commits
-  // that touch only that path, with nothing going red. A glob without this is
-  // half a change (non-negotiable 2).
-  ["batten-glob-check"] {
-    glob = List("batten.toml", "hk.pkl")
-    check = "mise run batten-glob-check"
   }
   // The shipped skill is the dispositional surface of the interaction model, and
   // two of its properties are specification rather than taste: a ~300-line
@@ -950,7 +614,7 @@ local gate = new Mapping<String, Step> {
   //
   // Deriving that union from batten.toml by hand makes hk.pkl a second authority
   // over it, which narrows silently the next time a rule adds a glob — half a
-  // change by non-negotiable 2. `batten-glob-check` below is the other half.
+  // change by non-negotiable 2. `glob-containment` below is the other half.
   //
   // The task runs `batten enforce` since CLOUD-229 — the committed
   // no-conflict-markers rule delegates to `hk util check-merge-conflict`, and a
@@ -980,6 +644,13 @@ local gate = new Mapping<String, Step> {
         "Cargo.lock",
         "mise.toml",
         ".github/workflows/*.yml",
+        // CLOUD-1709's two `workflow-shell-not-growing` rows glob
+        // `.github/workflows/**`, which is BROADER than the `*.yml` entry above
+        // and not redundant with it: the narrow entry misses a `.yaml` workflow
+        // and misses a nested path. A step whose glob does not cover its own
+        // inputs stops running for exactly the commits it is meant to judge, so
+        // `glob-containment` refused the rows until this followed them.
+        ".github/workflows/**",
         // Recursive since CLOUD-328: the ratchet row over bats suites was
         // narrowed to one segment only to dodge a submodule the walker used to
         // count and the base rev did not. Both halves stop at a nested
@@ -988,12 +659,12 @@ local gate = new Mapping<String, Step> {
         // CLOUD-383's portability row scopes a `forbid` to `mise-tasks/**`, so
         // those files are an input to `batten check` now — and a step whose glob
         // does not cover its own inputs stops running for exactly the commits it
-        // is meant to judge. `batten-glob-check` refused the rule until this
+        // is meant to judge. `glob-containment` refused the rule until this
         // followed it, which is the coupling working rather than a chore.
         "mise-tasks/**",
         // CLOUD-1457's `install-does-one-thing` row scopes a `forbid` to
         // `install.sh`, so the installer is an input to `batten check` — the same
-        // coupling as `mise-tasks/**` above, and `batten-glob-check` refused the
+        // coupling as `mise-tasks/**` above, and `glob-containment` refused the
         // rule until this followed it. The consequence of omitting it is sharper
         // here than elsewhere: `install.sh` is the one file exempt from the bash
         // moratorium, so a commit touching only it is exactly the commit the rule
@@ -1002,13 +673,13 @@ local gate = new Mapping<String, Step> {
         // CLOUD-876's `no-rego-metadata` row scopes a `forbid` to
         // `policy/**/*.rego`, so the modules are an input to `batten check` too
         // — the same coupling as `mise-tasks/**` above, and refused by
-        // `batten-glob-check` until it followed. Without it the gate goes silent
+        // `glob-containment` until it followed. Without it the gate goes silent
         // for exactly the commits that add a policy module, which is when the
         // `rego.metadata.*` refusal has anything to catch.
         "policy/**/*.rego",
         // CLOUD-761's `no-tracker-key-in-modules` row scopes a `forbid` to
         // `policy/**` — the whole tree rather than the `.rego` files above it —
-        // so the broader glob has to follow it here, and `batten-glob-check`
+        // so the broader glob has to follow it here, and `glob-containment`
         // refused the commit until it did. The two entries are not redundant:
         // every tracked path under `policy/` is a module today, so they select
         // the same set, and the day one is not, the narrow entry would leave the
@@ -1024,21 +695,21 @@ local gate = new Mapping<String, Step> {
         // The two `command` rows over the Rego corpus are globbed on their own
         // configuration rather than on `policy/**`, so that they run here and in
         // no fixture (CLOUD-614) — which makes these files batten inputs in the
-        // literal sense `batten-glob-check` reads, and it refused the commit
+        // literal sense `glob-containment` reads, and it refused the commit
         // until they were listed.
         ".regal/config.yaml",
         "schema/policy-input.schema.json",
         "AGENTS.md",
         ".serena/project.yml",
         // CLOUD-681's `fix-selection-complete` globs this very file, so editing
-        // the gate is now a reason to run the gate. `batten-glob-check` is what
+        // the gate is now a reason to run the gate. `glob-containment` is what
         // named it — the row landed, the list did not, and that suite went red
         // on the same commit rather than the step quietly not selecting.
         "hk.pkl",
         // CLOUD-1137's `claude-shell-not-growing` ratchets shebangs under
         // `.claude/**`, so those files are a `batten check` input now — the same
         // coupling `mise-tasks/**` and `policy/**/*.rego` above carry, and
-        // `batten-glob-check` refused the commit until this followed the row. It
+        // `glob-containment` refused the commit until this followed the row. It
         // is the entry that matters most for that row: a new shell program under
         // `.claude/` is exactly the commit the ratchet exists to catch, and
         // without this it is the commit the step would not run for.
@@ -1046,7 +717,7 @@ local gate = new Mapping<String, Step> {
         // CLOUD-605's `no-denied-identity-prescribed` row scopes a `forbid` to
         // Markdown — where the user-level hook's remedy would get pasted — so
         // every tracked `.md` is an input now. The bare `**` below does not
-        // discharge this: `batten-glob-check`'s subsumption is a `P/**` prefix
+        // discharge this: `glob-containment`'s subsumption is a `P/**` prefix
         // test and a slashless `**` matches only verbatim, so an explicit entry
         // is what the gate accepts. It is also what this list wants — each line
         // records WHICH rule made its path an input.

@@ -987,12 +987,22 @@ fn hyperfine(
 /// `--shell=none` runs argv directly, so it can only come from a prefix. The
 /// extra exec is identical on both arms and divides out of the ratio.
 fn state_prefixed(state: &str, argv: &[String]) -> Vec<String> {
-    let mut out = vec![
-        String::from("env"),
-        format!("XDG_DATA_HOME={state}"),
-        format!("APPDATA={state}"),
-        format!("LOCALAPPDATA={state}"),
-    ];
+    // THE ISOLATION IS `arm::Isolation`'s, and stating it there is what makes it
+    // behaviour rather than setup (CLOUD-1714): every state-writing name is set
+    // together, so a caller cannot point one at a scratch root and leave the
+    // rest ambient. This wrapper is the `env`-prefix spelling the benchmarking
+    // tool needs, over that one declaration.
+    let mut out = vec![String::from("env")];
+    for (name, value) in crate::arm::Isolation::at(state).env() {
+        if name == "HOME" {
+            // The benchmarking arms deliberately keep the ambient home: they
+            // measure a repository checkout, and relocating `HOME` would move
+            // the toolchain out from under the binary being measured. The other
+            // three are what carry per-arm state.
+            continue;
+        }
+        out.push(format!("{name}={value}"));
+    }
     out.extend(argv.iter().cloned());
     out
 }
@@ -1027,32 +1037,24 @@ fn record(arm: &'static str, id: &str, result: &serde_json::Value) -> Result<Rec
 fn summarise(
     arm: &'static str,
     id: &str,
-    mut times: Vec<f64>,
+    times: Vec<f64>,
     reported_mean: Option<f64>,
 ) -> Result<Record> {
     if times.is_empty() {
         bail!("perf: the {id} {arm} arm carried no times.");
     }
-    times.sort_by(f64::total_cmp);
-
     let n = times.len();
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "a run count is a small integer and this is an index computation, not a measurement"
-    )]
-    let last = (n - 1) as f64;
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "both products are within [0, n-1] by construction, so the cast cannot truncate meaningfully or go negative"
-    )]
-    let i50 = (last * 0.5).floor() as usize;
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "both products are within [0, n-1] by construction, so the cast cannot truncate meaningfully or go negative"
-    )]
-    let i95 = (last * 0.95).ceil() as usize;
+
+    // THE PERCENTILE REDUCTION IS `arm`'s, and this is one of the four copies
+    // CLOUD-1714 collapsed into it. `arm::percentile` sorts the series itself,
+    // so the shape where an unsorted series reaches a quantile is not
+    // representable here any more.
+    let (Some(p50), Some(p95)) = (
+        crate::arm::percentile(times.clone(), 50, 100),
+        crate::arm::percentile(times.clone(), 95, 100),
+    ) else {
+        bail!("perf: the {id} {arm} arm carried no times.");
+    };
 
     #[expect(
         clippy::cast_precision_loss,
@@ -1063,8 +1065,8 @@ fn summarise(
     Ok(Record {
         arm,
         path: id.to_owned(),
-        p50: times[i50] * 1000.0,
-        p95: times[i95.min(n - 1)] * 1000.0,
+        p50: p50 * 1000.0,
+        p95: p95 * 1000.0,
         mean: mean * 1000.0,
         runs: n,
     })

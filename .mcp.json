@@ -1,8 +1,13 @@
 {
   "mcpServers": {
     "serena": {
-      "command": "mise-tasks/serena-mcp.sh",
+      "command": "batten",
       "args": [
+        "mcp",
+        "spawn",
+        "serena",
+        "--",
+        "mise",
         "exec",
         "pipx:serena-agent@1.7.0",
         "--",
