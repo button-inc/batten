@@ -90,11 +90,11 @@ fn check(dir: &Path) -> Output {
     run(dir, &["check", "--rule", "coderabbit-config"])
 }
 
-const COMPLIANT: &str = "reviews:\n  request_changes_workflow: true\n  auto_review:\n    drafts: true\n  tools:\n    gitleaks:\n      enabled: true\n    ruff:\n      enabled: false\n";
+const CONFORMING: &str = "reviews:\n  request_changes_workflow: true\n  auto_review:\n    drafts: true\n  tools:\n    gitleaks:\n      enabled: true\n    ruff:\n      enabled: false\n";
 
 #[test]
-fn a_compliant_config_passes() {
-    let dir = review_repo("review-compliant", COMPLIANT);
+fn a_conforming_config_passes() {
+    let dir = review_repo("review-conforming", CONFORMING);
     let output = check(&dir);
     assert_eq!(
         output.status.code(),
@@ -109,7 +109,7 @@ fn a_compliant_config_passes() {
 fn the_changes_workflow_flipped_off_is_refused() {
     let dir = review_repo(
         "review-workflow-off",
-        &COMPLIANT.replace(
+        &CONFORMING.replace(
             "request_changes_workflow: true",
             "request_changes_workflow: false",
         ),
@@ -129,7 +129,7 @@ fn the_draft_key_flipped_off_is_refused() {
     // nobody having pushed.
     let dir = review_repo(
         "review-drafts-off",
-        &COMPLIANT.replace("drafts: true", "drafts: false"),
+        &CONFORMING.replace("drafts: true", "drafts: false"),
     );
     let output = check(&dir);
     assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
