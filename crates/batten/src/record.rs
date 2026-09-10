@@ -205,6 +205,7 @@ pub fn run(
         crate::cli::RecordCommand::Forge { reference } => run_forge(&reference, overrides),
         crate::cli::RecordCommand::Plan => run_plan(),
         crate::cli::RecordCommand::Closes => run_closes(overrides),
+        crate::cli::RecordCommand::Named { family } => run_named(&family),
         crate::cli::RecordCommand::Keyed { family, key } => run_keyed(&family, &key),
         crate::cli::RecordCommand::Journal { family } => run_journal(&family),
         crate::cli::RecordCommand::Show { family, key } => run_keyed_show(&family, &key, out),
@@ -422,6 +423,58 @@ fn safe_component(what: &str, value: &str) -> Result<String> {
         )));
     }
     Ok(clean.to_owned())
+}
+
+/// Record one named family under this branch, read from stdin.
+///
+/// **The POLICY-readable store, which is a different store from the two below.**
+/// `record keyed`/`record journal` write task stores that `record show`/`record
+/// fold` read back; this writes through [`crate::recorder::record_path`], which
+/// is the store [`crate::facts::Fact::Records`] projects onto
+/// `input.tree.records.<family>`. A module reads what this writes; nothing reads
+/// what those write except the task that wrote it. Keeping them apart is why
+/// this is a third verb rather than a flag on one of them: the two stores have
+/// different keys, different readers and different lifetimes.
+///
+/// **One verb, not one per measurement** (CLOUD-1717). Nine programs in that wave
+/// are measurements rather than gates — the `gh` call stays outside per
+/// house-style §5 and only the adjudication moves in — so each needs a producer
+/// that writes a record a module can read. Nine bespoke verbs would be nine
+/// spellings of `run_plan` with the validation removed, which is the duplication
+/// the retirement campaign exists to delete rather than to relocate.
+///
+/// **NO VALIDATION OF THE LINES, deliberately.** [`run_plan`] refuses an unknown
+/// status because a plan entry has a closed vocabulary this binary owns. A
+/// measurement's shape is the module's business, and a second reading here would
+/// be the two-authorities-over-one-fact defect: the module already has to decide
+/// what a malformed line means, and a writer that pre-judged it would make the
+/// module's own arm unreachable.
+///
+/// # Errors
+///
+/// A [`UsageError`] when the family is not a single path component, when the
+/// repository has no branch to key on, or when this is not a git repository; an
+/// internal error when the store cannot be written.
+pub fn run_named(family: &str) -> Result<ExitCode> {
+    let family = safe_component("family", family)?;
+    let raw = verdict_lines()?;
+    let root = Path::new(".");
+    let git_dir = git::git_dir(root).map_err(|_| {
+        UsageError::raise(
+            "record named: not a git repository, so there is nothing to key on".to_owned(),
+        )
+    })?;
+    let Ok(Some(branch)) = git::current_branch(root) else {
+        return Err(UsageError::raise(
+            "record named: a detached HEAD has no branch to key the record on".to_owned(),
+        ));
+    };
+    let claim = claim_of(&git_dir, &branch);
+    store(
+        &crate::recorder::record_path(&git_dir, &family, &branch, claim.as_deref()),
+        &raw,
+    )?;
+    Ok(ExitCode::Success)
 }
 
 /// The record path for one (family, key) pair.

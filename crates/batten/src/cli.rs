@@ -1364,6 +1364,20 @@ pub enum RecordCommand {
         /// The ref or sha the verdict was taken against.
         reference: String,
     },
+    /// Record one named family under this branch, for a module to read.
+    ///
+    /// The POLICY-readable store, unlike [`RecordCommand::Keyed`] and
+    /// [`RecordCommand::Journal`] below, which are task stores: this writes
+    /// through `recorder::record_path`, which is what `Fact::Records` projects
+    /// onto `input.tree.records.<family>`.
+    ///
+    /// No key positional: the BRANCH is the key and the engine resolves it, so a
+    /// caller cannot record against a branch it is not on — `record plan`'s
+    /// anti-staleness argument, applied to a family the caller names.
+    Named {
+        /// The record family, which is the key a module reads it under.
+        family: String,
+    },
     /// Put one value into a keyed store family (CLOUD-1713).
     Keyed {
         /// The store family the record belongs to.
@@ -2407,6 +2421,9 @@ fn record_of(matches: &ArgMatches) -> Option<RecordCommand> {
         }),
         ("forge", matches) => Some(RecordCommand::Forge {
             reference: matches.get_one::<String>("ref")?.clone(),
+        }),
+        ("named", matches) => Some(RecordCommand::Named {
+            family: matches.get_one::<String>("family")?.clone(),
         }),
         ("keyed", matches) => Some(RecordCommand::Keyed {
             family: matches.get_one::<String>("family")?.clone(),

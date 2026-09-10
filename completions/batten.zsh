@@ -5078,6 +5078,36 @@ trace\:"Add everything"))' \
 ':ref -- The ref or sha the verdict was taken against:_default' \
 && ret=0
 ;;
+(named)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':family -- The record family, which is the key a module reads it under:_default' \
+&& ret=0
+;;
 (keyed)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -5275,6 +5305,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (forge)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(named)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -7089,6 +7123,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(named)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (keyed)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -8641,6 +8679,7 @@ _batten__subcmd__help__subcmd__record_commands() {
     local commands; commands=(
 'tool:Record a declared tool row'\''s verdict, read as \`<name> <token>\` lines on stdin' \
 'forge:Record the forge'\''s check verdicts for one commit, read as \`<check> <conclusion>\` lines on stdin' \
+'named:Record one named family under this branch, read from stdin' \
 'keyed:Put one value into a keyed store family, read from stdin' \
 'journal:Append one record to an append-and-fold store family, read from stdin' \
 'show:Read one keyed record back\: \`hit\` and the value, or \`miss\`' \
@@ -8674,6 +8713,11 @@ _batten__subcmd__help__subcmd__record__subcmd__journal_commands() {
 _batten__subcmd__help__subcmd__record__subcmd__keyed_commands() {
     local commands; commands=()
     _describe -t commands 'batten help record keyed commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__record__subcmd__named_commands] )) ||
+_batten__subcmd__help__subcmd__record__subcmd__named_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help record named commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__record__subcmd__plan_commands] )) ||
 _batten__subcmd__help__subcmd__record__subcmd__plan_commands() {
@@ -9769,6 +9813,7 @@ _batten__subcmd__record_commands() {
     local commands; commands=(
 'tool:Record a declared tool row'\''s verdict, read as \`<name> <token>\` lines on stdin' \
 'forge:Record the forge'\''s check verdicts for one commit, read as \`<check> <conclusion>\` lines on stdin' \
+'named:Record one named family under this branch, read from stdin' \
 'keyed:Put one value into a keyed store family, read from stdin' \
 'journal:Append one record to an append-and-fold store family, read from stdin' \
 'show:Read one keyed record back\: \`hit\` and the value, or \`miss\`' \
@@ -9799,6 +9844,7 @@ _batten__subcmd__record__subcmd__help_commands() {
     local commands; commands=(
 'tool:Record a declared tool row'\''s verdict, read as \`<name> <token>\` lines on stdin' \
 'forge:Record the forge'\''s check verdicts for one commit, read as \`<check> <conclusion>\` lines on stdin' \
+'named:Record one named family under this branch, read from stdin' \
 'keyed:Put one value into a keyed store family, read from stdin' \
 'journal:Append one record to an append-and-fold store family, read from stdin' \
 'show:Read one keyed record back\: \`hit\` and the value, or \`miss\`' \
@@ -9839,6 +9885,11 @@ _batten__subcmd__record__subcmd__help__subcmd__keyed_commands() {
     local commands; commands=()
     _describe -t commands 'batten record help keyed commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__record__subcmd__help__subcmd__named_commands] )) ||
+_batten__subcmd__record__subcmd__help__subcmd__named_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten record help named commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__record__subcmd__help__subcmd__plan_commands] )) ||
 _batten__subcmd__record__subcmd__help__subcmd__plan_commands() {
     local commands; commands=()
@@ -9863,6 +9914,11 @@ _batten__subcmd__record__subcmd__journal_commands() {
 _batten__subcmd__record__subcmd__keyed_commands() {
     local commands; commands=()
     _describe -t commands 'batten record keyed commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__record__subcmd__named_commands] )) ||
+_batten__subcmd__record__subcmd__named_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten record named commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__record__subcmd__plan_commands] )) ||
 _batten__subcmd__record__subcmd__plan_commands() {

@@ -4863,6 +4863,33 @@ pub const SURFACE: &[CommandDecl] = &[
     // CLOUD-1546 counts 42 top-level rows and CLOUD-1182 records nine ports
     // becoming nine nouns, and a store family is an object this verb records, not
     // a verb of its own.
+    // CLOUD-1717's producer door. Nine programs in that wave are MEASUREMENTS
+    // rather than gates: house-style §5 keeps the `gh` spawn outside the engine
+    // and moves only the adjudication in, so each needs a producer writing a
+    // record a module can read.
+    //
+    // THE POLICY STORE, WHICH IS NOT THE TWO BELOW. This writes through
+    // `recorder::record_path`, the store `Fact::Records` projects onto
+    // `input.tree.records.<family>`; `record keyed`/`record journal` write task
+    // stores that only `record show`/`record fold` read back. Same noun, two
+    // different readers, so they are different leaves rather than one leaf with
+    // a mode flag.
+    //
+    // ONE LEAF FOR NINE PRODUCERS. Nine bespoke verbs would each be `record
+    // plan` with its validation removed — the duplication this campaign deletes
+    // rather than relocates.
+    CommandDecl {
+        path: "record named",
+        id: "record.named",
+        about: "Record one named family under this branch, read from stdin",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[FlagDecl::positional(
+            "family",
+            "The record family, which is the key a module reads it under",
+        )],
+    },
     CommandDecl {
         path: "record keyed",
         id: "record.keyed",

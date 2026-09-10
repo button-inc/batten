@@ -2543,6 +2543,24 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "record named",
+          "id": "record.named",
+          "about": "Record one named family under this branch, read from stdin",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "family",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The record family, which is the key a module reads it under"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "record plan",
           "id": "record.plan",
           "about": "Record this branch's plan, read as `<id> <status>` lines on stdin",

@@ -1019,6 +1019,10 @@ mod tests {
             // rather than one verb with a mode flag.
             "record journal".to_owned(),
             "record keyed".to_owned(),
+            // CLOUD-1717's producer door: the POLICY-readable store, keyed by
+            // branch, which `Fact::Records` projects. The two leaves above it
+            // are task stores read back only by `record show`/`record fold`.
+            "record named".to_owned(),
             // The plan a branch declared, so `plan-complete` decides over a
             // record rather than over a transcript it cannot re-read.
             "record plan".to_owned(),

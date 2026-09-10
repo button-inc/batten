@@ -1864,6 +1864,17 @@ const CENSUS: &[Verb] = &[
     // family and a key. `PointerOnly` is therefore the whole of their contract —
     // a successful write says nothing, because the record's destination is a
     // keyed file under `$GIT_DIR` and there is nothing for it to report.
+    // CLOUD-1717's producer door, and pointer-only for the reason the other two
+    // generic writers are: it does not know what its payload MEANS. A successful
+    // write says nothing at all — the record's destination is a branch-keyed file
+    // under `$GIT_DIR`, and what a module later makes of the lines is the
+    // module's business, not this verb's.
+    Verb {
+        path: "record named",
+        args: &["census"],
+        stdin: Stdin::ToolVerdict,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "record keyed",
         args: &["census", "a-key"],
