@@ -34,20 +34,15 @@ on:
   # failure it watches, and goes silent in exactly the case it exists to catch.
   # This trigger does not.
   #
-  # Most pushes to `main` ship no release. Both checks resolve the tag at the
-  # run's head commit and exit 0 when it carries none, so the asset download is
-  # spent per RELEASE rather than per merge.
   # zizmor flags workflow_run as dangerous because it runs privileged and is
   # usually paired with checking out and executing content the triggering run
-  # controlled. The first draft of this arm did exactly that — it checked out
-  # `github.event.workflow_run.head_sha` and then ran `mise` tasks from it — and
-  # the audit refused it, correctly. It does not now: the checkout below takes
-  # the repository's default ref, never the triggering head, so the code that
-  # executes is `main`'s. The head SHA reaches the job only as an opaque `env`
-  # value that the task passes to `git`, never as a checkout ref and never
-  # interpolated into a run script, so the injection this audit guards against
-  # cannot occur. Same reasoning `auto-release-land.yml` and `auto-bot-land.yml`
-  # state for the same audit.
+  # controlled. NOTHING FROM THE EVENT REACHES THIS JOB: the checkout below
+  # names no ref, so it takes the repository's default and the code that
+  # executes is `main`'s; no step reads `github.event.workflow_run.*` at all, so
+  # there is no ref to poison and nothing to interpolate into a run script. An
+  # earlier draft did check out the event's head SHA and run `mise` tasks from
+  # it, and this audit refused it — correctly, and that refusal is why the
+  # arm has this shape.
   #
   # `release-plz` is `on: push: branches: [main]`, so only a write-access push
   # can fire this at all — a fork cannot reach it, which is the safe subset of
@@ -91,28 +86,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-          # WHAT THE `workflow_run` ARM NEEDS TO ANSWER ITS OWN QUESTION, AND
-          # DELIBERATELY NOT A REF FROM THE EVENT.
-          #
-          # The checks read `git tag --points-at <sha>` to tell a release from
-          # an ordinary merge, so the triggering commit and its tags have to be
-          # present — but the commit is always on `main` (release-plz is
-          # `on: push: branches: [main]`), so full history at the DEFAULT ref
-          # carries it. Checking the event's head SHA out instead would put the
-          # triggering ref's own content into the job that then executes `mise`
-          # tasks, which is the privileged-checkout pattern zizmor refuses and
-          # the trigger comment above records.
-          #
-          # Absent either, the task exits 2 as a could-not-look rather than
-          # guessing "shipped nothing", which would let a broken release pass as
-          # an ordinary merge.
-          #
-          # Costs a full fetch on the clock and dispatch arms too, where depth 1
-          # would have done. That is the price of one checkout shape for three
-          # triggers, and it buys never resolving a tag against a shallow
-          # history that silently lacks it.
-          fetch-depth: 0
-          fetch-tags: true
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
           # Pinned to `batten.toml`'s `[[provision]]` version (CLOUD-1672). The
@@ -123,17 +96,25 @@ jobs:
       # expansion is textual substitution into the shell script, so a tag naming
       # shell metacharacters would execute. Same posture as every other run block
       # in this repo, and zizmor gates it at high severity.
-      # RELEASE_SHIPPED_BY is empty on the clock and dispatch arms, where it
-      # changes nothing and the task reads the latest release exactly as before.
-      # On the `workflow_run` arm it names the commit release-plz pushed, which
-      # is how the task tells "this merge shipped v0.0.160" from "this merge
-      # shipped nothing" without re-downloading a previous release's assets.
+      # NO TAG ON THE `workflow_run` ARM, DELIBERATELY. An empty `TAG` means
+      # "the latest release", and after release-plz publishes, the latest
+      # release IS the one it just shipped — so the per-release trigger needs no
+      # argument and, more to the point, no edit to the task. `shell-retirement`
+      # refuses an edited shell gate (CLOUD-843 replaces them rather than
+      # maintaining them, and this one cannot be ported: rego downloads no
+      # assets and hashes no bytes), so the trigger had to be expressible here
+      # alone. It is.
+      #
+      # THE COST, STATED: release-plz runs on every push to `main`, so a merge
+      # that shipped no release re-checks whichever release is latest — correct,
+      # and redundant. Suppressing that needs the tag at the triggering commit,
+      # which is exactly the task edit this shape exists to avoid. CLOUD-1777
+      # carries the follow-up.
       - name: Check the release carries one archive per matrix target
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
-          RELEASE_SHIPPED_BY: ${{ github.event.workflow_run.head_sha }}
         run: mise run release-assets-check "$TAG"
       # The provenance half of the same question (CLOUD-583), on this clock for
       # the same reason the step above is: whether a published release is attested
@@ -151,5 +132,4 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
-          RELEASE_SHIPPED_BY: ${{ github.event.workflow_run.head_sha }}
         run: mise run attestation-check "$TAG"

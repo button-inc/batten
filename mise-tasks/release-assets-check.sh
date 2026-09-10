@@ -40,20 +40,11 @@
 #
 #   mise run release-assets-check v0.0.36
 #   mise run release-assets-check            # the latest release
-#   RELEASE_SHIPPED_BY=<sha> mise run release-assets-check
-#                                            # the release that commit shipped,
-#                                            # or exit 0 if it shipped none
 #
 # Pointer-only (rule 4): target names and counts, never asset contents or URLs.
 # Output is sorted, so re-running is byte-stable and diffable.
 # A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
 #MUTANT missing-archive-passes|s/^\texit 1$/\texit 0/|a release with only the schema fails
-# The wrong-empty direction, and it is the defect this arm actually shipped once
-# (CLOUD-1777): the first resolution asked the paginated tags API and reported
-# "shipped nothing" for a real release commit. That answer is indistinguishable
-# from an ordinary merge, so a broken release passes in silence — which is worse
-# than any refusal this gate can emit. Blanking the resolution reproduces it.
-#MUTANT release-tag-resolves-empty|s#^\tshipped=\$(git tag --points-at "\$RELEASE_SHIPPED_BY")#\tshipped=""#|a commit carrying a release tag resolves THAT tag rather than reporting nothing
 
 set -euo pipefail
 
@@ -130,58 +121,6 @@ if [[ -z "$literal" ]]; then
 fi
 
 tag="${1:-}"
-
-# THE PER-RELEASE SUBJECT, AND THE NO-OP THAT MAKES ASKING EVERY TIME CHEAP
-# (CLOUD-1777).
-#
-# `RELEASE_SHIPPED_BY` names the commit a release-plz run pushed. It exists
-# because the caller that fires once per release fires on every push to `main`,
-# and most pushes ship no release — so the question "which release is this run
-# about?" has an honest empty answer that must not read as "check the latest
-# one again". Downloading a previous release's assets on every merge would
-# spend the bytes below to assert something no push changed.
-#
-# THE TAG AT THAT COMMIT IS THE RELEASE, verified against this repository's own
-# history rather than assumed: `v0.0.159` points at `f0ae1f39` and `v0.0.158`
-# at `06b78019`, each the head of the release-plz run that shipped it, while an
-# ordinary commit on `main` carries no tag at all. So absence here is
-# "shipped nothing", which is exit 0 with a line saying so — never exit 1,
-# which would report every ordinary merge as a broken release.
-#
-# READ FROM GIT, AND THE API ROUTE IS THE ONE THIS REPLACED. The first version
-# asked `git/matching-refs/tags` and filtered on `.object.sha`. It reported
-# "shipped nothing" for `f0ae1f39`, which is v0.0.159's own release commit, for
-# two independent reasons: that endpoint pages at 30 and this repository has
-# 160+ tags, so the tag was never in the response; and `.object.sha` on an
-# ANNOTATED tag is the tag object's digest, not the commit's, so the comparison
-# would still have missed. A wrong empty here is the worst possible answer —
-# it is indistinguishable from an ordinary merge, so a broken release would
-# pass silently, which is the exact failure this row exists to end.
-#
-# THE ABSENT COMMIT IS COULD-NOT-LOOK, NEVER "shipped nothing". A shallow
-# checkout that lacks the commit, or one with no tags fetched, cannot answer
-# the question — and answering it anyway is how a gate reports clean over a
-# tree it never read. The caller supplies both (`ref` and `fetch-tags`).
-#
-# Ignored when a tag is passed explicitly, and absent on the clock and dispatch
-# arms — both keep their existing meaning, which is "the latest release".
-RELEASE_SHIPPED_BY="${RELEASE_SHIPPED_BY:-}"
-if [[ -z "$tag" && -n "$RELEASE_SHIPPED_BY" ]]; then
-	if ! git cat-file -e "${RELEASE_SHIPPED_BY}^{commit}" 2>/dev/null; then
-		echo "::error:: $RELEASE_SHIPPED_BY is not a commit this checkout carries, so whether it shipped a release is unknown. Fetch it (and the tags) before asking — that is a could-not-look, not an empty release." >&2
-		exit 2
-	fi
-	# No pipe, so `set -o pipefail` has nothing to swallow and the first line is
-	# taken by expansion: a commit carrying two tags is a release either way, and
-	# which one is reported stays deterministic because `git tag` sorts.
-	shipped=$(git tag --points-at "$RELEASE_SHIPPED_BY")
-	tag=${shipped%%$'\n'*}
-	if [[ -z "$tag" ]]; then
-		echo "release-assets-check: $RELEASE_SHIPPED_BY carries no release tag, so it shipped nothing to judge"
-		exit 0
-	fi
-fi
-
 if [[ -z "$tag" ]]; then
 	if ! tag=$(gh release view --json tagName --jq .tagName 2>/dev/null) || [[ -z "$tag" ]]; then
 		echo "::error:: no tag given and no latest release readable. Pass one: mise run release-assets-check <tag>" >&2
