@@ -519,7 +519,7 @@ LEASE_STOP_NOTE = "mise-tasks/reclaim-census.sh note x land-stopped"
 # that one success as the whole roster, and `land` posted /fast-forward into a
 # branch protection still listing the other six as expected. The bot was
 # rejected. A stall is recoverable; a false green is not (CLOUD-337).
-CI_ABSENT_OK_CHECKS = "zizmor,cross,darwin-link (aarch64-apple-darwin),semver,windows,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
+CI_ABSENT_OK_CHECKS = "zizmor,cross,darwin-link (aarch64-apple-darwin),semver,windows,macos,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
 # The conclusions that CONSTITUTE AN ANSWER about a required check, written once
 # and read by `checks-green` and by `land`'s `graded_runs` — for exactly the
 # reason CI_REQUIRED_CHECKS is written once (CLOUD-327), and against exactly the
