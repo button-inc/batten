@@ -299,6 +299,96 @@ complete() {
 	[ "$status" -eq 2 ]
 }
 
+@test "THE DEFECT (CLOUD-1777): the committed workflow asks per release, not only on a clock" {
+	# Every case above proves the predicate. This one proves the predicate is
+	# ASKED often enough to matter, which is the half CLOUD-258 left open: it
+	# moved this gate off the `release` event — correctly, because a
+	# release-triggered run reaches no PR and no gate — and onto a WEEKLY clock,
+	# against a cadence measured at ~4 releases/day. That samples about one
+	# release in thirty. v0.0.159 shipped 1 asset of 18 on a Thursday and nothing
+	# would have reported it until the following Monday.
+	#
+	# `release-plz` specifically, not merely "a second trigger": it is `on: push`
+	# to `main`, so it is NOT suppressed by the recursion guard that stops a
+	# release created with `GITHUB_TOKEN` from firing `release-artifacts.yml` —
+	# the guard that let v0.0.159 ship with no run at all to notice. A gate
+	# reached through the `release` event shares a trigger with the failure it
+	# watches and goes silent in exactly the case it exists to catch. THAT is the
+	# property this case pins, and a future edit dropping the trigger for a
+	# tidier `on:` block fails here rather than four days later.
+	unset BATTEN_RELEASE_WORKFLOW
+	run grep -qE '^  workflow_run:' .github/workflows/release-assets.yml
+	[ "$status" -eq 0 ]
+	run grep -qE '^    workflows: \[release-plz\]' .github/workflows/release-assets.yml
+	[ "$status" -eq 0 ]
+	# And the arm is reachable: without the head SHA the task cannot tell a
+	# release from an ordinary merge, so the trigger alone would fire a gate that
+	# re-judges whichever release is latest on every push.
+	run grep -cF 'RELEASE_SHIPPED_BY: ${{ github.event.workflow_run.head_sha }}' .github/workflows/release-assets.yml
+	[ "$status" -eq 0 ]
+	[ "$output" -eq 2 ]
+}
+
+@test "a commit that shipped no release is judged as nothing, and not as the latest one" {
+	# THE DANGEROUS DIRECTION, and the reason the resolution reads git rather than
+	# the tags API. `release-plz` fires on every push to `main` and most pushes
+	# ship nothing, so this arm runs constantly: answering it with "the latest
+	# release" would spend the asset download on every merge, and answering a REAL
+	# release with an empty tag would let a broken release pass as an ordinary
+	# merge — silently, which is the failure this row exists to end.
+	#
+	# The first implementation did exactly that. It asked
+	# `git/matching-refs/tags` and compared `.object.sha`, and reported "shipped
+	# nothing" for v0.0.159's own release commit: that endpoint pages at 30
+	# against this repository's 160+ tags, and an annotated tag's `.object.sha` is
+	# the tag object's digest rather than the commit's.
+	#
+	# HEAD on a working branch carries no release tag by construction, so this
+	# needs no fixture and cannot rot as the tag list grows.
+	complete
+	export RELEASE_SHIPPED_BY
+	RELEASE_SHIPPED_BY="$(git rev-parse HEAD)"
+	run "$CHECK"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"shipped nothing"* ]]
+}
+
+@test "a commit the checkout does not carry is could-not-look, never an empty release" {
+	# The other half of the same distinction: a shallow checkout, or one with no
+	# tags fetched, cannot answer the question. Answering it anyway is how a gate
+	# reports clean over a tree it never read.
+	complete
+	export RELEASE_SHIPPED_BY=0000000000000000000000000000000000000000
+	run "$CHECK"
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"could-not-look"* ]]
+}
+
+@test "a commit carrying a release tag resolves THAT tag rather than reporting nothing" {
+	# The positive arm, and it asserts the RESOLUTION alone. Which assets some
+	# past release carries is not this case's subject, and keying on exit 0 would
+	# quietly make it one — cases 1-15 above own the asset predicate.
+	#
+	# A tag from THIS checkout, because the task reads the repository it runs in:
+	# a purpose-built repository elsewhere needs a `cd`, and `sbom --names`
+	# derives the expected asset names from `Cargo.toml` at that same cwd, so the
+	# fixture would take the rest of the gate down with it — measured, as
+	# `batten-v-...spdx.json` with the version resolved empty.
+	#
+	# A checkout with no tags reachable cannot answer this, and skips rather than
+	# passing vacuously: absent tags are exactly the could-not-look the case above
+	# pins, not a release that shipped nothing.
+	local tag sha
+	tag="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+	[ -n "$tag" ] || skip "no tag is reachable from HEAD, so no commit here shipped a release"
+	sha="$(git rev-list -n1 "$tag")"
+	complete
+	export RELEASE_SHIPPED_BY="$sha"
+	run "$CHECK"
+	[[ "$output" == *"$tag"* ]]
+	[[ "$output" != *"shipped nothing"* ]]
+}
+
 # --- the checksum manifest (CLOUD-278) ---------------------------------------
 
 @test "a complete release with a valid manifest reports the verified count" {

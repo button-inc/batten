@@ -48,6 +48,12 @@
 # Output is sorted, so re-running is byte-stable and diffable.
 # A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
 #MUTANT missing-archive-passes|s/^\texit 1$/\texit 0/|a release with only the schema fails
+# The wrong-empty direction, and it is the defect this arm actually shipped once
+# (CLOUD-1777): the first resolution asked the paginated tags API and reported
+# "shipped nothing" for a real release commit. That answer is indistinguishable
+# from an ordinary merge, so a broken release passes in silence — which is worse
+# than any refusal this gate can emit. Blanking the resolution reproduces it.
+#MUTANT release-tag-resolves-empty|s#^\tshipped=\$(git tag --points-at "\$RELEASE_SHIPPED_BY")#\tshipped=""#|a commit carrying a release tag resolves THAT tag rather than reporting nothing
 
 set -euo pipefail
 
