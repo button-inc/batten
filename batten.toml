@@ -10056,23 +10056,67 @@ owner = "CLOUD-1079"
 expires = "2027-02-28"
 
 [[hook.handler]]
-id = "session-container-preflight"
+id = "session-egress"
 on = "session-start"
-run = ["mise", "run", "container-preflight"]
+run = ["batten", "doctor", "egress"]
+# THE FIRST OF THE TWO ROWS `session-container-preflight` ALWAYS WAS (CLOUD-1753).
+#
 # LAST OF THE STEPS THAT CAN HALT, and that position is the whole point
 # (CLOUD-261). "The toolchain installed" and "this container can do the work" are
 # different questions, and the second used to be answered three tasks in, by a
-# failure wearing someone else's name.
+# failure wearing someone else's name. The pair keeps that position; splitting it
+# does not move it.
+#
+# WHY TWO ROWS AND NOT ONE. The retired script asked two unrelated questions —
+# can mise resolve a release, and does the credential carry the read claims the
+# lifecycle needs — and collected both answers so a reader saw the whole list. It
+# had to collect them, because one process reporting two causes has to remember
+# to keep looking after the first; that is why `set -e` was deliberately absent
+# from it. The door already does that for free: every row is dispatched and every
+# refusal reaches the same reply. So the collection loop was the SHELL'S problem,
+# not the property's, and the property is better served by two rows that each
+# name their own failure than by one script that owned neither.
+#
+# THE VERB RATHER THAN A TASK, and the difference is load-bearing. The script
+# read `NO_PROXY` from inside a process `mise` had already corrected, so it
+# graded the REPAIRED value and called an unfenced container fenced. `batten` is
+# invoked directly here, so this reads what the container actually shipped —
+# which `doctor.rs` records as the whole reason the verb exists.
 #
 # THE `--degraded` ARM IS GONE AND THAT IS A FIDELITY LOSS, recorded here rather
 # than glossed. The script tracked a `fail` variable across its steps and passed
 # `--degraded` when an earlier one had failed, telling the preflight not to trust
 # toolchain-dependent probes. Handlers do not share state — each is its own
-# process with its own outcome — so this now always runs the full probe set. The
-# consequence is a preflight that may report a toolchain-dependent probe failing
-# on a container whose install already failed: a second symptom of one cause
-# rather than a wrong answer, and both refusals are in the same reply. Recovering
-# the arm needs a fact the door does not carry today.
+# process with its own outcome — so the pair below always runs the full probe
+# set. The consequence is a preflight that may report a toolchain-dependent probe
+# failing on a container whose install already failed: a second symptom of one
+# cause rather than a wrong answer, and both refusals are in the same reply.
+# Recovering the arm needs a fact the door does not carry today.
+#
+# The bound is the verb's, not a guess: it reads two environment variables and
+# resolves a no-proxy list by string, opening no network and building nothing.
+timeout_ms = 30000
+owner = "CLOUD-312"
+expires = "2027-02-28"
+
+[[hook.handler]]
+id = "session-credential"
+on = "session-start"
+run = ["mise", "run", "gh-preflight"]
+# THE SECOND ROW, and it is a straight invocation of a program this campaign is
+# NOT retiring. `gh-preflight` walks the read endpoints the lifecycle tasks call
+# and reports the claim GitHub itself names in each 403; it is the diagnosis and
+# it already exits non-zero. What the retired script added was running it, and a
+# handler runs it with nothing in between — which is the adopt-prior-art reading
+# rather than rebuilding a probe set inside the engine.
+#
+# AFTER THE EGRESS ROW, because a container that cannot reach the API at all
+# fails both, and the reader wants the cause before the symptom. Both answers
+# still arrive in the same reply, so the ordering buys legibility rather than
+# information.
+#
+# ITS TIMEOUT IS THE PAIR'S LARGE HALF: this one opens the network and walks
+# several endpoints, which is what the retired script's 120s was actually for.
 timeout_ms = 120000
 owner = "CLOUD-312"
 expires = "2027-02-28"
@@ -10086,16 +10130,23 @@ run = ["mise", "run", "session:census"]
 # running when the container we replaced went down (CLOUD-451) — so its stdout is
 # deliberately left to become advisory text.
 #
-# THE OTHER IS `session-container-preflight`, and the count was wrong here until
-# it was measured: dispatching these rows for real on 2026-09-01 returned
-# `signing-posture: …` and `container-preflight: egress fenced, …` in the
-# advisory, where this comment claimed one line. Both were the retired script's
-# behaviour too — it ran `container-preflight` and the census directly and
-# `step`-wrapped everything else — so the preflight's line stays and the signing
-# row was repointed at a wrapped task to restore the silence it had. The lesson is
-# the one this file keeps re-learning: a claim about what a row PRINTS is a
-# measurement, and every other row above is silent by construction only because a
-# task makes it so.
+# THE OTHER IS `session-egress`, and the count was wrong here until it was
+# measured: dispatching these rows for real on 2026-09-01 returned
+# `signing-posture: …` and the preflight's own all-clear line in the advisory,
+# where this comment claimed one line. Both were the retired script's behaviour
+# too — it ran the preflight and the census directly and `step`-wrapped
+# everything else — so the preflight's line stays and the signing row was
+# repointed at a wrapped task to restore the silence it had. The lesson is the one
+# this file keeps re-learning: a claim about what a row PRINTS is a measurement,
+# and every other row above is silent by construction only because a task makes
+# it so.
+#
+# THE SPEAKING ROW MOVED WITH CLOUD-1753 AND THE COUNT DID NOT. The preflight
+# split into `session-egress` and `session-credential`, and only the first is
+# unconditionally chatty: `doctor egress` prints `egress ok` on the clean path
+# where `gh-preflight` is silent unless a claim is missing. That is a claim about
+# what a row prints, so it is owed the same measurement the paragraph above
+# demanded of its predecessor rather than being read as settled here.
 #
 # It is also the only row that cannot fail the session: the task swallows both
 # its exits, because a verdict about a PAST container is not a provisioning
@@ -14293,13 +14344,20 @@ target = "policy/spawn-adapters.rego"
 #
 # FOUR FACTS MAKE THE MOVE BEHAVIOUR-PRESERVING, each read rather than assumed:
 #
-#   1. stdout carries 79 bytes on the all-clear path — `container-preflight`
-#      announces its own success there — which behind the door is an advisory
-#      delivered every session whose whole content is "nothing is wrong". Moving
-#      that line to stderr is an edit to a governed file, so it belongs to that
-#      file's retirement rather than to this move. Stated as a precondition of the
-#      move rather than as something already done: an earlier draft of this comment
-#      claimed the line "now goes to stderr", and it does not.
+#   1. stdout carries 79 bytes on the all-clear path — the preflight announces
+#      its own success there — which behind the door is an advisory delivered
+#      every session whose whole content is "nothing is wrong". Moving that line
+#      to stderr was an edit to a governed file, so it belonged to that file's
+#      retirement rather than to this move. Stated as a precondition of the move
+#      rather than as something already done: an earlier draft of this comment
+#      claimed the line "now goes to stderr", and it did not.
+#
+#      CLOUD-1753 RETIRED THAT FILE AND THE PRECONDITION IS STILL OPEN, said
+#      plainly rather than letting a retirement read as a fix. The program is gone
+#      and its egress half is `batten doctor egress`, whose all-clear line goes to
+#      STDOUT under the same output contract every verb follows (§6). The byte
+#      count moved and the CHANNEL did not, so the advisory-every-session cost
+#      this fact was measuring is unchanged and still owed a decision.
 #   2. A failure is exit 1 with `::error::` lines on stderr, which `interpret`
 #      reads as `Outcome::Reported` — and that joins `Dispatched::advice()`, which
 #      `AdvisoryReach` delivers on `SessionStart` for this host. So the failure
