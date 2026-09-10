@@ -17,8 +17,33 @@ name: release-assets
 # so topping up a partial release is safe.
 
 on:
+  # ONCE PER RELEASE, ON A TRIGGER THIS FAILURE CANNOT SILENCE (CLOUD-1777).
+  #
+  # CLOUD-258 moved this gate off the `release` event for the reason in the
+  # header, and that reasoning stands. What it got wrong was the PERIOD: the
+  # clock below samples weekly against a cadence measured at ~4 releases/day
+  # (v0.0.151 through v0.0.159 published inside ~48 hours), so it inspects
+  # roughly one release in thirty, and only whichever is latest on a Monday.
+  # v0.0.159 shipped 1 asset of 18 and nothing would have said so for four days.
+  #
+  # `release-plz` is `on: push` to `main`, WHICH IS THE WHOLE POINT. A push
+  # event is not suppressed by the recursion guard that stops a release created
+  # with `GITHUB_TOKEN` from firing `release-artifacts.yml` — the guard that let
+  # v0.0.159 ship with no run at all to notice, as against a failed one. A gate
+  # reached through the `release` event therefore shares a trigger with the
+  # failure it watches, and goes silent in exactly the case it exists to catch.
+  # This trigger does not.
+  #
+  # Most pushes to `main` ship no release. Both checks resolve the tag at the
+  # run's head commit and exit 0 when it carries none, so the asset download is
+  # spent per RELEASE rather than per merge.
+  workflow_run:
+    workflows: [release-plz]
+    types: [completed]
   schedule:
-    # Mondays, 06:30 UTC — after lock-currency, same weekly slot.
+    # Mondays, 06:30 UTC — after lock-currency, same weekly slot. A BACKSTOP
+    # now rather than the primary ask: it covers a quiet period with no pushes,
+    # and a release whose own `workflow_run` run was lost.
     - cron: "30 6 * * 1"
   workflow_dispatch:
     inputs:
@@ -51,6 +76,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          # WHAT THE `workflow_run` ARM NEEDS TO ANSWER ITS OWN QUESTION.
+          #
+          # `ref` is the commit release-plz pushed, and `fetch-tags` brings the
+          # tag that points at it; the checks read both with `git tag
+          # --points-at` to tell a release from an ordinary merge. Neither is
+          # optional: without the commit, or without its tags, the task exits 2
+          # as a could-not-look rather than guessing "shipped nothing" — which
+          # would let a broken release pass as an ordinary merge.
+          #
+          # Both expand to empty on the clock and dispatch arms, where checkout
+          # keeps its previous default of the branch tip at depth 1.
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-tags: true
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
           # Pinned to `batten.toml`'s `[[provision]]` version (CLOUD-1672). The
@@ -61,11 +99,17 @@ jobs:
       # expansion is textual substitution into the shell script, so a tag naming
       # shell metacharacters would execute. Same posture as every other run block
       # in this repo, and zizmor gates it at high severity.
+      # RELEASE_SHIPPED_BY is empty on the clock and dispatch arms, where it
+      # changes nothing and the task reads the latest release exactly as before.
+      # On the `workflow_run` arm it names the commit release-plz pushed, which
+      # is how the task tells "this merge shipped v0.0.160" from "this merge
+      # shipped nothing" without re-downloading a previous release's assets.
       - name: Check the release carries one archive per matrix target
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
+          RELEASE_SHIPPED_BY: ${{ github.event.workflow_run.head_sha }}
         run: mise run release-assets-check "$TAG"
       # The provenance half of the same question (CLOUD-583), on this clock for
       # the same reason the step above is: whether a published release is attested
@@ -83,4 +127,5 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
+          RELEASE_SHIPPED_BY: ${{ github.event.workflow_run.head_sha }}
         run: mise run attestation-check "$TAG"

@@ -158,6 +158,34 @@ case "$status" in
 esac
 
 tag="${1:-}"
+
+# THE PER-RELEASE SUBJECT, mirroring `release-assets-check` because the header
+# above already says this task is that task's model (CLOUD-1777). The caller
+# that asks once per release asks on every push to `main`, and a push that
+# shipped no release has an honest empty answer — exit 0 rather than re-probing
+# whichever release happens to be latest.
+#
+# The tag at that commit IS the release: verified in this repository's history,
+# where each release tag points at the release commit that heads the run which
+# shipped it, and an ordinary commit on `main` carries none. Read from git for
+# the reasons `release-assets-check` records at its own copy of this arm — the
+# tag API pages, and an annotated tag's `.object.sha` is not the commit's, so
+# both would report a real release as "shipped nothing". An absent commit is
+# could-not-look, never an empty release.
+RELEASE_SHIPPED_BY="${RELEASE_SHIPPED_BY:-}"
+if [[ -z "$tag" && -n "$RELEASE_SHIPPED_BY" ]]; then
+	if ! git cat-file -e "${RELEASE_SHIPPED_BY}^{commit}" 2>/dev/null; then
+		echo "::error:: attestation-check: $RELEASE_SHIPPED_BY is not a commit this checkout carries, so whether it shipped a release is unknown. Fetch it (and the tags) before asking." >&2
+		exit 2
+	fi
+	shipped=$(git tag --points-at "$RELEASE_SHIPPED_BY")
+	tag=${shipped%%$'\n'*}
+	if [[ -z "$tag" ]]; then
+		echo "attestation-check: $RELEASE_SHIPPED_BY carries no release tag, so it shipped nothing to verify"
+		exit 0
+	fi
+fi
+
 if [[ -z "$tag" ]]; then
 	if ! tag=$("$GH_BIN" release view --json tagName --jq '.tagName' 2>/dev/null) || [[ -z "$tag" ]]; then
 		echo "::error:: attestation-check: no tag given and no latest release to read, so there is nothing to verify." >&2
