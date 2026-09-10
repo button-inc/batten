@@ -2026,6 +2026,15 @@ regex = '(?i)(^|[^0-9A-Za-z-])(clos(e|es|ed)|fix(|es|ed)|resolv(e|es|ed))[[:blan
 # issue reads this row instead of spelling its own set. `duplicate` is closed too:
 # an exemption whose owner was merged into another issue is as spent as one whose
 # owner shipped.
+# A RUN OF DIGITS AND NOTHING ELSE, which is what makes a recorded age readable
+# as a number at all. `branch-age`'s producer writes the age it computed; this is
+# the module's shape test before `to_number`, because an unparseable third column
+# is a torn record rather than a branch that is zero days old — and those two must
+# not collapse into the same verdict.
+[[pattern]]
+id = "whole-number"
+regex = '^[0-9]+$'
+
 [[pattern]]
 id = "closed-issue-status"
 regex = '^(done|canceled|duplicate)$'
@@ -6048,6 +6057,26 @@ line_sources = [
 ]
 module = "policy/mutation-declared-case.rego"
 severity = "deny"
+
+# CLOUD-349, ported off `mise-tasks/branch-age-check.sh` under CLOUD-1717.
+#
+# A MEASUREMENT, SO THE SPAWN STAYS OUTSIDE (house-style §5). `mise run
+# branch-age-record` makes the two forge reads and computes each branch's age in
+# days — the engine calls no clock on any evaluation path, so the arithmetic
+# cannot live in the module — and writes `branch-age` through `batten record
+# named`. This row adjudicates what was recorded.
+#
+# `severity = "warn"` FOR NOW, and the reason is the population rather than
+# caution: the retired program ran on a schedule against every remote branch,
+# where this runs in `verify` against whatever the last producer wrote. CLOUD-320
+# binds the promotion — land it reporting, read the firing rate, promote with the
+# measurement rather than with an argument.
+[[rule]]
+id = "branch-age"
+kind = "policy"
+scope = "tree"
+module = "policy/branch-age.rego"
+severity = "warn"
 
 [[rule]]
 id = "plan-complete"
@@ -12526,6 +12555,57 @@ and killing it took `kill -9` on the process group. A heredoc, `< msg.txt` or \
 id = "patch run first"
 kind = "command"
 target = "git commit -F <path>"
+
+# CLOUD-349's two readings, ported off `branch-age-check.sh` under CLOUD-1717.
+[[verdict]]
+id = "branch watch stale"
+gloss = "a remote branch has outlived the story it was cut for"
+class = """
+Trunk-based development asks a review branch to be "very short-lived" and names \
+the hazard: a short-lived feature branch sleepwalking into a long-lived one. \
+Measured 2026-08-11, before `land` learned to delete: 23 remote branches, ten of \
+them five days old. The branch is either finished — in which case delete it — or \
+it is not, in which case it is a long-lived branch and the trunk-based claim is \
+the thing that is false.
+"""
+
+[[verdict.route]]
+id = "branch write first"
+kind = "command"
+target = "git push origin --delete <branch>"
+
+[[verdict]]
+id = "branch name duplicate"
+gloss = "one branch name has headed several merged pull requests and still exists"
+class = """
+A per-PR lifetime metric cannot see this: \
+`claude/phase-3-sequential-landing-h26kx0` headed eight consecutive pull \
+requests, each landing inside an hour, while the branch itself lived for days. \
+THE SURVIVING BRANCH IS HALF THE CLASS, because merged pull requests are \
+immutable — a count alone would be an alarm no action could ever clear, so what \
+is refused is the name still being there to reuse again.
+"""
+
+[[verdict.route]]
+id = "branch write first"
+kind = "command"
+target = "git push origin --delete <branch>, and cut a fresh name for the next story"
+
+[[verdict]]
+id = "branch list empty"
+gloss = "the branch record was written and names no branch at all"
+class = """
+A remote reporting no branches cannot be true of a repository with a trunk, so \
+the honest reading is a listing that failed while still exiting zero. ABSENT AND \
+PRESENT-BUT-EMPTY ARE DIFFERENT STATES and must not collapse: no record is \
+could-not-look and says nothing, a record naming nothing is a reading this gate \
+refuses. Re-run the producer and read what it reports.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run branch-age-record"
 
 # CLOUD-613, CLOUD-482. The waste here is the SESSION rather than a verdict or a
 # gate, which is why it is a class of its own rather than a row on either above.

@@ -1836,6 +1836,70 @@ counts=$(jq -r --argjson authored "$authored" '
 } | cargo run --quiet -p batten -- record tool sbom
 '''
 
+# CLOUD-349's two forge reads, ported off `branch-age-check.sh` under CLOUD-1717.
+#
+# THE SPAWN STAYS OUT HERE AND ONLY THE ADJUDICATION MOVED IN (house-style §5).
+# `policy/branch-age.rego` decides what a stale branch is; this fetches what it
+# decides over. The day arithmetic is here for a harder reason than convention:
+# the engine calls no clock on any evaluation path — `clippy.toml`'s
+# `disallowed-methods` and `crates/batten/tests/clock_ban.rs` hold it to that —
+# so an AGE cannot be computed inside a module at all.
+#
+# ONE GRAPHQL CALL for the refs rather than a REST branch list plus a commit
+# lookup per branch: the tip date is not on the REST branch object, and 23
+# follow-up calls to learn it is the shape `mem:github-rest-etiquette` warns
+# about.
+#
+# WRITES NOTHING WHEN IT CANNOT LOOK, which is the half that keeps the module
+# honest. A failed fetch leaves the record absent, the module's `recorded` stays
+# undefined and it says nothing; a record that IS written and names no branch is
+# the different, refused state. Collapsing those two is the silent pass this
+# campaign keeps finding.
+[tasks.branch-age-record]
+description = "Effect: record every remote branch's age in days and which names head more than one merged PR (CLOUD-349)"
+shell = "bash -c"
+run = """
+trunk="${BRANCH_AGE_TRUNK:-main}"
+today=$(date -u +%Y-%m-%d)
+
+slug=$(gh repo view --json owner,name --jq '.owner.login + " " + .name' 2>/dev/null) || exit 0
+refs=$(gh api graphql \
+  -f query='query($owner:String!,$name:String!){
+              repository(owner:$owner,name:$name){
+                refs(refPrefix:"refs/heads/",first:100){
+                  nodes{ name target{ ... on Commit { committedDate } } }
+                }
+              }
+            }' \
+  -F owner="${slug% *}" -F name="${slug#* }" \
+  --jq '.data.repository.refs.nodes[] | [.name, .target.committedDate] | @tsv' 2>/dev/null) || exit 0
+prs=$(gh pr list --state merged --limit 200 --json headRefName --jq '.[].headRefName' 2>/dev/null) || exit 0
+
+{
+  printf '%s\\n' "$refs" | awk -F'\\t' -v today="$today" -v trunk="$trunk" '
+    function days(y, m, d,   era, yoe, doy, doe) {
+      if (m <= 2) y -= 1
+      era = int((y >= 0 ? y : y - 399) / 400)
+      yoe = y - era * 400
+      doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
+      doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+      return era * 146097 + doe - 719468
+    }
+    function daynum(iso,   p, s) {
+      s = substr(iso, 1, 10)
+      if (s !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) return "NaN"
+      split(s, p, "-")
+      return days(p[1] + 0, p[2] + 0, p[3] + 0)
+    }
+    BEGIN { now = daynum(today) }
+    $1 == "" { next }
+    $1 == trunk { next }
+    { d = daynum($2); if (d != "NaN") print "ref\\t" $1 "\\t" (now - d) }
+  '
+  printf '%s\\n' "$prs" | sed '/^$/d' | awk -v trunk="$trunk" '$0 != trunk { print "merged\\t" $0 }'
+} | cargo run --quiet -p batten -- record named branch-age
+"""
+
 [tasks.record-verdicts]
 description = "Effect: run each declared third-party validator OUTSIDE the engine and record its verdict where `batten check` reads it (CLOUD-1265)"
 # THE HALF THAT WAS MISSING. `crates/batten/src/tools.rs` reads
