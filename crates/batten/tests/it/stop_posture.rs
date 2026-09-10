@@ -22,6 +22,37 @@
 //! The suite's successor is the module, which is where the one rule that COULD
 //! be a predicate went.
 //!
+// THE PROGRAM THIS MODULE MADE REDUNDANT (CLOUD-1717). `stop-posture-check.sh`
+// and `policy/stop-posture.rego` decided the same question from the same bytes:
+// the shell read `last_assistant_message` off stdin, the module reads it off the
+// `Stop` payload. The row's own words were "already ported — retire it, don't
+// port it", and this is that retirement: nothing new is written, the shell's
+// nineteen cases are mapped onto the module's own and the program goes.
+//
+// The program's `#MUTANT hedged-framing-passes` row does not move: the module
+// carries `hedge-unread` over the same conjunct, so the sweep keeps a live
+// mutation on the surviving surface rather than gaining an orphan.
+// carried: mise-tasks/stop-posture-check.sh policy/stop-posture.rego kind:mechanism crates/batten/tests/it/stop_posture.rs
+// carried: tests/stop-posture-check.bats policy/stop-posture.rego kind:mechanism crates/batten/tests/it/stop_posture.rs
+// carried: "the first tell AGENTS.md names fires" policy/stop-posture.rego kind:mechanism
+// carried: "the second tell AGENTS.md names fires" policy/stop-posture.rego kind:mechanism
+// carried: "the inflection that a closed two-item list would have missed fires" policy/stop-posture.rego kind:mechanism
+// carried: "the report carries a count" policy/stop-posture.rego kind:mechanism
+// carried: "THE WITNESSED MISS: the CLOUD-347 sentence fires" policy/stop-posture.rego kind:mechanism
+// carried: "the asymmetry is gone: mentioning is a flagging verb under BOTH openers" policy/stop-posture.rego kind:mechanism
+// carried: "every opener carries the witnessed verb" policy/stop-posture.rego kind:mechanism
+// carried: "an UNWITNESSED near-miss stays out — that is the line against inventing a list" policy/stop-posture.rego kind:mechanism
+// carried: "the report never echoes the sentence it judged" policy/stop-posture.rego kind:mechanism
+// carried: "a code span carrying the tell does not fire" policy/stop-posture.rego kind:mechanism
+// carried: "a double-quoted span carrying the tell does not fire" policy/stop-posture.rego kind:mechanism
+// carried: "a block quote carrying the tell does not fire" policy/stop-posture.rego kind:mechanism
+// carried: "a fenced block carrying the tell does not fire" policy/stop-posture.rego kind:mechanism
+// carried: "a LINE-WRAPPED quoted span carrying the tell does not fire" policy/stop-posture.rego kind:mechanism
+// carried: "reporting a measured value is not hedged framing" policy/stop-posture.rego kind:mechanism
+// carried: "a command flag is not hedged framing" policy/stop-posture.rego kind:mechanism
+// carried: "a plainly stated finding with a durable home does not fire" policy/stop-posture.rego kind:mechanism
+// changed: "empty stdin is clean rather than an error" policy/stop-posture.rego kind:mechanism the input surface moved: the shell read the message on stdin, so an empty stream was a real state it had to answer for. The module is handed the `Stop` payload and an absent `last_assistant_message` is a missing FIELD, which `a_tool_call_carries_no_final_message` decides as silence. Same verdict, different question, so it is recorded as a divergence rather than a carry
+// carried: "a clean message produces no output at all" policy/stop-posture.rego kind:mechanism
 // carried: mise-tasks/stop-guard.sh crates/batten/src/lib.rs kind:mechanism crates/batten/tests/it/stop_posture.rs
 //
 // CLOUD-1163's unlanded unit. The program was spawned by `stop_nudges` with

@@ -71,7 +71,6 @@ to it pays.
 | 0.5 | 0.3% | `tests/duplicate-close-check.bats` |
 | 0.5 | 0.3% | `tests/suite-bench-check.bats` |
 | 0.5 | 0.3% | `tests/macos-link-check.bats` |
-| 0.5 | 0.3% | `tests/stop-posture-check.bats` |
 | 0.4 | 0.3% | `tests/checksums.bats` |
 | 0.4 | 0.3% | `tests/publish-credential-check.bats` |
 | 0.4 | 0.3% | `tests/msrv-pin-agreement.bats` |
