@@ -3149,6 +3149,7 @@ fn run_receipt(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     match command {
+        ReceiptCommand::Clean => receipt::run_clean(out, err),
         ReceiptCommand::Record { check } => receipt::run_record(&check, mode, err),
         ReceiptCommand::Status { check, key, json } => receipt::run_status(&check, key, json, out),
         ReceiptCommand::Verified => receipt::run_verified(out),

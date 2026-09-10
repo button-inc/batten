@@ -1398,6 +1398,12 @@ pub enum RecordCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ReceiptCommand {
+    /// Is the working tree the bytes at HEAD, so a receipt could name them?
+    ///
+    /// The cheap end of a pair `record` completes: this is asked before a long
+    /// gate set runs, and `record`'s own guard closes the window a tree dirtied
+    /// mid-run opens.
+    Clean,
     /// Record that the named check concluded pass against the current HEAD.
     Record {
         /// The check whose conclusion is being recorded.
@@ -2067,6 +2073,9 @@ fn receipt_of(matches: &ArgMatches) -> Option<ReceiptCommand> {
     // make this whole function answer `None` for it, and a sub-verb that parses
     // to nothing is a verb that silently does not exist.
     match name {
+        // Takes no positional, like `verified` below and for its reason: the
+        // subject is the tree, which the verb resolves for itself.
+        "clean" => Some(ReceiptCommand::Clean),
         "record" => Some(ReceiptCommand::Record {
             check: matches.get_one::<String>("check")?.clone(),
         }),

@@ -604,6 +604,11 @@ mod tests {
                 // its pullable path mints a receipt, so it is `write`, and a row
                 // claiming otherwise would advertise a writing verb as read-only.
                 "ready lint".to_owned(),
+                // CLOUD-1753's port of `tree-clean`, and `read` in §5's strong
+                // sense: it counts what `git status` reports and writes nothing,
+                // which is what lets `verify` ask it in `depends` without the ask
+                // itself becoming a reason the answer changes.
+                "receipt clean".to_owned(),
                 "receipt status".to_owned(),
                 // The composed receipt read that retired `mise-tasks/verified.sh`
                 // (CLOUD-1148). Three `receipt::validity` reads and no write, so
@@ -890,6 +895,12 @@ mod tests {
             // for any consumer reading an entry as a prefix (CLOUD-121).
             "mcp".to_owned(),
             "mcp call".to_owned(),
+            // CLOUD-1753's port of the MCP launcher shim. A LEAF under the noun
+            // rather than a noun of its own, and that placement is the port's one
+            // improvement: the retired shell read the server out of its own file
+            // name, so a second server meant a second copy of the script. Here it
+            // is an argument.
+            "mcp spawn".to_owned(),
             // CLOUD-1267's noun and its two verbs, retired out of
             // `mise-tasks/mutant.sh` and `mise-tasks/mutant-census.sh`.
             // Stated here rather than regenerated, on the terms `checks`
@@ -975,6 +986,11 @@ mod tests {
             "ready".to_owned(),
             "ready lint".to_owned(),
             "receipt".to_owned(),
+            // CLOUD-1753's port of `tree-clean`. The CHEAP end of a pair whose
+            // load-bearing half is a precondition inside `record` below — the
+            // verb that writes the receipt, and so the only place the question is
+            // answerable at the moment it matters.
+            "receipt clean".to_owned(),
             "receipt record".to_owned(),
             "receipt status".to_owned(),
             "receipt verified".to_owned(),

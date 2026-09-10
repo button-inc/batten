@@ -4529,6 +4529,31 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Unclassified,
         flags: &[],
     },
+    // The precondition, asked on its own — ported off `mise-tasks/tree-clean.sh`
+    // under CLOUD-1753.
+    //
+    // ONE PREDICATE, TWO CALLERS, AND THAT IS NOT A SECOND AUTHORITY. `receipt
+    // record` refuses a dirty tree itself, which is the load-bearing end: it is
+    // the verb that writes the receipt, so it is the only place the question is
+    // both askable and answerable at the moment it matters. This row is the CHEAP
+    // end, and the retiring program's own caller shows why both are needed —
+    // `verify:gated` asks it in `depends` so a dirty tree fails in seconds rather
+    // than after the ~170s the gate set costs, and `depends` completes before the
+    // body starts, so a tree dirtied MID-RUN is invisible to it. Both call
+    // `receipt::tree_state`; neither re-derives it.
+    //
+    // `read` in §5's strong sense: it counts what `git status` reports and writes
+    // nothing, which is what lets `verify` ask it without the ask itself becoming
+    // a reason the answer changes.
+    CommandDecl {
+        path: "receipt clean",
+        id: "receipt.clean",
+        about: "Refuse when the working tree differs from HEAD, so a receipt keyed to HEAD would attest bytes no commit contains",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Read,
+        flags: &[],
+    },
     // Creates state the caller can recreate by re-running the check.
     CommandDecl {
         path: "receipt record",

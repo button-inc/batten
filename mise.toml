@@ -617,7 +617,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,attestation-check,awk-regex,bats-invocation,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,claimed-keys,closing-key-check,coderabbit-config,commit-hygiene,connector-allow-guard,connector-allow-resolve,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-landed,engine-lease,engine-mcp,engine-perf,engine-pinned,engine-ready,engine-surface,engine-verdict,engine-wiring,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence-assert,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spawn-widening,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-substitution,test-targets,timeout-budget,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration"
+MUTANT_GATES = "agentic-experiment-record,attestation-check,awk-regex,bats-invocation,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,claimed-keys,closing-key-check,coderabbit-config,commit-hygiene,connector-allow-guard,connector-allow-resolve,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-landed,engine-lease,engine-mcp,engine-perf,engine-pinned,engine-ready,engine-surface,engine-verdict,engine-wiring,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence-assert,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spawn-widening,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-substitution,test-targets,timeout-budget,token-bench-check,transcript-corpus-check,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -3434,6 +3434,29 @@ run = "hk check --all"
 # the table inverted. Callers read the old numbers, so this maps them back, which
 # is the shim shape CLOUD-1170 established and the reason `land.sh` and
 # `tests/tree-clean.bats` need no edit to keep working.
+# CLOUD-193's precondition, ported off `mise-tasks/tree-clean.sh` under
+# CLOUD-1753.
+#
+# THE TASK NAME SURVIVES THE MIGRATION, for `perf-pair`'s reason and with a
+# sharper edge here: `verify:gated` names it in BOTH `depends` and its body, and
+# two governed suites — `tests/verify.bats` and `tests/task-fail-closed.bats` —
+# assert the literal string in each place, the second including that the body's
+# call PRECEDES the `receipt record` it guards. A renamed task would need those
+# suites edited, which a retirement may not do.
+#
+# A ONE-LINE WRAPPER, and the whole predicate is the engine's. `receipt clean`
+# and the guard inside `receipt record` both call one `receipt::tree_state`, so
+# this is a call site rather than a second authority — which is what the retired
+# program could never quite be, since its own header had to argue the point in
+# prose instead of resting on a shared function.
+#
+# `run = "…"` rather than a `'''` block, deliberately:
+# `inline-task-bodies-not-growing` ratchets the multi-line form, and a wrapper
+# that needs one line must not spend the budget a real body would.
+[tasks."tree-clean"]
+description = "Gate: the working tree is the bytes at HEAD, so a receipt keyed to HEAD names what was actually validated"
+run = "cargo run --quiet -p batten -- receipt clean"
+
 [tasks."verified"]
 description = "Gate: is HEAD verified? Answers from the receipts, so no shell idiom can mask the verdict"
 shell = "bash -c"

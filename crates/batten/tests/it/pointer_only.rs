@@ -1511,6 +1511,22 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-1753's port of the MCP launcher shim, and its disposition is forced
+    // by the transport rather than chosen: STDOUT IS THE MCP STREAM. One stray
+    // byte from Batten corrupts the JSON-RPC framing and takes the server down
+    // looking exactly like the bug the ledger exists to diagnose. So this emits
+    // nothing at all on the clean path, and the census is what would catch a
+    // later revision that started narrating the launch.
+    //
+    // Driven against `true`, which is on `PATH` everywhere this suite runs and
+    // exits 0 without writing: the verb EXECS its argument, so the census would
+    // otherwise be measuring whatever program it was handed.
+    Verb {
+        path: "mcp spawn",
+        args: &["a-server", "--", "true"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // CLOUD-1718's fold, and the EASIEST row in this census to justify: the verb
     // emits nothing at all. Its whole answer is the exit code, so there is no
     // content it could republish and no subject it could echo — two integers on
@@ -1598,6 +1614,17 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "receipt status",
         args: &["final"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // CLOUD-1753's port of `tree-clean`, and pointer-only is NARROWER than what
+    // it replaces rather than equal to it. The retired program printed the
+    // porcelain status lines to stderr; this emits a count and a short head and
+    // nothing else, because the remedy is the same whichever paths are dirty —
+    // so a path a reader has no use for never leaves the process.
+    Verb {
+        path: "receipt clean",
+        args: &[],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
