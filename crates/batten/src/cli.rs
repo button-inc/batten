@@ -1364,6 +1364,11 @@ pub enum StateCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RecordCommand {
+    /// Derive what each bats suite costs and record it where an author reads it.
+    Suites {
+        /// Write the corpus to its committed path instead of printing it.
+        write: bool,
+    },
     /// Record a declared tool row's verdict.
     Tool {
         /// The `[[rule.tools]]` id whose verdict is being recorded.
@@ -2449,6 +2454,9 @@ fn state_of(matches: &ArgMatches) -> Option<StateCommand> {
 /// inside their arms — [`state_of`]'s shape rather than [`receipt_of`]'s.
 fn record_of(matches: &ArgMatches) -> Option<RecordCommand> {
     match matches.subcommand()? {
+        ("suites", matches) => Some(RecordCommand::Suites {
+            write: flag(matches, "write"),
+        }),
         ("tool", matches) => Some(RecordCommand::Tool {
             id: matches.get_one::<String>("id")?.clone(),
         }),

@@ -38,7 +38,7 @@ local gate = new Mapping<String, Step> {
     check = "mise run hk-version"
   }
   ["suite-bench-check"] {
-    check = "mise run suite-bench-check"
+    check = "cargo run --quiet -p batten -- check --rule suite-cost-corpus"
   }
   // CLOUD-266's rule reaches the one budget nobody had looked at (CLOUD-668).
   // The MCP startup budget was the host's 30000ms default, never measured, and

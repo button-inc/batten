@@ -188,6 +188,47 @@ pub fn run_forge(reference: &str, _overrides: &Overrides) -> Result<ExitCode> {
     Ok(ExitCode::Success)
 }
 
+/// Derive the per-suite cost corpus and print it, or write it (CLOUD-352).
+///
+/// The one `record` leaf whose store is a COMMITTED file rather than the
+/// out-of-tree record tree, and the reason is the reader: the others are read by
+/// a gate, this one by a person deciding whether the suite they are about to add
+/// a case to is expensive. A record nobody opens answers nothing.
+///
+/// # Errors
+///
+/// A [`UsageError`] when the report is absent, unreadable, carries no suite, or
+/// names a suite this tree does not track — see [`crate::suites::derive`], where
+/// all four are could-not-look and none is an empty corpus. An internal error
+/// when the corpus cannot be written.
+pub fn run_suites(write: bool) -> Result<ExitCode> {
+    let root = git::repo_root(Path::new("."))?;
+    let root = Path::new(&root);
+    // THE TRACKED SET FROM GIT, never a directory walk: an untracked scratch file
+    // beside the suites is not something the corpus should have to carry, and a
+    // walk would put it there.
+    let tracked = crate::git::tracked_paths(root)?
+        .into_iter()
+        .filter(|path| path.starts_with("tests/") && path.ends_with(".bats"))
+        .collect();
+    let (rows, text) = crate::suites::derive(root, &tracked)?;
+    if !write {
+        print!("{text}");
+        return Ok(ExitCode::Success);
+    }
+    // `store` rather than a second write path, and it is the same helper the
+    // other three leaves use: one place that creates the directory and reports
+    // which write failed. The corpus lives in the tree rather than under
+    // `$GIT_DIR`, and that is the only thing this leaf does differently.
+    store(&crate::suites::corpus_path(root), &text)?;
+    eprintln!(
+        "record suites: {} suite(s), written to {}",
+        rows.len(),
+        crate::suites::CORPUS
+    );
+    Ok(ExitCode::Success)
+}
+
 /// Dispatch the `record` verbs.
 ///
 /// # Errors
@@ -197,6 +238,7 @@ pub fn run_forge(reference: &str, _overrides: &Overrides) -> Result<ExitCode> {
 /// an internal error when the store cannot be written.
 pub fn run(command: crate::cli::RecordCommand, overrides: &Overrides) -> Result<ExitCode> {
     match command {
+        crate::cli::RecordCommand::Suites { write } => run_suites(write),
         crate::cli::RecordCommand::Tool { id } => run_tool(&id, overrides),
         crate::cli::RecordCommand::Forge { reference } => run_forge(&reference, overrides),
         crate::cli::RecordCommand::Plan => run_plan(),

@@ -617,7 +617,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,attestation-check,awk-regex,bats-invocation,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,claimed-keys,closing-key-check,coderabbit-config,commit-hygiene,connector-allow-guard,connector-allow-resolve,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-landed,engine-lease,engine-mcp,engine-perf,engine-pinned,engine-ready,engine-surface,engine-verdict,engine-wiring,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence-assert,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spawn-widening,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-substitution,test-targets,timeout-budget,token-bench-check,transcript-corpus-check,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration"
+MUTANT_GATES = "agentic-experiment-record,attestation-check,awk-regex,bats-invocation,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,claimed-keys,closing-key-check,coderabbit-config,commit-hygiene,connector-allow-guard,connector-allow-resolve,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-landed,engine-lease,engine-mcp,engine-perf,engine-pinned,engine-ready,engine-surface,engine-verdict,engine-wiring,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence-assert,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,token-bench-check,transcript-corpus-check,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -3319,7 +3319,7 @@ workers=$(nproc)
 # Both halves are one change with one reason: TAP names a case but not the file
 # it came from, so a per-suite cost figure cannot be recovered from it, and the
 # `mktemp -d` + `trap rm` threw away the only per-case timings this repository
-# ever produces. `mise run suite-bench` reads what this leaves behind, so the
+# ever produces. `batten record suites` reads what this leaves behind, so the
 # corpus costs no second execution of a 2,500-case suite.
 #
 # `ran` counts `<testcase` elements, which is the same population TAP's
@@ -3351,7 +3351,7 @@ fi
 # that comparison sets a slow runner's parallel wall against a fast box's serial
 # cost, and part of what it measures is the runner. On one machine it inverts: the
 # 2026-08-28 sweep above ran this step in 829s at 2 workers against the same
-# corpus's 1367s. `suite-bench-check`'s own header states the general form — a
+# corpus's 1367s. `policy/suite-cost-corpus.rego` states the general form — a
 # gate demanding a duration "would be red on every second run and would be
 # bypassed within a day" — and this one would have been red on every CI run with
 # no setting able to clear it, since that sweep found every de-oversubscription
@@ -3366,12 +3366,12 @@ fi
 # corpus total would make every narrowed run read as comfortable.
 #
 # `bench/suites/RESULTS.md` is the recorded side. It is a CORPUS, regenerated
-# deliberately by `mise run suite-bench --write`, never by this run — so this
+# deliberately by `batten record suites --write`, never by this run — so this
 # compares against a number a person can see change in a diff, rather than against
 # itself.
 #
 # A SELECTED SUITE THE CORPUS DOES NOT RECORD IS COULD-NOT-LOOK, and says so:
-# `suite-bench-check` owns membership, and a new suite's first run must not be read
+# `suite-cost-corpus` owns membership, and a new suite's first run must not be read
 # against a total that does not include it.
 recorded=$(printf '%s\n' $suites | awk '
   FNR == NR { want[$1] = 1; next }
@@ -3379,7 +3379,7 @@ recorded=$(printf '%s\n' $suites | awk '
   END { for (s in want) if (!(s in seen)) { print "-"; exit } printf "%.0f\n", total }
 ' - bench/suites/RESULTS.md)
 if [ -z "$recorded" ] || [ "$recorded" = "-" ]; then
-  echo "::error:: test:bats: bench/suites/RESULTS.md does not record every selected suite, so ${elapsed}s has nothing to be judged against. Regenerate it with \`mise run suite-bench --write\`." >&2
+  echo "::error:: test:bats: bench/suites/RESULTS.md does not record every selected suite, so ${elapsed}s has nothing to be judged against. Regenerate it with \`batten record suites --write\`." >&2
 elif [ "$elapsed" -ge "$recorded" ]; then
   echo "::error:: test:bats: ${elapsed}s wall at $workers workers against ${recorded}s recorded serial for the same suites — the workers cost more than they bought on this machine. Reported, not refused: the corpus and this run may not come from comparable hardware (CLOUD-386)." >&2
 fi

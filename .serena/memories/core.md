@@ -64,6 +64,22 @@ err)` takes **both** channels and the resolved `Mode`, so a verb can write a
   (CLOUD-208; it closed CLOUD-42's G10, "nothing emits at `Verbose` or above
   yet"). `out` is the answer, `err` the messaging — `batten exec` reports its
   output matches through `err` for that reason.
+- `suites.rs` — the per-suite cost corpus (CLOUD-352), derived from the report
+  the bats runner already wrote. **IT RUNS NOTHING**: re-executing a
+  multi-thousand-case suite to measure it would cost more than the waste it
+  reports and would be a second authority over a run that already happened, so
+  this opens one file and writes one file and reaches
+  `policy/spawn-adapters.rego` not at all. The corpus path is a CONTRACT with
+  `policy/suite-cost-corpus.rego`, which reads the same bytes as a declared
+  `lines` source — the producer decides cost, the gate decides MEMBERSHIP, and
+  neither half can see the other. That division is the design: wall clock is a
+  clock and belongs in a drift job, membership is deterministic and belongs in a
+  gate. THREE STATES ARE COULD-NOT-LOOK, never an empty corpus — an absent
+  report (the ordinary state after a receipt-gated no-op lap), a report carrying
+  no readable `<testsuite>`, and a report naming a suite the tree no longer
+  tracks. The last one is what makes the gate's remedy reachable: a suite retired
+  while the report still named it once produced a corpus carrying a cost attached
+  to nothing, so the gate refused the very file its own remedy had just written.
 - `surface.rs` — house-style §11, CLOUD-27: the command tree declared **once**,
   as data (`ROOT` + `SURFACE`) — path, summary, effect, and flags (with each
   flag's env equivalent, so §8 precedence is inspectable data). `command()`

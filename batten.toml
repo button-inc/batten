@@ -6978,10 +6978,86 @@ input = "target/release/batten"
 # `error: test run failed`, exit 100.
 #
 # SO THIS ROW GUARDS A DECLARATION RATHER THAN A DURATION, and that division is
-# deliberate. `mise-tasks/suite-bench-check.sh` records why a duration gate is the
-# wrong instrument — it "would be red on every second run and would be bypassed
-# within a day" — and CLOUD-1419 wrote an aggregate ratchet and withdrew it in the
-# same branch. nextest measures and decides; batten refuses the weakening.
+# deliberate. `policy/suite-cost-corpus.rego` records why a duration gate is the
+# wrong instrument — it "would be red on every second run and switched off within
+# a day" — and CLOUD-1419 wrote an aggregate ratchet and withdrew it in the same
+# branch. nextest measures and decides; batten refuses the weakening.
+#
+# The membership half of that division is the row below, ported off
+# `mise-tasks/suite-bench-check.sh` under CLOUD-1753.
+
+# The per-suite cost corpus covers exactly the tracked suites (CLOUD-352).
+#
+# THE DIVISION THE ROW ABOVE NAMES, from the other side. Wall clock is a CLOCK and
+# belongs in a drift job; MEMBERSHIP is deterministic and belongs in a gate. A
+# suite added and never recorded is invisible to everything that reads the corpus,
+# and a row naming a deleted suite is a figure attached to nothing — both decidable
+# from committed text at no runtime cost.
+#
+# `lines` NAMES ONE LITERAL PATH, on `nextest-slow`'s reading directly above: a
+# tree without the corpus still acquires the declared source, so the could-not-look
+# arm fires on the absent document instead of leaving the rule SKIPPED. That is the
+# arm that matters most here — an absent corpus is precisely the state where
+# nothing records what a suite costs.
+#
+# The producer is `batten record suites`, and the path is a contract between the
+# two halves rather than an implementation detail of either: `suites.rs` spells it
+# as `CORPUS` and this row spells it here.
+[[rule]]
+id = "suite-cost-corpus"
+kind = "policy"
+scope = "tree"
+lines = ["bench/suites/RESULTS.md"]
+module = "policy/suite-cost-corpus.rego"
+severity = "deny"
+
+[[verdict]]
+id = "suite count unread"
+gloss = "the per-suite cost corpus is absent or carries no row, so nothing records what a suite costs"
+class = """
+Could-not-look, never a clean corpus — the whole subject of the gate is that a cost is recorded, so an unreadable corpus is the state it exists to report. Run `mise run test:bats`, then `batten record suites --write`.
+"""
+
+[[verdict.route]]
+id = "suite measure now"
+kind = "command"
+target = "batten record suites --write"
+
+[[verdict]]
+id = "suite list empty"
+gloss = "no tracked bats suite exists, so the cost corpus has no subject to cover"
+class = """
+Could-not-look rather than a corpus that covers everything there is. Reporting green over a tree with nothing to measure is the collapse that lets a gate pass on ignorance.
+"""
+
+[[verdict.route]]
+id = "test add first"
+kind = "document"
+target = "tests/"
+
+[[verdict]]
+id = "suite count absent"
+gloss = "a tracked suite has no row in the cost corpus, so an author editing it is told nothing about what it costs"
+class = """
+The corpus is read to answer "is the file I am about to add a case to expensive". A suite it does not name is invisible to that question. Regenerate after a run that covered it.
+"""
+
+[[verdict.route]]
+id = "suite measure now"
+kind = "command"
+target = "batten record suites --write"
+
+[[verdict]]
+id = "suite count dead"
+gloss = "the cost corpus records a suite this tree does not track — a figure attached to nothing"
+class = """
+Either the suite retired and the corpus was not regenerated, or the report it was derived from predates the tree. The producer refuses the second case by name, so regenerating is the whole remedy.
+"""
+
+[[verdict.route]]
+id = "suite measure now"
+kind = "command"
+target = "batten record suites --write"
 #
 # `lines` NAMES ONE FILE AND THAT IS SAFE HERE, unlike `landing-roster-guarded`
 # which had to declare a whole directory. That module's absent-source arm was dead

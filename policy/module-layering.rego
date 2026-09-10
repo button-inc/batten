@@ -181,6 +181,22 @@ declared_modules := {
 	# own instances, which is the drift that put four copies of a percentile
 	# function in this tree in the first place.
 	"arm",
+	# `suites` arrived with CLOUD-1753 and this rule named it once more — module
+	# written, its cases green, its tier green, and nobody had placed it.
+	#
+	# It is a LEAF and the purest kind: it reads one file and writes one file, and
+	# reaches nothing in this crate but `error` for its refusals. That is not
+	# incidental — its whole doctrine is that it RUNS NOTHING, because re-executing
+	# a suite to measure it would cost more than the waste it reports and would be
+	# a second authority over a run that already happened. A module that spawns
+	# nothing needs no placement in `policy/spawn-adapters.rego` and has no edge
+	# worth forbidding in that direction.
+	#
+	# The direction that IS worth naming is upward: `record` reads it, and it reads
+	# no verb. A back-edge would make the derivation know which caller asked for
+	# it, which is exactly what lets a corpus be derived once and read by both the
+	# producer and the gate that judges membership over it.
+	"suites",
 	# `pinned` arrived with CLOUD-1028 and it worked a fifth time: clippy green,
 	# both test tiers green, and this rule is what said the module was unplaced.
 	# It is an acquisition module in `symbols`' class — it spawns the mediator to

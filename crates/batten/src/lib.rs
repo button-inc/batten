@@ -131,6 +131,8 @@ pub mod startup;
 pub mod state;
 pub mod stop;
 pub mod store;
+/// The per-suite cost corpus, derived from the report the runner already wrote.
+pub mod suites;
 pub mod surface;
 /// What a long-running task is doing, recorded where it can be read without a log.
 pub mod task;

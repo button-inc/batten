@@ -1994,6 +1994,27 @@ const ISSUE: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// Write the derived corpus to its committed path instead of to stdout.
+///
+/// **Off by default, which is the safer direction for a verb whose product is a
+/// tracked file.** A caller who wants to SEE what would be recorded — a reviewer
+/// diffing a proposed corpus against the committed one — must not have to dirty
+/// the tree to do it, and `receipt clean` is one of the things that would then
+/// refuse.
+const SUITES_WRITE: FlagDecl = FlagDecl {
+    id: "write",
+    long: Some("write"),
+    short: None,
+    help: "Write the corpus to its committed path instead of printing it",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
 /// The roster `checks green` decides against (CLOUD-1143).
 ///
 /// **Flags rather than environment variables, and that is rule 1 rather than
@@ -4893,6 +4914,33 @@ pub const SURFACE: &[CommandDecl] = &[
     // could supply the wrong one", and this composes the same key with the same two
     // functions. The negative half falls out for free: a record for a tool nobody
     // declared is unspellable.
+    // The per-suite cost corpus (CLOUD-352), ported off `mise-tasks/suite-bench.sh`
+    // under CLOUD-1753.
+    //
+    // A LEAF UNDER `record` RATHER THAN A NOUN OF ITS OWN, and the noun already
+    // means what this does: write down what happened. The two neighbours key
+    // their records by tool and by forge; this one keys by suite, and the store
+    // is a committed file because the READER is a person deciding whether the
+    // file they are about to edit is expensive.
+    //
+    // IT RUNS NOTHING. The corpus is derived from the report `test:bats` leaves
+    // behind — re-executing the suite to measure it would cost more than the
+    // waste it reports and would be a second authority over a run that already
+    // happened. So this reads one file and writes one file, and reaches
+    // `policy/spawn-adapters.rego` not at all.
+    //
+    // `--write` rather than always writing: without it the corpus goes to stdout,
+    // which is what lets a caller diff a proposed corpus against the committed
+    // one without touching the tree.
+    CommandDecl {
+        path: "record suites",
+        id: "record.suites",
+        about: "Derive what each bats suite costs from the report the runner wrote, and record it where an author reads it",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[SUITES_WRITE],
+    },
     CommandDecl {
         path: "record tool",
         id: "record.tool",
