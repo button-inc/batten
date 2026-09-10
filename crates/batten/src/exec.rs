@@ -1742,7 +1742,15 @@ pub(crate) fn piped(
     // relative name cannot arise and handing a directory would only be a guess at
     // one.
     // `Drop`: both callers of this entry point parse the string it returns.
-    piped_through(root, None, path.to_str()?, args, stdin, Diagnostics::Drop)
+    piped_through(
+        root,
+        None,
+        path.to_str()?,
+        args,
+        stdin,
+        Diagnostics::Drop,
+        &[],
+    )
 }
 
 /// The one spawn both piped entry points share.
@@ -1777,16 +1785,38 @@ fn piped_through(
     args: &[String],
     stdin: &str,
     diagnostics: Diagnostics,
+    published: &[(String, Option<String>)],
 ) -> Option<(i32, String)> {
     let mut child = crate::rules::spawn_resolving(resolve_root, program, |resolved, extra| {
-        Command::new(OsString::from(resolved))
+        let mut command = Command::new(OsString::from(resolved));
+        command
             .args(extra.iter().map(OsString::from))
             .args(args)
             .current_dir(root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(diagnostics.redirection())
-            .spawn()
+            .stderr(diagnostics.redirection());
+        // THE BET TRAVELS TO EVERY GATE THAT READS THE COMMIT RANGE, not only to
+        // `verify`'s (CLOUD-1770). `BATTEN_SPEC_BASE` is the boundary
+        // `claimed-keys` narrows on, and it was published into the verify child's
+        // environment alone — so `closing-key-check`, which runs at a later step
+        // and delegates to the same reader, saw no bet and counted the holder's
+        // borrowed keys as this branch's own. Measured: two lease acquisitions
+        // spent and handed back on keys the speculation adopted.
+        // A `None` REMOVES rather than skips, and the difference is the whole
+        // reason this is `Option` (measured: this file's own suite runs INSIDE a
+        // `land` gate, which exports the variable, so a child that merely
+        // inherited it read a bet that was not its own). Publishing must be a
+        // FUNCTION of the bet — a lap with none outstanding has to say so, or a
+        // stale value from an outer process narrows the inner lap's commit range
+        // against a base it never borrowed.
+        for (name, value) in published {
+            match value {
+                Some(value) => command.env(name, value),
+                None => command.env_remove(name),
+            };
+        }
+        command.spawn()
     })
     .ok()?;
     // TAKEN AND DROPPED EVEN WHEN EMPTY, because a gate that reads stdin blocks
@@ -1975,13 +2005,22 @@ pub(crate) fn piped_argv(
     argv: &[String],
     stdin: &str,
     diagnostics: Diagnostics,
+    published: &[(String, Option<String>)],
 ) -> Option<(i32, String)> {
     let (program, operands) = argv.split_first()?;
     // `Some(root)`, where [`piped`] passes `None`: the first word here is a NAME
     // the ladder resolves, so rung 3 needs a directory to read a shebang out of.
     // That one argument IS the difference between the two entry points, which is
     // why they share [`piped_through`] and not a signature.
-    piped_through(root, Some(root), program, operands, stdin, diagnostics)
+    piped_through(
+        root,
+        Some(root),
+        program,
+        operands,
+        stdin,
+        diagnostics,
+        published,
+    )
 }
 
 /// This process's next dispatch number, for the live-capture key.

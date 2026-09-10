@@ -1597,7 +1597,12 @@ pub enum Readied {
 /// right way round: a gate that cannot run has not passed, and treating it as
 /// clean is exactly how a retired or renamed gate goes silently dead.
 #[must_use]
-pub fn ready(root: &Path, gates: &[Vec<String>], body: &str) -> Readied {
+pub fn ready(
+    root: &Path,
+    gates: &[Vec<String>],
+    body: &str,
+    published: &[(String, Option<String>)],
+) -> Readied {
     if body.trim().is_empty() {
         return Readied::Clear;
     }
@@ -1611,8 +1616,15 @@ pub fn ready(root: &Path, gates: &[Vec<String>], body: &str) -> Readied {
         // is identical across every possible finding is not a pointer (review of
         // #848).
         let gate = argv.join(" ");
+        // `published` CARRIES THE BET (CLOUD-1770). A body gate that reads the
+        // PR's commit range — `closing-key-check` does, through `claimed-keys` —
+        // cannot otherwise tell a commit this branch authored from one the
+        // speculation adopted, and counts the holder's keys as this branch's
+        // stranded ones. CLOUD-748 fixed that for `claim-race-check` by
+        // publishing the base into `verify`'s child; this is the same boundary
+        // reaching the same reader through its other caller.
         let Some((code, output)) =
-            crate::exec::piped_argv(root, argv, body, crate::exec::Diagnostics::Keep)
+            crate::exec::piped_argv(root, argv, body, crate::exec::Diagnostics::Keep, published)
         else {
             return Readied::Unrunnable { gate };
         };
@@ -1838,7 +1850,7 @@ pub fn admits_the_landing(root: &Path, gates: &[Vec<String>], pr: &str) -> Admit
         let gate = with_pr.join(" ");
         with_pr.push(pr.to_owned());
         let Some((code, output)) =
-            crate::exec::piped_argv(root, &with_pr, "", crate::exec::Diagnostics::Keep)
+            crate::exec::piped_argv(root, &with_pr, "", crate::exec::Diagnostics::Keep, &[])
         else {
             // AN ADVISORY GATE THAT WILL NOT RUN IS NOT A REFUSAL EITHER, which
             // is the same reading one line down rather than a separate decision:
@@ -3041,13 +3053,13 @@ mod tests {
         )]];
 
         assert_eq!(
-            super::ready(&root, &gate, "   \n "),
+            super::ready(&root, &gate, "   \n ", &[]),
             super::Readied::Clear,
             "a body the fetch never produced says nothing, so there is nothing to judge"
         );
 
         assert_eq!(
-            super::ready(&root, &gate, "Closes CLOUD-1"),
+            super::ready(&root, &gate, "Closes CLOUD-1", &[]),
             super::Readied::Unrunnable {
                 gate: String::from("batten-no-such-program-for-the-ready-phase"),
             },
@@ -3077,7 +3089,7 @@ mod tests {
         ]];
 
         assert_eq!(
-            super::ready(&root, &gate, "Closes CLOUD-1"),
+            super::ready(&root, &gate, "Closes CLOUD-1", &[]),
             super::Readied::Unrunnable {
                 gate: String::from(
                     "batten-no-such-runner-for-the-ready-phase run closing-key-check"
@@ -3087,12 +3099,67 @@ mod tests {
         );
     }
 
+    /// **THE BET REACHES A BODY GATE, AND FOR ITS WHOLE LIFE IT DID NOT**
+    /// (CLOUD-1770).
+    ///
+    /// `BATTEN_SPEC_BASE` is the boundary `claimed-keys` narrows the commit range
+    /// on. It was published into `verify`'s child environment alone, so
+    /// `closing-key-check` — a LATER step delegating to that same reader — saw no
+    /// bet and counted the lease holder's borrowed commits as keys this branch
+    /// had served and stranded. Measured over one session: two lease acquisitions
+    /// taken, spent on a 21–28 minute gate, and handed straight back.
+    ///
+    /// The gate here is `sh -c` over the variable, so its verdict is a fact about
+    /// the CHILD's environment rather than about this process's — a case reading
+    /// `std::env::var` would pass against the defect it exists to catch.
+    #[test]
+    fn a_body_gate_is_told_which_base_the_lap_borrowed() {
+        let root = std::env::temp_dir();
+        let gate = vec![vec![
+            String::from("sh"),
+            String::from("-c"),
+            String::from("test -n \"$BATTEN_SPEC_BASE\""),
+        ]];
+        let published = vec![(
+            String::from(crate::speculation::PUBLISHED_AS),
+            Some(String::from("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")),
+        )];
+        // A lap with NO bet, spelled as the removal it has to be. `&[]` would
+        // leave whatever the parent exported in place — and this suite runs
+        // inside a `land` gate that exports exactly this variable, which is how
+        // the first version of this case failed against its own subject.
+        let unpublished = vec![(String::from(crate::speculation::PUBLISHED_AS), None)];
+
+        assert_eq!(
+            super::ready(&root, &gate, "Closes CLOUD-1", &published),
+            super::Readied::Clear,
+            "a speculative lap must tell its body gates which base it borrowed"
+        );
+
+        // **THE MIRROR, and without it the case above passes on any environment
+        // that happens to carry the variable** — a developer's shell, an outer
+        // `land`, or a sibling test leaking one. That is not hypothetical: this
+        // suite runs as a child of the gate `mise run land` drives, which
+        // publishes this very variable, and the first version of this case read
+        // that outer bet and failed.
+        //
+        // So "no bet" is an explicit REMOVAL rather than an omission, and the
+        // mechanism now matches the claim: publication is a function of the bet.
+        assert!(
+            matches!(
+                super::ready(&root, &gate, "Closes CLOUD-1", &unpublished),
+                super::Readied::Refused { .. }
+            ),
+            "a lap carrying no bet must publish no base"
+        );
+    }
+
     /// No declared gates is a clear ready, and the distinction from `Unrunnable`
     /// is the optional-versus-dead one the driver's own header states.
     #[test]
     fn a_consumer_declaring_no_body_gates_is_clear_rather_than_unrunnable() {
         assert_eq!(
-            super::ready(&std::env::temp_dir(), &[], "Closes CLOUD-1"),
+            super::ready(&std::env::temp_dir(), &[], "Closes CLOUD-1", &[]),
             super::Readied::Clear
         );
     }

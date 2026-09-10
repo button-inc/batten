@@ -163,7 +163,7 @@ pub fn run(root: &Path, fix: &str, key: Option<&str>, applicability: Applicabili
     // `Diagnostics::Drop`: the repair's own chatter is not a finding, and a
     // consumer's command could print anything at all.
     let Some((code, _output)) =
-        crate::exec::piped_argv(root, &words, "", crate::exec::Diagnostics::Drop)
+        crate::exec::piped_argv(root, &words, "", crate::exec::Diagnostics::Drop, &[])
     else {
         // The program would not resolve. A declared repair naming something this
         // host does not have is a config defect, and the ordinary refusal is the

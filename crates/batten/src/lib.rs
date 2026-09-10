@@ -7300,7 +7300,7 @@ fn run_land_lap(
                     run_land_verify(root, &bet, branch, Some(reference), out, err)?
                 }
                 land::Step::Lease => run_land_lease(root, branch, out, err)?,
-                land::Step::Ready => run_land_ready(root, branch, &mut ledger, out, err)?,
+                land::Step::Ready => run_land_ready(root, branch, &bet, &mut ledger, out, err)?,
                 land::Step::Push => run_land_push(root, url, branch, out)?,
                 land::Step::Wait => {
                     let (code, verdict) = run_land_wait(root, reference, branch, out, err)?;
@@ -9242,6 +9242,7 @@ fn trunk_watch(reference: &str, base: &str, repo: &str, interval: u64) -> main_w
 fn run_land_ready(
     root: &Path,
     branch: &str,
+    bet: &speculation::Bet,
     ledger: &mut land::Ledger,
     out: &mut dyn Write,
     err: &mut dyn Write,
@@ -9265,12 +9266,30 @@ fn run_land_ready(
             // `Drop`: this string is PARSED as the body, so a client's notice
             // on stderr would become text the author never wrote. The gates
             // below take `Keep`, because their stderr IS their reason.
-            .and_then(|argv| exec::piped_argv(root, argv, "", exec::Diagnostics::Drop))
+            // NO BET PUBLISHED TO THE FETCH, deliberately. This call reads the
+            // pull request's BODY; the bet is a fact about the commit RANGE, and
+            // handing it to a client that does not read one would be a variable
+            // in an environment for no reader.
+            .and_then(|argv| exec::piped_argv(root, argv, "", exec::Diagnostics::Drop, &[]))
             .filter(|(code, _)| *code == 0)
             .map(|(_, body)| body)
             .unwrap_or_default();
 
-        match land::ready(root, &gates, &body) {
+        // THE SAME PUBLICATION `run_land_verify` MAKES, and for the same reason
+        // one step later (CLOUD-1770). `Bet::published` is `None` with no bet
+        // outstanding, so the variable is simply absent from a non-speculative
+        // lap's gates — the publication stays a function of the bet rather than a
+        // side effect kept in step with it.
+        // ONE ENTRY ALWAYS, and its VALUE is the bet. An empty list would leave
+        // an inherited `BATTEN_SPEC_BASE` in place — and this lap's own gates run
+        // as children of a `verify` that exports it, so "no bet" has to be said
+        // out loud rather than left unsaid (measured: the case for this asserted
+        // the mirror and read an outer process's bet).
+        let published: Vec<(String, Option<String>)> = vec![(
+            speculation::PUBLISHED_AS.to_owned(),
+            bet.published().map(str::to_owned),
+        )];
+        match land::ready(root, &gates, &body, &published) {
             land::Readied::Clear => {
                 writeln!(out, "land: {} body gate(s) clear", gates.len())?;
             }
@@ -10803,7 +10822,7 @@ fn note_release(root: &Path) {
     let Some(argv) = land::body_gates(&declared).into_iter().next() else {
         return;
     };
-    let _ = exec::piped_argv(root, &argv, "", exec::Diagnostics::Keep);
+    let _ = exec::piped_argv(root, &argv, "", exec::Diagnostics::Keep, &[]);
 }
 
 /// `lease release`: a tombstone, never a delete.
