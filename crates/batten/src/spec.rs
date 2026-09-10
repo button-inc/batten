@@ -627,6 +627,11 @@ mod tests {
                 // the corpse it reports, so a `read` row there would be false in
                 // the one direction this allowlist exists to prevent.
                 "task read".to_owned(),
+                // CLOUD-1718's fold, and `read` in §5's strong sense rather than
+                // its polite one: its whole input is two integers on argv, it
+                // opens nothing and spawns nothing, and its output is one of §7's
+                // four codes. There is no tree for it to be well-behaved about.
+                "verdict".to_owned(),
                 "worktree status".to_owned(),
             ]
         );
@@ -1055,6 +1060,17 @@ mod tests {
             "task sig".to_owned(),
             "task tick".to_owned(),
             "task unregister".to_owned(),
+            // CLOUD-1718's fold, and a LEAF verb rather than a subtree because
+            // it decides one thing: given a count of findings and a count of
+            // blind spots, which of §7's four codes is the honest answer. It is
+            // on the read-only allowlist below — it opens nothing, reads no
+            // tree, and its whole input is two integers on argv.
+            //
+            // It exists because the retiring bash corpus INVERTS `1` and `2`
+            // against §7, so every port either re-spelled the mapping at its own
+            // call site or quietly shipped the shell's. One authority folding the
+            // two counts is what makes that unnecessary.
+            "verdict".to_owned(),
             // The one write path over a host's hook registrations
             // (CLOUD-893). Both rows are here and NEITHER is on the
             // read-only allowlist above: the noun is `Unclassified` because
