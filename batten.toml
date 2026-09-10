@@ -3758,7 +3758,7 @@ scope = "tree"
 # tracker's — a row keyed on the bare word `status` would have caught both and
 # taught the next reader that the ban is about the field name.
 [[rule]]
-id = "no-board-column-in-core"
+id = "config name other"
 kind = "forbid"
 glob = "crates/**"
 regex = '(==|!=)\s*"(Todo|Backlog|In Progress|In Review|Done)"|"(Todo|Backlog|In Progress|In Review|Done)"\s*(==|!=)'
