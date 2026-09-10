@@ -1747,6 +1747,112 @@ const SESSION_HEADER: &str = "mcp-session-id";
 /// envelope, or when the envelope carries an `error`. A server's refusal is a
 /// fact about the call rather than a verdict about the repository, so it never
 /// reaches the policy code — see `crate::exit`'s table.
+/// The window in which two spawns count as concurrent, in seconds.
+///
+/// The one number here that is a judgement rather than a reading, and it is the
+/// retired shell's: ten seconds is a third of the client's connect budget — long
+/// enough that a burst of servers started back to back all land inside it, short
+/// enough that the previous session's launches do not.
+const SPAWN_WINDOW: u64 = 10;
+
+/// The per-clone spawn ledger's name under the git directory.
+///
+/// **The path is a CONTRACT with a reader this module does not own.**
+/// `mcp-attach-check` opens `$GIT_DIR/batten-mcp-spawns` by that name and
+/// compares its lines against the client's own log, which is the comparison
+/// CLOUD-714 exists to make possible. So the retirement preserves the location
+/// and the tab-separated layout exactly; a port that "improved" either would
+/// silently disconnect the two halves of the diagnosis.
+const SPAWN_LEDGER: &str = "batten-mcp-spawns";
+
+/// One ledger line: when, which server, which pid, the load, and how many
+/// siblings were already inside the window.
+///
+/// # Why the two extra fields are not decoration
+///
+/// CLOUD-714's only surviving correlate is that all three failures happened
+/// during a multi-server startup burst, while every successful isolated
+/// replication was a lone launch on an idle session. That is n=3 with no
+/// mechanism attached — a hypothesis — and the load average and the sibling count
+/// are what let the NEXT occurrence decide it. Both are free at spawn and
+/// unrecoverable afterwards.
+///
+/// # Every failure is silent, and that is inherited rather than chosen
+///
+/// A ledger that cannot be written must never be the reason a server does not
+/// start, so every fallible step degrades and the launch proceeds. The load field
+/// renders `?` rather than a number when it cannot be read: a zero there would
+/// read as *the machine was idle*, which is precisely the claim the hypothesis
+/// above turns on.
+fn spawn_record(
+    root: &Path,
+    server: &str,
+    now: u64,
+    pid: u32,
+) -> Option<(std::path::PathBuf, String)> {
+    // Outside a checkout there is nowhere per-clone to keep the ledger, and
+    // inventing a path under the temp directory would put it somewhere no gate
+    // reads. So this is a launch that records nothing and still launches.
+    let git_dir = crate::git::git_dir(root).ok()?;
+    let ledger = git_dir.join(SPAWN_LEDGER);
+    let load = std::fs::read_to_string("/proc/loadavg")
+        .ok()
+        .and_then(|text| text.split_whitespace().next().map(str::to_owned))
+        .unwrap_or_else(|| String::from("?"));
+    // Counted BEFORE the append, so a launch never counts itself.
+    let siblings = siblings_within(&ledger, now);
+    Some((
+        ledger,
+        format!("{now}\t{server}\t{pid}\t{load}\t{siblings}\n"),
+    ))
+}
+
+/// How many entries the ledger already holds inside [`SPAWN_WINDOW`] of `now`.
+///
+/// Counted from the ledger itself — entries that are already there — so there is
+/// no process-table walk and no new dependency. A ledger that will not read is
+/// ZERO rather than a refusal, for the module's silence rule: the count is a
+/// hypothesis-testing field, and failing a launch over it would be the tail
+/// wagging the dog.
+///
+/// A timestamp in the FUTURE is skipped rather than counted. Clocks move
+/// backwards on resume, and a negative age counted as a sibling would inflate
+/// exactly the field the hypothesis reads.
+fn siblings_within(ledger: &Path, now: u64) -> usize {
+    let Ok(text) = std::fs::read_to_string(ledger) else {
+        return 0;
+    };
+    text.lines()
+        .filter_map(|line| line.split('\t').next())
+        .filter_map(|stamp| stamp.parse::<u64>().ok())
+        .filter(|stamp| *stamp <= now && now - *stamp <= SPAWN_WINDOW)
+        .count()
+}
+
+/// Append the spawn record, then say nothing.
+///
+/// **Nothing reaches stdout, ever, and here that is not hygiene.** STDOUT IS THE
+/// MCP TRANSPORT: one stray byte corrupts the JSON-RPC stream and takes the
+/// server down in a way that looks exactly like the bug this records. So the
+/// record is a file and the return is `()` — there is no channel for a caller to
+/// act on the difference, and no verdict a failed append should produce.
+pub fn record_spawn(root: &Path, server: &str) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    let Some((ledger, line)) = spawn_record(root, server, now, std::process::id()) else {
+        return;
+    };
+    // `>>` on a short line is atomic enough for concurrent appends: the record is
+    // well under `PIPE_BUF` and every writer opens in append mode.
+    let appended = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&ledger)
+        .and_then(|mut file| std::io::Write::write_all(&mut file, line.as_bytes()));
+    drop(appended);
+}
+
 pub fn dispatch(
     wiring: &Wiring,
     method: &str,

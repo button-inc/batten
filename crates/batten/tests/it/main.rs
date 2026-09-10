@@ -178,6 +178,7 @@ mod locator_index;
 mod lock_complete;
 mod mcp_dispatch;
 mod mcp_reduce_array;
+mod mcp_spawn;
 mod mediated_admission;
 mod mediated_verbs;
 mod memories;

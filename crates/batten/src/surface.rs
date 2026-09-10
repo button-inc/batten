@@ -2792,6 +2792,45 @@ pub const SURFACE: &[CommandDecl] = &[
             ),
         ],
     },
+    // The spawn ledger and the launch, ported off `mise-tasks/serena-mcp.sh`
+    // under CLOUD-1753 (CLOUD-714 is the defect it exists for).
+    //
+    // WHAT THIS MUST NEVER BECOME is the whole of CLOUD-714 and it survives the
+    // port structurally rather than by prose: not a retry, not a supervisor, not
+    // a keepalive. It records and it EXECS, and after an exec there is no process
+    // left that could restart anything. A shim that recovered from a failed
+    // launch would hide the defect it was written to expose.
+    //
+    // `Unclassified` on `exec`'s own reading, and it is the honest one twice
+    // over: the verb replaces this process with a command the CONSUMER named, so
+    // its reach is whatever that command's is, and it writes a per-clone ledger
+    // besides. An optimistic `read` here would put a process-replacing verb on
+    // the derived allowlist.
+    //
+    // `data_channel` is FALSE and here it is load-bearing beyond `exec`'s reason:
+    // STDOUT IS THE MCP TRANSPORT. One stray byte corrupts the JSON-RPC stream
+    // and takes the server down looking exactly like the bug this records. So
+    // Batten emits nothing on stdout at all, and the record it keeps is a file.
+    CommandDecl {
+        path: "mcp spawn",
+        id: "mcp.spawn",
+        about: "Record that a client actually spawned this server, then exec the launch line unchanged",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Unclassified,
+        flags: &[
+            // Declared BEFORE the trailing argv, on `exec`'s note: a
+            // `trailing_var_arg` swallows everything after the first free token.
+            FlagDecl::positional(
+                "server",
+                "The server this launch is for, as the spawn ledger and `mcp-attach-check` name it",
+            ),
+            FlagDecl::trailing(
+                "command",
+                "The launch line, run verbatim — Batten execs it and does not supervise it",
+            ),
+        ],
+    },
     // The `target` noun only dispatches, and takes `capture`'s reading one row
     // family up rather than `policy`'s: its subtree carries a `destructive` verb,
     // §5 derives the agent allowlist from `effect == read`, and a `read` noun over

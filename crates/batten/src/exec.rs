@@ -2044,6 +2044,86 @@ pub(crate) fn detached(program: &Path, args: &[String], env: &[(&str, &str)]) {
     drop(builder.spawn());
 }
 
+/// Become `argv`: replace this process, or say why it could not be.
+///
+/// # Why this is a THIRD shape beside `piped` and `detached`
+///
+/// Both of those leave this process alive — one waiting, one not — and there is
+/// a caller for whom that is the defect rather than the mechanism. `mcp spawn`
+/// records a launch and then hands the process to the server, and CLOUD-714's
+/// whole constraint is that nothing survives to supervise it: not a retry, not a
+/// keepalive. A shim that recovered from a failed launch would hide the failure
+/// it exists to expose. `exec` is what makes that structural instead of a
+/// promise — after it there is no process left that could restart anything.
+///
+/// So the guarantee is a PROPERTY OF THE SYSCALL, not of the code above it,
+/// which is why the launch line goes through here rather than through a spawn a
+/// later edit could quietly wrap in a loop.
+///
+/// # Placed here rather than widening the adapter table
+///
+/// `policy/spawn-adapters.rego` names `exec` as *"the sanctioned child-process
+/// boundary"*, and its own prose records why the table is not the place to grow:
+/// two rows were once added by a branch whose justification was false, with every
+/// sensor green over them. `mcp` calling this reaches the boundary that already
+/// exists; adding `mcp` to that set would cost `spawn-widening`'s refusal for a
+/// capability the placed adapter already owns.
+///
+/// # Errors
+///
+/// Only when the replacement fails — a program that is not on `PATH`, or not
+/// executable. Success does not return.
+#[cfg(unix)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: becoming the named program IS the verb, on `provision::become_process`'s reading — there is no in-process form of somebody else's binary (CLOUD-320)"
+)]
+pub fn become_argv(argv: &[String]) -> Result<std::convert::Infallible> {
+    use std::os::unix::process::CommandExt as _;
+    // An empty argv is unreachable — the surface declares the trailing list
+    // `num_args(1..)` — and is a refusal rather than a panic, because a launch
+    // line nobody named must never read as a launch that happened.
+    let Some((program, rest)) = argv.split_first() else {
+        return Err(UsageError::raise(
+            "mcp spawn: no launch line to become, so nothing was started".to_owned(),
+        ));
+    };
+    let mut command = Command::new(program);
+    command.args(rest);
+    // `exec` returns only on failure, so reaching the next line IS the error.
+    let failed = command.exec();
+    Err(UsageError::raise(format!(
+        "mcp spawn: could not become `{program}`: {failed}"
+    )))
+}
+
+/// The same, where a process cannot be replaced.
+///
+/// **A refusal rather than a spawn**, and the difference from
+/// `provision::become_process`'s fallback is deliberate: that one runs the child
+/// and takes its status, which is right for a launcher. It is wrong here. The
+/// caller's whole guarantee is that no supervisor survives the launch, and a
+/// parent waiting on a child IS a supervisor — one that a later edit could give a
+/// restart loop without any gate noticing. Refusing says the guarantee cannot be
+/// made on this host instead of quietly making a weaker one.
+///
+/// Nothing in this repository links on such a host today; the arm exists so the
+/// cross-target build is honest about it.
+///
+/// # Errors
+///
+/// Always.
+#[cfg(not(unix))]
+pub fn become_argv(argv: &[String]) -> Result<std::convert::Infallible> {
+    let _ = argv;
+    Err(UsageError::raise(
+        "mcp spawn: this host cannot replace a process, and the launch guarantee is that no \
+         supervisor survives it — running the server as a child would be a weaker promise wearing \
+         the same name"
+            .to_owned(),
+    ))
+}
+
 /// Whether a spawn's stderr joins its stdout, and it is per CALL SITE.
 ///
 /// **A shared spawn may not decide this, which is what the first attempt got

@@ -1747,11 +1747,33 @@ fn run_mcp(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
+    // RECORD, THEN BECOME. The two statements are the whole verb, and the order
+    // is the diagnosis: a connect timeout WITH a matching record means
+    // spawned-and-unresponsive, one WITHOUT means never spawned, and nothing in
+    // this repository could tell those apart before CLOUD-714. Recording after
+    // the exec is not an option — there is no after.
+    //
+    // Nothing is written to either channel here. `out` and `err` are untouched
+    // because stdout is the MCP transport, and one stray byte on it corrupts the
+    // JSON-RPC stream and takes the server down looking exactly like the bug.
+    if let cli::McpCommand::Spawn { server, command } = command {
+        mcp::record_spawn(Path::new("."), server);
+        // Returns only on failure; success replaces this process.
+        return exec::become_argv(command).map(|never| match never {});
+    }
     let cli::McpCommand::Call {
         server,
         method,
         params,
-    } = command;
+    } = command
+    else {
+        // Unreachable: the enum has two variants and the first is handled above.
+        // A refusal rather than a panic, on this module's own rule that an
+        // impossible parse is still answered rather than aborted.
+        return Err(UsageError::raise(
+            "mcp: no sub-verb resolved from this invocation".to_owned(),
+        ));
+    };
     let repo = git::repo_root(Path::new("."))?;
     let resolved = resolve::resolve(Path::new("."), overrides)?;
     let config = resolved.mcp.clone().unwrap_or_default();

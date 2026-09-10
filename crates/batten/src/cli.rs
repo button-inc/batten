@@ -1284,6 +1284,13 @@ pub enum McpCommand {
         /// The method's arguments as a JSON object. `None` is an empty object.
         params: Option<String>,
     },
+    /// Record that a client spawned this server, then exec the launch line.
+    Spawn {
+        /// The server this launch is for, as the ledger names it.
+        server: String,
+        /// The launch line, verbatim. Never empty — the surface requires it.
+        command: Vec<String>,
+    },
 }
 
 /// Subcommands of `target` (CLOUD-1030).
@@ -2381,6 +2388,17 @@ fn mcp_of(matches: &ArgMatches) -> Option<McpCommand> {
             server: matches.get_one::<String>("server").cloned()?,
             method: matches.get_one::<String>("method").cloned()?,
             params: matches.get_one::<String>("params").cloned(),
+        }),
+        // The trailing argv is `num_args(1..)` in the surface, so clap has
+        // already refused an empty launch line: a spawn verb with nothing to
+        // exec would record a launch that never happened, which is the exact
+        // false reading CLOUD-714's ledger exists to make impossible.
+        ("spawn", matches) => Some(McpCommand::Spawn {
+            server: matches.get_one::<String>("server").cloned()?,
+            command: matches
+                .get_many::<String>("command")?
+                .cloned()
+                .collect::<Vec<_>>(),
         }),
         _ => None,
     }
