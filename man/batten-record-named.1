@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-record-named 1  batten 
+.SH NAME
+batten\-record\-named \- Record one named family under this branch, read from stdin
+.SH SYNOPSIS
+\fBbatten record named\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIfamily\fR> 
+.SH DESCRIPTION
+Record one named family under this branch, read from stdin
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIfamily\fR>
+The record family, which is the key a module reads it under
