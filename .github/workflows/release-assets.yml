@@ -37,7 +37,22 @@ on:
   # Most pushes to `main` ship no release. Both checks resolve the tag at the
   # run's head commit and exit 0 when it carries none, so the asset download is
   # spent per RELEASE rather than per merge.
-  workflow_run:
+  # zizmor flags workflow_run as dangerous because it runs privileged and is
+  # usually paired with checking out and executing content the triggering run
+  # controlled. The first draft of this arm did exactly that — it checked out
+  # `github.event.workflow_run.head_sha` and then ran `mise` tasks from it — and
+  # the audit refused it, correctly. It does not now: the checkout below takes
+  # the repository's default ref, never the triggering head, so the code that
+  # executes is `main`'s. The head SHA reaches the job only as an opaque `env`
+  # value that the task passes to `git`, never as a checkout ref and never
+  # interpolated into a run script, so the injection this audit guards against
+  # cannot occur. Same reasoning `auto-release-land.yml` and `auto-bot-land.yml`
+  # state for the same audit.
+  #
+  # `release-plz` is `on: push: branches: [main]`, so only a write-access push
+  # can fire this at all — a fork cannot reach it, which is the safe subset of
+  # `workflow_run` rather than the `pull_request`-fed shape the audit is about.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
     workflows: [release-plz]
     types: [completed]
   schedule:
@@ -76,18 +91,27 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-          # WHAT THE `workflow_run` ARM NEEDS TO ANSWER ITS OWN QUESTION.
+          # WHAT THE `workflow_run` ARM NEEDS TO ANSWER ITS OWN QUESTION, AND
+          # DELIBERATELY NOT A REF FROM THE EVENT.
           #
-          # `ref` is the commit release-plz pushed, and `fetch-tags` brings the
-          # tag that points at it; the checks read both with `git tag
-          # --points-at` to tell a release from an ordinary merge. Neither is
-          # optional: without the commit, or without its tags, the task exits 2
-          # as a could-not-look rather than guessing "shipped nothing" — which
-          # would let a broken release pass as an ordinary merge.
+          # The checks read `git tag --points-at <sha>` to tell a release from
+          # an ordinary merge, so the triggering commit and its tags have to be
+          # present — but the commit is always on `main` (release-plz is
+          # `on: push: branches: [main]`), so full history at the DEFAULT ref
+          # carries it. Checking the event's head SHA out instead would put the
+          # triggering ref's own content into the job that then executes `mise`
+          # tasks, which is the privileged-checkout pattern zizmor refuses and
+          # the trigger comment above records.
           #
-          # Both expand to empty on the clock and dispatch arms, where checkout
-          # keeps its previous default of the branch tip at depth 1.
-          ref: ${{ github.event.workflow_run.head_sha }}
+          # Absent either, the task exits 2 as a could-not-look rather than
+          # guessing "shipped nothing", which would let a broken release pass as
+          # an ordinary merge.
+          #
+          # Costs a full fetch on the clock and dispatch arms too, where depth 1
+          # would have done. That is the price of one checkout shape for three
+          # triggers, and it buys never resolving a tag against a shallow
+          # history that silently lacks it.
+          fetch-depth: 0
           fetch-tags: true
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
