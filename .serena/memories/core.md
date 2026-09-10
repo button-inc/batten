@@ -384,6 +384,22 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   whole-set reading let one dead glob contribute nothing while the rest counted
   and still reported green (CLOUD-298). A config declaring no budget is exit 1
   too — a budget verb that measured nothing must not report `0`.
+- `arm.rs` — the declared-arm harness (CLOUD-1714): run N declared things,
+  reduce each to a named `Observable`, hand back one `Outcome` per arm. The
+  primitive `perf.rs` and `mutate.rs` were each one instance of, plus the two the
+  bash corpus held. **`percentile` is owned here** — four copies existed between
+  the four instances, and `perf::summarise` now calls this one, so CLOUD-1712's
+  fetched-duration percentiles have no fifth. It takes the quantile as a RATIO OF
+  INTEGERS and ranks with `div_ceil`, which is why the rank arithmetic carries no
+  lint escape: the `f64` form needed three, and `spawn-widening` counts an added
+  escape as inventory growth whatever the reasoning behind it. `Isolation::at`
+  sets `HOME`, `XDG_DATA_HOME`, `APPDATA` and `LOCALAPPDATA` together, because an
+  arm inheriting one of them measures the ambient toolchain instead of the
+  subject. **A FAILED ARM IS `NotObserved`, NEVER A ZERO**: a zero measurement is
+  the could-not-look collapse CLOUD-251 names, and it reads as the fastest arm in
+  the table. Stability is checked BEFORE a byte count is reduced, so a run set
+  that disagrees is reported `Unstable` with its distinct count rather than
+  averaged into one plausible number.
 - `attribution.rs` — what produced commits may carry about the tooling that made
   them (CLOUD-274), the mechanism for the attribution decision record
   (CLOUD-268). Judges author/committer identity, every trailer and the message

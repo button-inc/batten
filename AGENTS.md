@@ -161,9 +161,8 @@ half**: declared work dies too, so **"unsaved?" is `batten doctor session`**.
    never a model verdict. _(house-style §5.)_
 4. **Output is a pointer, never the payload** — a count, `path:line`, or boolean,
    never the content. _(house-style §6.)_
-5. **Exit codes and output follow the one contract** — byte-stable output, the
-   `0/1/2/3` table, no per-verb exception. _(house-style §6–§7.)_ The corpus
-   INVERTS `1`/`2`: fold via `batten verdict`.
+5. **Exit codes and output follow one contract** — byte-stable, `0/1/2/3`, no
+   per-verb exception (§6–§7). The corpus INVERTS `1`/`2`: fold `batten verdict`.
 6. **Keep configuration narrow.** One committed authority plus raise-only
    overrides, no directory walk, no `conf.d` merge (house-style §8). Don't widen it.
 7. **Research goes to Linear, not a repo `docs/` tree.** Evidence notes and literature

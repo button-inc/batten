@@ -169,6 +169,18 @@ declared_modules := {
 	# spawns a benchmark runner, so it sits with the acquisition modules below and
 	# its back-edges are forbidden for their reason.
 	"perf",
+	# `arm` arrived with CLOUD-1714 and this rule named it once more — module
+	# written, its cases green, and nobody had placed it. It is `perf`'s class
+	# generalised: the declared-arm harness that `perf` and `mutate` were each one
+	# instance of, so it sits with the measurement modules and its back-edges are
+	# forbidden for their reason.
+	#
+	# THE DIRECTION IS THE WHOLE REASON THE EXTRACTION WAS WORTH DOING. `perf`
+	# reads `arm` — for `percentile` and for `Isolation` — and `arm` reads nothing
+	# of `perf`. An edge back would make the generic harness know about one of its
+	# own instances, which is the drift that put four copies of a percentile
+	# function in this tree in the first place.
+	"arm",
 	# `pinned` arrived with CLOUD-1028 and it worked a fifth time: clippy green,
 	# both test tiers green, and this rule is what said the module was unplaced.
 	# It is an acquisition module in `symbols`' class — it spawns the mediator to
@@ -685,6 +697,18 @@ forbidden[from] contains to if {
 		# suite against it, so a back-edge into the module that adjudicates a
 		# mediated call is the reach the surface split exists to make unwritable.
 		"mutate": {"rules", "hook"},
+		# `arm -> {rules, hook, perf, mutate}`, and the last two are what make this
+		# row different from its neighbours. The first pair is `prune`'s and
+		# `mutate`'s for their reason: a harness that runs declared commands must
+		# not reach the module that adjudicates a mediated call.
+		#
+		# The second pair is the extraction's whole point. `perf` and `mutate` are
+		# INSTANCES of this harness and both read it; an edge back would make the
+		# generic primitive know about one of the four things it generalises, which
+		# is how four copies of a percentile function came to exist. Forbidding it
+		# here is what keeps `arm` consumable by CLOUD-1712's fetched-duration
+		# series without dragging a benchmark runner in behind it.
+		"arm": {"rules", "hook", "perf", "mutate"},
 	}
 	some to in targets
 }

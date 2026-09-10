@@ -240,39 +240,53 @@ impl Outcome {
 /// fetched-duration series consume it here rather than growing a fifth.
 ///
 /// The series is taken by value and sorted, because a percentile over an
-/// unsorted series is the bug this signature makes unrepresentable. `quantile`
-/// is clamped to `[0, 1]`, and an empty series has no percentile — which is a
-/// [`Outcome::NotObserved`] at the call site, never a zero.
+/// unsorted series is the bug this signature makes unrepresentable. An empty
+/// series has no percentile — which is an [`Outcome::NotObserved`] at the call
+/// site, never a zero.
+///
+/// # The quantile is a RATIO OF INTEGERS, not a float, and that is the whole
+/// reason the rank arithmetic carries no lint escape
+///
+/// The obvious signature takes `f64` and pays for it three times: `(n - 1) as
+/// f64` is a precision loss, and `position.ceil() as usize` is a possible
+/// truncation and a sign loss. Each is provably harmless here and each still
+/// needs an `#[expect]` to say so — three escapes in engine source, which
+/// `spawn-widening` counts as inventory growth whether or not the reasoning
+/// behind them is sound.
+///
+/// A rank is an index, and an index is an integer. `numerator / denominator`
+/// says the same thing the float said and computes the ceiling exactly, so
+/// nothing is rounded, nothing is cast, and there is no lint to waive. A zero
+/// denominator is [`None`] rather than a panic, for the reason an empty series
+/// is: this is a reduction, and a reduction that cannot answer says so.
 #[must_use]
-pub fn percentile(mut series: Vec<f64>, quantile: f64) -> Option<f64> {
-    if series.is_empty() {
+pub fn percentile(mut series: Vec<f64>, numerator: usize, denominator: usize) -> Option<f64> {
+    if series.is_empty() || denominator == 0 {
         return None;
     }
     series.sort_by(f64::total_cmp);
-    let n = series.len();
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "a run count is a small integer and this is an index computation, not a measurement"
-    )]
-    let last = (n - 1) as f64;
-    let position = last * quantile.clamp(0.0, 1.0);
+    let last = series.len() - 1;
+    // CLAMPED RATHER THAN REFUSED, because the clamp is what a percentile above
+    // the top of the series means: the last element. The float form clamped the
+    // quantile to `[0, 1]` and this clamps the rank to `[0, last]`, which is the
+    // same bound expressed where it can be checked.
+    let scaled = last.saturating_mul(numerator.min(denominator));
     // CEIL rather than round: the 95th percentile of a short series must not
     // round DOWN into the body of the distribution, which is how a tail that a
-    // budget exists to bound stops being represented at all.
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "the product is within [0, n-1] by construction, so the cast cannot truncate meaningfully or go negative"
-    )]
-    let index = position.ceil() as usize;
-    series.get(index.min(n - 1)).copied()
+    // budget exists to bound stops being represented at all. Integer ceiling
+    // division, so the rounding is exact rather than a float's best effort.
+    let index = scaled.div_ceil(denominator);
+    series.get(index.min(last)).copied()
 }
 
 /// Reduce a wall-clock series to a reading, or say why it could not be.
 #[must_use]
 pub fn wall_clock(series: Vec<f64>) -> Outcome {
     let runs = series.len();
-    let (Some(p50), Some(p95)) = (percentile(series.clone(), 0.5), percentile(series, 0.95)) else {
+    let (Some(p50), Some(p95)) = (
+        percentile(series.clone(), 50, 100),
+        percentile(series, 95, 100),
+    ) else {
         return Outcome::NotObserved(String::from("the arm produced no timing series"));
     };
     Outcome::Observed(Reading::WallClock { p50, p95, runs })
@@ -321,12 +335,12 @@ mod tests {
         // Ten values, so the indices are checkable by eye: p50 takes index
         // ceil(9 * 0.5) = 5, and p95 takes ceil(9 * 0.95) = 9.
         let series: Vec<f64> = (1..=10).map(f64::from).collect();
-        assert_eq!(percentile(series.clone(), 0.5), Some(6.0));
-        assert_eq!(percentile(series.clone(), 0.95), Some(10.0));
+        assert_eq!(percentile(series.clone(), 50, 100), Some(6.0));
+        assert_eq!(percentile(series.clone(), 95, 100), Some(10.0));
         // And it does not depend on the order it was handed.
         let mut shuffled = series;
         shuffled.reverse();
-        assert_eq!(percentile(shuffled, 0.95), Some(10.0));
+        assert_eq!(percentile(shuffled, 95, 100), Some(10.0));
     }
 
     #[test]
@@ -334,7 +348,7 @@ mod tests {
         // The whole `Outcome` distinction, at its source: an empty series has no
         // percentile, and returning `0.0` would make an arm that produced
         // nothing the fastest one in the comparison.
-        assert_eq!(percentile(Vec::new(), 0.5), None);
+        assert_eq!(percentile(Vec::new(), 50, 100), None);
         assert!(matches!(wall_clock(Vec::new()), Outcome::NotObserved(_)));
     }
 

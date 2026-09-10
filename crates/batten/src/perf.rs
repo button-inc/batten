@@ -1050,8 +1050,8 @@ fn summarise(
     // so the shape where an unsorted series reaches a quantile is not
     // representable here any more.
     let (Some(p50), Some(p95)) = (
-        crate::arm::percentile(times.clone(), 0.5),
-        crate::arm::percentile(times.clone(), 0.95),
+        crate::arm::percentile(times.clone(), 50, 100),
+        crate::arm::percentile(times.clone(), 95, 100),
     ) else {
         bail!("perf: the {id} {arm} arm carried no times.");
     };
