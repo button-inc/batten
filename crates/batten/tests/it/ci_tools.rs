@@ -8,7 +8,7 @@
 //! ready-made map of workflows with `with input as`. That fabricates the very
 //! shape the engine may be unable to produce (CLOUD-845), and the second direction
 //! IS that shape: its whole finding was that the retiring gate had been pointed at
-//! one file which happened to be compliant, so two other workflows installed every
+//! one file which happened to conform, so two other workflows installed every
 //! declared tool on every push with nothing red and nothing able to be. A
 //! resolution reaching only some workflows reintroduces exactly that blindness,
 //! and no fabricated map can tell it from a clean tree.
