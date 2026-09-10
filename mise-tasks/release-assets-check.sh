@@ -3,7 +3,11 @@
 #
 # CLOUD-258. `release-artifacts.yml` failed on EVERY release from v0.0.31 to
 # v0.0.36 — all seven dist legs built, then died on the attestation step, which
-# is plan-gated and unavailable on a private repo. Because that step failed, the
+# the repository's plan did not offer at the time. (Past tense throughout: this
+# paragraph is the post-mortem of six specific releases, never a claim about what
+# the platform offers today. `attestation-check.sh` decides that on every run,
+# from the endpoint's own status code, which is why no prose here has to.)
+# Because that step failed, the
 # upload after it never ran, so `v0.0.36` carries one asset (the schema) and no
 # binary has ever shipped.
 #

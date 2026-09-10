@@ -846,8 +846,10 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   budget is not).
   `git2` is excluded by `macos-link-check` rule 1 — a COST, not a constraint:
   cross-linking Darwin frameworks needs an SDK the build declines because macOS
-  runners bill at 10x on a **private** repo, which CLOUD-737 revisits when the
-  repo goes public.
+  runners carry a billing multiplier. That is a PRICE, and it moves with the
+  repository's visibility and plan — so this note names the dependency instead
+  of a rate that would go stale silently. CLOUD-737 owns re-deciding it, and
+  `rust.yml`'s `macos` job is where a Darwin leg's cost is actually paid.
 - `state.rs` — out-of-tree state dir (`<data-dir>/<app>/<segment>/`, CLOUD-23), via
   `etcetera`; the segment derived at runtime, never baked in (rule 1). Since
   CLOUD-296 the segment is `<dir-name>-<12 hex>`, not the bare directory name: the

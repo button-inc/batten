@@ -8,7 +8,10 @@
 # THE WHOLE DESIGN IS THE PRECONDITION. `gh attestation verify` exits 1 both when
 # an artifact has no provenance and when the platform never offered any, and those
 # are opposite facts: the first is a release that should be fixed, the second is a
-# plan feature this private repo does not have. Measured 2026-08-14 on
+# plan feature the repository does not have. WHICH ONE IS TRUE IS DECIDED BELOW
+# RATHER THAN ASSERTED HERE — the endpoint's own status code separates them, so
+# this comment never has to carry a claim about the repository's plan or
+# visibility that would go stale the moment either changed. Measured 2026-08-14 on
 # `batten-v0.0.74-x86_64-unknown-linux-gnu.tar.gz`, reproducing CLOUD-583's v0.0.52
 # reading exactly — `Error: HTTP 404: Not Found`, exit 1.
 #
