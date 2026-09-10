@@ -1397,6 +1397,156 @@ pub fn rfc3339_utc(unix_seconds: u64) -> String {
     format!("{}T{hour:02}:{minute:02}:{second:02}Z", date.text())
 }
 
+/// How many paths differ from HEAD, or [`None`] when the tree matches it.
+///
+/// **THE ONE AUTHORITY, and both callers ask it rather than re-deriving it.**
+/// [`tree_is_head`] guards the write and [`run_clean`] answers the question on
+/// its own; a second count would be a second reading of `git status` that could
+/// disagree with the first over an ignored path or an untracked directory.
+///
+/// `Err` is could-not-look and is kept distinct from `Ok(None)` — "I could not
+/// read the tree" and "the tree is clean" are opposite answers, and the callers
+/// take opposite arms on the difference.
+///
+/// # Errors
+///
+/// As [`crate::git::uncommitted`]: when this is not inside a repository.
+fn tree_state() -> Result<Option<usize>> {
+    let dirty = crate::git::uncommitted(Path::new("."))?;
+    Ok((dirty > 0).then_some(dirty))
+}
+
+/// `receipt clean`: the precondition asked on its own.
+///
+/// The CHEAP end of the pair [`tree_is_head`] completes. `verify:gated` asks this
+/// in `depends` so a dirty tree fails in seconds rather than after the gate set's
+/// full cost — and `depends` finishes before the body starts, so a tree dirtied
+/// mid-run is invisible to it. That window is what the guard inside `record`
+/// closes.
+///
+/// # Errors
+///
+/// An internal error (exit `3`) when the tree cannot be read at all. Asked
+/// directly, could-not-look is an answer worth reporting rather than one to
+/// degrade past — which is where this differs from [`tree_is_head`], whose caller
+/// must not fail a lap over its own bookkeeping.
+pub fn run_clean(out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+    let Ok(state) = tree_state() else {
+        writeln!(
+            err,
+            "::error:: receipt clean: the working tree state cannot be read, so whether a receipt \
+             would name the right bytes is unknown. That is not a clean tree."
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    // HEAD ALONE, never `repo_facts`, and the difference is a real one rather
+    // than a shortcut: that helper also resolves `origin/main`, because a
+    // RECORDED receipt names the trunk it was taken against. This verb compares
+    // the tree to HEAD and nothing else, so requiring a remote would make it
+    // refuse in a fresh clone that has none — a could-not-look manufactured out
+    // of a fact the question does not use.
+    let Ok(Some(head)) = crate::git::resolve_ref(Path::new("."), "HEAD") else {
+        writeln!(
+            err,
+            "::error:: receipt clean: HEAD does not resolve, so there is no commit for a receipt \
+             to name"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    let head = head.get(..8).unwrap_or(&head).to_owned();
+    let Some(dirty) = state else {
+        writeln!(out, "receipt clean: working tree matches HEAD {head}")?;
+        return Ok(ExitCode::Success);
+    };
+    writeln!(
+        err,
+        "::error:: receipt clean: the working tree differs from HEAD {head} in {dirty} path(s), so \
+         a receipt keyed to that commit would attest bytes no commit contains. Commit the work \
+         (you are pre-authorised to), stash it, or run the long task in a separate worktree — then \
+         re-run."
+    )?;
+    Ok(ExitCode::Usage)
+}
+
+/// Refuse to key a receipt to HEAD when the tree is not HEAD (CLOUD-193),
+/// ported off `mise-tasks/tree-clean.sh` under CLOUD-1753.
+///
+/// # The assumption this enforces was load-bearing and unenforced
+///
+/// CLOUD-193 moved `verify`'s verdict off the exit code and onto a receipt *"keyed
+/// to the exact HEAD it validated"*. The mechanism is sound and it rests on an
+/// assumption nothing checked: that the bytes verified ARE the bytes at HEAD.
+/// They need not be. `cargo`, `hk` and `zizmor` all read the WORKING TREE, and
+/// this function keys the claim to HEAD.
+///
+/// # The direction that matters is the SILENT one
+///
+/// Measured 2026-08-09: a backgrounded `land` compiled a mid-edit snapshot and
+/// died on a `non-exhaustive patterns` error for code the commit did not contain.
+/// That direction is loud and self-correcting. The mirror is not — a dirty tree
+/// that PASSES writes a receipt for HEAD, `verified` matches it, `ready-guard`
+/// accepts it, the branch is readied, and CI runs the commit alone, which was
+/// never the thing that passed.
+///
+/// Uncommitted work is not exotic here: backgrounding the slow path is mandated,
+/// so a long `verify` running while the session edits the next row in the same
+/// worktree is the DESIGNED workflow.
+///
+/// # Why a precondition on the write rather than a `[[rule]]`
+///
+/// `batten.toml` twice cites *"the scoping defect CLOUD-1164 records for
+/// `tree-clean`"* as the anti-pattern: a `Tree`-scoped row runs on every `batten
+/// check`, and `pre-commit` runs over a tree that is dirty by definition, so a
+/// row there would refuse every commit. The retiring program said the same thing
+/// in its own words — *"NOT wired into the hk gate, deliberately"*.
+///
+/// The receipt is written HERE, by this verb, so this is the one place the
+/// question is both askable and answerable. It is not `[[mint]]` either: a mint's
+/// condition vocabulary is JSON paths into a tool result, and no receipt reaches
+/// it.
+///
+/// # Untracked files are dirty, decided rather than omitted
+///
+/// [`crate::git::uncommitted`] counts staged, unstaged and untracked alike, and
+/// the third is the one a `diff HEAD` predicate misses. The gap is not
+/// theoretical: `cargo test` autodiscovers test targets and the bats suite globs
+/// `tests/*.bats`, so a brand-new untracked file is compiled and run by `verify`
+/// with ZERO tracked-file change. A receipt written after that attests a pass over
+/// bytes no commit contains, which is the whole failure. Ignored paths are
+/// excluded structurally rather than tuned out, so `target/` and the worktree
+/// directories are outside the judgement by construction.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) when the tree differs from HEAD — a statement
+/// about this invocation, never a policy verdict, so never exit `2`.
+fn tree_is_head(facts: &RepoFacts, err: &mut dyn Write) -> Result<()> {
+    // Could-not-look degrades to permitting the write rather than refusing it.
+    // `repo_facts` has already resolved the repository, so a failure here is the
+    // status read alone — and a receipt verb that refused because it could not
+    // run `status` would fail the lap for its own bookkeeping. `receipt clean`
+    // takes the opposite arm on the same fact, and the difference is the caller:
+    // asked directly, could-not-look is an answer worth reporting.
+    let Ok(Some(dirty)) = tree_state() else {
+        return Ok(());
+    };
+    // A COUNT AND THE HEAD, never a path list and never a diff (rule 4). The
+    // remedy names all three routes, because "commit it" is not always the one
+    // the author wants and a refusal naming one route is how a gate earns a
+    // bypass.
+    let head = facts.head.get(..8).unwrap_or(&facts.head);
+    writeln!(
+        err,
+        "::error:: receipt record: the working tree differs from HEAD {head} in {dirty} path(s), \
+         so a receipt keyed to that commit would attest bytes no commit contains. Commit the work \
+         (you are pre-authorised to), stash it, or run the long task in a separate worktree — then \
+         re-run. No receipt is written."
+    )?;
+    Err(UsageError::raise(format!(
+        "receipt record: {dirty} uncommitted path(s), so no receipt is written"
+    )))
+}
+
 /// Record that `check` concluded pass against the current HEAD.
 ///
 /// Writes the canonical statement into the out-of-tree state dir and the
@@ -1415,6 +1565,7 @@ pub fn rfc3339_utc(unix_seconds: u64) -> String {
 pub fn run_record(check: &str, mode: Mode, err: &mut dyn Write) -> Result<ExitCode> {
     validate_check_name(check)?;
     let facts = repo_facts()?;
+    tree_is_head(&facts, err)?;
     let policy = git::show(Path::new("."), "HEAD", config::CONFIG_FILE)
         .map_err(|_| {
             UsageError::raise(
