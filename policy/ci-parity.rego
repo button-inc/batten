@@ -292,7 +292,7 @@ names_the_covering_lane(list, covering) if {
 }
 
 violation contains {
-	"rule": "ci-task-parity",
+	"rule": "job run other",
 	"verdict": "task run duplicate",
 	"subjects": [{"path": "mise.toml"}, {"artifact": task}],
 } if {
@@ -311,7 +311,7 @@ violation contains {
 # It fires on a retired task, a renamed one, and a `ci:quick` respelled to
 # something `hooks` does not subsume.
 violation contains {
-	"rule": "ci-task-parity",
+	"rule": "job run other",
 	"verdict": "task cover stale",
 	"subjects": [{"path": "mise.toml"}, {"artifact": task}],
 } if {
