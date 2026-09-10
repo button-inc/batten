@@ -432,6 +432,13 @@ mod tests {
                 // which is the harmless direction — but it would also be false,
                 // and this list is read as a statement about what the binary
                 // does.
+                // The two key readers that retired `mise-tasks/claimed-keys.sh`
+                // and `mise-tasks/merged-pr-keys.sh` (CLOUD-1711). Both walk the
+                // ref log and the closing bodies through git's read-only
+                // plumbing and write nothing, so they sit beside `claim race`
+                // rather than with `claim check`, which records.
+                "claim keys".to_owned(),
+                "claim merged".to_owned(),
                 "claim race".to_owned(),
                 // Both `commit` rows, unlike attribution's. The noun IS `read`
                 // here because its whole subtree is — nothing under it writes —
@@ -610,6 +617,12 @@ mod tests {
                 // it belongs here beside `receipt status` rather than with
                 // `receipt record`.
                 "receipt verified".to_owned(),
+                // The read half of the out-of-tree verdict stores (CLOUD-1713).
+                // `record` itself is the write band and is absent here on
+                // purpose; these two leaves fold and print what is already
+                // stored and open nothing.
+                "record fold".to_owned(),
+                "record show".to_owned(),
                 // CLOUD-1180's recovered `agent` slice. BOTH the noun and its
                 // leaf are read, and that is the row's §2 predicate rather than
                 // an accident: `show` is the read band under CLOUD-1184's
@@ -762,6 +775,10 @@ mod tests {
             "claim bot".to_owned(),
             "claim carry".to_owned(),
             "claim check".to_owned(),
+            // The two key readers that retired `mise-tasks/claimed-keys.sh` and
+            // `mise-tasks/merged-pr-keys.sh` (CLOUD-1711).
+            "claim keys".to_owned(),
+            "claim merged".to_owned(),
             "claim race".to_owned(),
             "commit".to_owned(),
             "commit check".to_owned(),
@@ -991,10 +1008,25 @@ mod tests {
             // a third row spelled the old way would be a third row to invert.
             "record".to_owned(),
             "record closes".to_owned(),
+            // The two READ leaves of this noun (CLOUD-1713). They fold and
+            // print what the write leaves already stored, which is why they —
+            // alone under `record` — are also on the read-only allowlist above.
+            "record fold".to_owned(),
             "record forge".to_owned(),
+            // The two store FAMILIES the record readers work over: a keyed
+            // store addressed by a composed triple, and an append-only journal
+            // sharded by name. Same reason `record` carries two write leaves
+            // rather than one verb with a mode flag.
+            "record journal".to_owned(),
+            "record keyed".to_owned(),
+            // CLOUD-1717's producer door: the POLICY-readable store, keyed by
+            // branch, which `Fact::Records` projects. The two leaves above it
+            // are task stores read back only by `record show`/`record fold`.
+            "record named".to_owned(),
             // The plan a branch declared, so `plan-complete` decides over a
             // record rather than over a transcript it cannot re-read.
             "record plan".to_owned(),
+            "record show".to_owned(),
             "record tool".to_owned(),
             // The API-compatibility noun (CLOUD-1050), ported off
             // `mise-tasks/semver.sh` when CLOUD-1059 made editing a shell

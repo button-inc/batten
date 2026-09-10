@@ -319,6 +319,8 @@ pub struct Grammar {
     defer_verb: Regex,
     key: Regex,
     closing_verb: Regex,
+    /// A negator sitting on the closing verb, which unmakes the claim.
+    closing_negation: Regex,
     mention_markup: Regex,
 }
 
@@ -478,6 +480,7 @@ impl Grammar {
             pressure_test_reviews: Vec::new(),
             key: find("ready-issue-key")?,
             closing_verb: find("ready-closing-verb")?,
+            closing_negation: find("ready-closing-negation")?,
             mention_markup: find("ready-issue-mention-markup")?,
         })
     }
@@ -704,6 +707,29 @@ impl Grammar {
         keys
     }
 
+    /// Does `prefix` end in a closing verb that is NOT negated?
+    ///
+    /// **Two rows rather than one cleverer row, because Rust's regex has no
+    /// lookbehind** (CLOUD-1752). `ready-closing-verb` is anchored at the end so
+    /// it decides the text immediately before a key — which is precisely why it
+    /// reads `does not close CLOUD-1` as a claim: the prefix ends in `close` and
+    /// the negation is one word further back, outside an end-anchored pattern's
+    /// reach.
+    ///
+    /// So the verb is LOCATED rather than merely detected, and the text before it
+    /// is asked the second question. Measured over 713 merged pull requests, six
+    /// rows read as closed by bodies that say in so many words that they do not
+    /// close them.
+    fn closes_rather_than_disclaims(&self, prefix: &str) -> bool {
+        let Some(verb) = self.closing_verb.find(prefix) else {
+            return false;
+        };
+        // `find` yields the leftmost match, and the pattern's own leading
+        // `(^|[^0-9A-Za-z-])` may eat the separator before the verb — so the
+        // negation is asked about everything up to where the match began.
+        !self.closing_negation.is_match(&prefix[..verb.start()])
+    }
+
     /// The keys a span names in CLOSING form — the ones a merge will move.
     ///
     /// **Naming a key and closing one are different facts, and conflating them is
@@ -723,7 +749,7 @@ impl Grammar {
             .key
             .find_iter(text)
             .filter(|m| opens_a_key(text, m.start()) && closes_a_key(text, m.end()))
-            .filter(|m| self.closing_verb.is_match(&text[..m.start()]))
+            .filter(|m| self.closes_rather_than_disclaims(&text[..m.start()]))
             .map(|m| m.as_str())
             .collect();
         let mut keys: Vec<IssueKey> = found.into_iter().map(|k| IssueKey(k.to_owned())).collect();

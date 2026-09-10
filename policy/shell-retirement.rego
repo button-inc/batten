@@ -282,7 +282,99 @@ violation contains {
 	some path in delta.edited
 	governed_at_head(path)
 	not only_drops_a_retired_reference(path)
+	not only_supplies_the_successors_precondition(path)
 }
+
+# THE SECOND ADMITTED EDIT, and it is CLOUD-1051's arm one surface further out.
+#
+# That arm exists because retiring a program requires editing the SIBLINGS that
+# declare it. This one exists because repointing those siblings can invalidate
+# their own governed SUITES — and the module admitted the repoint while refusing
+# the change the repoint forced, so it could not complete a retirement it had
+# itself mandated. The same structural gap, found the same way: by a campaign
+# hitting a wall it built.
+#
+# MEASURED 2026-09-09 (CLOUD-1711). Retiring `claimed-keys.sh` moved the issue-key
+# grammar out of inline shell and into the `[[pattern]]` registry, which is where
+# non-negotiable rule 1 says a consumer fact belongs. The shell answered in ANY
+# tree; the engine leaf resolves the grammar from the committed config and answers
+# could-not-look without one. Every suite whose fixture is a bare scratch repo
+# therefore stopped exercising its gate — and the cases that assert a REFUSAL went
+# green, because a gate with nothing to judge refuses nothing. Fourteen such cases
+# across four suites, all four green on `origin/main`, verified in a clean
+# worktree rather than argued.
+#
+# THE NARROWING IS WHAT KEEPS THIS A RATCHET. `shell edit refused` is the arm that
+# refuses the move which READS as progress and is not, so widening it to "an edit
+# that adds lines" would be the ratchet with a lie in it. Every ADDED line must
+# either be a comment — which cannot change what a suite exercises — or name the
+# committed config or the declared successor's own invocation. An author cannot
+# reach for this to change a program's behaviour, because a line that changes
+# behaviour names neither.
+#
+# REMOVALS STAY THE OTHER ARM'S BUSINESS. This one admits additions only; an edit
+# that both adds a precondition and drops a line has to earn the drop under
+# `only_drops_a_retired_reference` exactly as before.
+only_supplies_the_successors_precondition(path) if {
+	base := delta["base-lines"][path]
+	head := {line | some line in input.tree.lines[path]}
+	added := {line | some line in head; not line in base}
+
+	# An edit that added nothing is not this case — it removed or reordered, and
+	# the sibling arm above owns the first.
+	count(added) > 0
+
+	# EVERY REMOVAL STILL EARNS THE SIBLING ARM, unchanged. A suite that both drops
+	# a retired program's stub and gains the grammar its successor reads is doing
+	# ONE thing: `tests/in-progress-drain.bats` fails 26 cases without the config
+	# line, measured, so forbidding removals here would refuse the very suite this
+	# arm exists for.
+	removed := {line | some line in base; not line in head}
+	count({line |
+		some line in removed
+		admitted_removal(path, line, removed)
+	}) == count(removed)
+
+	count({line |
+		some line in added
+		supplies_a_precondition(line)
+	}) == count(added)
+}
+
+# A comment cannot change what the suite exercises, so it carries the reason.
+supplies_a_precondition(line) if {
+	startswith(trim_space(line), "#")
+}
+
+# The committed config, which holds the grammar a retired program carried inline
+# and its successor reads from the `[[pattern]]` registry instead.
+#
+# THE NAME IS A LITERAL HERE, and that is the narrow reading rather than a lapse.
+# `batten.toml` is the ONE committed authority (house-style §8) — there is no
+# second spelling for this module to be a second authority over — and an
+# undefined reference in Rego is not an error but a clause that never holds, so
+# reaching for a token this module does not define would have made the whole arm
+# silently dead. That is the failure this file's own `#MUTANT` rows exist to
+# catch, and it is cheaper to spell the name than to ship an arm that decides
+# nothing.
+supplies_a_precondition(line) if {
+	contains(line, "batten.toml")
+}
+
+# THERE IS NO THIRD SHAPE, and the one that was here is why this comment is.
+#
+# A draft also admitted an added line naming the retired path's declared successor
+# invocation. It reads as the obvious third case and it is the hole: a REPOINT
+# rewrites a line to name the successor, so every such edit satisfied it — and
+# the module's own suite said so, `a_repointing_that_also_changes_the_rest_of_the_line_is_refused`
+# and `test_replacing_a_span_that_is_not_a_retired_reference_is_refused` both
+# going green. Those two exist to refuse an edit that repoints AND changes the
+# rest, which is precisely what the clause admitted.
+#
+# A repoint is `repoints_at_the_declared_invocation`'s business and already
+# polices that it changes nothing else. What is left here — a comment, or the
+# committed config — is the set a rewritten line cannot be, which is the property
+# that keeps this arm from swallowing the rule it extends.
 
 # THE ONE ADMITTED EDIT, and it is what makes this campaign able to clean up
 # after itself (CLOUD-1051).
@@ -961,6 +1053,45 @@ mentions_retired(path, line, gone) if {
 	some variable in retired_path_vars(path, gone)
 	some span in {concat("", [variable, " "]), concat("", [" ", variable])}
 	contains(line, span)
+}
+
+# AND THE SCRIPT-DIRECTORY BINDING ITSELF, once this delta has taken its last
+# spend (CLOUD-1752).
+#
+# CLOUD-843's arm above closed this for a `local … reg …` DECLARATION. It does
+# not reach the other spelling this tree uses just as often — a standalone
+# `here=$(cd "$(dirname "$0")" && pwd)` whose only consumer was a call to the
+# program being retired. Repoint that call at a verb and `here` is bound and
+# never spent, which `shellcheck` refuses as SC2034; keep the call and the
+# program cannot die. That is the same "no landable spelling in either
+# direction" CLOUD-843 records, one assignment form further on, and it was
+# measured retiring `claimed-keys.sh` out of `mise-tasks/landed-check.sh`.
+#
+# WHY THIS IS NOT A LICENCE: the binding may go only when EVERY line in the BASE
+# that spends the variable is a call to the path this delta deletes. One
+# surviving spend and the arm does not hold, so a caller cannot drop a binding it
+# still uses — which is exactly the conjunct `case_earns_removal`'s second arm
+# relies on, read over a whole file rather than one `@test` block.
+spends_only_the_retired(path, variable, gone) if {
+	spends := {line |
+		some line in delta["base-lines"][path]
+		some spelling in {concat("", ["$", variable]), concat("", ["${", variable, "}"])}
+		contains(line, spelling)
+	}
+	count(spends) > 0
+	every line in spends {
+		some form in {
+			concat("", ["$", variable, "/", basename(gone)]),
+			concat("", ["${", variable, "}/", basename(gone)]),
+		}
+		contains(line, form)
+	}
+}
+
+mentions_retired(path, line, gone) if {
+	variable := assigned_name(line)
+	variable in script_dir_vars(path)
+	spends_only_the_retired(path, variable, gone)
 }
 
 # A REPOINTING: the removed line with the retired path replaced by a successor

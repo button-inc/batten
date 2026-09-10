@@ -647,6 +647,13 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // either the trunk commit or the comparison — which is the could-not-look
     // this gate is built to fail open on.
     "lease carries",
+    // `claim merged` joins it for `lease carries`' reason exactly: it reaches
+    // the FORGE to read merged pull request bodies, and a corpus with no
+    // credential can read none of them. It is also the one verb here whose
+    // could-not-look is a REFUSAL rather than an empty answer — a producer that
+    // exits clean having produced nothing is indistinguishable from a repository
+    // with no merged pull requests.
+    "claim merged",
     // `lease guard` joins it for `carries`' reason and one more: it is the
     // composite, so a corpus that cannot read the trunk commit cannot answer its
     // first half either — and the guard's contract is that every such reading
@@ -1027,6 +1034,31 @@ const CENSUS: &[Verb] = &[
     // a promise is what a type makes unnecessary.
     Verb {
         path: "claim race",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `claim-keys.sh`'s successor (CLOUD-1711), and pointer-only for the reason
+    // that program had to promise by hand: its inputs are a branch NAME, a pull
+    // request TITLE and a commit LOG, all three of them prose somebody wrote,
+    // and its answer is a list of `CLOUD-<n>` keys. A key is a pointer by
+    // construction — the shape of the extraction is the guarantee, not a filter
+    // applied after it.
+    Verb {
+        path: "claim keys",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `merged-pr-keys.sh`'s successor, on the same terms one surface out: it
+    // reads MERGED PULL REQUEST BODIES, which are the largest untrusted prose
+    // any verb here touches, and emits `<key>\t<number>` rows. Two columns, both
+    // of them identifiers. It is in `MAY_ANSWER_COULD_NOT_LOOK` because it
+    // reaches the forge and this corpus carries no credential — the pointer-only
+    // assertions still run over the could-not-look report, which is where a
+    // reader of somebody else's body is most tempted to quote it.
+    Verb {
+        path: "claim merged",
         args: &[],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
@@ -1822,6 +1854,54 @@ const CENSUS: &[Verb] = &[
         path: "record closes",
         args: &[],
         stdin: Stdin::PrBody,
+        disposition: Disposition::PointerOnly,
+    },
+    // The two GENERIC store writers (CLOUD-1713), and the pair that makes this
+    // census worth running over them: unlike every other `record` leaf, neither
+    // knows what its payload MEANS. `record tool` reads a tool verdict and
+    // `record plan` reads plan entries, so each can be careful about a shape it
+    // understands; these two take whatever the caller sends and file it under a
+    // family and a key. `PointerOnly` is therefore the whole of their contract —
+    // a successful write says nothing, because the record's destination is a
+    // keyed file under `$GIT_DIR` and there is nothing for it to report.
+    // CLOUD-1717's producer door, and pointer-only for the reason the other two
+    // generic writers are: it does not know what its payload MEANS. A successful
+    // write says nothing at all — the record's destination is a branch-keyed file
+    // under `$GIT_DIR`, and what a module later makes of the lines is the
+    // module's business, not this verb's.
+    Verb {
+        path: "record named",
+        args: &["census"],
+        stdin: Stdin::ToolVerdict,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "record keyed",
+        args: &["census", "a-key"],
+        stdin: Stdin::ToolVerdict,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "record journal",
+        args: &["census"],
+        stdin: Stdin::ToolVerdict,
+        disposition: Disposition::PointerOnly,
+    },
+    // Their READ halves. Over this corpus the stores are empty, so the answers
+    // are `miss` and `nothing` — which is the state that matters most here: a
+    // reader that cannot find a record is exactly where a program is tempted to
+    // print the key it looked for, the path it looked in, or the bytes it half
+    // read. The closed token vocabulary is what stops all three.
+    Verb {
+        path: "record show",
+        args: &["census", "a-key"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "record fold",
+        args: &["census"],
+        stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
     // The task registry's six writers (CLOUD-425). Each answers with silence and

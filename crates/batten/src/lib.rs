@@ -397,7 +397,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // input, which is exactly the committed authority a `--config-from` is
         // meant to pin. That is also what stops a caller keying a record to
         // anything the config does not already declare (CLOUD-1265).
-        Some(Command::Record { command }) => record::run(command, &overrides),
+        Some(Command::Record { command }) => record::run(command, &overrides, out),
     }
 }
 
@@ -3692,6 +3692,240 @@ fn refuse_claim_bot(err: &mut dyn Write, text: &str) -> Result<ExitCode> {
 /// Minted by whoever is at the keyboard, exactly like the agent receipt — the
 /// party that ran the check writes the record of it. A workflow minting one would
 /// be a receipt asserting a check nobody performed.
+/// What `claim keys` was asked about (CLOUD-1711).
+///
+/// Explicit sources exist for a pull request this checkout did not author
+/// (CLOUD-378): `claim race` asks the same question about a COMPETING branch and
+/// had no way to ask it of the local repository.
+struct ClaimKeysAsk<'a> {
+    /// The head branch, source 2.
+    branch: Option<&'a str>,
+    /// The pull request title, also source 2.
+    title: Option<&'a str>,
+    /// Commit messages, sources 1 and 3.
+    log: Option<&'a str>,
+    /// Source 1 alone.
+    closing_only: bool,
+    /// Source 3 alone.
+    refs_first_only: bool,
+}
+
+/// Print the issue keys this branch claims, one per line.
+///
+/// **Ported off `mise-tasks/claimed-keys.sh` (CLOUD-1711).** The precedence, the
+/// citation rule, the explicit-source mode and the `BATTEN_SPEC_BASE` ancestor
+/// bound are all `race`'s; this function is the seam that reads the repository
+/// and prints the answer.
+///
+/// EMPTY IS NOT AN ERROR and exit 0 is the whole contract: every caller treats
+/// "no claim" as "do not judge", because a guard that guesses is one that blocks
+/// correct work. Outside a git repository the same applies.
+fn run_claim_keys(
+    repo: &Path,
+    ask: &ClaimKeysAsk<'_>,
+    overrides: &resolve::Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    // EACH FLAG NAMES ONE SOURCE, so both together is a caller that has not
+    // decided which question it is asking rather than an intersection to compute.
+    let source = match (ask.closing_only, ask.refs_first_only) {
+        (true, true) => {
+            writeln!(
+                err,
+                "batten: claim keys: --closing-only and --refs-first-only each name one source; pick one"
+            )?;
+            return Ok(ExitCode::Usage);
+        }
+        (true, false) => race::Source::ClosingOnly,
+        (false, true) => race::Source::RefsFirstOnly,
+        (false, false) => race::Source::All,
+    };
+
+    // EXPLICIT MODE IS ALL-OR-NOTHING. Passing any source switches git off
+    // entirely, because a remote pull request silently answered from the local
+    // branch would be a confident verdict about the wrong repository state.
+    let explicit = ask.branch.is_some() || ask.title.is_some() || ask.log.is_some();
+    let (branch, log) = if explicit {
+        (
+            ask.branch.unwrap_or_default().to_owned(),
+            ask.log.unwrap_or_default().to_owned(),
+        )
+    } else {
+        // BEFORE THE GRAMMAR, and the order is the program's own decision rather
+        // than an accident: outside a git checkout it printed nothing and exited
+        // 0, so the caller behaves exactly as it did before it asked. Resolving
+        // config first would turn that silence into a config error, which is a
+        // different answer to a caller that treats non-zero as "could not look".
+        // ANY failure to name the branch is "no claim", never an error. The
+        // program spelled this `git rev-parse --abbrev-ref HEAD || exit 0`, and
+        // it covers a directory that is not a checkout at all as well as a
+        // checkout with no HEAD. Propagating instead would turn "do not judge"
+        // into a non-zero every caller reads as could-not-look.
+        let Some(head) = git::current_branch(repo).ok().flatten() else {
+            return Ok(ExitCode::Success);
+        };
+        (head, race::authored_log(repo, "origin/main"))
+    };
+    let grammar = board_grammar(overrides)?;
+
+    // The extra evidence a caller has and this cannot read for itself: the
+    // command being guarded, or the pull request body being judged. OPTIONAL — a
+    // caller with nothing to add closes stdin and the branch and commit sources
+    // still answer, so this must never block on an interactive terminal.
+    let body = if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        String::new()
+    } else {
+        let mut raw = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut raw).unwrap_or_default();
+        raw
+    };
+    for key in race::claimed_from(
+        &branch,
+        ask.title.unwrap_or_default(),
+        &log,
+        &body,
+        &grammar,
+        source,
+    ) {
+        writeln!(out, "{key}")?;
+    }
+    Ok(ExitCode::Success)
+}
+
+/// How many merged pull requests `claim merged` reads before refusing.
+///
+/// Carried from `MERGED_PR_KEYS_LIMIT`'s default. A bound rather than an
+/// unbounded walk because the forge's own listing caps out, and the header of the
+/// program this replaces records the measurement: `--limit 400` returned exactly
+/// 400 and hid #170, #337 and #339.
+const MERGED_PR_LIMIT: usize = 5000;
+
+/// Print `<key>\t<number>` for every key a merged pull request body CLOSES.
+///
+/// **Ported off `mise-tasks/merged-pr-keys.sh` (CLOUD-1752).** The extraction is
+/// delegated to [`race::claimed_from`] with [`race::Source::ClosingOnly`], exactly
+/// as the program delegated to `claimed-keys --closing-only`, so both sides of a
+/// landed-ness comparison still come out of one authority (CLOUD-338).
+///
+/// # Every could-not-look, and why each is one
+///
+/// * the remote names no repository this can derive a slug from;
+/// * the forge did not answer, or answered something unparseable;
+/// * the walk hit its page budget — a reading AT the limit is indistinguishable
+///   from one truncated by it, and **a truncated evidence file makes landed work
+///   read as live**;
+/// * the forge reports NO merged pull requests at all, which cannot be true of a
+///   repository with a trunk. That is a reachability problem, not an empty
+///   answer, and reading it as one strands every landed row.
+///
+/// Each exits non-zero. See this verb's `CommandDecl` for why a producer differs
+/// from `claim race` here.
+///
+/// Output is keys and numbers, sorted and de-duplicated so two runs over one
+/// forge are byte-identical (§6) — never a title or a body, which is where the
+/// keyword lives and which rule 4 keeps out of a report.
+fn run_claim_merged(
+    repo: &Path,
+    limit: Option<&str>,
+    overrides: &resolve::Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let cannot_look = |err: &mut dyn Write, why: &str| -> Result<ExitCode> {
+        writeln!(err, "batten: claim merged: {why}")?;
+        Ok(ExitCode::Internal)
+    };
+    let limit = match limit {
+        Some(raw) => match raw.trim().parse::<usize>() {
+            Ok(parsed) if parsed > 0 => parsed,
+            _ => {
+                writeln!(
+                    err,
+                    "batten: claim merged: --limit must be a positive number"
+                )?;
+                return Ok(ExitCode::Usage);
+            }
+        },
+        None => MERGED_PR_LIMIT,
+    };
+
+    let remotes = git::remote_fact(repo)?.remotes;
+    let Some(slug) = remotes.get("origin").and_then(|url| race::slug_of(url)) else {
+        return cannot_look(err, "no origin remote this can derive a repository from");
+    };
+    let git_dir = git::git_dir(repo)?;
+    // ONE PAGE OF 100 PER LAP, so the budget is stated in pull requests rather
+    // than in pages — the same unit `MERGED_PR_KEYS_LIMIT` was written in.
+    let per_page = 100_usize;
+    let pages = u32::try_from(limit.div_ceil(per_page)).unwrap_or(u32::MAX);
+    let rows = match forge::window(
+        &git_dir,
+        &format!("repos/{slug}/pulls"),
+        &[("state", "closed"), ("per_page", "100")],
+        forge::Shape::Bare,
+        pages,
+    ) {
+        forge::Window::Whole(rows) => rows,
+        forge::Window::Truncated { read, .. } => {
+            return cannot_look(
+                err,
+                &format!(
+                    "the walk read {read} pull request(s) and did not reach the end — the answer \
+                     is truncated, and a truncated evidence file makes landed work read as live. \
+                     Raise --limit above {limit} and run again"
+                ),
+            );
+        }
+        forge::Window::CouldNotLook { endpoint, status } => {
+            return cannot_look(
+                err,
+                &format!(
+                    "the forge did not answer for {endpoint} (status {})",
+                    status.map_or_else(|| String::from("none"), |code| code.to_string())
+                ),
+            );
+        }
+    };
+
+    // MERGED, not merely closed. The forge's listing has no merged state, so the
+    // filter is `merged_at`; a closed-unmerged pull request closes nothing and
+    // counting it would report abandoned work as landed.
+    let merged: Vec<&serde_json::Value> = rows
+        .iter()
+        .filter(|row| row.get("merged_at").is_some_and(|at| !at.is_null()))
+        .collect();
+    if merged.is_empty() {
+        return cannot_look(
+            err,
+            "the forge reports no merged pull requests at all, which cannot be true of a \
+             repository with a trunk — a reachability problem, not an empty answer",
+        );
+    }
+
+    let grammar = board_grammar(overrides)?;
+    let mut lines: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for row in merged {
+        let Some(number) = row.get("number").and_then(serde_json::Value::as_u64) else {
+            return cannot_look(
+                err,
+                "a pull request in the reading carries no usable number",
+            );
+        };
+        let body = row
+            .get("body")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        for key in race::claimed_from("", "", "", body, &grammar, race::Source::ClosingOnly) {
+            lines.insert(format!("{key}\t{number}"));
+        }
+    }
+    for line in lines {
+        writeln!(out, "{line}")?;
+    }
+    Ok(ExitCode::Success)
+}
+
 fn run_claim_bot(
     repo: &Path,
     mode: Mode,
@@ -3987,6 +4221,28 @@ fn run_claim(
                 out,
                 err,
             )
+        }
+        ClaimCommand::Keys {
+            branch,
+            title,
+            log,
+            closing_only,
+            refs_first_only,
+        } => run_claim_keys(
+            Path::new("."),
+            &ClaimKeysAsk {
+                branch: branch.as_deref(),
+                title: title.as_deref(),
+                log: log.as_deref(),
+                closing_only,
+                refs_first_only,
+            },
+            overrides,
+            out,
+            err,
+        ),
+        ClaimCommand::Merged { limit } => {
+            run_claim_merged(Path::new("."), limit.as_deref(), overrides, out, err)
         }
         ClaimCommand::Bot => run_claim_bot(Path::new("."), mode, overrides, out, err),
         ClaimCommand::Race => run_claim_race(Path::new("."), mode, overrides, out, err),
@@ -12088,16 +12344,10 @@ fn run_hook(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let mut raw = String::new();
-    if std::io::stdin().read_to_string(&mut raw).is_err() {
-        output::message(mode, Verbosity::Normal, err, UNREADABLE_STDIN)?;
-        return Ok(ExitCode::Success);
-    }
-    let bypass = std::env::var_os(hook::BYPASS_ENV).is_some_and(|value| !value.is_empty());
-    let Some(mut envelope) = hook::decode(harness, &raw) else {
-        output::message(mode, Verbosity::Normal, err, UNDECODABLE_PAYLOAD)?;
+    let Some((raw, mut envelope)) = read_envelope(harness, mode, err)? else {
         return Ok(ExitCode::Success);
     };
+    let bypass = std::env::var_os(hook::BYPASS_ENV).is_some_and(|value| !value.is_empty());
     // THE WRITE TARGET IS READ AS THE REPOSITORY READS IT (CLOUD-1133), and this
     // is the one place that can do it: `decode` is pure and has no repository,
     // and the readers below — the protected gate, and any module over
@@ -12115,8 +12365,7 @@ fn run_hook(
     // The note rides the ladder above `normal`, because on the hosts where this
     // is reachable it is the ordinary state rather than news.
     let capabilities = harness.capabilities();
-    if !capabilities.emits(envelope.event) && envelope.event != hook::Event::Unrecognized {
-        let note = unsupported_event_note(harness, &capabilities, envelope.event);
+    if let Some(note) = undeclared_event_note(harness, &capabilities, envelope.event) {
         output::message(mode, Verbosity::Verbose, err, &note)?;
         return Ok(ExitCode::Success);
     }
@@ -12226,18 +12475,7 @@ fn run_hook(
     // end-of-turn surface. The retired shell hook this replaces paid ~330-440ms
     // at the same boundary; `perf`'s `passthrough` and `noop` arms are pre-tool
     // shapes and are untouched by this clause.
-    let adjudicable = !envelope.command.is_empty()
-        || envelope.writes.is_some()
-        || envelope.event == hook::Event::Stop
-        // A FOURTH TIME, and for a mint rather than a verdict (CLOUD-856). Session
-        // start carries no command, no write and no tool name, so this predicate
-        // was false there and config was never loaded — which means the receipt
-        // this event exists to mint could not know which manifests were declared.
-        // The cost is one config load per SESSION, not per call, which is the
-        // same trade the `Stop` clause above makes, and it buys the whole reason
-        // `Fact::Document` can stay `None` on the mediated path.
-        || envelope.event == hook::Event::SessionStart
-        || (envelope.event == hook::Event::PreTool && !envelope.raw_tool.is_empty());
+    let adjudicable = is_adjudicable(&envelope);
     // A BYPASSED CALL NOW PAYS THE CONFIG READ, and that invariant is retired
     // deliberately rather than eroded.
     //
@@ -12256,8 +12494,39 @@ fn run_hook(
     // arms, ~0.7 ms against a 100 ms budget. `!adjudicable` keeps its old
     // behaviour, because an event with nothing to adjudicate has no protected
     // gate to run either, and that is the arm the hot path actually rides.
+    // A DECLARATION NOTHING COULD READ IS THE ONE FAULT THAT REFUSES, and the
+    // narrowness is the decision rather than caution (CLOUD-1677).
+    //
+    // Gates are registered fail-open, so a gate that fails open is INERT — it
+    // neither allows nor denies, it is absent. A config fault is therefore never
+    // a choice between refusing and allowing: it is a choice between keeping the
+    // enforcement surface we still have and losing it entirely. An unknown key, a
+    // version this build is too old for, a table whose validator refused — each
+    // leaves every other row readable and enforceable, and leaves an agent that
+    // can still be TOLD to repair the broken one. Refusing there would trade a
+    // working partial surface for nothing.
+    //
+    // `Native::ConfigUnreadable` is the one class with no partial function left:
+    // the file is not TOML, so no row is readable and none can be enforced. Then
+    // the refusal is the only signal available, and the hatch below is how the
+    // container gets back.
+    //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
+    //MUTANT unloadable-config-allows|s@            Err(unreadable) if unreadable_declaration(\&unreadable) => {@            Err(unreadable) if false \&\& unreadable_declaration(\&unreadable) => {@|a_config_this_build_cannot_load_denies_rather_than_failing_open
     let (policy, waivers) = if adjudicable {
-        load_policy(overrides, harness)?
+        match load_policy(overrides, harness) {
+            Ok(loaded) => loaded,
+            // The declared hatch, read before the refusal so a stale binary
+            // meeting a newer config leaves a container recoverable, not bricked.
+            Err(_) if bypass => (hook::Policy::declaring_nothing(harness), Vec::new()),
+            Err(unreadable) if unreadable_declaration(&unreadable) => {
+                return deny_unadjudicable(harness, &envelope, &unreadable, mode, out, err);
+            }
+            // EVERY OTHER FAULT KEEPS ITS OLD BEHAVIOUR, deliberately. Today that
+            // is still a whole-file refusal at exit `1`, which is the outcome the
+            // argument above says is wrong — making these actually preserve the
+            // rows they can read is its own change, over `prune_unresolvable`.
+            Err(other) => return Err(other),
+        }
     } else {
         (hook::Policy::declaring_nothing(harness), Vec::new())
     };
@@ -12497,6 +12766,237 @@ fn run_hook(
         ceiling: policy.refusal.as_ref(),
     };
     render(harness, &envelope, decision, &rendering, mode, out, err)
+}
+
+/// The note for an event this host does not declare, or `None` to carry on.
+///
+/// **`Unrecognized` is not undeclared**, and collapsing the two is why this is a
+/// named predicate rather than an inline `&&`: an event nobody could parse has
+/// no capability row to be absent from, so it falls through to the ordinary
+/// path instead of being reported as a host that offers less.
+///
+/// Returning the note rather than a `bool` keeps [`unsupported_event_note`]'s
+/// call beside the condition that earns it — a caller that tested one and
+/// rendered the other could report an event the table actually declares.
+fn undeclared_event_note(
+    harness: hook::Harness,
+    capabilities: &hook::Capabilities,
+    event: hook::Event,
+) -> Option<String> {
+    (!capabilities.emits(event) && event != hook::Event::Unrecognized)
+        .then(|| unsupported_event_note(harness, capabilities, event))
+}
+
+/// Whether this envelope has anything for the config to decide about.
+///
+/// **The gate on whether a call pays a config read at all**, which is why the
+/// hot path stays cheap: `perf`'s `passthrough` arm — a `Read` with a
+/// `file_path`, no command, no write — takes the `false` branch, and its
+/// below-`noop` reading comes from doing so.
+///
+/// Every clause was added by a measurement rather than by symmetry, and the
+/// history is the argument for keeping them enumerated here:
+///
+/// * a command or a write is the original shape;
+/// * `Stop` carries neither, so a `mediated_call` module registered for the end
+///   of turn could not run at all — a dead gate whose own suite stayed green,
+///   because a `with input as` case fabricates the shape the boundary never
+///   built (CLOUD-1051);
+/// * `SessionStart` likewise, and for a MINT rather than a verdict (CLOUD-856):
+///   the receipt that event exists to write could not know which manifests were
+///   declared. One config load per session, not per call;
+/// * a `PreTool` call naming a tool is the shape a tool-keyed row exists to
+///   judge, and without it such a row was loaded for no call that could match.
+fn is_adjudicable(envelope: &hook::Envelope) -> bool {
+    !envelope.command.is_empty()
+        || envelope.writes.is_some()
+        || envelope.event == hook::Event::Stop
+        || envelope.event == hook::Event::SessionStart
+        || (envelope.event == hook::Event::PreTool && !envelope.raw_tool.is_empty())
+}
+
+/// The mediated call on stdin, or `None` where the call must simply proceed.
+///
+/// **THE TWO FAIL-OPEN BOUNDARIES, TOGETHER BECAUSE THEY ARE ONE ANSWER.** Stdin
+/// that will not read and a payload that will not decode are both "the engine
+/// does not know what this call IS", and neither may block it: a guard must never
+/// be the reason a session cannot proceed. That is the opposite side of
+/// [`unreadable_declaration`], where the engine knows the call perfectly well and
+/// has been told it cannot enforce the rules over it.
+///
+/// **Loud, never silent** (CLOUD-43). A guard that cannot read its input is a gate
+/// that did not run, and the silent version of that is byte-identical to a clean
+/// allow — the false green this engine exists to catch, in the one place nobody
+/// would think to look.
+/// **The RAW bytes travel with the decoded value**, because `dispatch_handlers`
+/// hands a declared handler the payload as it arrived. Re-reading stdin for it is
+/// not an option — the stream is consumed — and re-serializing the envelope would
+/// hand a handler a document the host never sent.
+fn read_envelope(
+    harness: hook::Harness,
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<Option<(String, hook::Envelope)>> {
+    let mut raw = String::new();
+    if std::io::stdin().read_to_string(&mut raw).is_err() {
+        output::message(mode, Verbosity::Normal, err, UNREADABLE_STDIN)?;
+        return Ok(None);
+    }
+    let Some(envelope) = hook::decode(harness, &raw) else {
+        output::message(mode, Verbosity::Normal, err, UNDECODABLE_PAYLOAD)?;
+        return Ok(None);
+    };
+    Ok(Some((raw, envelope)))
+}
+
+/// Whether this load failure is a declaration nothing could read at all.
+///
+/// **Positively identified, never inferred from an absence.** The tempting
+/// spelling is "carries no declared class", and it is wrong: the
+/// unsupported-version and `min_batten_version` refusals carry none either, and
+/// both leave every row in the file readable. Keying on absence would refuse
+/// those too — and every future unclassed refusal after them, silently widening
+/// what denies.
+///
+/// So the loader says which one this is. `config_error` already separates a
+/// syntax failure from an unknown key, and since CLOUD-1677 its syntax arm raises
+/// under [`verdict::Native::ConfigUnreadable`].
+fn unreadable_declaration(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<UsageError>()
+        .and_then(|usage| usage.verdict)
+        .is_some_and(|class| class == verdict::Native::ConfigUnreadable)
+}
+
+/// Refuse a call whose rules this build could not load (CLOUD-1677).
+///
+/// Lifted out of [`run_hook`] rather than left inline because that function is
+/// already at its line budget, and a boundary this load-bearing should be
+/// readable on its own rather than as a match arm nine levels in.
+///
+/// # Certainty denies; guessing allows
+///
+/// The load used to propagate with `?`, raising a [`UsageError`] — exit `1` —
+/// and [`crate::exit`] makes only `2` a denial precisely so no FAILURE path can
+/// block a call. So a harness read this whole class as a non-blocking hook error
+/// and ran the mediated tool anyway. Measured over one 5-day session: 1,149
+/// calls proceeded unjudged through seven windows of a mid-edit `batten.toml`,
+/// and ~456 more through a preset the installed build did not ship — the
+/// unknown-preset arm in [`crate::policy`] raises exactly this error.
+///
+/// This is the discrimination `UNREADABLE_STDIN` sits on the other side of, and
+/// the one CLOUD-1572 drew one level down. Where the engine is GUESSING about
+/// the call — stdin it could not read, a payload that would not decode, an event
+/// the host does not declare — allowing is right, because nothing is known and
+/// refusing would make Batten the reason a session cannot proceed. Here the
+/// engine has READ its own authority and been told it cannot enforce it: the
+/// rule set is named, and unavailable. Proceeding is not caution then, it is a
+/// gate reporting a clean allow over rules it never ran.
+///
+/// # The surfaces stay separate
+///
+/// `doctor` still never answers `2` — a diagnosis is not a policy verdict — and
+/// the CLI verbs still raise a usage error over a config they cannot read. The
+/// mediated boundary is the one place where "cannot judge" must not resolve to
+/// "proceed", because here the alternative is a tool call nobody looked at.
+///
+/// # The hatch is read before this is reached
+///
+/// [`run_hook`] takes the bypass arm first, and that is what keeps a container
+/// recoverable rather than bricked: a stale binary meeting a newer config
+/// refuses every call until one of them moves, so the operator's declared escape
+/// has to survive exactly the state that needs it.
+///
+/// **A DECISION, NOT AN ERROR, WHICH IS WHY IT RENDERS.** [`render`] owns the
+/// per-harness deny channel: Claude Code answers in its JSON decision object at
+/// exit `0`, where the document *is* the deny, and the neutral adapter answers
+/// [`ExitCode::Violation`]. Raising a [`Denial`] here would send `2` to the one
+/// host that reads the document instead of the number.
+///
+/// **The rendering carries no ceiling and the general hatch**, because both live
+/// on the policy that would not load. `None` reads downstream as "no declared
+/// bound" rather than as a bound of zero, which is the direction that keeps a
+/// refusal about an unreadable config from being truncated by a value nobody
+/// could read.
+fn deny_unadjudicable(
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    unreadable: &dyn std::fmt::Display,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    // THE FIRST LINE ONLY, AND THAT IS NON-NEGOTIABLE RULE 4 RATHER THAN BREVITY.
+    //
+    // A `toml` parse error renders as a multi-line span — a header naming the
+    // position, then the OFFENDING SOURCE LINE with a caret under it. Interpolating
+    // the whole thing puts a byte of the unreadable config into a refusal that
+    // reaches the model, the host's log and the transcript, which is exactly the
+    // payload rule 4 keeps out of every report this engine writes. Measured by
+    // `the_declaration_that_would_not_parse_is_named_without_quoting_it`, which
+    // fails on the un-truncated form.
+    //
+    // The first line is the POINTER and loses nothing an operator needs: for a
+    // parse failure it is `TOML parse error at line L, column C`, and for the
+    // skew and unknown-key arms the whole message is one line already — the
+    // `max_age = 0` and `command_matcher` diagnostics ride through intact, which
+    // is what keeps the repair as findable as it was when this arm exited `1`.
+    let pointer = unreadable
+        .to_string()
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    let refusal = Refusal::new(
+        "engine-cannot-adjudicate",
+        format!(
+            "this build could not load the rules it is registered to enforce, so nothing judged \
+             this call: {pointer}"
+        ),
+        // No remedy the ENGINE may declare: the repair is rebuilding or
+        // reinstalling the binary, or fixing the config, and each is the
+        // consumer's own command (non-negotiable rule 1).
+        Fix::None,
+    );
+    let rendering = Rendering {
+        hatch: hook::BYPASS_ENV,
+        ceiling: None,
+    };
+    // WHICH CHANNEL CARRIED THE REFUSAL IS `render`'S OWN ANSWER, and reading it
+    // here is what lets the number say could-not-look without ever spending the
+    // refusal to do it (CLOUD-1677's exit-code half).
+    //
+    // `render` denies through the host's protocol: a document harness gets its
+    // decision object and answers `Ok`, while the neutral adapter's ONLY deny
+    // channel is the number, so it answers `Err(Denial)` — `run_hook`'s own
+    // contract says as much. The two arms below are therefore not a preference
+    // between codes, they are the two protocols.
+    match render(
+        harness,
+        envelope,
+        hook::Decision::Deny(refusal),
+        &rendering,
+        mode,
+        out,
+        err,
+    ) {
+        // The DOCUMENT already refuses, so the number is free to be honest: §6–§7
+        // reserve `3` for could-not-look, and nothing was judged about this call.
+        // `Internal` rather than `Violation` also keeps `exit.rs`'s guarantee
+        // whole — `Usage` and `Internal` are the only codes a failure of Batten's
+        // own may produce, *so that fail-open is structural* — and an unreadable
+        // declaration is such a failure. Answering `2` here would have bought the
+        // refusal twice and spent that guarantee for the second copy.
+        Ok(_) => Ok(ExitCode::Internal),
+        // THE NUMBER IS THIS HARNESS'S ONLY CHANNEL, so it stays the deny. Turning
+        // it into `3` would be honest about the cause and silent about the verdict,
+        // which is the fail-open this row exists to close.
+        //
+        // **The cost is stated rather than absorbed** (CLOUD-1677's Replay asks for
+        // the per-harness table): on this adapter the boundary cannot say BOTH
+        // "refused" and "nothing could be read", so the could-not-look half is
+        // unavailable there until that protocol grows a way to carry it.
+        Err(denial) => Err(denial),
+    }
 }
 
 /// Run the refusing row's declared repair, and say what the boundary decides now.

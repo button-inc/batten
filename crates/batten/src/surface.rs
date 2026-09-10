@@ -801,6 +801,102 @@ const CONFIG_IN: FlagDecl = FlagDecl {
 ///
 /// Deliberately not global: a global output mode would be silently accepted by
 /// verbs that emit no data — a flag that looks applied and isn't.
+/// The fetch bound `claim merged` refuses at, rather than answering short.
+const MERGED_LIMIT: FlagDecl = FlagDecl {
+    id: "limit",
+    long: Some("limit"),
+    short: None,
+    help: "The most pull requests to read before the answer is truncated (default 5000)",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// The explicit sources `claim keys` may be handed for a pull request this
+/// checkout did not author (CLOUD-378, carried by CLOUD-1711).
+///
+/// Passing ANY of them switches to explicit mode: git is not consulted at all and
+/// an unsupplied source is empty. All-or-nothing rather than per-source fallback,
+/// because a remote pull request silently answered from the LOCAL branch is the
+/// worst kind of wrong — a confident verdict about the wrong repository state.
+const CLAIM_BRANCH: FlagDecl = FlagDecl {
+    id: "branch",
+    long: Some("branch"),
+    short: None,
+    help: "The head branch, standing in for source 2",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+const CLAIM_TITLE: FlagDecl = FlagDecl {
+    id: "title",
+    long: Some("title"),
+    short: None,
+    help: "The pull request title, also source 2 — a body is not, because a body cites evidence",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+const CLAIM_LOG: FlagDecl = FlagDecl {
+    id: "log",
+    long: Some("log"),
+    short: None,
+    help: "Commit messages, standing in for sources 1 and 3",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// Source 1 alone. Mutually exclusive with [`REFS_FIRST_ONLY`]: each names a
+/// different SINGLE source, so both together is a caller that has not decided
+/// which question it is asking, never an intersection to compute.
+const CLOSING_ONLY: FlagDecl = FlagDecl {
+    id: "closing_only",
+    long: Some("closing-only"),
+    short: None,
+    help: "Answer from a closing keyword alone, never falling through to the branch or a trailer",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
+/// Source 3 alone — `closing-key-check`'s need (CLOUD-674).
+const REFS_FIRST_ONLY: FlagDecl = FlagDecl {
+    id: "refs_first_only",
+    long: Some("refs-first-only"),
+    short: None,
+    help: "Answer from the first key of each `Refs:` trailer alone, never sources 1 or 2",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
 const JSON: FlagDecl = FlagDecl {
     id: "json",
     long: Some("json"),
@@ -3936,6 +4032,57 @@ pub const SURFACE: &[CommandDecl] = &[
     // than a pure read — the mediated claim gate needs a claimed branch to be
     // distinguishable from an unclaimed one. A row claiming `read` here would put
     // a writing verb on the derived read-only allowlist.
+    // CLOUD-1711. `mise-tasks/claimed-keys.sh` retires onto this leaf, and
+    // `merged-pr-keys.sh` with it — that program shells into this same answer once
+    // per pull request body, so the two are a closed set.
+    //
+    // A LEAF under `claim` rather than a noun of its own (CLOUD-1546's 42
+    // top-level rows). `read`, and honestly so: it mints nothing and writes
+    // nothing — it derives which keys a branch claims and prints them.
+    //
+    // Pointer-only: the keys alone, uppercased and sorted, never the prose they
+    // were extracted from (rule 4).
+    // CLOUD-1752's forge-window group, and `merged-pr-keys.sh`'s successor. It
+    // asked `claimed-keys` once per pull request body; this asks
+    // `race::claimed_from(.., ClosingOnly)` the same way, so the two sides of
+    // every landed-ness comparison still come out of one authority (CLOUD-338).
+    //
+    // AN EVIDENCE PRODUCER, not a gate: its stdout is DATA its caller consumes,
+    // which is why a could-not-look here exits non-zero where `claim race` — which
+    // answers a question — reports could-not-look on stdout at 0. A producer that
+    // exits clean having produced nothing is indistinguishable from a repository
+    // with no merged pull requests, and that is the exact state the program it
+    // replaces refuses as impossible of a repository with a trunk.
+    CommandDecl {
+        path: "claim merged",
+        id: "claim.merged",
+        about: "The keys merged pull request bodies close, as `<key>\\t<number>` rows",
+        // `data_channel` is exactly "declares `-J`", which
+        // `every_data_emitting_verb_declares_the_json_flag` pins in both
+        // directions — it is not the wider claim the header paragraph makes
+        // about stdout being data rather than a verdict. Two-column rows are
+        // this family's shape and `claim keys` beside it says the same, so the
+        // answer is the line shape, not a second encoding of it.
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[MERGED_LIMIT],
+    },
+    CommandDecl {
+        path: "claim keys",
+        id: "claim.keys",
+        about: "The issue keys this branch CLAIMS, as distinct from the ones it merely mentions",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[
+            CLAIM_BRANCH,
+            CLAIM_TITLE,
+            CLAIM_LOG,
+            CLOSING_ONLY,
+            REFS_FIRST_ONLY,
+        ],
+    },
     CommandDecl {
         path: "claim check",
         id: "claim.check",
@@ -4710,6 +4857,92 @@ pub const SURFACE: &[CommandDecl] = &[
     // No positional: the branch is the key and the engine resolves it, so a
     // caller cannot record against a branch it is not on — `record tool`'s
     // anti-staleness argument, applied to a different key.
+    // CLOUD-1713's two doors. Three programs (841 lines) hand-rolled a durable
+    // store under `.git/` because the engine's own two shapes — keyed put/hit and
+    // append-and-fold — had no leaf. LEAVES UNDER `record` rather than new nouns:
+    // CLOUD-1546 counts 42 top-level rows and CLOUD-1182 records nine ports
+    // becoming nine nouns, and a store family is an object this verb records, not
+    // a verb of its own.
+    // CLOUD-1717's producer door. Nine programs in that wave are MEASUREMENTS
+    // rather than gates: house-style §5 keeps the `gh` spawn outside the engine
+    // and moves only the adjudication in, so each needs a producer writing a
+    // record a module can read.
+    //
+    // THE POLICY STORE, WHICH IS NOT THE TWO BELOW. This writes through
+    // `recorder::record_path`, the store `Fact::Records` projects onto
+    // `input.tree.records.<family>`; `record keyed`/`record journal` write task
+    // stores that only `record show`/`record fold` read back. Same noun, two
+    // different readers, so they are different leaves rather than one leaf with
+    // a mode flag.
+    //
+    // ONE LEAF FOR NINE PRODUCERS. Nine bespoke verbs would each be `record
+    // plan` with its validation removed — the duplication this campaign deletes
+    // rather than relocates.
+    CommandDecl {
+        path: "record named",
+        id: "record.named",
+        about: "Record one named family under this branch, read from stdin",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[FlagDecl::positional(
+            "family",
+            "The record family, which is the key a module reads it under",
+        )],
+    },
+    CommandDecl {
+        path: "record keyed",
+        id: "record.keyed",
+        about: "Put one value into a keyed store family, read from stdin",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[
+            FlagDecl::positional("family", "The store family the record belongs to"),
+            FlagDecl::positional("key", "The key the record is filed under"),
+        ],
+    },
+    CommandDecl {
+        path: "record journal",
+        id: "record.journal",
+        about: "Append one record to an append-and-fold store family, read from stdin",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[FlagDecl::positional(
+            "family",
+            "The store family the record belongs to",
+        )],
+    },
+    // The READ half of CLOUD-1713's two families, and they stay under `record`
+    // on `capture show`'s precedent: `record` is a store NOUN and is already
+    // `unclassified` because the subtree writes, so a read leaf under it neither
+    // leaks onto the derived agent allowlist nor needs a noun of its own. The
+    // producer/consumer split is still §2's answer to "how does a
+    // read-classed surface obtain a record without gaining a write" — the producer
+    // is a separate verb, exactly as `record tool` already is for
+    // `validator-verdict-clean`.
+    CommandDecl {
+        path: "record show",
+        id: "record.show",
+        about: "Read one keyed record back: `hit` and the value, or `miss`",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[
+            FlagDecl::positional("family", "The store family to read"),
+            FlagDecl::positional("key", "The key to look under"),
+        ],
+    },
+    CommandDecl {
+        path: "record fold",
+        id: "record.fold",
+        about: "Fold a journal family: `nothing`, its records, or `unreadable <path>`",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[FlagDecl::positional("family", "The store family to fold")],
+    },
     CommandDecl {
         path: "record plan",
         id: "record.plan",

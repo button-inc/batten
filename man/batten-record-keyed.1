@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-record-keyed 1  batten 
+.SH NAME
+batten\-record\-keyed \- Put one value into a keyed store family, read from stdin
+.SH SYNOPSIS
+\fBbatten record keyed\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIfamily\fR> <\fIkey\fR> 
+.SH DESCRIPTION
+Put one value into a keyed store family, read from stdin
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIfamily\fR>
+The store family the record belongs to
+.TP
+<\fIkey\fR>
+The key the record is filed under

@@ -238,12 +238,20 @@ fn the_handler_receives_the_hosts_own_payload_including_the_calls_background_fla
 }
 
 #[test]
-fn a_backgrounded_wait_on_a_condition_stays_allowed() {
-    // Driven against the COMMITTED guard deliberately, because this is its allow
-    // path and the allow path is not broken: the guard prints a document only
-    // when it denies, so a command it passes leaves the door silent either way.
-    // A guard refusing every backgrounded sleep would fail this and be the false
-    // positive that gets a guard switched off (CLOUD-418).
+fn a_command_a_handler_passes_is_forwarded_silently() {
+    // THE ALLOW PATH THROUGH THE DOOR, and the command is incidental. I briefly
+    // inverted this case for CLOUD-1337, reading it as an assertion that a
+    // conditioned sleep loop is permitted — it is not, and cannot be: this
+    // fixture carries ONE `[[hook.handler]]` row and no `[[rule]]` at all, by the
+    // isolation this file's header argues for, so `run-shape` never runs here and
+    // the stub behind the door exits 0 whatever it is handed.
+    //
+    // What the case pins is the door: a handler that passes prints no document,
+    // so an allowed command must leave both channels silent. A door that
+    // manufactured a verdict from a quiet handler would fail this.
+    //
+    // The module's own withdrawal of the exemption is asserted where the rule
+    // actually runs, in `run_shape.rs` and in the module's load-time tier.
     let dir = fixture("door-background-wait");
     let answer = door_bg(&dir, "until [ -f /tmp/done ]; do sleep 1; done");
     assert!(answer.allowed(), "{}", answer.out);

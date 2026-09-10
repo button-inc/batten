@@ -776,6 +776,24 @@ pub enum ReadyCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ClaimCommand {
+    /// The issue keys this branch CLAIMS, as distinct from those it mentions.
+    Keys {
+        /// The head branch, standing in for source 2.
+        branch: Option<String>,
+        /// The pull request title, also source 2.
+        title: Option<String>,
+        /// Commit messages, standing in for sources 1 and 3.
+        log: Option<String>,
+        /// Answer from a closing keyword alone.
+        closing_only: bool,
+        /// Answer from the first key of each `Refs:` trailer alone.
+        refs_first_only: bool,
+    },
+    /// The keys merged pull request bodies CLOSE, as `<key>\t<number>` rows.
+    Merged {
+        /// The most pull requests to read before the answer is truncated.
+        limit: Option<String>,
+    },
     /// Judge a set of payloads and mint the receipt when they are pullable.
     Check {
         /// Claim over the competitor refusals, recording what was overridden.
@@ -1345,6 +1363,44 @@ pub enum RecordCommand {
     Forge {
         /// The ref or sha the verdict was taken against.
         reference: String,
+    },
+    /// Record one named family under this branch, for a module to read.
+    ///
+    /// The POLICY-readable store, unlike [`RecordCommand::Keyed`] and
+    /// [`RecordCommand::Journal`] below, which are task stores: this writes
+    /// through `recorder::record_path`, which is what `Fact::Records` projects
+    /// onto `input.tree.records.<family>`.
+    ///
+    /// No key positional: the BRANCH is the key and the engine resolves it, so a
+    /// caller cannot record against a branch it is not on — `record plan`'s
+    /// anti-staleness argument, applied to a family the caller names.
+    Named {
+        /// The record family, which is the key a module reads it under.
+        family: String,
+    },
+    /// Put one value into a keyed store family (CLOUD-1713).
+    Keyed {
+        /// The store family the record belongs to.
+        family: String,
+        /// The key the record is filed under.
+        key: String,
+    },
+    /// Append one record to an append-and-fold store family (CLOUD-1713).
+    Journal {
+        /// The store family the record belongs to.
+        family: String,
+    },
+    /// Read one keyed record back: `hit` and the value, or `miss`.
+    Show {
+        /// The store family to read.
+        family: String,
+        /// The key to look under.
+        key: String,
+    },
+    /// Fold a journal family: `nothing`, its records, or `unreadable <path>`.
+    Fold {
+        /// The store family to fold.
+        family: String,
     },
     /// Record this branch's plan: `<id> <status>` per line, on stdin.
     ///
@@ -2100,6 +2156,16 @@ fn claim_of(matches: &ArgMatches) -> Option<ClaimCommand> {
         }),
         ("bot", _) => Some(ClaimCommand::Bot),
         ("race", _) => Some(ClaimCommand::Race),
+        ("merged", matches) => Some(ClaimCommand::Merged {
+            limit: matches.get_one::<String>("limit").cloned(),
+        }),
+        ("keys", matches) => Some(ClaimCommand::Keys {
+            branch: matches.get_one::<String>("branch").cloned(),
+            title: matches.get_one::<String>("title").cloned(),
+            log: matches.get_one::<String>("log").cloned(),
+            closing_only: flag(matches, "closing_only"),
+            refs_first_only: flag(matches, "refs_first_only"),
+        }),
         ("carry", matches) => Some(ClaimCommand::Carry {
             json: flag(matches, "json"),
         }),
@@ -2355,6 +2421,23 @@ fn record_of(matches: &ArgMatches) -> Option<RecordCommand> {
         }),
         ("forge", matches) => Some(RecordCommand::Forge {
             reference: matches.get_one::<String>("ref")?.clone(),
+        }),
+        ("named", matches) => Some(RecordCommand::Named {
+            family: matches.get_one::<String>("family")?.clone(),
+        }),
+        ("keyed", matches) => Some(RecordCommand::Keyed {
+            family: matches.get_one::<String>("family")?.clone(),
+            key: matches.get_one::<String>("key")?.clone(),
+        }),
+        ("journal", matches) => Some(RecordCommand::Journal {
+            family: matches.get_one::<String>("family")?.clone(),
+        }),
+        ("show", matches) => Some(RecordCommand::Show {
+            family: matches.get_one::<String>("family")?.clone(),
+            key: matches.get_one::<String>("key")?.clone(),
+        }),
+        ("fold", matches) => Some(RecordCommand::Fold {
+            family: matches.get_one::<String>("family")?.clone(),
         }),
         // No positional to read: the branch is the key and the engine resolves
         // it, so this arm takes the sub-verb and nothing else.

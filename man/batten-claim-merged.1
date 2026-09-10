@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-claim-merged 1  batten 
+.SH NAME
+batten\-claim\-merged \- The keys merged pull request bodies close, as `<key>\\t<number>` rows
+.SH SYNOPSIS
+\fBbatten claim merged\fR [\fB\-\-limit\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+The keys merged pull request bodies close, as `<key>\\t<number>` rows
+.SH OPTIONS
+.TP
+\fB\-\-limit\fR
+The most pull requests to read before the answer is truncated (default 5000)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

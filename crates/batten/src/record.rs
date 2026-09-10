@@ -54,7 +54,7 @@
 //! in this family for a secret to appear.
 
 use std::io::Read as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
 
@@ -195,12 +195,21 @@ pub fn run_forge(reference: &str, _overrides: &Overrides) -> Result<ExitCode> {
 /// Whatever the chosen sub-verb returns: a [`UsageError`] for an id or ref that
 /// resolves to nothing, an unreadable subject, or a malformed verdict line, and
 /// an internal error when the store cannot be written.
-pub fn run(command: crate::cli::RecordCommand, overrides: &Overrides) -> Result<ExitCode> {
+pub fn run(
+    command: crate::cli::RecordCommand,
+    overrides: &Overrides,
+    out: &mut dyn std::io::Write,
+) -> Result<ExitCode> {
     match command {
         crate::cli::RecordCommand::Tool { id } => run_tool(&id, overrides),
         crate::cli::RecordCommand::Forge { reference } => run_forge(&reference, overrides),
         crate::cli::RecordCommand::Plan => run_plan(),
         crate::cli::RecordCommand::Closes => run_closes(overrides),
+        crate::cli::RecordCommand::Named { family } => run_named(&family),
+        crate::cli::RecordCommand::Keyed { family, key } => run_keyed(&family, &key),
+        crate::cli::RecordCommand::Journal { family } => run_journal(&family),
+        crate::cli::RecordCommand::Show { family, key } => run_keyed_show(&family, &key, out),
+        crate::cli::RecordCommand::Fold { family } => run_journal_show(&family, out),
     }
 }
 
@@ -370,5 +379,218 @@ pub fn run_plan() -> Result<ExitCode> {
         &crate::recorder::record_path(&git_dir, "plan", &branch, claim.as_deref()),
         &raw,
     )?;
+    Ok(ExitCode::Success)
+}
+
+// --- the two store families a task can reach (CLOUD-1713) --------------------
+//
+// Three programs (841 lines) each hand-rolled a durable keyed store under
+// `.git/` while the engine shipped both shapes with no door to either. These are
+// the doors: `keyed` is put/hit, `journal` is append-and-fold.
+//
+// THE COST CLASS IS NOT WIDENED, and this is the answer §2 asks for in one
+// sentence: `check` is `Cost::Read` and structurally cannot spawn or write, so a
+// record reaches a read-classed surface exactly as `validator-verdict-clean`'s
+// already does — a SEPARATE PRODUCER VERB writes it, and `verify` runs that verb
+// before the gates. The producer here is `record keyed` / `record journal`
+// (`Effect::Write`); the consumer is `show record` / `show journal`
+// (`Effect::Read`) or a fact. Nothing on the read path writes.
+
+/// Where the keyed put/hit family stores its records.
+const KEYED_STORE: &str = "batten-records";
+
+/// Where the append-and-fold family stores its shards.
+const JOURNAL_STORE: &str = "batten-journals";
+
+/// A family name that cannot escape its store.
+///
+/// **A path component, checked rather than trusted.** The family and the key both
+/// reach this from a caller's argv, and a `..` or a `/` in either would put a
+/// record outside the store the reader looks in — which is not a security
+/// boundary here so much as a silent miss: the write succeeds, the read finds
+/// nothing, and the gate reads clean.
+fn safe_component(what: &str, value: &str) -> Result<String> {
+    let clean = value.trim();
+    if clean.is_empty()
+        || clean == "."
+        || clean == ".."
+        || clean.contains('/')
+        || clean.contains('\\')
+        || clean.contains('\0')
+    {
+        return Err(UsageError::raise(format!(
+            "the {what} must be one path component and must not be `.`, `..`, or contain a separator"
+        )));
+    }
+    Ok(clean.to_owned())
+}
+
+/// Record one named family under this branch, read from stdin.
+///
+/// **The POLICY-readable store, which is a different store from the two below.**
+/// `record keyed`/`record journal` write task stores that `record show`/`record
+/// fold` read back; this writes through [`crate::recorder::record_path`], which
+/// is the store [`crate::facts::Fact::Records`] projects onto
+/// `input.tree.records.<family>`. A module reads what this writes; nothing reads
+/// what those write except the task that wrote it. Keeping them apart is why
+/// this is a third verb rather than a flag on one of them: the two stores have
+/// different keys, different readers and different lifetimes.
+///
+/// **One verb, not one per measurement** (CLOUD-1717). Nine programs in that wave
+/// are measurements rather than gates — the `gh` call stays outside per
+/// house-style §5 and only the adjudication moves in — so each needs a producer
+/// that writes a record a module can read. Nine bespoke verbs would be nine
+/// spellings of `run_plan` with the validation removed, which is the duplication
+/// the retirement campaign exists to delete rather than to relocate.
+///
+/// **NO VALIDATION OF THE LINES, deliberately.** [`run_plan`] refuses an unknown
+/// status because a plan entry has a closed vocabulary this binary owns. A
+/// measurement's shape is the module's business, and a second reading here would
+/// be the two-authorities-over-one-fact defect: the module already has to decide
+/// what a malformed line means, and a writer that pre-judged it would make the
+/// module's own arm unreachable.
+///
+/// # Errors
+///
+/// A [`UsageError`] when the family is not a single path component, when the
+/// repository has no branch to key on, or when this is not a git repository; an
+/// internal error when the store cannot be written.
+pub fn run_named(family: &str) -> Result<ExitCode> {
+    let family = safe_component("family", family)?;
+    let raw = verdict_lines()?;
+    let root = Path::new(".");
+    let git_dir = git::git_dir(root).map_err(|_| {
+        UsageError::raise(
+            "record named: not a git repository, so there is nothing to key on".to_owned(),
+        )
+    })?;
+    let Ok(Some(branch)) = git::current_branch(root) else {
+        return Err(UsageError::raise(
+            "record named: a detached HEAD has no branch to key the record on".to_owned(),
+        ));
+    };
+    let claim = claim_of(&git_dir, &branch);
+    store(
+        &crate::recorder::record_path(&git_dir, &family, &branch, claim.as_deref()),
+        &raw,
+    )?;
+    Ok(ExitCode::Success)
+}
+
+/// The record path for one (family, key) pair.
+///
+/// Keyed by a digest of the key rather than by the key itself, on
+/// [`crate::review::record_path`]'s reason one store over: the key is a caller's
+/// string and may be any length or hold any byte, and a digest is a filename on
+/// every platform. The key is not recoverable from the path, which is the
+/// pointer-only posture rule 4 asks for anyway.
+fn keyed_path(git_dir: &Path, family: &str, key: &str) -> PathBuf {
+    git_dir
+        .join(KEYED_STORE)
+        .join(family)
+        .join(crate::tools::digest(key.as_bytes()))
+}
+
+/// Put one value into the keyed family, read from stdin.
+///
+/// # Errors
+///
+/// A [`UsageError`] when the family or key is not a single path component; an
+/// internal error when the store cannot be written.
+pub fn run_keyed(family: &str, key: &str) -> Result<ExitCode> {
+    let family = safe_component("family", family)?;
+    let value = verdict_lines()?;
+    let git_dir = git::git_dir(Path::new("."))?;
+    store(&keyed_path(&git_dir, &family, key), &value)?;
+    Ok(ExitCode::Success)
+}
+
+/// Append one record to the journal family, read from stdin.
+///
+/// **Reuses [`crate::journal::append_line`] rather than opening a file here**,
+/// which is CLOUD-1713's §2 in one call: the durability barrier, the one-writer
+/// shard rule and the persist-before-emit order all live in that function, and a
+/// second append path beside it is precisely the defect this row removes.
+///
+/// The shard is per worktree, via [`crate::journal::shard_id`] — `reclaim-census`
+/// keyed its single shard by boot id instead, which is a caller's choice of key
+/// rather than a different mechanism.
+///
+/// # Errors
+///
+/// A [`UsageError`] when the family is not a single path component or the record
+/// is blank — an empty append is a caller with nothing to say, and recording it
+/// would put a record in the log that no fold can distinguish from a torn one.
+/// An internal error when the shard cannot be written or synced.
+pub fn run_journal(family: &str) -> Result<ExitCode> {
+    let family = safe_component("family", family)?;
+    let record = verdict_lines()?;
+    let record = record.trim();
+    if record.is_empty() {
+        return Err(UsageError::raise(String::from(
+            "the record is empty; an empty append is not a record",
+        )));
+    }
+    if record.contains('\n') {
+        return Err(UsageError::raise(String::from(
+            "a record is one line; a multi-line append would fold back as several records",
+        )));
+    }
+    let git_dir = git::git_dir(Path::new("."))?;
+    let store_dir = git_dir.join(JOURNAL_STORE).join(&family);
+    let shard = crate::journal::shard_id(Path::new("."));
+    crate::journal::append_line(&store_dir, &shard, record)?;
+    Ok(ExitCode::Success)
+}
+
+/// Read one keyed record back: `hit` and the value, or `miss`.
+///
+/// **A miss is exit 0 and the discrimination comes off STDOUT**, which is
+/// `checks-green`'s shape and is deliberate. The engine's contract makes exit 2 a
+/// VIOLATION, and a cache miss is not a violation — it is the ordinary answer that
+/// says *run the step*. A caller reading only the code holds either way; the one
+/// caller that needs the difference reads the line.
+///
+/// # Errors
+///
+/// A [`UsageError`] when the family or key is not a single path component; an
+/// internal error when the git directory cannot be resolved.
+pub fn run_keyed_show(family: &str, key: &str, out: &mut dyn std::io::Write) -> Result<ExitCode> {
+    let family = safe_component("family", family)?;
+    let git_dir = git::git_dir(Path::new("."))?;
+    match std::fs::read_to_string(keyed_path(&git_dir, &family, key)) {
+        Ok(value) => {
+            writeln!(out, "hit")?;
+            write!(out, "{value}")?;
+        }
+        // ABSENT IS A MISS, and it is the only reading here: a record that exists
+        // and holds nothing is a hit carrying an empty value, because the producer
+        // chose to record that.
+        Err(_) => writeln!(out, "miss")?,
+    }
+    Ok(ExitCode::Success)
+}
+
+/// Fold a journal family: `nothing`, the records, or `unreadable <path>`.
+///
+/// # Errors
+///
+/// A [`UsageError`] when the family is not a single path component; an internal
+/// error when the git directory cannot be resolved.
+pub fn run_journal_show(family: &str, out: &mut dyn std::io::Write) -> Result<ExitCode> {
+    let family = safe_component("family", family)?;
+    let git_dir = git::git_dir(Path::new("."))?;
+    let store_dir = git_dir.join(JOURNAL_STORE).join(&family);
+    match crate::journal::fold_lines(&store_dir) {
+        crate::journal::Fold::Nothing => writeln!(out, "nothing")?,
+        crate::journal::Fold::Records(records) => {
+            for record in records {
+                writeln!(out, "{record}")?;
+            }
+        }
+        // A PATH IS A POINTER (§6 names `path:line` outright), so naming the
+        // store a reader could not open is rule 4 satisfied rather than breached.
+        crate::journal::Fold::Unreadable(path) => writeln!(out, "unreadable {}", path.display())?,
+    }
     Ok(ExitCode::Success)
 }

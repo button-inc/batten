@@ -1966,9 +1966,49 @@ regex = 'CLOUD-[0-9]+'
 # `[[pattern]]` row and not a literal in the crate: the core stays repo-agnostic,
 # and a consumer whose forge spells the set differently declares its own row
 # rather than patching the engine.
+# BLANK, NEVER SPACE, and the difference is a measured false positive rather than
+# a nicety (CLOUD-1752). `[[:space:]]` matches a NEWLINE, so the anchor above
+# stopped meaning "immediately before a key" the moment a body put the verb at the
+# end of one line and the key at the start of the next — which ordinary prose does
+# constantly. Measured 2026-09-09 over this repository's 713 merged pull requests:
+# 16 rows read as CLOSED that no body closes, `mise-tasks/merged-pr-keys.sh`
+# emitting none of them. PR #163 is the shape:
+#
+#     ## The residue survived the fix
+#
+#     CLOUD-223 taught `.claude/hooks/session-start.sh` …
+#
+# A heading ending in "the fix", a blank line, then a citation — read as a claim.
+# The harm runs the dangerous way: a false CLAIM tells `in-progress-drain` a row
+# landed, and it drains a row that is still live.
+#
+# `[[:blank:]]` is space and tab and nothing else, so the verb must sit on the
+# key's own line — which is what the paragraph above always said this row did.
+# A NEGATED CLOSING VERB IS NOT A CLAIM, and the row above cannot see one
+# (CLOUD-1752). Its anchor decides the text IMMEDIATELY before a key, which is
+# exactly what makes `does not close CLOUD-1` match: the prefix ends in `close`
+# and the negation sits one word further back, outside what an end-anchored
+# pattern can reach. Rust's regex has no lookbehind, so the guard is a second row
+# rather than a cleverer first one.
+#
+# MEASURED 2026-09-09 over this repository's 713 merged pull requests: SIX rows
+# read as closed by a body that says in so many words that it does not close them
+# — `## Why this does NOT close CLOUD-1074`, `It also does not close CLOUD-673`,
+# `**This does not close CLOUD-1050`, `## Why this does not close CLOUD-607`,
+# `Filed, not fixed: CLOUD-466`. Writing out why a change does NOT close a row is
+# a habit this repository actively encourages, so the false positive is not rare
+# and it runs the dangerous way: a false CLAIM moves a live row.
+#
+# ANCHORED AT THE END LIKE ITS SIBLING, and read against the text before the VERB
+# rather than before the key — so `not` must sit on the verb, never merely
+# somewhere earlier in the paragraph.
+[[pattern]]
+id = "ready-closing-negation"
+regex = '(?i)(^|[^0-9A-Za-z-])(not|never|n.t|without|nor)[[:blank:]]*$'
+
 [[pattern]]
 id = "ready-closing-verb"
-regex = '(?i)(^|[^0-9A-Za-z-])(clos(e|es|ed)|fix(|es|ed)|resolv(e|es|ed))[[:space:]]*:?[[:space:]]*#?$'
+regex = '(?i)(^|[^0-9A-Za-z-])(clos(e|es|ed)|fix(|es|ed)|resolv(e|es|ed))[[:blank:]]*:?[[:blank:]]*#?$'
 
 # THE PROSE-DIALECT THRESHOLD (CLOUD-472) IS `[ready]`, NOT A `[[pattern]]` ROW.
 # It was drafted as one — a regex over the exempt key range — and that is the
@@ -1986,6 +2026,15 @@ regex = '(?i)(^|[^0-9A-Za-z-])(clos(e|es|ed)|fix(|es|ed)|resolv(e|es|ed))[[:spac
 # issue reads this row instead of spelling its own set. `duplicate` is closed too:
 # an exemption whose owner was merged into another issue is as spent as one whose
 # owner shipped.
+# A RUN OF DIGITS AND NOTHING ELSE, which is what makes a recorded age readable
+# as a number at all. `branch-age`'s producer writes the age it computed; this is
+# the module's shape test before `to_number`, because an unparseable third column
+# is a torn record rather than a branch that is zero days old — and those two must
+# not collapse into the same verdict.
+[[pattern]]
+id = "whole-number"
+regex = '^[0-9]+$'
+
 [[pattern]]
 id = "closed-issue-status"
 regex = '^(done|canceled|duplicate)$'
@@ -5629,6 +5678,13 @@ severity = "deny"
 # green fires this and not that; a commit graded red fires both, and they say
 # different things — do not re-run it, and do not land it.
 #
+# BOTH READINGS NEEDED A PRODUCER, and until CLOUD-1707 neither had one: nothing
+# invoked `batten record forge`, so this fact was `null` and the paragraph above
+# described a discrimination no checkout could make. `mise run record-verdicts`
+# writes it, and writes it ONLY once the fan-in has concluded — so "nothing was
+# recorded at all" now means the forge has not finished judging, which is the
+# could-not-look both rows read it as.
+#
 # `warn`, NOT `deny`, AND THE FIRST LANDING IS THE REASON. `land` re-verifies and
 # re-waits every lap by design, because a rebase mints a new SHA and the receipts
 # keyed to the old one are gone — so the loop legitimately reaches graded commits,
@@ -6001,6 +6057,26 @@ line_sources = [
 ]
 module = "policy/mutation-declared-case.rego"
 severity = "deny"
+
+# CLOUD-349, ported off `mise-tasks/branch-age-check.sh` under CLOUD-1717.
+#
+# A MEASUREMENT, SO THE SPAWN STAYS OUTSIDE (house-style §5). `mise run
+# branch-age-record` makes the two forge reads and computes each branch's age in
+# days — the engine calls no clock on any evaluation path, so the arithmetic
+# cannot live in the module — and writes `branch-age` through `batten record
+# named`. This row adjudicates what was recorded.
+#
+# `severity = "warn"` FOR NOW, and the reason is the population rather than
+# caution: the retired program ran on a schedule against every remote branch,
+# where this runs in `verify` against whatever the last producer wrote. CLOUD-320
+# binds the promotion — land it reporting, read the firing rate, promote with the
+# measurement rather than with an argument.
+[[rule]]
+id = "branch-age"
+kind = "policy"
+scope = "tree"
+module = "policy/branch-age.rego"
+severity = "warn"
 
 [[rule]]
 id = "plan-complete"
@@ -6597,6 +6673,11 @@ looked at it."""
 # bytes at this version — absent from the map, not a verdict — which is what a
 # checkout gets if the producer was skipped or died. The row that wants a verdict
 # to be REQUIRED is `forge-verdict-required`'s shape and is not this one.
+# THAT CONTRAST ONLY BECAME REAL WITH CLOUD-1707. `forge-verdict-required` had no
+# producer, so it refused nothing and the sentence above named a shape rather than
+# a behaviour. Both rows are fed by `mise run record-verdicts` now, and they still
+# read absence the same way — what differs is what each does with a record that IS
+# present, which is the distinction this block was always drawing.
 [[rule]]
 id = "validator-verdict-clean"
 kind = "policy"
@@ -12475,6 +12556,57 @@ id = "patch run first"
 kind = "command"
 target = "git commit -F <path>"
 
+# CLOUD-349's two readings, ported off `branch-age-check.sh` under CLOUD-1717.
+[[verdict]]
+id = "branch watch stale"
+gloss = "a remote branch has outlived the story it was cut for"
+class = """
+Trunk-based development asks a review branch to be "very short-lived" and names \
+the hazard: a short-lived feature branch sleepwalking into a long-lived one. \
+Measured 2026-08-11, before `land` learned to delete: 23 remote branches, ten of \
+them five days old. The branch is either finished — in which case delete it — or \
+it is not, in which case it is a long-lived branch and the trunk-based claim is \
+the thing that is false.
+"""
+
+[[verdict.route]]
+id = "branch write first"
+kind = "command"
+target = "git push origin --delete <branch>"
+
+[[verdict]]
+id = "branch name duplicate"
+gloss = "one branch name has headed several merged pull requests and still exists"
+class = """
+A per-PR lifetime metric cannot see this: \
+`claude/phase-3-sequential-landing-h26kx0` headed eight consecutive pull \
+requests, each landing inside an hour, while the branch itself lived for days. \
+THE SURVIVING BRANCH IS HALF THE CLASS, because merged pull requests are \
+immutable — a count alone would be an alarm no action could ever clear, so what \
+is refused is the name still being there to reuse again.
+"""
+
+[[verdict.route]]
+id = "branch write first"
+kind = "command"
+target = "git push origin --delete <branch>, and cut a fresh name for the next story"
+
+[[verdict]]
+id = "branch list empty"
+gloss = "the branch record was written and names no branch at all"
+class = """
+A remote reporting no branches cannot be true of a repository with a trunk, so \
+the honest reading is a listing that failed while still exiting zero. ABSENT AND \
+PRESENT-BUT-EMPTY ARE DIFFERENT STATES and must not collapse: no record is \
+could-not-look and says nothing, a record naming nothing is a reading this gate \
+refuses. Re-run the producer and read what it reports.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run branch-age-record"
+
 # CLOUD-613, CLOUD-482. The waste here is the SESSION rather than a verdict or a
 # gate, which is why it is a class of its own rather than a row on either above.
 [[verdict]]
@@ -12486,14 +12618,17 @@ exit 143 and 144 over a hung commit, after which the container was reclaimed \
 with the work uncommitted. Waiting is the harness's job, not the command's: put \
 the work in the background by passing `run_in_background` on the tool call \
 itself and act on its exit, which is delivered (measured 523 of 524 in one \
-session). For a condition rather than a process, background a command that EXITS \
-when the condition holds — that is a background wait and is allowed.
+session). THERE IS NO SANCTIONED SLEEP — in a loop or out of one, foreground or \
+background (CLOUD-1337, CLOUD-821). A loop changes what the wait is ABOUT and \
+not that the session spends itself performing a poll the exit notification \
+already performs. Chained execution — run X, then when it finishes run Y — is a \
+workflow and gets a row, never a poll.
 """
 
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "until <test>; do sleep 1; done — where <test> reads something the harness does NOT report, never a process table"
+target = "pass run_in_background on the long command itself, and act on its exit notification"
 
 [[verdict.route]]
 id = "task run other"
@@ -12512,15 +12647,18 @@ so it reports the same whether that thing finished, failed, or never started. \
 The wake-up already exists: a backgrounded task's exit notification is delivered, \
 measured 523 of 524 in one session including every failure, so idling until it \
 arrives is the designed state rather than a turn wasted. Measured 2026-08-21: \
-490 of these in one session, 2 of which changed a decision. A backgrounded \
-command carrying an `until`/`while` construct waits on the condition itself and \
-is allowed.
+490 of these in one session, 2 of which changed a decision. THE LOOP IS NOT AN \
+EXEMPTION and was one until CLOUD-1337: a backgrounded `until`/`while` around \
+the sleep waits on the condition rather than the clock, and still spends the \
+session performing by hand the wake-up the runtime already delivers. Measured \
+2026-09-09: one such loop ran 3h34m under that exemption before a human reading \
+`ps` found it. Every sleep is refused, in both postures.
 """
 
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "until <test>; do sleep 1; done — where <test> reads something the harness does NOT report, never a process table"
+target = "pass run_in_background on the long command itself, and act on its exit notification"
 
 [[verdict.route]]
 id = "task run other"

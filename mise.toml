@@ -617,7 +617,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "mise,attestation-check,engine-checks-green,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,claimed-keys,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence-assert,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,stop-posture-check,suite-bench-check,suite-subject-retirable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler"
+MUTANT_GATES = "mise,attestation-check,engine-checks-green,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence-assert,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -1836,6 +1836,70 @@ counts=$(jq -r --argjson authored "$authored" '
 } | cargo run --quiet -p batten -- record tool sbom
 '''
 
+# CLOUD-349's two forge reads, ported off `branch-age-check.sh` under CLOUD-1717.
+#
+# THE SPAWN STAYS OUT HERE AND ONLY THE ADJUDICATION MOVED IN (house-style §5).
+# `policy/branch-age.rego` decides what a stale branch is; this fetches what it
+# decides over. The day arithmetic is here for a harder reason than convention:
+# the engine calls no clock on any evaluation path — `clippy.toml`'s
+# `disallowed-methods` and `crates/batten/tests/clock_ban.rs` hold it to that —
+# so an AGE cannot be computed inside a module at all.
+#
+# ONE GRAPHQL CALL for the refs rather than a REST branch list plus a commit
+# lookup per branch: the tip date is not on the REST branch object, and 23
+# follow-up calls to learn it is the shape `mem:github-rest-etiquette` warns
+# about.
+#
+# WRITES NOTHING WHEN IT CANNOT LOOK, which is the half that keeps the module
+# honest. A failed fetch leaves the record absent, the module's `recorded` stays
+# undefined and it says nothing; a record that IS written and names no branch is
+# the different, refused state. Collapsing those two is the silent pass this
+# campaign keeps finding.
+[tasks.branch-age-record]
+description = "Effect: record every remote branch's age in days and which names head more than one merged PR (CLOUD-349)"
+shell = "bash -c"
+run = """
+trunk="${BRANCH_AGE_TRUNK:-main}"
+today=$(date -u +%Y-%m-%d)
+
+slug=$(gh repo view --json owner,name --jq '.owner.login + " " + .name' 2>/dev/null) || exit 0
+refs=$(gh api graphql \
+  -f query='query($owner:String!,$name:String!){
+              repository(owner:$owner,name:$name){
+                refs(refPrefix:"refs/heads/",first:100){
+                  nodes{ name target{ ... on Commit { committedDate } } }
+                }
+              }
+            }' \
+  -F owner="${slug% *}" -F name="${slug#* }" \
+  --jq '.data.repository.refs.nodes[] | [.name, .target.committedDate] | @tsv' 2>/dev/null) || exit 0
+prs=$(gh pr list --state merged --limit 200 --json headRefName --jq '.[].headRefName' 2>/dev/null) || exit 0
+
+{
+  printf '%s\\n' "$refs" | awk -F'\\t' -v today="$today" -v trunk="$trunk" '
+    function days(y, m, d,   era, yoe, doy, doe) {
+      if (m <= 2) y -= 1
+      era = int((y >= 0 ? y : y - 399) / 400)
+      yoe = y - era * 400
+      doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
+      doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+      return era * 146097 + doe - 719468
+    }
+    function daynum(iso,   p, s) {
+      s = substr(iso, 1, 10)
+      if (s !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) return "NaN"
+      split(s, p, "-")
+      return days(p[1] + 0, p[2] + 0, p[3] + 0)
+    }
+    BEGIN { now = daynum(today) }
+    $1 == "" { next }
+    $1 == trunk { next }
+    { d = daynum($2); if (d != "NaN") print "ref\\t" $1 "\\t" (now - d) }
+  '
+  printf '%s\\n' "$prs" | sed '/^$/d' | awk -v trunk="$trunk" '$0 != trunk { print "merged\\t" $0 }'
+} | cargo run --quiet -p batten -- record named branch-age
+"""
+
 [tasks.record-verdicts]
 description = "Effect: run each declared third-party validator OUTSIDE the engine and record its verdict where `batten check` reads it (CLOUD-1265)"
 # THE HALF THAT WAS MISSING. `crates/batten/src/tools.rs` reads
@@ -1843,8 +1907,12 @@ description = "Effect: run each declared third-party validator OUTSIDE the engin
 # reads `.git/batten-forge/<sha>`; both shipped with no writer but a test, so
 # `validator-verdict-clean` and `forge-verdict-required` — two registered
 # `severity = "deny"` rows — resolved `null` on every real checkout and decided
-# nothing. Each row says so at its own site in `batten.toml`: "SILENT UNTIL A
-# PRODUCER WRITES."
+# nothing.
+#
+# BOTH HALVES ARE WRITTEN HERE NOW. The tool half landed with this task
+# (CLOUD-1265); the forge half is the arm at the end of this body (CLOUD-1707),
+# and until it landed this file closed one of the two gaps its own header
+# described and left the other open.
 #
 # THE RUN IS HERE BECAUSE IT CANNOT BE IN THE ENGINE. House style §5 makes
 # `check` `read` and structurally incapable of spawning, so the validator stays a
@@ -1954,6 +2022,72 @@ jq -r --slurpfile full "$full" '
 	| ($full[0].steps[] | select(.name == $name) | .status) as $under
 	| "\($name) \($under // "absent")"
 ' <"$fast" | record hk-plan
+
+# THE FORGE'S OWN VERDICT, and the row it feeds had never been fed (CLOUD-1707).
+# `crates/batten/src/forge.rs` reads `.git/batten-forge/<sha>` and
+# `batten record forge` writes it, but nothing invoked the writer — so
+# `input.tree.forge` was `null` on every checkout, the module's `is_object` guard
+# never held, and `forge-verdict-required` decided NOTHING while registered at
+# `severity = "deny"`. A dead gate is byte-identical to a clean tree.
+#
+# THE REF IS `HEAD`, AND THAT IS THE WHOLE DECLARED SET. Two rows read this fact
+# — `forge-verdict-required` and the re-grade row above it — and each declares
+# exactly `forge = ["HEAD"]`. Recording HEAD is scoped to what is asked rather
+# than narrowed below it. A row that later declares a second ref must add it here
+# in the same change; an under-scoped record is the same silent pass in a new
+# costume.
+#
+# THE FAN-IN IS THE GATE ON WRITING AT ALL, and this is the load-bearing half.
+# `$CI_FANIN_CHECK` is the check every other required job feeds, so until IT has
+# concluded the forge has not finished judging this commit. Recording a partial
+# reading would be a record PRESENT without a passing fan-in, which
+# `forge-verdict-required` refuses — and that refusal would fire in the two places
+# it must never fire:
+#   * local `verify`, which runs against a freshly minted SHA CI has not graded,
+#     turning every pre-push check red;
+#   * CI itself, where `verify` runs while the fan-in is by construction still
+#     pending, so the record would refuse the very run that wrote it.
+# Absent is could-not-look and is the correct reading for both. So a failed fetch
+# writes nothing, and a commit whose fan-in has not concluded writes nothing.
+#
+# A NAME WITH A SPACE CANNOT BE SPELLED HERE, and is dropped rather than mangled.
+# The record's byte format is `<name> <token>` split on the first whitespace run,
+# so `action (ubuntu-latest) success` would record the name `action` with the
+# conclusion `(ubuntu-latest)` — a wrong verdict under a name three checks collide
+# on. Nine of `$CI_REQUIRED_CHECKS` carry spaces. The fan-in both rows read is one
+# token by construction, so nothing a consumer reads is lost; the COUNT of dropped
+# names goes to stderr (rule 4 — a count, never the payload) so the limit stays
+# visible rather than silent.
+forge_sha=$(git rev-parse HEAD 2>/dev/null || true)
+forge_fanin="${CI_FANIN_CHECK:-}"
+if [ -n "$forge_sha" ] && [ -n "$forge_fanin" ]; then
+	forge_repo="${REPO:-}"
+	[ -n "$forge_repo" ] || forge_repo='{owner}/{repo}'
+	# LATEST RUN PER NAME, and the reduction belongs here rather than in the
+	# reader. A re-run adds a second check-run under the SAME name, so the raw
+	# listing carries `fast-forward-release-pr success` and `… skipped` for one
+	# commit — and `forge::parse` folds a record into a map, so whichever line came
+	# last would win by listing order rather than by recency. `checks-green` draws
+	# the same distinction with `started_at` and `id`; this is that reduction,
+	# spelled once, at the producer.
+	if forge_runs=$(gh api "repos/$forge_repo/commits/$forge_sha/check-runs?per_page=100" \
+		--jq '.check_runs | map(select(.conclusion != null)) | group_by(.name) | map(max_by([(.started_at // ""), (.id // 0)])) | .[] | "\(.name)\t\(.conclusion)"' 2>/dev/null); then
+		# The fan-in decides whether ANY record is written; the name filter then
+		# decides what the record may spell.
+		forge_graded=$(printf '%s\n' "$forge_runs" |
+			awk -F'\t' -v fanin="$forge_fanin" 'NF == 2 && $1 == fanin {found = 1} END {print found + 0}')
+		if [ "$forge_graded" -eq 1 ]; then
+			forge_dropped=$(printf '%s\n' "$forge_runs" |
+				awk -F'\t' 'NF == 2 && $1 ~ /[[:space:]]/ {n++} END {print n + 0}')
+			if [ "$forge_dropped" -gt 0 ]; then
+				echo "record-verdicts: $forge_dropped check-run name(s) carry a space and have no spelling in a forge record; dropped" >&2
+			fi
+			printf '%s\n' "$forge_runs" |
+				awk -F'\t' 'NF == 2 && $1 !~ /[[:space:]]/ {print $1 " " $2}' |
+				cargo run --quiet -p batten -- record forge HEAD
+		fi
+	fi
+fi
 '''
 
 # The perf producer and the perf gate (CLOUD-207, ported off
@@ -4307,7 +4441,7 @@ shell = "bash -c"                                                   # uses ${sha
 # no others: a bot commit reaching anything else is not a bump and is not exempt.
 run = '''
 fail=0
-keys="$(git rev-parse --show-toplevel)/mise-tasks/claimed-keys.sh"
+
 for sha in $(git rev-list --no-merges "${BASE_SHA:?}..${HEAD_SHA:?}"); do
   subject=$(git show -s --format=%s "$sha")
   # The subject-convention half is NOT here: it is `commit-check`, above in
@@ -4335,7 +4469,20 @@ for sha in $(git rev-list --no-merges "${BASE_SHA:?}..${HEAD_SHA:?}"); do
   # extra evidence from stdin whenever stdin is not a tty, so under a task runner
   # — where it never is — a call with nothing piped BLOCKS FOREVER. Measured here
   # as a two-minute harness kill. Same shape as CLOUD-511's bare `cat`.
-  if [ -z "$("$keys" --log "$(git show -s --format='%B' "$sha")" </dev/null 2>/dev/null)" ]; then
+  # `batten claim keys`, not the retired `claimed-keys.sh` (CLOUD-1711). The
+  # binding this replaces pointed at a deleted path, so the command emitted
+  # nothing and every commit read as claiming no issue — including ones carrying
+  # a `Refs:` trailer, which is the tell: a missing program's empty output is
+  # byte-identical to a message that names no row.
+  #
+  # `cargo run`, NEVER A BARE `batten`, and the first repair got this wrong in a
+  # way only CI could show: a bare name resolves wherever the binary happens to be
+  # installed, so the gate passed locally and failed on the runner — accusing four
+  # commits that carry `Refs: CLOUD-1688`. That is the SAME false negative one
+  # environment over, which is why the form matters rather than being a style
+  # choice: 52 other call sites in this file spell it this way and none of them
+  # depends on what is on PATH.
+  if [ -z "$(cargo run --quiet -p batten -- claim keys --branch "" --title "" --log "$(git show -s --format='%B' "$sha")" </dev/null 2>/dev/null)" ]; then
     echo "::error::Commit ${sha:0:8} claims no CLOUD-<n> issue: '$subject' — add a 'Refs: CLOUD-<n>' trailer naming the work it serves"
     fail=1
   fi

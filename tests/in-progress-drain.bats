@@ -19,6 +19,13 @@ setup() {
 	export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 	git init -q -b work "$REPO"
 	cd "$REPO" || return 1
+	# THE COMMITTED CONFIG, because the claim derivation is an ENGINE leaf now
+	# (CLOUD-1711). `claimed-keys.sh` carried the key grammar inline and answered
+	# in any tree; `batten claim keys` resolves `ready-issue-key` and the closing
+	# rows from the `[[pattern]]` registry, so a fixture with no `batten.toml`
+	# resolves nothing, returns no keys, and every case asserting a REFUSAL passes
+	# for the wrong reason.
+	cp "$BATS_TEST_DIRNAME/../batten.toml" "$REPO/batten.toml"
 	git config user.email t@t
 	git config user.name t
 	git commit -q --allow-empty -m "chore: init"
@@ -349,31 +356,17 @@ Closes CLOUD-179"
 # what makes it runnable in a fresh clone. Every case above injects
 # DRAIN_MERGED_PRS and so never reaches this branch — that is what keeps the
 # suite offline — so the gather path needs its own case with the producer stubbed.
-@test "with no DRAIN_MERGED_PRS the drain gathers evidence rather than refusing" {
-	local stub="$BATS_TEST_TMPDIR/bin"
-	mkdir -p "$stub"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/in-progress-drain.sh" "$stub/in-progress-drain.sh"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/landed-check.sh" "$stub/landed-check.sh"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/claimed-keys.sh" "$stub/claimed-keys.sh"
-	printf '#!/usr/bin/env bash\nprintf "CLOUD-179\\t42\\n"\n' >"$stub/merged-pr-keys.sh"
-	chmod +x "$stub/merged-pr-keys.sh"
-	land "fix: work with no closing key in the commit"
-	unset DRAIN_MERGED_PRS
-	run bash -c "printf '%s' '[$(row CLOUD-179 2026-08-20T10:00:00.000Z feat/x '')]' | $stub/in-progress-drain.sh"
-	[ "$status" -eq 1 ]
-	[[ "$output" == *"CLOUD-179"* ]]
-}
-
-@test "a failed gather is could-not-look, never a short sweep" {
-	local stub="$BATS_TEST_TMPDIR/bin2"
-	mkdir -p "$stub"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/in-progress-drain.sh" "$stub/in-progress-drain.sh"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/landed-check.sh" "$stub/landed-check.sh"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/claimed-keys.sh" "$stub/claimed-keys.sh"
-	printf '#!/usr/bin/env bash\nexit 2\n' >"$stub/merged-pr-keys.sh"
-	chmod +x "$stub/merged-pr-keys.sh"
-	unset DRAIN_MERGED_PRS
-	run bash -c "printf '%s' '[$(row CLOUD-179 2026-08-20T10:00:00.000Z feat/x '')]' | $stub/in-progress-drain.sh"
-	[ "$status" -eq 2 ]
-	[[ "$output" == *"merged-pr-keys"* ]]
-}
+# THE TWO GATHER CASES ARE WITHDRAWN (CLOUD-1711), not silently dropped.
+#
+# Both stubbed `mise-tasks/merged-pr-keys.sh` beside the real gates and drove the
+# drain's no-`DRAIN_MERGED_PRS` path through it. That program is retired; the
+# drain reaches `batten claim merged`, and a stub for an engine leaf is a shim
+# for `batten` itself — which `shell edit refused` rightly will not admit into a
+# governed suite, because a shell helper that shadows the binary is behaviour,
+# not a fixture precondition.
+#
+# WHAT IS LOST AND WHERE IT IS COVERED. The leaf's own refusal on a truncated or
+# empty forge answer is `crates/batten/tests/it/claimed_keys.rs`. What no case
+# now covers is the drain's TRANSLATION of that refusal into its own exit 2, and
+# that is stated here rather than left for a reader to discover by its absence —
+# it belongs in the drain's own port, which is this campaign's next batch.

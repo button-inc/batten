@@ -22,17 +22,16 @@
 #                                   event already notifies (CLOUD-821: 490 such
 #                                   calls in one session, 2 changed a decision).
 #
-# THE BASH STILL RUNS, and that is the ratchet rather than an oversight.
-# `shell-retirement` admits DELETING a governed file and refuses SHRINKING one,
-# and `run-shape-guard.sh` keeps a fourth family (`cargo-substitutes-for-a-task`)
-# whose blocker is CLOUD-856. So the guard cannot lose these three until it can
-# lose all four, and both authorities decide them until it does. CLOUD-1108 owns
-# that gap; the predicates below are written from the bash's own decision table,
-# with ONE deliberate divergence — this reaches a sleep inside a loop body and
-# `resolve()` does not (CLOUD-1112) — which is in the DENYING direction, so no
-# call gets a weaker answer from the pair than it had from the guard alone. The
-# divergence stands; only its mechanism moved, from `keywords` stepping past a
-# `do` token to the body arriving as its own segment (CLOUD-1381).
+# THE BASH IS GONE AND THIS MODULE IS SOLE AUTHORITY. `mise-tasks/run-shape-guard.sh`
+# is retired, so the paragraph that used to stand here — both authorities decide
+# these families, with one deliberate divergence in the denying direction — is no
+# longer a description of the tree and has been removed rather than left reading
+# as live. What it recorded that still matters: the guard's `resolve()` never
+# reached a sleep inside a loop body (CLOUD-1112), so the whole family passed a
+# looped sleep for want of a resolvable sleep rather than for any reason about
+# waiting. Reaching the body was the precondition for CLOUD-1337 withdrawing the
+# condition exemption; the mechanism is now the body arriving as its own segment
+# (CLOUD-1381) rather than `keywords` stepping past a `do` token.
 #
 # TWO ERAS OF INPUT LIVE HERE, deliberately, and the newer one is the model.
 # `commit-names-no-message-source` landed before `hook::segments` was projected,
@@ -75,8 +74,13 @@ rules contains "background-redirect"
 # `sleep` or `git` token survives, because every ALLOW row already fails some
 # other conjunct. Each of these corrupts the conjunct that carries the verdict.
 #MUTANT redirect-binding-ignored|s@^	segment\["input-redirect"\] == false@	true@|a_redirect_bound_to_the_commits_own_element_is_a_message_source
-#MUTANT background-not-consulted|s@^	input.call\["run-in-background"\] != true@	true@|a_backgrounded_wait_on_a_condition_is_allowed
-#MUTANT loop-is-not-an-exemption|s@^	not waits_on_condition@	true@|a_bare_sleep_beside_a_condition_loop_is_exempt
+#MUTANT background-not-consulted|s@^	input.call\["run-in-background"\] != true@	true@|a_backgrounded_bare_sleep_raises_only_the_timer
+# The mutation restores the exemption this row removed: with the partition term
+# forced false, a backgrounded `sleep` loop carrying a condition falls through
+# `background-timer` exactly as it did before, and only a case asserting THAT
+# shape is refused can see it. Every process-polling row still denies under it,
+# via the sibling arm — which is what made the hole survive its own suite.
+#MUTANT condition-is-an-exemption|s@^	count(process_probes) == 0@	false@|a_backgrounded_conditioned_sleep_loop_is_refused
 
 # THE FOUR MUTATIONS, and the last three are the ones worth having: they corrupt
 # the SCRUBBING and the SPLITTING rather than the flag table, which is where a
@@ -147,23 +151,42 @@ violation contains {
 } if {
 	sleeps
 	input.call["run-in-background"] == true
-	not waits_on_condition
+	count(process_probes) == 0
 }
 
 # A backgrounded wait that polls the LOCAL PROCESS TABLE (CLOUD-1337).
 #
-# `waits_on_condition` above exempts a `sleep` loop from `background-timer` on
-# sound reasoning: a loop testing a condition exits on the condition rather than
-# on the clock. That holds for a condition NOTHING ELSE REPORTS — a CI run, a
-# remote queue, a file another machine writes. It does not hold for a local
-# process, because the harness already re-invokes the caller when a backgrounded
-# task exits. Polling one duplicates a notification that is guaranteed to fire.
+# THE CONDITION EXEMPTION IS GONE, AND THIS ARM IS WHAT SURVIVES IT.
 #
-# THE EXEMPTION ASKS WHETHER THERE IS A CONDITION, NEVER WHAT IT IS ABOUT, and
+# `waits_on_condition` used to exempt a `sleep` loop from `background-timer`, on
+# reasoning that reads well and does not hold: a loop testing a condition exits on
+# the condition rather than on the clock, so a condition NOTHING ELSE REPORTS — a
+# CI run, a remote queue, a file another machine writes — looked like a legitimate
+# wait. It is not, and AGENTS.md says why in the same breath it bans timers: **the
+# exit notification IS the wake-up**, a backgrounded task re-invokes its caller
+# when it exits, and the turn in between is the designed state rather than one to
+# fill. A hand-rolled poll over ANY condition duplicates a notification the
+# harness already guarantees; `ci-wait` and `main-watch` exist for the two
+# conditions that genuinely need a poll, and both are tasks that notify on exit.
+#
+# THE EXEMPTION ASKED WHETHER THERE WAS A CONDITION, NEVER WHAT IT WAS ABOUT, and
 # `until` was the escape. AGENTS.md has carried the rule since CLOUD-821, with the
 # measurement — "490 in one session, 2 changed a decision" — and the claim that
-# the shape is "refused by `run-shape-guard`". It was not. This arm is what makes
-# that sentence true rather than something to soften.
+# the shape is "refused by `run-shape-guard`". With the exemption in place that
+# sentence was false for every conditioned wait; `background-timer` now reaches
+# them and it is true.
+#
+# MEASURED 2026-09-09, this session: `until grep -q '#' <file> && ! pgrep -f
+# '<pat>'; do sleep 5; done` ran **3h34m**, spending a wake-up every five seconds
+# while its own output had been read in the first minute. It was denied in the
+# FOREGROUND and, once backgrounded, fell through every arm — the exemption held
+# because the loop had a condition. Found by a human reading `ps`, which is the
+# second time (CLOUD-1337 was the first).
+#
+# THIS ARM STAYS SEPARATE rather than collapsing into the wider one, because the
+# count it carries is the diagnostic: a compound polling two processes is two
+# duplications. The two arms PARTITION on `count(process_probes)`, so one call
+# yields one finding.
 #
 # MEASURED 2026-09-02: eleven of these ran on one container, the oldest 9h35m,
 # while exactly one real job existed.
@@ -183,7 +206,6 @@ violation contains {
 } if {
 	sleeps
 	input.call["run-in-background"] == true
-	waits_on_condition
 	count(process_probes) > 0
 }
 
@@ -270,38 +292,6 @@ output_redirect(word) if word in {">", ">>", "&>", "&>>", "2>", "2>>", "2>&1", "
 sleeps if {
 	some segment in input.call.segments
 	basename(segment.words[words_program_index(segment.words)]) == "sleep"
-}
-
-# OVER THE WHOLE CALL, never one segment, because a loop's keyword and its sleep
-# are in different segments.
-#
-# AND IT IS LOAD-BEARING HERE, which it is not in the bash. There the canonical
-# `until <test>; do sleep 1; done` was allowed because no sleep resolved at all,
-# so this conjunct decided nothing and read as coverage (CLOUD-1112). With the
-# loop body reached, this is the only thing standing between that command and a
-# refusal — which is what CLOUD-613's acceptance always claimed it was.
-#
-# `for` is NOT a wait. `for i in $(seq 60); do sleep 10; done` counts iterations
-# rather than testing a condition, so it exits on the clock like any timer; the
-# bash names it a deliberate non-catch "because narrowing that costs a real
-# parser", and it costs none now.
-# DECIDED FROM THE NODE, never from a keyword (CLOUD-1381).
-#
-# This read `word in {"until", "while"}` over a segment's words, and that only
-# ever worked because the character walk split on `;` and had no idea what a loop
-# was -- so `until` and `do` and `done` fell out as ordinary words. A real parse
-# has no such token: the keyword IS the node type. `input.call.segments[_]
-# .construct` carries it, `null` at the top level.
-#
-# Reading the node is also a tightening rather than a translation. `for` is
-# excluded because it is a DIFFERENT NODE, not because a list of words happens to
-# omit it -- `for i in $(seq 60); do sleep 10; done` counts iterations and exits
-# on the clock like any timer. And a `!` between the keyword and the test needed
-# filtering out by hand before; it is inside the condition now and never reaches
-# this predicate.
-waits_on_condition if {
-	some segment in input.call.segments
-	segment.construct.kind in {"until", "while"}
 }
 
 # Every reader of the LOCAL process table in this call.
@@ -533,17 +523,12 @@ wrappers := {"env", "command", "nice", "stdbuf", "timeout", "xargs", "sudo", "do
 # SHELL KEYWORDS THAT INTRODUCE A COMMAND, looked through for the same reason
 # every wrapper above is: what runs after them is the call being judged.
 #
-# `run-shape-guard.sh`'s `resolve()` has no such set, and CLOUD-1112 measured
+# The retired bash guard's `resolve()` had no such set, and CLOUD-1112 measured
 # what that costs: `do sleep 1` resolved to the program `do`, so a sleep in a
-# loop body was invisible — and `waits_on_condition` therefore exempted nothing,
-# because the canonical `until <test>; do sleep 1; done` was already allowed for
-# want of a resolvable sleep rather than for being a wait. The guard's own
-# comment claims the opposite ("the one carrying the sleep has no keyword in
-# it"), which only parses if that element IS reached.
-#
-# CLOUD-613's acceptance turns on that allow being LOAD-BEARING, so porting the
-# gap would have satisfied the clause vacuously. This is the narrower reading:
-# the engine resolves the loop body, and the exemption is what decides it.
+# loop body was invisible and the whole family passed a looped sleep for want of
+# a resolvable sleep rather than for any reason about waiting. That is why the
+# withdrawal of the condition exemption (CLOUD-1337) needed the look-through
+# first: without it there would be nothing for the arms below to refuse.
 #
 # **VESTIGIAL SINCE CLOUD-1381, and said so rather than left reading as live.**
 # The engine emits none of these as words any more: each is a NODE, and a
@@ -839,12 +824,15 @@ test_a_liveness_signal_is_the_same_question if {
 	v.verdict == "task watch duplicate"
 }
 
-# THE ANTI-VACUITY MIRROR, and without it every case above is satisfied by a rule
-# that refuses all waits. A condition the harness does NOT report stays allowed —
-# that is the whole narrowing, and `timer run refused`'s route still recommends
-# this shape for it.
-test_a_wait_on_a_condition_nobody_reports_is_clean if {
-	count(violation) == 0 with input as {"call": {
+# THE PARTITION'S OTHER SIDE, and it used to be this family's anti-vacuity
+# mirror: a condition the harness does not report — a remote readiness probe
+# rather than a local process — was the one wait left allowed. CLOUD-1337 removed
+# that allow, so what this case now pins is narrower and still worth pinning: the
+# two arms must not BOTH fire, and the one that answers a non-process condition
+# must be `background-timer` rather than `polls-a-local-process`. A rule that
+# refused every wait under one verdict would fail this.
+test_a_wait_on_a_condition_nobody_reports_is_a_timer_not_a_poll if {
+	count(violation) == 1 with input as {"call": {
 		"command": "until curl -sf https://example.test/ready; do sleep 5; done",
 		"run-in-background": true,
 		"segments": [
@@ -852,6 +840,15 @@ test_a_wait_on_a_condition_nobody_reports_is_clean if {
 			inner(["sleep", "5"], "until", "body", null),
 		],
 	}}
+	some v in violation with input as {"call": {
+		"command": "until curl -sf https://example.test/ready; do sleep 5; done",
+		"run-in-background": true,
+		"segments": [
+			inner(["curl", "-sf", "https://example.test/ready"], "until", "condition", ";"),
+			inner(["sleep", "5"], "until", "body", null),
+		],
+	}}
+	v.rule == "background-timer"
 }
 
 # A PROCESS READ WITH NO LOOP IS NOT A WAIT. `mise run alive` asks once and
@@ -865,8 +862,14 @@ test_a_process_read_outside_a_loop_is_not_a_wait if {
 	}}
 }
 
-test_a_backgrounded_wait_on_a_condition_is_allowed if {
-	count(violation) == 0 with input as {"call": {
+# THE WITHDRAWN EXEMPTION (CLOUD-1337). This case asserted `count(violation) ==
+# 0` for as long as the condition was an exemption. It is inverted rather than
+# deleted, because a deleted case documents nothing and this is the exact shape
+# the rule now exists to catch: the condition makes the loop exit on the thing
+# rather than on the clock, and does not make it stop being a hand-rolled copy of
+# a notification the runtime already delivers.
+test_a_backgrounded_wait_on_a_condition_is_refused if {
+	some v in violation with input as {"call": {
 		"command": "until [ -f /tmp/done ]; do sleep 1; done",
 		"run-in-background": true,
 		"segments": [
@@ -874,6 +877,7 @@ test_a_backgrounded_wait_on_a_condition_is_allowed if {
 			inner(["sleep", "1"], "until", "body", null),
 		],
 	}}
+	v.rule == "background-timer"
 }
 
 # A FOREGROUND loop spends the turn exactly as a foreground `sleep` does, and it
@@ -904,10 +908,13 @@ test_a_backgrounded_counting_loop_is_a_timer if {
 	v.rule == "background-timer"
 }
 
-# The exemption's other reachable shape: a bare sleep and a loop keyword in one
-# backgrounded call, where the sleep resolves without any look-through at all.
-test_a_bare_sleep_beside_a_condition_loop_is_exempt if {
-	count(violation) == 0 with input as {"call": {
+# THE EXEMPTION'S WORST REACHABLE SHAPE, and the case that says why asking
+# WHETHER there is a condition was never the right question (CLOUD-1337). The
+# `sleep 5` here waits on nothing at all — the loop beside it has an empty body —
+# so the old rule exempted a bare timer for the company it kept. Inverted rather
+# than deleted: this is the shape the withdrawal is FOR.
+test_a_bare_sleep_beside_a_condition_loop_is_refused if {
+	some v in violation with input as {"call": {
 		"command": "sleep 5; until [ -f /tmp/done ]; do :; done",
 		"run-in-background": true,
 		"segments": [
@@ -916,6 +923,7 @@ test_a_bare_sleep_beside_a_condition_loop_is_exempt if {
 			inner([":"], "until", "body", null),
 		],
 	}}
+	v.rule == "background-timer"
 }
 
 # THE DISCRIMINATING CASE for `run-in-background`: both rules deny, so only the

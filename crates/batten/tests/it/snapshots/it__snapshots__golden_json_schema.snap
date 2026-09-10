@@ -595,6 +595,74 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "claim keys",
+          "id": "claim.keys",
+          "about": "The issue keys this branch CLAIMS, as distinct from the ones it merely mentions",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "branch",
+              "short": null,
+              "long": "branch",
+              "takes_value": true,
+              "positional": false,
+              "help": "The head branch, standing in for source 2"
+            },
+            {
+              "name": "closing_only",
+              "short": null,
+              "long": "closing-only",
+              "takes_value": false,
+              "positional": false,
+              "help": "Answer from a closing keyword alone, never falling through to the branch or a trailer"
+            },
+            {
+              "name": "log",
+              "short": null,
+              "long": "log",
+              "takes_value": true,
+              "positional": false,
+              "help": "Commit messages, standing in for sources 1 and 3"
+            },
+            {
+              "name": "refs_first_only",
+              "short": null,
+              "long": "refs-first-only",
+              "takes_value": false,
+              "positional": false,
+              "help": "Answer from the first key of each `Refs:` trailer alone, never sources 1 or 2"
+            },
+            {
+              "name": "title",
+              "short": null,
+              "long": "title",
+              "takes_value": true,
+              "positional": false,
+              "help": "The pull request title, also source 2 — a body is not, because a body cites evidence"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "claim merged",
+          "id": "claim.merged",
+          "about": "The keys merged pull request bodies close, as `<key>\\t<number>` rows",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "limit",
+              "short": null,
+              "long": "limit",
+              "takes_value": true,
+              "positional": false,
+              "help": "The most pull requests to read before the answer is truncated (default 5000)"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "claim race",
           "id": "claim.race",
           "about": "Refuse a claim a different open pull request already carries, judged by head SHA",
@@ -2395,6 +2463,24 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "record fold",
+          "id": "record.fold",
+          "about": "Fold a journal family: `nothing`, its records, or `unreadable <path>`",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "family",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The store family to fold"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "record forge",
           "id": "record.forge",
           "about": "Record the forge's check verdicts for one commit, read as `<check> <conclusion>` lines on stdin",
@@ -2413,12 +2499,100 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "record journal",
+          "id": "record.journal",
+          "about": "Append one record to an append-and-fold store family, read from stdin",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "family",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The store family the record belongs to"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "record keyed",
+          "id": "record.keyed",
+          "about": "Put one value into a keyed store family, read from stdin",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "family",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The store family the record belongs to"
+            },
+            {
+              "name": "key",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The key the record is filed under"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "record named",
+          "id": "record.named",
+          "about": "Record one named family under this branch, read from stdin",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "family",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The record family, which is the key a module reads it under"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "record plan",
           "id": "record.plan",
           "about": "Record this branch's plan, read as `<id> <status>` lines on stdin",
           "effect": "write",
           "data_channel": false,
           "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "record show",
+          "id": "record.show",
+          "about": "Read one keyed record back: `hit` and the value, or `miss`",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "family",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The store family to read"
+            },
+            {
+              "name": "key",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The key to look under"
+            }
+          ],
           "subcommands": []
         },
         {
@@ -3028,6 +3202,14 @@ expression: stdout_of(&output)
       "path": "checks green"
     },
     {
+      "id": "claim.keys",
+      "path": "claim keys"
+    },
+    {
+      "id": "claim.merged",
+      "path": "claim merged"
+    },
+    {
       "id": "claim.race",
       "path": "claim race"
     },
@@ -3218,6 +3400,14 @@ expression: stdout_of(&output)
     {
       "id": "receipt.verified",
       "path": "receipt verified"
+    },
+    {
+      "id": "record.fold",
+      "path": "record fold"
+    },
+    {
+      "id": "record.show",
+      "path": "record show"
     },
     {
       "id": "show",

@@ -169,6 +169,21 @@ pub struct Answer {
     pub backoff: Option<u64>,
     /// The response body, as text.
     pub body: String,
+    /// Every header the response carried, keyed by LOWERCASE name.
+    ///
+    /// **The four typed fields above are readings this tier makes; this is the
+    /// rest of what it already read.** `fetch::Response` holds the whole block
+    /// and `canned` parses the whole block, so before this field the transport
+    /// was discarding headers it had in hand — which is why `gh-preflight` still
+    /// shelled out to `gh api -i` to read `X-Accepted-GitHub-Permissions` off a
+    /// 403. That is the second header parser this module's own header says the
+    /// typed boundary retired, standing again one endpoint over.
+    ///
+    /// Lowercase because `fetch::Response` lowercases every name it read, and
+    /// matching a mixed-case literal against that map finds nothing and reads as
+    /// *the header was absent* — the three-valued mistake CLOUD-390 records.
+    /// [`Answer::header`] folds the case so no caller has to remember.
+    pub headers: std::collections::BTreeMap<String, String>,
 }
 
 impl Answer {
@@ -218,6 +233,25 @@ impl Answer {
     #[must_use]
     pub const fn answered(&self) -> bool {
         self.status == 200 || self.status == 304
+    }
+
+    /// One header by name, case-insensitively, or `None` where it was absent.
+    ///
+    /// **Works on a REFUSAL as well as a reading, and that is the point rather
+    /// than a side effect.** The caller this exists for reads
+    /// `X-Accepted-GitHub-Permissions` off a `403` to name the claim a token is
+    /// missing — a status [`Answer::is_reading`] excludes and
+    /// [`Answer::answered`] excludes too. Gating header access on either would
+    /// leave exactly the case that needs it unable to ask.
+    ///
+    /// `None` is *the response did not carry this header*. It is not
+    /// could-not-look: an [`Answer`] exists only where the exchange completed,
+    /// and the could-not-look channel is [`get`] returning `None`.
+    #[must_use]
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .get(&name.to_ascii_lowercase())
+            .map(String::as_str)
     }
 }
 
@@ -341,8 +375,20 @@ fn canned(raw: &str, now: u64) -> Answer {
             (key.trim().eq_ignore_ascii_case(name)).then(|| value.trim().to_owned())
         })
     };
+    // THE WHOLE BLOCK, lowercased, so a fixture answers `header` exactly as a
+    // live exchange does. A fixture that carried fewer headers than the wire
+    // would make the one caller reading an arbitrary header untestable offline,
+    // which is the shape of a gate that is only exercised in production.
+    let headers = lines
+        .clone()
+        .filter_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            Some((key.trim().to_ascii_lowercase(), value.trim().to_owned()))
+        })
+        .collect();
     Answer {
         status,
+        headers,
         etag: header("etag"),
         poll_floor: header("x-poll-interval")
             .and_then(|raw| raw.trim().parse::<f64>().ok())
@@ -376,6 +422,13 @@ fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>) -> Option<Answe
     let response = answers.pop()?;
     Some(Answer {
         status: response.status,
+        // ALREADY LOWERCASE off `fetch::Response`; re-folding costs nothing and
+        // keeps this side's invariant stated where the map is built.
+        headers: response
+            .headers
+            .iter()
+            .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
+            .collect(),
         etag: response.header("etag").map(str::to_owned),
         // LOWERCASE, because `fetch::Response` lowercases every name it read.
         // Matching `X-Poll-Interval` here would find nothing and read as *the
@@ -474,6 +527,7 @@ mod tests {
     #[test]
     fn only_a_two_hundred_carries_a_reading() {
         let with = |status: u16| Answer {
+            headers: std::collections::BTreeMap::new(),
             status,
             etag: None,
             poll_floor: None,
@@ -561,6 +615,7 @@ mod tests {
     #[test]
     fn no_value_this_module_returns_can_carry_the_credential() {
         let answer = Answer {
+            headers: std::collections::BTreeMap::new(),
             status: 200,
             etag: Some(String::from("W/\"a\"")),
             poll_floor: Some(2.5),
