@@ -168,6 +168,23 @@ pub struct Bet {
     /// it, and reading it as "no more bets at all" would give up speculating for
     /// the rest of the landing over one bad candidate.
     pub conflicts: Option<String>,
+    /// This landing has already declined to publish a speculation (CLOUD-1681).
+    ///
+    /// **THE TERMINATION HALF, and without it the precheck is a spin.** The
+    /// `Push` row's precheck unwinds a live bet and laps; nothing in the lap
+    /// otherwise remembers that, so `place_the_bet` would bet on the same holder
+    /// at the top of the next lap, reach the same precheck, and unwind again —
+    /// bounded by the lap budget rather than by the one extra local verify the
+    /// design promises.
+    ///
+    /// A `bool` rather than a base, unlike [`Bet::conflicts`]: that
+    /// records a judgement about a COMMIT and stays true of it afterwards. This records a decision about THIS LANDING — we got as far
+    /// as the push with a bet outstanding, so speculating again buys nothing
+    /// before this branch lands. Naming a base would invite re-betting on the
+    /// next holder and paying the same unwind a second time.
+    ///
+    /// Survives [`Bet::forget`], because `forget` is what the unwind calls.
+    pub declined: bool,
 }
 
 impl Bet {
@@ -521,6 +538,7 @@ mod tests {
             recovered: true,
             pushed: true,
             conflicts: Some(String::from("feedface")),
+            declined: true,
         };
         bet.forget();
         assert!(bet.is_forgotten(), "a settled bet carried state forward");

@@ -8025,6 +8025,14 @@ fn place_the_bet(
     // second guard's own comment reasons that "`run_land_replay` immediately
     // fetches a fresh trunk", which it does — one step AFTER this runs.
     advance_trunk(root, reference);
+    // THIS LANDING ALREADY DECLINED TO PUBLISH ONE (CLOUD-1681). The `Push`
+    // precheck unwound a bet that reached the publish, so betting again buys
+    // nothing before this branch lands and costs another unwind at the same row.
+    // Checked FIRST, because it is a fact about us rather than about the holder
+    // and no reading below can change it.
+    if bet.declined {
+        return Ok(());
+    }
     let tracking = land::tracking_ref(reference);
     // THE HOLDER ALREADY LANDED. Their head is on the trunk, so an ordinary replay
     // reaches it and a bet would borrow a range that is not borrowed.
@@ -10028,6 +10036,34 @@ fn asks_before_the_step(
                 "::error:: land: the lease is no longer held by this clone; not fast-forwarding {branch}"
             )?;
             Ok(Answered::Stop(exit::ExitCode::Violation))
+        }
+        // A LIVE BET NEVER REACHES THE PUBLISH (CLOUD-1681).
+        //
+        // The unwind is done HERE rather than left to the lap's compensations,
+        // and that is the arm's correctness rather than its convenience: no
+        // `Compensation` drops a bet — `Nothing`, `Redraft`, `Abandon`,
+        // `ReleaseLease` — so answering `Lap` alone would carry the borrowed
+        // range straight into the next lap and back to this row.
+        //
+        // `unwind_the_bet` is the same drop `Settle::Lost` already takes, so
+        // this is a second caller for an existing arm rather than new machinery.
+        Some(pipeline::Precheck::BetLive) if bet.live() => {
+            writeln!(
+                out,
+                "land: a speculation is still outstanding, so this head is not publishable — unwinding and lapping onto real trunk"
+            )?;
+            if let Some(code) = unwind_the_bet(root, url, branch, bet, reference, out, err)? {
+                // The unwind itself refused — a tree it could not rewind is the
+                // one thing that stops rather than laps, because carrying on
+                // would push another branch's commits under this one.
+                return Ok(Answered::Stop(code));
+            }
+            // AND WE DO NOT BET AGAIN THIS LANDING, which is what makes the lap
+            // terminate. `place_the_bet`'s own guards are about the HOLDER, so
+            // without this the next lap re-bets the same one, arrives back here,
+            // and unwinds again until the lap budget is spent.
+            bet.declined = true;
+            Ok(Answered::Lap)
         }
         _ => Ok(Answered::Go),
     }

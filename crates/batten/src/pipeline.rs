@@ -51,6 +51,11 @@
 //! That is raise-only in the same spirit as the deny-only Rego surface: a
 //! consumer may compose any pipeline, but not one that leaks spend.
 
+// CLOUD-1681: dropping the `Push` row's precheck restores the path from a
+// pending bet to a publish, which is the state measured twice.
+//MUTANT-SUITE crates/batten/tests/it/land_speculation.rs
+//MUTANT live-bet-reaches-the-push|s@                    precheck: Some(Precheck::BetLive),@                    precheck: None,@|a_live_bet_is_refused_by_the_row_that_would_publish_it
+
 use crate::land::Step;
 
 /// A step's declared undo, run when a lap leaves without landing.
@@ -243,6 +248,44 @@ pub enum Precheck {
     /// that reads as a narrowing: the next reader should find the gap written
     /// down rather than infer its absence.
     LeaseHeld,
+    /// Is a speculation still outstanding on the head we are about to publish?
+    ///
+    /// **THE INVARIANT THIS FILE ALREADY QUOTES AND DID NOT HOLD** (CLOUD-1681).
+    /// `mise-tasks/land.sh`, verbatim above: *"there is no path from a losing bet
+    /// to a push, which is what makes speculating safe rather than merely fast."*
+    /// [`Settle::Lost`] has no such path — [`Self::BetSettled`] unwinds it at the
+    /// top of the lap. [`Settle::Pending`] does, because that precheck
+    /// deliberately KEEPS a pending bet, and this row carried no precheck at all.
+    ///
+    /// # A PENDING BET IS EXACTLY AS UNPUBLISHABLE AS A LOST ONE
+    ///
+    /// A bet names the holder's SHAS, and the holder lands by rebase — which
+    /// mints new ones for the same patches. So a published pending head does not
+    /// merely risk going stale: the moment the holder lands it is DIVERGENT, and
+    /// the fast-forward is impossible by construction rather than by race. The
+    /// bet is unwinnable at the instant it is placed, so publishing it guarantees
+    /// a wasted matrix rather than risking one.
+    ///
+    /// Measured twice — four commits of another branch published under this one
+    /// on 2026-09-08, eight on 2026-09-10, the second costing a full matrix on a
+    /// head that could not merge when it was graded.
+    ///
+    /// **It answers `Lap`, never `Stop`, and that is the design.** `Stop` strands
+    /// the waiter behind CLOUD-1306's poisoned base indefinitely, trading a
+    /// wasted matrix for an unbounded stall. `Lap` drops the borrowed range and
+    /// re-enters: replay onto real trunk, verify the UNSPECULATED tree, publish
+    /// this branch's own commits alone — one extra local verify and zero CI.
+    ///
+    /// **Speculation keeps its whole value.** A holder that lands during `verify`
+    /// settles [`Settle::Landed`], the bet is forgotten, nothing unwinds, and the
+    /// lap publishes the pre-linearized head exactly as before. This fires only
+    /// where the bet failed to pay off — precisely where carrying the borrowed
+    /// range is worthless AND harmful.
+    ///
+    /// [`Settle::Lost`]: crate::speculation::Settle::Lost
+    /// [`Settle::Pending`]: crate::speculation::Settle::Pending
+    /// [`Settle::Landed`]: crate::speculation::Settle::Landed
+    BetLive,
 }
 
 /// A declared landing pipeline.
@@ -450,7 +493,11 @@ impl Default for Pipeline {
                     step: Step::Push,
                     effectful: true,
                     compensate: Compensation::ReleaseLease,
-                    precheck: None,
+                    // THE ROW THAT PUBLISHES IS THE ROW THAT ASKS (CLOUD-1681).
+                    // `Replay` asks whether the bet is worth KEEPING; this asks
+                    // whether it is fit to PUBLISH, and the two answers differ
+                    // for a pending bet — which is the whole gap.
+                    precheck: Some(Precheck::BetLive),
                 },
                 StepRow {
                     step: Step::Ready,
@@ -527,6 +574,46 @@ mod tests {
         assert!(
             !entered(Step::Verify, true),
             "a step that is not effectful never owes an undo, however it ended"
+        );
+    }
+
+    /// **THE PUBLISHING ROW ASKS BEFORE IT PUBLISHES** (CLOUD-1681).
+    ///
+    /// `mise-tasks/land.sh`'s invariant, quoted in this file's own header, is
+    /// *"there is no path from a losing bet to a push"* — and for the whole of
+    /// this table's life the `Push` row carried `precheck: None` while `Replay`,
+    /// `Ready` and the commit point each carried one. A pending bet reached the
+    /// publish, twice measured.
+    ///
+    /// **The mirror is the half that discriminates.** Asserting only that `Push`
+    /// has a precheck passes over a table where every row has one, which would be
+    /// its own defect — `Verify` spends the gate and must not be gated on the bet,
+    /// or a speculating lap could never verify the tree it speculated.
+    #[test]
+    fn the_push_row_asks_about_the_bet_and_the_verify_row_does_not() {
+        let shipped = Pipeline::default();
+        let precheck = |step: Step| {
+            shipped
+                .steps
+                .iter()
+                .find(|row| row.step == step)
+                .and_then(|row| row.precheck)
+        };
+
+        assert_eq!(
+            precheck(Step::Push),
+            Some(Precheck::BetLive),
+            "the row that publishes must ask whether the head is publishable"
+        );
+        assert_eq!(
+            precheck(Step::Verify),
+            None,
+            "gating the gate on the bet would stop a speculating lap verifying at all"
+        );
+        assert_eq!(
+            precheck(Step::Replay),
+            Some(Precheck::BetSettled),
+            "and the settle stays where it was — the two ask different questions"
         );
     }
 
