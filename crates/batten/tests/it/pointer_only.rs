@@ -1511,6 +1511,18 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-1718's fold, and the EASIEST row in this census to justify: the verb
+    // emits nothing at all. Its whole answer is the exit code, so there is no
+    // content it could republish and no subject it could echo — two integers on
+    // argv go in and one of §7's four codes comes out. `PointerOnly` is the
+    // honest disposition rather than a vacuous one, because the emitter is still
+    // exercised: the census drives it and asserts the channels stay empty.
+    Verb {
+        path: "verdict",
+        args: &["--findings", "0", "--unjudgeable", "0"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The one verb whose subject is a file OUTSIDE the repository (CLOUD-893),
     // which makes rule 4 tighter here rather than looser: what it removes is a
     // command line off somebody's home directory, so every byte it reports is a
