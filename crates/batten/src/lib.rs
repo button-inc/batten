@@ -3013,6 +3013,9 @@ fn parse_run(line: &str) -> Option<checks_green::Run> {
         name: name.to_string(),
         started_at: fields.next().unwrap_or_default().to_string(),
         id: fields.next().unwrap_or_default().parse().unwrap_or(0),
+        // SIXTH AND LAST, so a five-field reading from before the column existed
+        // carries none and orders on `started_at` exactly as it did (CLOUD-1662).
+        completed_at: fields.next().unwrap_or_default().to_string(),
     })
 }
 

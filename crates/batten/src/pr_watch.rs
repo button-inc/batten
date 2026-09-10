@@ -162,6 +162,9 @@ pub fn runs_from_body(body: &str) -> Vec<Run> {
                     .to_owned(),
                 name: name.to_owned(),
                 started_at: string_at(row, "started_at"),
+                // Already on this projection, which is what makes the ordering
+                // CLOUD-1662 asked for cost no second read per poll.
+                completed_at: string_at(row, "completed_at"),
                 id: row
                     .get("id")
                     .and_then(serde_json::Value::as_u64)
