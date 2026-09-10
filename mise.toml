@@ -4410,7 +4410,15 @@ for sha in $(git rev-list --no-merges "${BASE_SHA:?}..${HEAD_SHA:?}"); do
   # nothing and every commit read as claiming no issue — including ones carrying
   # a `Refs:` trailer, which is the tell: a missing program's empty output is
   # byte-identical to a message that names no row.
-  if [ -z "$(batten claim keys --branch "" --title "" --log "$(git show -s --format='%B' "$sha")" </dev/null 2>/dev/null)" ]; then
+  #
+  # `cargo run`, NEVER A BARE `batten`, and the first repair got this wrong in a
+  # way only CI could show: a bare name resolves wherever the binary happens to be
+  # installed, so the gate passed locally and failed on the runner — accusing four
+  # commits that carry `Refs: CLOUD-1688`. That is the SAME false negative one
+  # environment over, which is why the form matters rather than being a style
+  # choice: 52 other call sites in this file spell it this way and none of them
+  # depends on what is on PATH.
+  if [ -z "$(cargo run --quiet -p batten -- claim keys --branch "" --title "" --log "$(git show -s --format='%B' "$sha")" </dev/null 2>/dev/null)" ]; then
     echo "::error::Commit ${sha:0:8} claims no CLOUD-<n> issue: '$subject' — add a 'Refs: CLOUD-<n>' trailer naming the work it serves"
     fail=1
   fi
