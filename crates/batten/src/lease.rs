@@ -1246,6 +1246,19 @@ impl Body {
 /// A body with no `expires:` line yields `None` for the same reason rather than
 /// defaulting here — the default belongs to the caller that knows its own TTL, and
 /// a parser inventing one would report a lease it could not read as one it could.
+///
+/// **A present-but-empty `schema:` is not an absent one.** The empty-value block
+/// below carries an arm for it so it takes the same refusal an unparseable major
+/// takes; without that arm it falls to `_ => {}`, `schema` stays `None`, and the
+/// reading turns `None` into [`BODY_SCHEMA`] — a body whose writer disagrees with
+/// us about what the field IS, parsed loosely and acted on, which is the exact
+/// failure the major was added to stop (CLOUD-1792).
+// The arm, reverted. The old spelling stayed green under the suite that already
+// existed because `schema: tomorrow` contains `": "` and reaches the match arm —
+// two spellings of one case taking different branches, and the test picked the
+// branch that already worked.
+//MUTANT-SUITE crates/batten/src/lease.rs
+//MUTANT empty-schema-reads-as-oldest|s@                    "schema" => {}@                    "schema" => {}@|a_body_carrying_an_empty_major_is_refused
 #[must_use]
 pub fn parse_body(object: &[u8]) -> Option<Body> {
     let text = String::from_utf8_lossy(object);
@@ -1273,6 +1286,13 @@ pub fn parse_body(object: &[u8]) -> Option<Body> {
                     "next" => body.next.clear(),
                     "stand-down" => body.stand_down.clear(),
                     "progress" => body.progress.clear(),
+                    // `schema:` with nothing after it is NOT the absent field.
+                    // Absence means "written before the field existed", and reads
+                    // as major 1; a field that is present and says nothing was
+                    // written by something that disagrees with us about what the
+                    // field IS, which is the whole reason the major exists. Route
+                    // it to the same refusal an unparseable value takes.
+                    "schema" => schema = Some(None),
                     _ => {}
                 }
             }
@@ -4697,6 +4717,60 @@ mod tests {
         )
         .expect("mint");
         assert_eq!(parse_body(&object.body), None);
+    }
+
+    /// THE CASE. A `schema:` carrying nothing is refused, not read as the oldest.
+    ///
+    /// This spelling has no `": "` to split on, so it never reaches the arm
+    /// `an_unreadable_major_is_refused_rather_than_treated_as_the_oldest`
+    /// exercises. Before the empty-value arm existed it fell to `_ => {}`, left
+    /// `schema` at `None`, and was read as major 1 — the loose parse the field
+    /// exists to refuse, reached by a second spelling of the same case.
+    #[test]
+    fn a_body_carrying_an_empty_major_is_refused() {
+        let object = lease_object(
+            "land-lock\nschema:\nholder: a\nexpires: 1700000060\nnonce: bb\n",
+            1_700_000_000,
+        )
+        .expect("mint");
+        assert_eq!(
+            parse_body(&object.body),
+            None,
+            "a present-but-empty version field is a writer disagreeing about the \
+             field, not a body written before it existed"
+        );
+    }
+
+    /// The compatibility hinge, unbroken: NO `schema:` line still reads as 1.
+    ///
+    /// The anti-vacuity twin. Without it the case above is satisfied by refusing
+    /// every body, which would stop the whole fleet the moment this build met a
+    /// lease minted before the field was added.
+    #[test]
+    fn a_body_with_no_major_at_all_still_reads_as_the_oldest() {
+        let object = lease_object(
+            "land-lock\nholder: a\nexpires: 1700000060\nnonce: bb\n",
+            1_700_000_000,
+        )
+        .expect("mint");
+        let body = parse_body(&object.body).expect("an older body is still readable");
+        assert_eq!(body.schema, BODY_SCHEMA);
+    }
+
+    /// And a body that states a major this build speaks is still acted on.
+    ///
+    /// The second twin: refusal must be keyed to the emptiness, not to the field
+    /// being present.
+    #[test]
+    fn a_body_stating_a_major_we_speak_still_parses() {
+        let object = lease_object(
+            "land-lock\nschema: 1\nholder: a\nexpires: 1700000060\nnonce: bb\n",
+            1_700_000_000,
+        )
+        .expect("mint");
+        let body = parse_body(&object.body).expect("a body this build speaks is readable");
+        assert_eq!(body.schema, BODY_SCHEMA);
+        assert_eq!(body.holder, "a");
     }
 
     /// Every mint stamps THIS build, and never inherits a predecessor's.
