@@ -1307,14 +1307,56 @@ pub fn authorises(observed: Option<&Observed>, want: &str, now: i64) -> Authorit
 
 /// Where the lease lives, and the bounds the design was pressure-tested into.
 ///
-/// **`refs/heads`, and it is an environment limitation rather than a preference.**
-/// A custom namespace is the better home — invisible to a remote branch listing,
-/// untouched by a push of every ref, absent from base pickers, and the CAS behaves
-/// identically there — but this sandbox proxies git and its write policy refuses
-/// any push outside `refs/heads`. GitHub also does not enforce the fast-forward
-/// rule off `refs/heads`: a parentless orphan was ACCEPTED on a custom namespace,
-/// which is the whole safety property gone. Moving is a one-line change the day
-/// the proxy allows it.
+/// **`refs/heads`, and the reason is the forge's fast-forward rule — NOT a
+/// namespace restriction.** This paragraph used to claim both, and the first half
+/// was wrong for two years.
+///
+/// # The namespace claim was a misdiagnosed credential failure (CLOUD-416)
+///
+/// It asserted that this sandbox's git proxy permits writes under `refs/heads`
+/// and rejects every other namespace. **Deliberately paraphrased rather than
+/// quoted**: a refuted sentence left sitting here verbatim is one a future reader
+/// lifts out of its correction, which is how it survived this long.
+///
+/// Measured 2026-09-11 as a controlled pair — same object, same ref, same push,
+/// one variable:
+///
+/// ```text
+/// fenced, PAT via credential helper:  push → refs/sessions/<sha>   exit 0
+/// unfenced, ambient injected token:   push → refs/sessions/<sha>   HTTP 403
+/// ```
+///
+/// `refs/batten-probe/<nonce>` behaved identically. So the 403 is the injected
+/// credential being unscoped for the write, and the namespace never came into it
+/// — the symptom `mem:github-access` measures and this comment attributed to a
+/// proxy write policy. CLOUD-416 records the lease being implemented four times,
+/// "two of those passes existed only because the environment lied and nothing said
+/// so"; this is the sentence that carried the lie forward.
+///
+/// **A custom namespace is therefore available**, which unblocks the per-agent
+/// refs and `refs/sessions/<sha>` transcripts rather than this one struct.
+///
+/// # The fast-forward claim is the one that survived, and it is the real reason
+///
+/// The same run confirmed the other half: a **parentless orphan was ACCEPTED** on
+/// `refs/sessions/`, so the forge does not enforce the fast-forward rule off
+/// `refs/heads`. That is what keeps the lease here.
+///
+/// Read precisely, because the old text conflated two mechanisms. It is not what
+/// makes the CAS work — `--force-with-lease` sends the expected old value and the
+/// forge swaps atomically, in any namespace, and a lease RENEWAL is a non-fast-
+/// forward update by design. What the rule protects is everything else that reads
+/// this ref as a branch-shaped thing, and the blast radius of a bug that writes a
+/// wrong object here.
+///
+/// **And off `refs/heads` that same missing rule is a FEATURE, not a loss.** An
+/// append-only log branch wants fast-forward enforcement and belongs here too; a
+/// content-addressed transcript wants exactly the parentless orphan the rule would
+/// refuse, and is structurally inert precisely because it can never become an
+/// ancestor of trunk. One property, opposite signs, decided per structure — which
+/// is why the old text's sweeping conclusion — that losing the rule forfeits the
+/// safety property outright — was wrong to draw once about the lease and then
+/// reuse everywhere.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Terms {
     /// The remote the lease lives on, as a URL the transport can reach.

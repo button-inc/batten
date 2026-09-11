@@ -165,6 +165,7 @@ mod landed_check;
 mod landing_roster;
 mod lease_health;
 mod lease_lifecycle;
+mod lease_namespace_premise;
 mod lease_precondition;
 mod lease_record;
 mod locator_index;
