@@ -223,6 +223,7 @@ mod reference_coverage;
 mod refusal_ceiling;
 mod refusal_render_bench;
 mod release_provision_parity;
+mod release_token_precedence;
 mod remedy_authorship;
 mod repaired_arms;
 mod repetition;

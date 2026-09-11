@@ -659,12 +659,23 @@ GH_TOKEN = "{{ get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default=get_env(name
 # tools and 401'd on the four that needed a release listing, with the fix for
 # exactly that failure sitting two lines above, applied to the wrong name.
 #
-# THE AMBIENT VALUE IS STILL THE FALLBACK, because in CI it is the job token and
-# is the only credential there — but a `proxy-` value is dropped rather than
-# forwarded. That is the whole discrimination: a placeholder is not a weaker
-# token, it is a string that authenticates as nobody, and sending it is strictly
-# worse than sending nothing (60 requests/hour unauthenticated beats a 401).
-GITHUB_TOKEN = "{% set ours = get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default=get_env(name='BATTEN_GITHUB_TOKEN', default=get_env(name='MISE_GITHUB_TOKEN', default=''))) %}{% set ambient = get_env(name='GITHUB_TOKEN', default='') %}{% if ours %}{{ ours }}{% elif ambient | truncate(length=6, end='') != 'proxy-' %}{{ ambient }}{% endif %}"
+# AN EXPLICIT AMBIENT VALUE OUTRANKS THE INTERNAL CHAIN, and the reverse
+# precedence is what broke the release (CLOUD-1789). `MISE_GITHUB_TOKEN` is the
+# last leg of `ours`, and in CI the mise setup action SETS it — to the default job
+# token, not to whatever credential the job chose. So an `ours`-first rule reads
+# mise-action's own token and overwrites the `GITHUB_TOKEN` the job deliberately
+# exported, which for `release-plz.yml` is `RELEASE_PLZ_TOKEN`. Measured: tags
+# v0.0.159 and v0.0.160 were authored by `github-actions[bot]` rather than the
+# PAT, and a release published by the job token fires no `release` event, so
+# `release-artifacts.yml` never ran and both releases went out incomplete.
+#
+# The placeholder discrimination is unchanged and is the only reason ambient is
+# not simply taken: a `proxy-` value is a string that authenticates as nobody,
+# and sending it is strictly worse than sending nothing (60 requests/hour
+# unauthenticated beats a 401). So ambient wins WHEN IT IS REAL, and `ours` is
+# the fallback for the sandbox, where ambient is the placeholder and the PAT
+# variables carry the only usable credential.
+GITHUB_TOKEN = "{% set ours = get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default=get_env(name='BATTEN_GITHUB_TOKEN', default=get_env(name='MISE_GITHUB_TOKEN', default=''))) %}{% set ambient = get_env(name='GITHUB_TOKEN', default='') %}{% if ambient and ambient | truncate(length=6, end='') != 'proxy-' %}{{ ambient }}{% elif ours %}{{ ours }}{% endif %}"
 NO_PROXY = "{% set cur = get_env(name='NO_PROXY', default='') %}{% if 'api.github.com' in cur %}{{ cur }}{% else %}api.github.com,objects.githubusercontent.com,codeload.github.com,uploads.github.com{% if cur %},{{ cur }}{% endif %}{% endif %}"
 no_proxy = "{% set cur = get_env(name='no_proxy', default=get_env(name='NO_PROXY', default='')) %}{% if 'api.github.com' in cur %}{{ cur }}{% else %}api.github.com,objects.githubusercontent.com,codeload.github.com,uploads.github.com{% if cur %},{{ cur }}{% endif %}{% endif %}"
 
