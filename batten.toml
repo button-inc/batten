@@ -6819,6 +6819,22 @@ documents = ["bench/agentic/trials.toml", "bench/agentic/method.toml"]
 module = "policy/agentic-experiment-record.rego"
 severity = "deny"
 
+# CLOUD-1777. A gate must not share a trigger with the failure it watches. The
+# module's header carries the measurement and why `release` is disqualified by
+# construction; it is not restated here.
+#
+# `sources` RATHER THAN A PATH LITERAL IN THE MODULE, and the glob is the point:
+# the predicate finds its subject by what a workflow RUNS, so the arm follows the
+# release-asset check if the file is renamed or the step moves. A row naming one
+# path would go vacuous on exactly that move — green, and deciding nothing.
+[[rule]]
+id = "release watch late"
+kind = "policy"
+scope = "tree"
+sources = [".github/workflows/*.yml"]
+module = "policy/release-trigger-independent.rego"
+severity = "deny"
+
 [[rule]]
 id = "tag mint wrong"
 kind = "policy"
@@ -11594,6 +11610,32 @@ is right — this class is about deciding the pairing at authoring time instead.
 id = "config read first"
 kind = "document"
 target = "batten.toml"
+
+[[verdict]]
+id = "release watch late"
+gloss = "the release gate is reachable only through the event that silences it, or a clock slower than the releases"
+class = """
+A gate must not share a trigger with the failure it watches. The release-asset \
+check exists because six consecutive releases shipped no binaries and nothing \
+said so: a `release`-triggered run reaches no PR and no gate, so a workflow \
+failing on 100% of its invocations was indistinguishable from one that had never \
+fired. Moving it to a clock fixed the silence and left the period, which \
+reintroduces the same blindness as latency. Measured: a weekly sample against a \
+cadence of roughly four releases a day inspects about one release in thirty, and \
+only whichever is latest when the clock happens to run — two consecutive releases \
+shipped one asset of eighteen and neither would have been reported before the \
+next superseded it. `release` is disqualified by construction rather than by \
+preference: it is the event the platform's own recursion guard swallows when a \
+release is created with the default token, which is the exact case that produced \
+both instances. What passes is a trigger reached from a channel that guard does \
+not touch — a trunk push, or the completion of the workflow that does the \
+releasing, which is itself reached by one.
+"""
+
+[[verdict.route]]
+id = "workflow read first"
+kind = "document"
+target = ".github/workflows/release-assets.yml"
 
 [[verdict]]
 id = "workflow read unread"
