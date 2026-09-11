@@ -2309,6 +2309,67 @@ pub fn notice(body: &Body, from: &str) -> Body {
     }
 }
 
+/// Should `ours` ask a holder writing `theirs` to stand down?
+///
+/// The predicate behind the only sender of [`notice`] (CLOUD-1798). Strictly
+/// newer, and **every uncertain reading answers `false`**:
+///
+/// - **An equal build is not out-ranked.** Two clones on the same version asking
+///   each other to stand down is a request loop with no newer party to win it.
+/// - **An unreadable version on either side is not evidence of anything.** A
+///   body minted by a build whose version this one cannot parse might be newer;
+///   reading it as older would let an old clone evict the whole fleet, which is
+///   the inversion [`Body::writer`]'s own doc refuses when it says the field
+///   decides nothing on its own.
+///
+/// A pre-release or build suffix is cut before the comparison rather than
+/// ordered, because the question here is "is the holder behind us" and no
+/// decision in this repository turns on `-rc.1` ordering. Saying so is cheaper
+/// than implementing an ordering nothing asks for.
+#[must_use]
+pub fn outranks(ours: &str, theirs: &str) -> bool {
+    fn triple(version: &str) -> Option<(u64, u64, u64)> {
+        let core = version.trim().split(['-', '+']).next().unwrap_or_default();
+        let mut parts = core.split('.');
+        let mut next = || parts.next()?.parse::<u64>().ok();
+        let (major, minor, patch) = (next()?, next()?, next()?);
+        // A FOURTH SEGMENT IS NOT A VERSION THIS UNDERSTANDS. Reading `1.2.3.4`
+        // as `1.2.3` would rank two distinct builds equal.
+        parts.next().is_none().then_some((major, minor, patch))
+    }
+    match (triple(ours), triple(theirs)) {
+        (Some(ours), Some(theirs)) => ours > theirs,
+        _ => false,
+    }
+}
+
+/// Is it worth `asker` leaving a stand-down request on this body?
+///
+/// The three guards of the notice sender as one pure predicate, so the decision
+/// is testable without a ref, a CAS or a wire (CLOUD-1798). Each clause is a
+/// distinct way to get this wrong:
+///
+/// 1. **Strictly newer** — [`outranks`], which refuses an equal build and every
+///    unreadable one.
+/// 2. **Not already asked** — idempotence. Without it every lap of every waiter
+///    rewrites the ref and the holder's own heartbeat CAS fails against a stream
+///    of cosmetic updates, evicting by contention rather than by asking.
+/// 3. **Never self-addressed** — the mirror of
+///    [`stand_down_requested`]'s own guard, one step earlier: that one stops a
+///    holder honouring a notice it minted onto itself, this one stops it being
+///    written.
+///
+/// A released or expired body is not excluded here and does not need to be: the
+/// caller only reaches this on `Turn::Wait`, which those states never produce.
+//MUTANT-SUITE crates/batten/tests/it/lease_lifecycle.rs
+//MUTANT notice-ignores-the-writer|s@    outranks(\&writer_version(), \&body.writer)@    true@|a_waiter_asks_only_a_strictly_older_holder_to_stand_down
+#[must_use]
+pub fn worth_asking(body: &Body, asker: &str) -> bool {
+    outranks(&writer_version(), &body.writer)
+        && body.stand_down.trim().is_empty()
+        && body.holder != asker
+}
+
 /// Has a peer asked this holder to stand down?
 ///
 /// A pure reading over a body already in hand, so the beat pays no extra fetch

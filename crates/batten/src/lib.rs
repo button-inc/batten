@@ -10872,6 +10872,19 @@ fn run_lease_acquire(
             match &observed {
                 lease::Observed::Held { body, .. } => {
                     writeln!(out, "lease: held by {}", body.holder)?;
+                    // THE ONLY SENDER OF A STAND-DOWN NOTICE (CLOUD-1798). The
+                    // receiving half — `stand_down_requested`, `Beat::StandDown`,
+                    // `honour_the_notice` — landed wired and this arm is what was
+                    // missing, so `stand_down` was empty on every lease in the
+                    // fleet.
+                    //
+                    // IT DOES NOT CHANGE THE WAIT. The waiter still answers
+                    // `Violation`, still does not take the lease and still does
+                    // not retry: asking is a REQUEST the holder may decline,
+                    // which is what makes it the eviction path that is safe
+                    // under a false suspicion. `turn`'s steal arms are the
+                    // unsafe ones and they are unchanged.
+                    ask_the_holder_to_stand_down(terms, &observed, body, &holder, now, out, err)?;
                     Ok(ExitCode::Violation)
                 }
                 // **A REF THAT IS NOT A LEASE IS A WAIT, NOT AN INTERNAL ERROR**
@@ -10939,6 +10952,55 @@ fn run_lease_acquire(
             }
         }
     }
+}
+
+/// Leave a stand-down request on a holder this clone out-ranks, if it should.
+///
+/// **Three guards, and each is a way to get this wrong:**
+///
+/// - **Strictly newer only** ([`lease::outranks`]). A waiter asking an equal or
+///   NEWER holder to stand down inverts the design and would let an old clone
+///   evict the fleet.
+/// - **Idempotent.** A body already carrying a request is left alone. Without
+///   this, every lap of every waiter rewrites the ref, and the holder's own
+///   heartbeat CAS fails against a stream of cosmetic updates — a request that
+///   bullies the holder off the lease by contention rather than by asking.
+/// - **Never self-addressed.** Guarded here as well as in
+///   [`lease::stand_down_requested`], because the reader's guard protects the
+///   holder from a notice it minted onto itself and this one stops it being
+///   written at all.
+///
+/// # Why a lost CAS is silent
+///
+/// Somebody else moved the ref — the holder beat, released, or another waiter
+/// asked first. All three make the request moot or already-made, and none is
+/// this clone's problem. Retrying would be the tight spin `run_lease_acquire`'s
+/// own CAS arm refuses for the same reason.
+fn ask_the_holder_to_stand_down(
+    terms: &lease::Terms,
+    observed: &lease::Observed,
+    body: &lease::Body,
+    holder: &str,
+    now: i64,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<()> {
+    if !lease::worth_asking(body, holder) {
+        return Ok(());
+    }
+    match lease::cas(terms, observed, &lease::notice(body, holder), now) {
+        // Pointer-only: who was asked and which build, never the body.
+        Ok(lease::Outcome::Applied) => writeln!(
+            out,
+            "lease: asked {} to stand down — it writes {} and this clone writes {}",
+            body.holder,
+            body.writer,
+            lease::writer_version()
+        )?,
+        Ok(lease::Outcome::Rejected { .. }) => {}
+        Err(reason) => writeln!(err, "::error:: lease: the stand-down request: {reason}")?,
+    }
+    Ok(())
 }
 
 /// Why this clone may not take a turn it is otherwise owed, or `None`.

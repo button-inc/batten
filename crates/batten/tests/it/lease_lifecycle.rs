@@ -599,3 +599,115 @@ fn an_empty_or_untabbed_poison_record_reads_as_unpoisoned() {
         );
     }
 }
+
+// --- the stand-down sender, and the three ways it goes wrong (CLOUD-1798) -----
+//
+// `lease::notice` landed with the whole receiving half wired — `stand_down_
+// requested`, `Beat::StandDown`, `honour_the_notice` — and not one non-test
+// caller, so `stand_down` was empty on every lease in the fleet. `worth_asking`
+// is the sender's decision, pure so it can be decided without a ref or a CAS.
+
+/// **THE CASE.** A waiter asks a STRICTLY older holder, and nobody else.
+///
+/// The equal-build row is the one that matters most and looks most like a
+/// formality: two clones on the same version asking each other to stand down is
+/// a request loop with no newer party to win it. The newer-holder row is the
+/// inversion — an old clone evicting the fleet — which is what `Body::writer`'s
+/// own doc refuses when it says the field decides nothing by itself.
+#[test]
+fn a_waiter_asks_only_a_strictly_older_holder_to_stand_down() {
+    use batten::lease::{worth_asking, writer_version};
+
+    let older = Body {
+        writer: String::from("0.0.1"),
+        ..held("work", NOW + 60)
+    };
+    assert!(
+        worth_asking(&older, RIVAL),
+        "a holder behind this build is the whole subject of the request"
+    );
+
+    let equal = Body {
+        writer: writer_version(),
+        ..held("work", NOW + 60)
+    };
+    assert!(
+        !worth_asking(&equal, RIVAL),
+        "an equal build is not out-ranked, and asking it would be a loop with no \
+         newer party to win it"
+    );
+
+    let newer = Body {
+        writer: String::from("999.0.0"),
+        ..held("work", NOW + 60)
+    };
+    assert!(
+        !worth_asking(&newer, RIVAL),
+        "asking a NEWER holder to stand down lets an old clone evict the fleet"
+    );
+}
+
+/// **AN UNREADABLE VERSION IS NOT AN OLD ONE**, on either side.
+///
+/// A body minted by a build whose version this one cannot parse might be newer.
+/// Reading it as older is the same inversion as the row above, reached through a
+/// parse instead of a comparison — and a body written before `writer` existed
+/// carries an EMPTY one, which is the shape that actually occurs on upgrade.
+#[test]
+fn a_writer_this_build_cannot_parse_is_never_treated_as_older() {
+    use batten::lease::worth_asking;
+
+    for unreadable in ["", "tomorrow", "1.2", "1.2.3.4", "v1.2.3", "1.2.x"] {
+        let body = Body {
+            writer: String::from(unreadable),
+            ..held("work", NOW + 60)
+        };
+        assert!(
+            !worth_asking(&body, RIVAL),
+            "an unparseable writer is not evidence the holder is behind: {unreadable:?}"
+        );
+    }
+}
+
+/// **IDEMPOTENT, AND NEVER SELF-ADDRESSED.**
+///
+/// Without the first, every lap of every waiter rewrites the ref and the
+/// holder's own heartbeat CAS fails against a stream of cosmetic updates —
+/// eviction by contention rather than by asking, which is precisely the steal
+/// this path exists to avoid. The second is the mirror of
+/// `stand_down_requested`'s guard, one step earlier.
+#[test]
+fn a_body_already_asked_or_asked_by_its_own_holder_is_left_alone() {
+    use batten::lease::worth_asking;
+
+    let base = Body {
+        writer: String::from("0.0.1"),
+        ..held("work", NOW + 60)
+    };
+
+    let asked = Body {
+        stand_down: String::from("clone-c"),
+        ..base.clone()
+    };
+    assert!(
+        !worth_asking(&asked, RIVAL),
+        "a request already standing is not re-written every lap"
+    );
+
+    assert!(
+        !worth_asking(&base, HOLDER),
+        "the holder does not ask itself to stand down"
+    );
+
+    // AND THE WHITESPACE SPELLING IS THE SAME STATE. A `stand-down: ` line that
+    // round-tripped through a render carries a blank rather than an absence, and
+    // reading that as "nobody asked" would re-write on every lap after all.
+    let blank = Body {
+        stand_down: String::from("   "),
+        ..base.clone()
+    };
+    assert!(
+        worth_asking(&blank, RIVAL),
+        "a blank request is an absence, so this one IS worth asking"
+    );
+}
