@@ -2398,6 +2398,62 @@ impl Local {
         Ok(minted)
     }
 
+    /// Record that THIS clone's head reddened the metered matrix on `trunk`.
+    ///
+    /// The written value is a trunk POSITION, never an instant, and that is the
+    /// whole reason [`cooling`] can decide without a clock: the cooldown lapses
+    /// when the trunk moves off this sha or when the pool goes idle, both of them
+    /// observable events (CLOUD-1784's decomposition, CLOUD-1797's wiring).
+    ///
+    /// Beside `holder` in the same per-clone directory, because it is the same
+    /// kind of fact — something this clone knows about itself that must outlive
+    /// the process, since the `land` that reddened CI and the `acquire` that must
+    /// be held back are different processes.
+    ///
+    /// # THE RECORD NAMES ITS OWN REF, and that is not decoration
+    ///
+    /// It stores `<tracking-ref>\t<sha>`, so the reader resolves the ref the
+    /// WRITER used rather than a constant of its own. A reader that assumed
+    /// `origin/main` would compare this clone's poisoned sha against an unrelated
+    /// ref on any other base, never match, and answer "not cooling" — a
+    /// fail-open arm inside a mechanism that exists to fail closed, which is the
+    /// shape CLOUD-1792 was filed over. Naming the ref costs one field and
+    /// removes the assumption entirely.
+    ///
+    /// # Errors
+    ///
+    /// A directory or file this clone cannot write. **Never swallowed**: a poison
+    /// that failed to record reads as an unpoisoned clone on the next acquire,
+    /// which is the defect this exists to close.
+    pub fn poison(&self, tracking: &str, at: &str) -> Result<()> {
+        std::fs::create_dir_all(&self.dir)?;
+        std::fs::write(self.dir.join("poisoned"), format!("{tracking}\t{at}\n"))?;
+        Ok(())
+    }
+
+    /// The ref and position this clone last poisoned, if it has poisoned one.
+    ///
+    /// `None` for an absent, empty or malformed record, and for one this clone
+    /// cannot read. **Unreadable reads as unpoisoned on purpose** — the opposite
+    /// of [`Local::holder`]'s rule, and for the opposite reason: a holder id that
+    /// defaulted would let two clones claim one lease, while a cooldown that
+    /// defaulted to ON would hold a clone back over a file it cannot read, which
+    /// is the single-agent stranding [`cooling`]'s idle-pool clause exists to
+    /// prevent.
+    ///
+    /// A record missing its tab is malformed rather than a bare sha, because a
+    /// bare sha is what the FIRST spelling of this wrote and reading it loosely
+    /// would resurrect the assumption the tab exists to remove.
+    #[must_use]
+    pub fn poisoned(&self) -> Option<(String, String)> {
+        let record = std::fs::read_to_string(self.dir.join("poisoned")).ok()?;
+        let (tracking, at) = record.trim().split_once('\t')?;
+        if tracking.is_empty() || at.is_empty() {
+            return None;
+        }
+        Some((tracking.to_owned(), at.to_owned()))
+    }
+
     /// How long `token` has been what this clone sees under `name`, on OUR clock.
     ///
     /// **Expiry alone is not safe to steal on**, which is the whole reason this

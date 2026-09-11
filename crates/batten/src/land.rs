@@ -1459,6 +1459,45 @@ impl Basis {
     }
 }
 
+/// Did THIS clone just redden the metered matrix on a base of its own?
+///
+/// The predicate behind the poison cooldown (CLOUD-1797). It is the same cell
+/// [`progress_of`] answers `Stop` for, narrowed by the basis, and each part of
+/// it is load-bearing:
+///
+/// - **`Wait` and `Violation`** is the wait's OWN refusal. Keying on a red
+///   reading alone would fire on a wait that succeeded while a stale red sat in
+///   `seen` — the defect `progress_of`'s own comment records one cell below.
+/// - **`Red`, never `Pending` or `None`.** A could-not-look is not a poisoning,
+///   and a cooldown placed on a network blip holds a clone back over nothing.
+/// - **`Own`, never `Borrowed`.** On a borrowed base the red may be the
+///   speculated base's fault, so charging it here would let a neighbour's bad
+///   tree evict an innocent agent — the asymmetry `charge_the_lap` already
+///   refuses for the same reason.
+///
+/// Pure, and free-standing rather than a branch inside the lap, so the cell can
+/// be decided in a test instead of only through a git resolution and a
+/// filesystem write.
+//MUTANT-SUITE crates/batten/tests/it/lease_lifecycle.rs
+//MUTANT poison-never-recorded|s@    matches!(@    !matches!(@|a_red_wait_on_this_clones_own_base_is_what_poisons_it
+#[must_use]
+pub const fn poisons_this_clone(
+    step: Step,
+    code: crate::exit::ExitCode,
+    seen: Option<TapVerdict>,
+    basis: Basis,
+) -> bool {
+    matches!(
+        (step, code, seen, basis),
+        (
+            Step::Wait,
+            crate::exit::ExitCode::Violation,
+            Some(TapVerdict::Red),
+            Basis::Own
+        )
+    )
+}
+
 #[must_use]
 pub const fn progress_of(
     step: Step,

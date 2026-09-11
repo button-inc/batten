@@ -7401,6 +7401,9 @@ fn run_land_lap(
             // different world than the one that answered (CLOUD-1306).
             let basis = land::Basis::of(bet.live());
             note_the_poison(step, code, basis, &mut bet);
+            if land::poisons_this_clone(step, code, seen, basis) {
+                note_the_cooldown(root, reference, out, err)?;
+            }
             match land::progress_of(step, code, seen, basis) {
                 land::Progress::Proceed => {}
                 // `None` is not merged, or nobody could say. Either way this is
@@ -8050,6 +8053,77 @@ fn note_the_poison(
         // something no later lap can recognise.
         bet.poisoned = bet.published().map(str::to_owned);
     }
+}
+
+/// Record the poison cooldown when THIS branch's own head reddened the matrix.
+///
+/// The mirror of [`note_the_poison`], and deliberately not folded into it: that
+/// one is about somebody ELSE's base and lives in the `Bet`, which dies with the
+/// process. This one is about THIS clone and must outlive the process, because
+/// the `land` that reddened CI and the `acquire` that must be held back are
+/// different runs (CLOUD-1797).
+///
+/// # The cell, and why each part of it is load-bearing
+///
+/// `(Wait, Violation, Red, Own)` — the same cell [`land::progress_of`] answers
+/// `Stop` for, narrowed by the basis:
+///
+/// - **`Wait` and `Violation`** is the wait's own refusal. Keying on a red
+///   reading alone would fire on a wait that SUCCEEDED while a stale red sat in
+///   `seen`, which is the defect `progress_of`'s own comment records.
+/// - **`Red`, never `Pending` or `None`.** Could-not-look is not a poisoning, and
+///   a cooldown placed on a network blip would hold this clone back over nothing.
+/// - **`Own`, never `Borrowed`.** On a borrowed base the red may be the
+///   speculated base's fault, and charging it to this clone would let a
+///   neighbour's bad tree evict an innocent agent — the same asymmetry
+///   `charge_the_lap` already refuses.
+///
+/// # What it records
+///
+/// The trunk POSITION, never an instant. [`lease::cooling`] lapses the cooldown
+/// when the trunk moves off that sha or when the pool goes idle, so the whole
+/// mechanism is two observable events and no clock (CLOUD-1784).
+///
+/// # Why a failure here reports rather than returns
+///
+/// The lap is already stopping — this cell is `Progress::Stop`. Failing the land
+/// over a bookkeeping write would replace a reported stop with an unreported one
+/// and tell the operator less. It is loud on `err` because a cooldown that did
+/// not record reads as an unpoisoned clone on the next acquire, which is exactly
+/// the hole this closes.
+///
+/// **The cell is [`land::poisons_this_clone`], asked by the caller**, for the
+/// reason [`land::progress_of`] is a free function rather than a branch inside
+/// this loop: the decision is the part worth testing, and a decision reachable
+/// only through a git resolution and a filesystem write is a decision nothing
+/// tests.
+fn note_the_cooldown(
+    root: &Path,
+    reference: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<()> {
+    let tracking = land::tracking_ref(reference);
+    let Ok(Some(trunk)) = git::resolve_ref(root, &tracking) else {
+        writeln!(
+            err,
+            "::error:: land: {tracking} would not read, so the poison cooldown has no base to name"
+        )?;
+        return Ok(());
+    };
+    match lease_identity(root).and_then(|(local, _)| {
+        local
+            .poison(&tracking, &trunk)
+            .map_err(|why| format!("cannot record the poison cooldown: {why}"))
+    }) {
+        // Pointer-only: the base, never the record.
+        Ok(()) => writeln!(
+            out,
+            "land: cooling on {trunk} — this head reddened the matrix"
+        )?,
+        Err(why) => writeln!(err, "::error:: land: {why}")?,
+    }
+    Ok(())
 }
 
 /// Refresh the trunk's remote-tracking ref before a speculation reads it.
@@ -10833,6 +10907,16 @@ fn run_lease_acquire(
             }
         }
         lease::Turn::Take(why) => {
+            // THE POISON COOLDOWN, ASKED AFTER THE TURN AND BEFORE THE CAS
+            // (CLOUD-1797). `turn` decides whose turn it is; this decides whether
+            // THIS clone may take a turn it is otherwise owed, and the order is
+            // what keeps the two separable — folding it into `turn` would put a
+            // local file inside a decision every other clone must be able to
+            // reproduce from the ref alone.
+            if let Some(reason) = still_cooling(root, &local, &observed) {
+                writeln!(out, "lease: {reason}")?;
+                return Ok(ExitCode::Violation);
+            }
             let body = lease::claim(terms, &holder, branch, &head, now);
             match lease::cas(terms, &observed, &body, now) {
                 Ok(lease::Outcome::Applied) => {
@@ -10855,6 +10939,24 @@ fn run_lease_acquire(
             }
         }
     }
+}
+
+/// Why this clone may not take a turn it is otherwise owed, or `None`.
+///
+/// The reading half of [`note_the_cooldown`], and the whole of the decision is
+/// [`lease::cooling`] — this resolves the two inputs and renders the reason.
+///
+/// **It resolves the ref the WRITER recorded**, never a constant of its own. A
+/// ref that will not read answers `None`: a could-not-look is not evidence this
+/// clone is still poisoned, and holding it back on one would strand a clone over
+/// a ref that was renamed or pruned.
+fn still_cooling(root: &Path, local: &lease::Local, observed: &lease::Observed) -> Option<String> {
+    let (tracking, at) = local.poisoned()?;
+    let trunk = git::resolve_ref(root, &tracking).ok().flatten()?;
+    // Pointer-only: the ref and the position, never the lease body.
+    lease::cooling(Some(&at), &trunk, observed).then(|| {
+        format!("cooling — this clone reddened the matrix on {tracking} at {at}, which is still trunk, and the pool is not idle")
+    })
 }
 
 /// `lease renew`: extend this clone's lease by one term.

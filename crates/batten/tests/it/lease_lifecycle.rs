@@ -459,3 +459,143 @@ fn the_rendered_body_opens_with_the_banner_and_ends_with_the_nonce() {
         "and the head that is about to become main"
     );
 }
+
+// --- the poison cooldown, end to end through its three pieces (CLOUD-1797) ----
+//
+// `lease::cooling` landed pure, documented and unit-tested with NOTHING calling
+// it: no code path produced a `Some` for its `poisoned_at`, so every real call
+// would have passed `None` and returned `false` on the first line. The cases
+// below pin the two halves that were missing — the cell that decides a clone
+// poisoned itself, and the record that carries the decision across processes.
+
+/// **THE CELL.** A red wait, on this clone's OWN base, is what poisons it.
+///
+/// Each of the four negatives is a way to hold an innocent clone back, and each
+/// was reachable before the qualifier set was complete. The borrowed-base row is
+/// the one a simplification deletes first: it looks like a duplicate of the
+/// `Own` row above it and is the entire difference between charging a clone for
+/// its own bad tree and charging it for a neighbour's.
+#[test]
+fn a_red_wait_on_this_clones_own_base_is_what_poisons_it() {
+    use batten::exit::ExitCode;
+    use batten::land::{Basis, Step, TapVerdict, poisons_this_clone};
+
+    assert!(
+        poisons_this_clone(
+            Step::Wait,
+            ExitCode::Violation,
+            Some(TapVerdict::Red),
+            Basis::Own
+        ),
+        "a red wait this clone owns is the whole subject of the cooldown"
+    );
+
+    assert!(
+        !poisons_this_clone(
+            Step::Wait,
+            ExitCode::Violation,
+            Some(TapVerdict::Red),
+            Basis::Borrowed
+        ),
+        "a borrowed base's red may be the base's fault, and charging it here \
+         would let a neighbour's bad tree evict an innocent agent"
+    );
+    assert!(
+        !poisons_this_clone(Step::Wait, ExitCode::Violation, None, Basis::Own),
+        "could-not-look is not a poisoning"
+    );
+    assert!(
+        !poisons_this_clone(
+            Step::Wait,
+            ExitCode::Violation,
+            Some(TapVerdict::Pending),
+            Basis::Own
+        ),
+        "pending is not red"
+    );
+    assert!(
+        !poisons_this_clone(
+            Step::Wait,
+            ExitCode::Success,
+            Some(TapVerdict::Red),
+            Basis::Own
+        ),
+        "a wait that SUCCEEDED with a stale red in hand is not a refusal — this \
+         is the cell progress_of's own comment records as the defect"
+    );
+    assert!(
+        !poisons_this_clone(
+            Step::Verify,
+            ExitCode::Violation,
+            Some(TapVerdict::Red),
+            Basis::Own
+        ),
+        "verify's refusal is a gate's, not the metered matrix going red"
+    );
+}
+
+/// **THE RECORD, and the assumption its shape removes.**
+///
+/// It round-trips, and it stores the ref BESIDE the sha so the reader resolves
+/// what the writer used. A bare sha would have made the reader assume
+/// `origin/main`, compare against an unrelated ref on any other base, never
+/// match, and answer "not cooling" — a fail-open arm inside a mechanism that
+/// exists to fail closed, which is exactly what CLOUD-1792 was filed over one
+/// module away.
+#[test]
+fn the_poison_record_names_the_ref_it_resolved_not_only_the_sha() {
+    let dir = crate::common::scratch("lease-poison-record");
+    let local = batten::lease::Local::under(&dir);
+
+    assert_eq!(
+        local.poisoned(),
+        None,
+        "an unpoisoned clone records nothing"
+    );
+
+    local
+        .poison("origin/release/1.x", "deadbeef")
+        .expect("the record is writable");
+    assert_eq!(
+        local.poisoned(),
+        Some((String::from("origin/release/1.x"), String::from("deadbeef"))),
+        "the reader gets back the ref the writer used, not a constant of its own"
+    );
+
+    // A LATER POISONING REPLACES THE EARLIER ONE. Two records would leave the
+    // reader choosing, and the cooldown is a claim about ONE base.
+    local
+        .poison("origin/main", "cafe1234")
+        .expect("the record is rewritable");
+    assert_eq!(
+        local.poisoned(),
+        Some((String::from("origin/main"), String::from("cafe1234")))
+    );
+}
+
+/// **A MALFORMED RECORD READS AS UNPOISONED, and that direction is chosen.**
+///
+/// The opposite of `Local::holder`'s rule, for the opposite reason: a holder id
+/// that defaulted would let two clones claim one lease, while a cooldown that
+/// defaulted to ON would hold a clone back over a file it cannot parse — the
+/// single-agent stranding `cooling`'s idle-pool clause exists to prevent.
+///
+/// The bare-sha row is not hypothetical: it is what the first spelling of this
+/// wrote, and reading it loosely would resurrect the very assumption the tab
+/// exists to remove.
+#[test]
+fn an_empty_or_untabbed_poison_record_reads_as_unpoisoned() {
+    let dir = crate::common::scratch("lease-poison-malformed");
+    let local = batten::lease::Local::under(&dir);
+    std::fs::create_dir_all(&local.dir).expect("the bookkeeping directory");
+    let record = local.dir.join("poisoned");
+
+    for malformed in ["", "   \n", "deadbeef\n", "\tdeadbeef\n", "origin/main\t\n"] {
+        std::fs::write(&record, malformed).expect("the fixture is writable");
+        assert_eq!(
+            local.poisoned(),
+            None,
+            "a record this clone cannot parse is not evidence it is still poisoned: {malformed:?}"
+        );
+    }
+}
