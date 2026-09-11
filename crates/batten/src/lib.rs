@@ -7737,9 +7737,23 @@ fn bet_liveness(root: &Path, branch: &str, base: &str) -> speculation::Live {
         // landed is caught one arm earlier, by the ancestry check.
         return speculation::Live::No;
     };
-    if body.branch.is_empty() || body.branch == branch {
-        // WE hold it, or it names nobody. Either way the bet is not on somebody
-        // else's landing any more.
+    // THE SAME PREDICATE, READ FROM THE OTHER SIDE (CLOUD-1779). `holder_head`
+    // declines to PLACE a bet on a hold that is not somebody else's; this
+    // declines to keep believing one already placed. Both are needed, because a
+    // bet outlives the process that placed it: a lap that adopted a self-bet
+    // recorded before this clause existed would otherwise keep riding it, and
+    // the branch comparison cannot see it — the hold names the OTHER branch.
+    //
+    // `Unreadable` rather than `No` when the identity will not resolve, because
+    // that is this function's own fail-closed spelling: `Live::decide` treats
+    // anything but a confirmed yes as stale, so an unreadable identity settles
+    // the bet instead of silently keeping it.
+    let Ok((_, ours)) = lease_identity(root) else {
+        return speculation::Live::Unreadable;
+    };
+    if speculation::bettable(&body.branch, &body.holder, branch, &ours).is_none() {
+        // WE hold it, it is our own hold on another branch, or it names nobody.
+        // In each case the bet is not on somebody else's landing any more.
         return speculation::Live::No;
     }
     // The holder may have changed or force-pushed past our base, and the
@@ -8091,10 +8105,21 @@ fn holder_head(root: &Path, branch: &str) -> Option<String> {
     let lease::Observed::Held { body, .. } = &observed else {
         return None;
     };
-    if body.branch.is_empty() || body.branch == branch {
+    // WHOSE HOLD IS THIS (CLOUD-1779). `speculation::bettable` carries both
+    // conjuncts — a different branch AND a different holder — because asking
+    // only the first reads "is this hold about the branch I am landing", which
+    // is not "is this hold somebody else's". Its own cases record the measured
+    // failure the second conjunct closes.
+    //
+    // FAIL-CLOSED, as every other clause here is. An unreadable identity cannot
+    // say whose the hold is, and reading it as "not ours" is exactly what
+    // produced that measurement. Declining costs one lap of speculation;
+    // guessing wrong costs a lap AND a diagnosis pointing at the wrong branch.
+    let Ok((_, ours)) = lease_identity(root) else {
         return None;
-    }
-    let reference = format!("refs/heads/{}", body.branch);
+    };
+    let hold = speculation::bettable(&body.branch, &body.holder, branch, &ours)?;
+    let reference = format!("refs/heads/{hold}");
     land::advance(root, &terms.remote, &reference, speculation::LIVE_REF).ok()
 }
 

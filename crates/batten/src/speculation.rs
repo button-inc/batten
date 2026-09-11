@@ -400,12 +400,112 @@ pub fn recover(dir: &Path, bet: &mut Bet) -> Result<bool> {
     Ok(true)
 }
 
+/// Is a live hold one this clone may bet on — and whose branch, if so?
+///
+/// **BOTH HALVES, AND THE SECOND IS WHY THIS IS A FUNCTION** (CLOUD-1779). A
+/// hold is bettable only when it names a DIFFERENT branch and a DIFFERENT
+/// holder. The branch half was the only one `holder_head` asked, which reads
+/// "is this hold about the branch I am landing" — a different question from
+/// "is this hold somebody else's". The gap between them is one agent with two
+/// branches in flight: its own earlier hold names another branch, so it passed,
+/// and the lap stacked the agent's unlanded work underneath itself.
+///
+/// Measured 2026-09-10: a killed lap on `claude/cloud-1638-…` leaked its hold
+/// to the TTL, and the next lap from the SAME clone bet on it and replayed 17
+/// of its own commits under its own branch. Both branches were green; only the
+/// pair was red, because the borrowed branch's `Weakens:` trailers stop
+/// covering its weakenings the moment it is not the tip.
+///
+/// **PURE, BECAUSE THE SEAM IT REPLACES WAS THE UNTESTED ONE.** `settle` below
+/// takes [`Live`] as an input and this module's cases cover the table it
+/// decides; what computed that input reached git and the lease on every call
+/// and had no case at all, which is how a missing conjunct survived. Taking the
+/// four strings makes the predicate a table too.
+///
+/// An empty branch is not bettable: a hold naming no branch admits nobody, and
+/// that clause predates this one.
+#[must_use]
+pub fn bettable<'a>(
+    hold_branch: &'a str,
+    hold_holder: &str,
+    our_branch: &str,
+    our_holder: &str,
+) -> Option<&'a str> {
+    if hold_branch.is_empty() || hold_branch == our_branch {
+        return None;
+    }
+    if hold_holder == our_holder {
+        return None;
+    }
+    Some(hold_branch)
+}
+
+// The conjunct CLOUD-1779 added, and the one a refactor would drop first
+// because the branch comparison beside it already looks like the whole
+// predicate. Dropping it restores the measured defect exactly: our own hold on
+// another branch becomes bettable again.
+//MUTANT-SUITE crates/batten/src/speculation.rs
+//MUTANT self-speculation-admitted|s@    if hold_holder == our_holder {@    if false {@|our_own_hold_on_another_branch_is_not_bettable
+
 #[cfg(test)]
 // Panicking on a failed assertion is how a test fails loudly; these are the
 // module's own cases, not a reachable path.
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
+
+    const OURS: &str = "host-5814-b05f816314d98563";
+    const THEIRS: &str = "host-9921-4c1f0a7728ee35b1";
+
+    /// THE DEFECT (CLOUD-1779): our own hold, on another branch, is not a bet.
+    ///
+    /// This is the measured case — a leaked hold from the same clone's earlier
+    /// lap, naming a different branch, which the branch comparison alone reads
+    /// as a rival's and bets on.
+    #[test]
+    fn our_own_hold_on_another_branch_is_not_bettable() {
+        assert_eq!(
+            bettable(
+                "claude/cloud-1638-grammar",
+                OURS,
+                "claude/cloud-1777-cadence",
+                OURS
+            ),
+            None,
+        );
+    }
+
+    /// THE DIRECTION THAT MUST KEEP WORKING, and without it the case above is
+    /// satisfied by a function that returns `None` for everything.
+    #[test]
+    fn another_holders_branch_is_still_bettable() {
+        assert_eq!(
+            bettable(
+                "claude/cloud-1638-grammar",
+                THEIRS,
+                "claude/cloud-1777-cadence",
+                OURS
+            ),
+            Some("claude/cloud-1638-grammar"),
+        );
+    }
+
+    /// The branch half is ADDED TO, never replaced: a hold naming our own
+    /// branch stays unbettable even when some other holder wrote it, which is
+    /// the pre-existing clause this row must not have loosened.
+    #[test]
+    fn a_hold_naming_our_own_branch_is_not_bettable_whoever_holds_it() {
+        assert_eq!(bettable("mine", OURS, "mine", OURS), None);
+        assert_eq!(bettable("mine", THEIRS, "mine", OURS), None);
+    }
+
+    /// A hold naming no branch admits nobody — older than this row, pinned here
+    /// because the predicate moved and an unpinned clause is one a refactor
+    /// drops in silence.
+    #[test]
+    fn a_hold_naming_no_branch_is_not_bettable() {
+        assert_eq!(bettable("", THEIRS, "mine", OURS), None);
+    }
 
     /// **A SETTLED BET LEAKS NOTHING INTO THE NEXT ONE**, which `pushed` did.
     ///
