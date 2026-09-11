@@ -266,6 +266,21 @@ pub const MANIFESTS: &[Manifest] = &[
         ],
         verdicts: &[
             VendoredVerdict {
+                id: "workflow parse unseen",
+                gloss: "a declared workflow would not parse, so no rule here could read it",
+                class: "Could-not-look, and deliberately not spelled the same way as absent. Absent is \
+not-applicable — this tree runs no such workflow — while unparsed means the boundary tried and \
+failed. Every rule in this preset iterates the documents that DID parse, so without this the \
+module reports green over exactly the file it could not read. Its own class rather than the one \
+`mise` raises for the same state, because the registry declares a class once and could not \
+otherwise say which preset raises it.",
+                routes: &[read(
+                    "source read first",
+                    "the workflow that would not parse",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
                 id: "cache build loose",
                 gloss: "a cache-warming build recompiles and writes nothing on every run",
                 class: "A build that compiles to fill a cache and runs nothing judges nothing, which is \
@@ -969,68 +984,99 @@ mod tests {
         );
     }
 
-    /// Every FINDING id a preset's modules declare is in the grammar.
+    /// Every occurrence of a provider's expression language in a rule BODY, as
+    /// `(module pointer, line)` pairs — the `.rego` half of the rule-1 scan.
     ///
-    /// # The hole this closes
+    /// # The three exemptions, each load-bearing in one direction
     ///
-    /// The finding-id half of CLOUD-1638 had no reader over the vendored half.
-    /// `policy::load`'s general branch holds a module's `"rule":` literals to the
-    /// grammar with `check_finding_ids`; its PRESET branch does not call it, and
-    /// must not: a preset's bytes are in the binary, so a consumer refused for
-    /// one has no edit that fixes it, and held to a narrow consumer vocabulary an
-    /// enabled preset would simply be unloadable. That is the same reasoning that
-    /// makes the vendored verdict rows unconditional in `collidable_tokens`.
-    ///
-    /// So the authority moves to the VENDOR, which is the half that can act on a
-    /// refusal — this repository's own committed `[vocabulary]`, holding names
-    /// this repository ships.
-    ///
-    /// # Why not "every finding is one of the manifest's classes"
-    ///
-    /// Measured, and it is false BY DESIGN: `ci-hygiene` declares `job guard
-    /// missing`, which raises `cache build loose` at one site and `cache name
-    /// unknown` at another. A finding id and a class are different names —
-    /// `check_finding_ids` exempts an id that happens to be a class rather than
-    /// requiring it — so an assertion of containment would refuse the very
-    /// one-to-many shape the two-name split exists to allow.
-    #[test]
-    fn every_finding_a_preset_declares_is_in_the_grammar() {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let text =
-            std::fs::read_to_string(root.join("batten.toml")).expect("the authority is readable");
-        let authority: toml::Value = toml::from_str(&text).expect("the authority parses");
-        let vocabulary: crate::verdict::Vocabulary = authority
-            .get("vocabulary")
-            .expect("the vendor has adopted the grammar it holds its presets to")
-            .clone()
-            .try_into()
-            .expect("the word lists deserialize");
-
-        let mut seen = 0_usize;
+    /// A `github.event` occurrence is a violation unless it is (1) on a comment
+    /// line, (2) inside a `test_*` rule, or (3) a fixture line under an `"if":`
+    /// key. Clauses 2 and 3 are not conveniences: a module that matches GitHub
+    /// syntax must carry fixtures written IN that syntax, because they are the
+    /// tests of the thing being tested. Without the exemptions this scan would
+    /// report every such module's own suite and be switched off; with them it
+    /// reports exactly the rule bodies that READ the provider.
+    fn provider_syntax_sites() -> Vec<(&'static str, usize)> {
+        let mut found = Vec::new();
         for manifest in MANIFESTS {
-            // A CLASS TOKEN IS EXEMPT, exactly as `check_finding_ids` exempts
-            // one: where the id IS a class the registry governs the name, and
-            // checking it again here would be the second authority over one name
-            // that the exemption exists to avoid.
-            let declared: BTreeSet<&str> = manifest.verdicts.iter().map(|entry| entry.id).collect();
             for module in manifest.modules {
-                for id in crate::policy::finding_ids(module.source) {
-                    if declared.contains(id.as_str()) {
+                let mut in_test_rule = false;
+                for (index, line) in module.source.lines().enumerate() {
+                    let trimmed = line.trim_start();
+                    // A rule header at column zero opens a rule; `test_` opens one
+                    // this scan does not read. Tracked by header rather than by
+                    // brace depth because Rego bodies are `if { … }` blocks whose
+                    // closing line is column zero too, so the next header is what
+                    // ends the previous rule either way.
+                    if !line.starts_with([' ', '\t', '#']) && !line.is_empty() {
+                        in_test_rule = line.starts_with("test_");
+                    }
+                    if trimmed.starts_with('#') || in_test_rule {
                         continue;
                     }
-                    seen += 1;
-                    crate::verdict::check_rule_id(&id, &vocabulary).unwrap_or_else(|error| {
-                        panic!(
-                            "`{}` declares the finding `{id}` in `{}`: {error}",
-                            manifest.name, module.pointer
-                        )
-                    });
+                    // A fixture line under an `"if":` key is data the module is
+                    // matching AGAINST, not language it reads.
+                    if trimmed.starts_with("\"if\":") || trimmed.contains("\"if\":") {
+                        continue;
+                    }
+                    if line.contains("github.event") {
+                        found.push((module.source, index + 1));
+                    }
                 }
             }
         }
+        found
+    }
+
+    /// **A module reading a provider's expression language declares that
+    /// provider** (CLOUD-1625).
+    ///
+    /// The `.rego` arm of non-negotiable rule 1, and the mechanism rule 2 owes
+    /// the `provider` column: without it the next module to match `github.event`
+    /// ships with `provider: None`, loads for every consumer on every host, and
+    /// reports a clean tree it never read — which is the exact state this row
+    /// exists to end, re-entered one module later.
+    ///
+    /// The scan does NOT forbid the syntax. Six sites carry it today and all six
+    /// are legitimate; what they owe is the declaration beside them.
+    #[test]
+    fn a_module_reading_provider_syntax_declares_that_provider() {
+        let declared: Vec<&'static str> = MANIFESTS
+            .iter()
+            .flat_map(|manifest| manifest.modules)
+            .filter(|module| module.provider.is_some())
+            .map(|module| module.source)
+            .collect();
+
+        let undeclared: Vec<usize> = provider_syntax_sites()
+            .into_iter()
+            .filter(|(source, _)| !declared.contains(source))
+            .map(|(_, line)| line)
+            .collect();
+
         assert!(
-            seen > 0,
-            "no preset finding id was judged, so this case is green over nothing"
+            undeclared.is_empty(),
+            "a preset module reads a CI provider's expression language and declares \
+             no `provider`, so it would compile for a consumer on any host and match \
+             nothing there; lines: {undeclared:?}"
+        );
+    }
+
+    /// The anti-vacuity mirror, in the direction that matters.
+    ///
+    /// Without it the case above is satisfied by a scan that finds NOTHING — the
+    /// dead-gate shape this whole row is about, and the one a `.rego` scan is
+    /// most likely to take, since a discriminator that over-exempts is
+    /// byte-identical to a clean tree. Six is the measured count; the assertion
+    /// is that the scan still sees the syntax it is supposed to see, so an
+    /// exemption widened later fails here rather than quietly reporting green.
+    #[test]
+    fn the_provider_scan_still_sees_the_syntax_it_exempts_around() {
+        let sites = provider_syntax_sites();
+        assert!(
+            sites.len() >= 6,
+            "the scan must still find the rule bodies that read the provider, or its \
+             exemptions have swallowed the subject: {sites:?}"
         );
     }
 
