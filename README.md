@@ -46,10 +46,16 @@ container's setup step, an agent sandbox:
 
 - **A token is read if one is set**, from `BATTEN_GITHUB_TOKEN`, `GH_TOKEN`,
   `GITHUB_TOKEN` or `GITHUB_PERSONAL_ACCESS_TOKEN`, in that order. A public
-  release needs none of them. **This repository is private today**, so a fetch
-  needs a token with release-read scope until that changes; a host carrying
-  several tokens that are not equivalent names the working one through
-  `BATTEN_GITHUB_TOKEN`, which wins.
+  release needs none of them; a release only a credential can read needs one
+  granting **read access to the repository's contents** — `contents: read` on a
+  fine-grained token, or `repo` on a classic one. Release assets are served
+  under that permission rather than a release-specific one, which is why there
+  is no narrower grant to ask for. Whether a given repository's releases need it
+  at all is a property of that repository rather than of this page: an
+  unauthenticated fetch of the download URL answers it in one command, and keeps
+  answering it correctly after a visibility change no sentence here would
+  notice. A host carrying several tokens that are not equivalent names the
+  working one through `BATTEN_GITHUB_TOKEN`, which wins.
 - **A proxy that re-terminates TLS is handled** by honouring the CA bundle the
   environment already declares — `CURL_CA_BUNDLE`, else `SSL_CERT_FILE`. Nothing
   is disabled and an unproxied host is untouched. Set one of those rather than

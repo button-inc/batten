@@ -448,6 +448,63 @@ jobs:
       - run: mise exec -- cargo nextest run --no-run --workspace
         if: steps.rust-cache.outputs.cache-hit != 'true'
 
+  # The warm side of `rust.yml`'s `macos` leg. It exists because that job reads
+  # with `save-if: false`, and a read-only family with no writer on the trunk is
+  # an entry nothing ever fills — `ci-cache-declared` calls that orphaned, and it
+  # is right to: every pull request would pay a cold build of the whole
+  # dependency set forever.
+  cache-warm-macos:
+    name: cache-warm-macos
+    runs-on: macos-latest
+    # Grandfathered for the `macos` leg's own reason: no run of this job exists
+    # to derive a quantile from. `cache-warm-windows` above carries the same
+    # marker for the same reason.
+    timeout-minutes: 30 # budget: grandfathered measured=2026-09-09
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
+        with:
+          # Pinned to `batten.toml`'s `[[provision]]` version (CLOUD-1672). The
+          # digest above pins the ACTION; this pins the MISE it installs, which
+          # is a separate resolution the digest does not reach.
+          version: 2026.9.1
+          # Exactly what the `macos` job installs, minus the tools only its
+          # assertions need: the cache being filled is a cargo target dir.
+          install_args: rust github:nextest-rs/nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # The `id` is load-bearing, not decoration: the compile step below reads
+        # this step's `cache-hit` output to decide whether there is anything to
+        # warm. `ci-local-parity` property 17 holds the pair together.
+        id: rust-cache
+        with:
+          # Must match `rust.yml`'s `macos` job exactly or this writes an entry
+          # that job cannot read.
+          shared-key: macos-
+      # COMPILE ONLY WHEN THERE IS NOTHING TO RESTORE. `cache-hit` is true only
+      # on an EXACT key match, which is precisely the case where the post-run
+      # save would be a no-op — so this pays the full compile when the key moves
+      # (a dependency bump or a toolchain change, which is what makes a pull
+      # request miss) and only a runner boot and a restore otherwise. CLOUD-840
+      # measured the ungated version: every warm cycle after the first restored,
+      # recompiled and wrote nothing.
+      #
+      # The failure direction is safe by construction: if the action ever stops
+      # emitting `cache-hit` the expression is empty, `!= 'true'` holds, and the
+      # compile runs as it does today. The silent rot is the opposite one — the
+      # `id` disappearing while the `if` still names it — and property 17
+      # refuses that.
+      #
+      # `--no-run` builds without executing: this job fills a cache and is not a
+      # test leg, and `foreign-cargo-is-the-declared-spelling` excludes a
+      # `--no-run` line from its drift comparison for exactly that reason.
+      - run: mise exec -- cargo nextest run --no-run --workspace
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+
   release-plz:
     runs-on: ubuntu-latest
     timeout-minutes: 15 # budget: grandfathered measured=2026-08-10
