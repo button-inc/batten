@@ -632,6 +632,27 @@ pub struct Config {
     /// could-not-look rather than as healthy: no removal is authorised.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential: Option<crate::provision::CredentialProbe>,
+    /// Which forge this repository is hosted on, in the two places the engine
+    /// otherwise assumed one (CLOUD-1622).
+    ///
+    /// **A SEPARATE TABLE FROM `[credential]` ABOVE, and that separation is
+    /// measured rather than tidy.** `[credential] names` answers "which variables
+    /// hold a credential WE hold", and its own doc is explicit that the forge's
+    /// conventional names are deliberately excluded — a host may inject a
+    /// substitutable placeholder under them, so probing those would measure the
+    /// host's credential rather than ours. [`Forge::credential_names`] answers the
+    /// opposite question: which variables hold a token to AUTHENTICATE WITH,
+    /// host-injected job tokens emphatically included. Folding the two would have
+    /// stopped every REST read using the CI-provided token — a live regression,
+    /// and the reason the row's suggestion to reuse the existing key does not
+    /// survive contact with what that key declares.
+    ///
+    /// Absent is could-not-look rather than a default. The engine's own
+    /// spellings are gone rather than kept as a fallback, because a fallback is
+    /// how the seam stayed invisible: it worked here, on this forge, and returned
+    /// a safe-looking nothing everywhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forge: Option<crate::rest::Forge>,
     /// The commit-subject convention this repository holds itself to
     /// (CLOUD-701). Absent means no convention is declared and the gate is not
     /// active — which the gate reports as exit 1, never as a clean pass over
@@ -1033,6 +1054,16 @@ pub struct Contract {
 pub fn parse(text: &str, source: &str) -> Result<Config> {
     let config = parse_ungated(text, source)?;
     check_min_version(&config, source)?;
+    // THE ONE WRITER of the forge declaration (CLOUD-1622). Every load path —
+    // `load`, `load_authority`, `load_site` — funnels through here, so recording
+    // it once at the gate is what keeps the REST tier's credential reader a single
+    // authority instead of a parameter threaded up fifteen call chains. `declare`
+    // ignores a later call, so a second parse cannot move the credential a request
+    // in flight would use; an unparsed or absent config never reaches this line,
+    // and the REST tier then reads could-not-look rather than a default.
+    if let Some(forge) = config.forge.clone() {
+        crate::rest::declare(forge);
+    }
     Ok(config)
 }
 
@@ -3326,6 +3357,7 @@ impl Config {
     pub fn declaring_nothing() -> Self {
         Config {
             credential: None,
+            forge: None,
             unresolvable: Vec::new(),
             version: SUPPORTED_VERSION,
             deferrals: Vec::new(),

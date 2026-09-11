@@ -8758,6 +8758,26 @@ body_template = ".github/bot-lane-row.md"
 probe_url = "https://api.github.com/rate_limit"
 names = ["GITHUB_PERSONAL_ACCESS_TOKEN", "BATTEN_GITHUB_TOKEN"]
 
+# Which variables the REST tier may authenticate with (CLOUD-1622).
+#
+# A SEPARATE LIST FROM `[credential] names` DIRECTLY ABOVE, and the difference is
+# the whole reason this is its own table rather than a reuse of that one. That
+# list names credentials WE hold, and deliberately excludes the forge's
+# conventional spellings: this host injects a substitutable placeholder under
+# them, so probing those would measure the host's credential rather than ours.
+# This list is the opposite question — what a REST read may PRESENT — and the
+# host-injected job token is exactly what belongs in it. Folding the two would
+# have stopped every REST read using that token.
+#
+# These two spellings are what `crates/batten` carried as literals until this
+# change, so declaring them here keeps this repository's behaviour byte for byte
+# while the engine stops assuming any forge at all. `GH_TOKEN` first, which is the
+# forge CLI's own precedence: a session that set one for that tool does not have
+# to set a second. Naming none would be could-not-look, never "no credential
+# needed" — there is deliberately no fallback in the engine to fall back to.
+[forge]
+credential_names = ["GH_TOKEN", "GITHUB_TOKEN"]
+
 # --- the scripts the launcher re-arms every spawn (CLOUD-1704) -----------------
 #
 # THE FOURTH REPAIR OF LAUNCHER-PROVISIONED STATE, and the first whose subject is
