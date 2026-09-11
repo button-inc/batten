@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.161](https://github.com/button-inc/batten/compare/v0.0.160...v0.0.161) - 2026-09-11
+
+### Added
+
+- *(lease)* an agent that poisoned CI takes no turn until the trunk moves or the pool idles
+- *(lease)* [**breaking**] a peer can ask the holder to stand down, and the holder decides
+- *(lease)* the body carries a refusable major and advertises its writer
+
+### Fixed
+
+- *(semver)* route every spawn through the resolution ladder
+- *(land)* a gate refusal over a borrowed base laps instead of blaming this branch
+- *(lease)* the ref-namespace premise was a misdiagnosed credential failure
+- *(commit)* a path with a sanctioned mutation owes no articulation
+- *(land)* [**breaking**] refuse the publish while a bet is outstanding, and lap instead
+- *(land)* [**breaking**] publish the borrowed base to every body gate
+- *(verdict)* append the new class rather than grouping it, since position is API
+- *(hook)* refuse only a declaration nothing could read, and say why
+- *(hook)* extract the refusal, and move four asserted codes off the fail-open
+- *(hook)* deny a call this build cannot adjudicate, rather than exiting non-zero
+
+### Other
+
+- *(hook)* name the two fail-open boundaries, and let the raw payload travel
+- *(hook)* give the adjudicable predicate a name, and the fifth code its reason
+- *(hook)* show the fail-open arm can fail, and that its fix is not an outage
+
 ## [0.0.160](https://github.com/button-inc/batten/compare/v0.0.159...v0.0.160) - 2026-09-11
 
 ### Fixed
