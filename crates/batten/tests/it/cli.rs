@@ -13228,3 +13228,61 @@ fn a_clone_with_no_origin_main_ref_cannot_look_and_allows() {
         stderr(&output)
     );
 }
+
+/// A `--rule` selection accepts the three spellings a boundary may carry
+/// (CLOUD-1638).
+///
+/// THE DEFECT THIS PINS. Every stored `[[rule]] id` is normalised to the space
+/// form at load, and `select_rules` compared a raw argv entry against it — so
+/// `--rule branch-write-unsafe` was refused as undeclared for a row that is
+/// declared. The refusal reads exactly like a typo, which is the one reading
+/// this selection must never produce falsely: its own header is about a
+/// misspelled id silently dropping a gate, and this turned a CORRECT id into
+/// that same silence.
+///
+/// Driven against this repository, like `harness_wiring`'s own live case: the
+/// row has to be one the committed authority really declares, because the
+/// question is whether the argument reaches it.
+#[test]
+fn a_rule_selection_accepts_every_spelling_of_a_declared_id() {
+    for spelling in [
+        "branch write unsafe",
+        "branch-write-unsafe",
+        "branch_write_unsafe",
+    ] {
+        let output = batten()
+            .current_dir(common::at_root("."))
+            .args(["check", "--rule", spelling])
+            .output()
+            .expect("run batten check");
+        assert!(
+            output.status.success(),
+            "`--rule {spelling}` names a declared row and must select it: {}",
+            stderr(&output)
+        );
+    }
+}
+
+/// And a real typo still refuses, NAMING WHAT THE CALLER TYPED.
+///
+/// Both halves matter. Without the refusal the fix above would be "match
+/// anything", which is the vacuous pass `select_rules` exists to prevent.
+/// Without the spelling in the message, the caller is sent hunting for a row
+/// under a normalised name that never appeared on their command line.
+#[test]
+fn a_misspelled_rule_is_still_refused_under_the_spelling_it_was_given() {
+    let output = batten()
+        .current_dir(common::at_root("."))
+        .args(["check", "--rule", "branch-write-unsaef"])
+        .output()
+        .expect("run batten check");
+    assert!(
+        !output.status.success(),
+        "a misspelled id must not select a row"
+    );
+    assert!(
+        stderr(&output).contains("branch-write-unsaef"),
+        "the refusal must quote the caller's own spelling: {}",
+        stderr(&output)
+    );
+}

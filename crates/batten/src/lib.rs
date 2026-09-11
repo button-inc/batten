@@ -5537,6 +5537,18 @@ fn run_policy_rule(
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
     let config = resolve::resolve(Path::new("."), overrides)?;
+    // THE ARGUMENT IS A BOUNDARY, SO IT NORMALISES (CLOUD-1638), and this is
+    // the surface `normalise_rule_id`'s own doc names — "a `policy rule`
+    // argument" — while being the one path that never called it. Stored ids are
+    // rewritten to the space form at load, so matching a raw argv entry made
+    // `batten policy rule shell-retirement` answer "no `[[rule]]` row and no
+    // module declares" for a row that is declared. Measured in use: the refusal
+    // was read as "that name is not a rule" and the lookup abandoned.
+    //
+    // Normalised for MATCHING only. The refusal below still quotes the caller's
+    // own spelling, because a message naming a form they did not type sends
+    // them hunting for a row by a name that is not on their command line.
+    let wanted = verdict::normalise_rule_id(id);
     // BOTH NAMES A LINE CAN CARRY (CLOUD-1638). A `policy` row's finding is
     // emitted under the MODULE's `"rule":` — `test add duplicate`, not the row
     // `test fix duplicate` that binds the module — so resolving only `[[rule]]`
@@ -5547,8 +5559,8 @@ fn run_policy_rule(
     let owner = config
         .rules
         .iter()
-        .find(|rule| rule.id == id)
-        .or_else(|| owning_row(&config, id));
+        .find(|rule| rule.id == wanted)
+        .or_else(|| owning_row(&config, &wanted));
     let Some(rule) = owner else {
         // Named, and the id is the caller's own argument rather than anything
         // read out of the tree. A list of what IS declared would be every row on
@@ -17944,10 +17956,29 @@ fn select_rules(
     if only.is_empty() {
         return Ok((declared.to_vec(), policy::ModuleChecks::Run));
     }
+    // THE ARGUMENT IS A BOUNDARY, SO IT NORMALISES (CLOUD-1638). Every stored
+    // `[[rule]] id` is rewritten to the space form at load (`config.rs`), so
+    // comparing a raw argv entry against it refuses `--rule shell-retirement`
+    // for a row that is declared and spelled `shell retirement`. That refusal
+    // reads exactly like a typo, which is the one reading this function must
+    // never produce falsely — its whole header is about a misspelled id
+    // silently dropping a gate.
+    //
+    // `normalise_rule_id`'s own doc already claims this surface: "`-` and `_`
+    // are accepted at the boundary and NOWHERE stored". The boundary was the
+    // half that never called it.
+    let wanted: Vec<String> = only
+        .iter()
+        .map(|id| verdict::normalise_rule_id(id))
+        .collect();
+    // The refusal still names what the CALLER typed, not what it normalised to.
+    // A message quoting a spelling they did not write sends them looking for a
+    // row by a name that is not on their command line.
     let unmatched: Vec<&str> = only
         .iter()
-        .map(String::as_str)
-        .filter(|id| !declared.iter().any(|rule| rule.id == *id))
+        .zip(&wanted)
+        .filter(|(_, want)| !declared.iter().any(|rule| rule.id == **want))
+        .map(|(typed, _)| typed.as_str())
         .collect();
     if let Some(first) = unmatched.first() {
         return Err(error::UsageError::raise(format!(
@@ -17955,6 +17986,7 @@ fn select_rules(
             declared.len()
         )));
     }
+    let only = &wanted;
     // Declaration order, never the order the flags were written: findings sort by
     // the `(path, line, rule)` pointer tuple downstream, and a selection that
     // reordered the table would make a caller's argv order visible in bytes §6
