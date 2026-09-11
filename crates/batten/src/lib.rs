@@ -5548,7 +5548,19 @@ fn run_policy_rule(
     // Normalised for MATCHING only. The refusal below still quotes the caller's
     // own spelling, because a message naming a form they did not type sends
     // them hunting for a row by a name that is not on their command line.
-    let wanted = verdict::normalise_rule_id(id);
+    //
+    // THE REWRITE IS CONDITIONAL, SO THE MATCH IS TOO: `config.rs` rewrites
+    // stored ids only `if !config.vocabulary.is_empty()`, so a tree that has not
+    // adopted the grammar stores a kebab id verbatim and normalising
+    // unconditionally would refuse the row under the only name it has. The
+    // typed spelling is therefore tried first and the normalised one as a
+    // fallback, which is a no-op under the grammar — a stored id is already the
+    // space form there, so only the other two spellings reach it.
+    let wanted = if config.rules.iter().any(|rule| rule.id == id) {
+        id.to_owned()
+    } else {
+        verdict::normalise_rule_id(id)
+    };
     // BOTH NAMES A LINE CAN CARRY (CLOUD-1638). A `policy` row's finding is
     // emitted under the MODULE's `"rule":` — `test add duplicate`, not the row
     // `test fix duplicate` that binds the module — so resolving only `[[rule]]`
@@ -17967,9 +17979,25 @@ fn select_rules(
     // `normalise_rule_id`'s own doc already claims this surface: "`-` and `_`
     // are accepted at the boundary and NOWHERE stored". The boundary was the
     // half that never called it.
+    //
+    // THE REWRITE IS CONDITIONAL, SO THE MATCH IS TOO — the typed spelling is
+    // tried FIRST and the normalised one only as a fallback. `config.rs` rewrites
+    // stored ids only `if !config.vocabulary.is_empty()`, so in a tree that has
+    // not adopted the grammar a kebab id is stored VERBATIM, and normalising
+    // unconditionally refused `--rule census-rule` for a row declared under
+    // exactly that name. Measured: it took out every `-J` census fixture, which
+    // declares no vocabulary. Exact-first is right in both worlds — under the
+    // grammar a stored id is already the space form, so only the other two
+    // spellings reach the fallback.
     let wanted: Vec<String> = only
         .iter()
-        .map(|id| verdict::normalise_rule_id(id))
+        .map(|id| {
+            if declared.iter().any(|rule| rule.id == *id) {
+                id.clone()
+            } else {
+                verdict::normalise_rule_id(id)
+            }
+        })
         .collect();
     // The refusal still names what the CALLER typed, not what it normalised to.
     // A message quoting a spelling they did not write sends them looking for a

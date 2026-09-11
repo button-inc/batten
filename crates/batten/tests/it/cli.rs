@@ -13263,6 +13263,42 @@ fn a_rule_selection_accepts_every_spelling_of_a_declared_id() {
     }
 }
 
+/// And a tree that has NOT adopted the grammar keeps its stored spelling.
+///
+/// The mirror of the case above, and the one the first fix broke. `config.rs`
+/// rewrites a stored id to the space form only `if !config.vocabulary
+/// .is_empty()`, so a consumer who declares no `[vocabulary]` keeps a kebab id
+/// verbatim — and a boundary that normalised unconditionally refused that row
+/// under the only name it has, which is the same false typo one direction over.
+/// Measured: it took out every `-J` census fixture at once, none of which
+/// declares a vocabulary.
+#[test]
+fn a_stored_kebab_id_is_selectable_in_a_tree_with_no_vocabulary() {
+    let repo = repo_with_config(
+        "kebab-id-no-vocabulary",
+        r#"version = 1
+
+[[rule]]
+id = "no-hardcoded-banner"
+kind = "forbid"
+glob = "**/*.txt"
+pattern = "ACME CORP"
+severity = "warn"
+scope = "tree"
+"#,
+    );
+    let output = batten()
+        .current_dir(&repo)
+        .args(["check", "--rule", "no-hardcoded-banner"])
+        .output()
+        .expect("run batten check");
+    assert!(
+        output.status.success(),
+        "a kebab id stored verbatim must be selectable under that spelling: {}",
+        stderr(&output)
+    );
+}
+
 /// And a real typo still refuses, NAMING WHAT THE CALLER TYPED.
 ///
 /// Both halves matter. Without the refusal the fix above would be "match
