@@ -277,7 +277,7 @@ fn completion_fixture(name: &str, diverge: bool) -> (PathBuf, PathBuf) {
     fs::write(
         repo.join("batten.toml"),
         format!(
-            "{}\n\n[transcript]\npath = \"session.jsonl\"\n",
+            "{}\n\n[transcript]\npath = \"session.jsonl\"\nharness = \"claude-code\"\n",
             CONFIG.replacen("version = 1", "version = 1\nmust_land_on = \"main\"", 1)
         ),
     )

@@ -268,6 +268,7 @@ fn authority(spawning: bool) -> String {
          \n\
          [transcript]\n\
          path = \"transcript.jsonl\"\n\
+         harness = \"claude-code\"\n\
          tasks = \"/nonexistent/{{session}}\"\n\
          \n\
          [epoch]\n\

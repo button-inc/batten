@@ -5610,6 +5610,14 @@ id = "task table other"
 kind = "policy"
 scope = "tree"
 preset = "mise"
+# ONLY THIS ROW OF THE TWO, and that is the point of a per-module declaration
+# (CLOUD-1625). At `tree` the `mise` preset compiles
+# `action-version-matches-the-pin`, which matches a step's `uses:` coordinate —
+# GitHub Actions. At `mediated_call` the same preset compiles
+# `task-over-executable`, which decides task argv and reads no provider at all,
+# so `mise-preset` above needs nothing. A manifest-level declaration could not
+# have told those two apart.
+provider = "github-actions"
 sources = [
   "batten.toml",
   ".github/workflows/*.yml",
@@ -5647,6 +5655,12 @@ id = "job spelling wrong"
 kind = "policy"
 scope = "tree"
 preset = "ci-hygiene"
+# Both of this preset's modules read GitHub Actions expression language and key
+# on documents carrying a `jobs:` mapping (CLOUD-1625). Declaring the provider is
+# what lets them load: without it the engine refuses, because on any other
+# provider that document set is empty and the modules would report a clean tree
+# they never read.
+provider = "github-actions"
 sources = [".github/workflows/*.yml", ".github/workflows/*.yaml"]
 #
 # `line_sources` AS WELL, for exactly one clause. The swallowed-interpolation

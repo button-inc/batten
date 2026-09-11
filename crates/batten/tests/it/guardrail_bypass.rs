@@ -96,7 +96,8 @@ fn bypass_repo(name: &str, transcript_body: &str) -> (PathBuf, PathBuf) {
             "version = 1\n\
              must_land_on = \"main\"\n\n\
              [transcript]\n\
-             path = \"session.jsonl\"\n",
+             path = \"session.jsonl\"\n\
+             harness = \"claude-code\"\n",
         )
         .file("src/a.rs", "fn main() {}\n")
         .file(".gitignore", "session.jsonl\n")

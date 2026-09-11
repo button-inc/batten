@@ -804,7 +804,7 @@ fn with_transcript(name: &str, body: Option<&str>) -> PathBuf {
     let dir = scratch(
         name,
         true,
-        Some("version = 1\n\n[transcript]\npath = \"session.jsonl\"\n"),
+        Some("version = 1\n\n[transcript]\npath = \"session.jsonl\"\nharness = \"claude-code\"\n"),
     );
     if let Some(body) = body {
         common::write(&dir, "session.jsonl", body);

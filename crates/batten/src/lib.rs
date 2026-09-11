@@ -5724,9 +5724,10 @@ fn run_policy_hooks(json: bool, overrides: &Overrides, out: &mut dyn Write) -> R
         .ok_or_else(|| UsageError::raise(transcript::UNNAMED_NOTICE.to_owned()))?
         .transcript_shape()
     else {
-        return Err(
-            UsageError::raise(format!("{}: {label}", transcript::UNSURVEYED_NOTICE)).into(),
-        );
+        return Err(UsageError::raise(format!(
+            "{}: {label}",
+            transcript::UNSURVEYED_NOTICE
+        )));
     };
     let stream = transcript::parse(&body, &label, shape)?;
     let reading = hookcost::measure(&stream);
@@ -17201,17 +17202,18 @@ fn register_transcript_detectors(
         // the unconfigured one: a repository that declared a transcript and got
         // no stream is owed the notice, where one that declared nothing is not
         // (CLOUD-1624).
-        transcript::Capability::Unnamed | transcript::Capability::Unsurveyed(_) => {
-            report_transcript_capability(&capability, mode, err)?;
-            return Ok(());
-        }
-        // The same could-not-look answer as absent, plus the pointer that names
-        // the line to repair (CLOUD-819). This path already returned `Ok(())`
-        // for absent, so recording nothing is the established reading here; what
-        // changes is only that a decode failure reaches it instead of raising.
-        // Reported through the shared helper, so the two callers cannot drift
-        // into wording the same state differently.
-        transcript::Capability::Unreadable(_) => {
+        //
+        // `Unreadable` joins them: the same could-not-look answer as absent, plus
+        // the pointer that names the line to repair (CLOUD-819). This path already
+        // returned `Ok(())` for absent, so recording nothing is the established
+        // reading here; what changes is only that a decode failure reaches it
+        // instead of raising. One arm rather than two identical ones because the
+        // three states are told apart by the VALUE the shared helper reads, not by
+        // which arm ran — and routing all three through that one helper is what
+        // keeps the two callers from wording the same state differently.
+        transcript::Capability::Unnamed
+        | transcript::Capability::Unsurveyed(_)
+        | transcript::Capability::Unreadable(_) => {
             report_transcript_capability(&capability, mode, err)?;
             return Ok(());
         }
