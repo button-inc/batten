@@ -197,6 +197,17 @@
         "null"
       ]
     },
+    "forge": {
+      "description": "Which forge this repository is hosted on, in the two places the engine\notherwise assumed one (CLOUD-1622).\n\n**A SEPARATE TABLE FROM `[credential]` ABOVE, and that separation is\nmeasured rather than tidy.** `[credential] names` answers \"which variables\nhold a credential WE hold\", and its own doc is explicit that the forge's\nconventional names are deliberately excluded — a host may inject a\nsubstitutable placeholder under them, so probing those would measure the\nhost's credential rather than ours. [`Forge::credential_names`] answers the\nopposite question: which variables hold a token to AUTHENTICATE WITH,\nhost-injected job tokens emphatically included. Folding the two would have\nstopped every REST read using the CI-provided token — a live regression,\nand the reason the row's suggestion to reuse the existing key does not\nsurvive contact with what that key declares.\n\nAbsent is could-not-look rather than a default. The engine's own\nspellings are gone rather than kept as a fallback, because a fallback is\nhow the seam stayed invisible: it worked here, on this forge, and returned\na safe-looking nothing everywhere else.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Forge"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "hook": {
       "description": "Side effects this repository attaches to hook events (CLOUD-91), the\nhouse-style §9 extension surface: `[[hook.action]]` names an event and a\ncommand already on the operator's PATH, so repo-specific cleanup or\nkeepalive is reconstructed here rather than carried by the engine\n(non-negotiable rule 1). Absent means the repository attaches nothing.\nThe type, its validator and the spawn are [`crate::action`].",
       "anyOf": [
@@ -1883,6 +1894,20 @@
         "worst_mb",
         "measured"
       ]
+    },
+    "Forge": {
+      "description": "Which forge this repository is hosted on, in the parts the engine cannot\nderive (CLOUD-1622).\n\n**Only what a consumer can actually answer.** The REST base stays the constant\nabove: pointing this tier at another host asks for a different CLIENT, not a\ndifferent value, and that reasoning is unchanged by this table. What a\nconsumer genuinely knows, and what the engine had no way to be told, is which\nenvironment variables carry the token — which differs per forge AND per host,\nsince a CI provider injects a job token under its own name.",
+      "type": "object",
+      "properties": {
+        "credential_names": {
+          "description": "The environment variables that may carry the forge credential, in\nprecedence order.\n\nOrdered rather than a set, and the order is the consumer's: a session that\nsets one variable for the forge's own CLI should not have to set a second,\nand which of several wins is a fact about that consumer's host.\n\n**An empty list is could-not-look, never \"no credential needed.\"** A\npublic repository genuinely needs none, so an unauthenticated read is a\nlegitimate state — but it is one a consumer DECLARES by naming no\nvariables, rather than one the engine infers by finding none of the two\nspellings it used to carry.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
     },
     "Format": {
       "description": "The document formats the engine can parse — the **format** half of a document\nfact (CLOUD-772).\n\n# Formats, never artifacts\n\nNon-negotiable rule 1 decides this shape. A `parse the toolchain manifest`\nfact would name a consumer's toolchain choice inside `crates/batten`; the\ncore knows only *formats*, and which paths carry which format is the\nconsumer's `batten.toml`. That is why the variants below are TOML and YAML\nrather than any file name, and why\n`tests/document_facts.rs`'s `no_artifact_name_reaches_the_core` is a gate on\nit rather than a convention anyone has to remember.\n\n# PKL is declarable and deliberately unparseable\n\nIt has no maintained Rust parser, and adopting one on speculation is the\nscope expansion this repository refuses. So it is a **variant** rather than\nan omission: a consumer that declares a PKL path gets [`Look::CouldNotLook`],\nexhaustively matched, instead of a fact that silently does not exist. An\nabsent variant would answer the same declaration with \"no rows\", and the only\nway to find that out is that the rule never fires — which is the vacuous pass\nthe whole issue is filed against.",

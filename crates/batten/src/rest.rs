@@ -14,8 +14,10 @@
 //! credential — so the forge's own client IS the call."* That sentence was
 //! **false when it was written, four times**, and one of the four was written in
 //! `lease.rs`, eighty lines from the credential reader [`credential`] is —
-//! a function that reads `GH_TOKEN`, falls back to `GITHUB_TOKEN`, and attaches
-//! `Authorization: Bearer` to a [`crate::fetch`] call.
+//! a function that resolves the token and attaches `Authorization: Bearer` to a
+//! [`crate::fetch`] call. (It named two variables outright when that was written;
+//! since CLOUD-1622 the consumer declares them, because naming them here was the
+//! same rule-1 defect one layer down.)
 //!
 //! [`crate::fetch`] is hyper plus hyper-rustls, vendored under CLOUD-745, with
 //! explicit connect and total timeouts, a typed status, lowercased response
@@ -49,6 +51,77 @@ const API: &str = "https://api.github.com";
 /// What the API is asked to send back.
 const ACCEPT: &str = "application/vnd.github+json";
 
+/// Which forge this repository is hosted on, in the parts the engine cannot
+/// derive (CLOUD-1622).
+///
+/// **Only what a consumer can actually answer.** The REST base stays the constant
+/// above: pointing this tier at another host asks for a different CLIENT, not a
+/// different value, and that reasoning is unchanged by this table. What a
+/// consumer genuinely knows, and what the engine had no way to be told, is which
+/// environment variables carry the token — which differs per forge AND per host,
+/// since a CI provider injects a job token under its own name.
+#[derive(
+    Debug, Clone, Default, serde::Serialize, serde::Deserialize, schemars::JsonSchema, PartialEq, Eq,
+)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct Forge {
+    /// The environment variables that may carry the forge credential, in
+    /// precedence order.
+    ///
+    /// Ordered rather than a set, and the order is the consumer's: a session that
+    /// sets one variable for the forge's own CLI should not have to set a second,
+    /// and which of several wins is a fact about that consumer's host.
+    ///
+    /// **An empty list is could-not-look, never "no credential needed."** A
+    /// public repository genuinely needs none, so an unauthenticated read is a
+    /// legitimate state — but it is one a consumer DECLARES by naming no
+    /// variables, rather than one the engine infers by finding none of the two
+    /// spellings it used to carry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub credential_names: Vec<String>,
+}
+
+/// What the loaded config declared about the forge, set once per process.
+///
+/// **A process-scoped declaration rather than a threaded parameter, and the
+/// choice is argued rather than convenient.** Fifteen call sites across six
+/// modules reach [`get`], [`post`] and [`post_json`], and most sit in functions
+/// with no `Config` in scope — threading one would change signatures up six call
+/// chains to deliver a value that is the same for every one of them, since a
+/// process runs against exactly one repository. That is the shape [`FIXTURE`]
+/// below already takes for the same reason.
+///
+/// **One writer, one reader.** [`declare`] is called from the config loader and
+/// nowhere else, and [`credential`] is the only thing that reads it — so this is
+/// not a second authority over "which variable holds the credential", which is
+/// the property the module header insists on.
+///
+/// Unset reads as `None`, which is could-not-look: a caller reaching the REST
+/// tier before any config was loaded gets an unauthenticated request and the
+/// 401/403 its callers already report, never a token borrowed from a default.
+static DECLARED: std::sync::OnceLock<Forge> = std::sync::OnceLock::new();
+
+/// Record what the consumer declared, once.
+///
+/// Later calls are ignored rather than refused: a process loads one config, and a
+/// second load of the same file must not be able to change the credential a
+/// request in flight would use.
+pub(crate) fn declare(forge: Forge) {
+    let _ = DECLARED.set(forge);
+}
+
+/// [`credential`] against what this process was told, for the one caller outside
+/// this module that needs the token rather than a built header.
+///
+/// [`crate::lease`] speaks git's smart-HTTP transport directly, so it builds its
+/// own `Authorization` line over a different endpoint family — but it reads the
+/// credential through here, which is what keeps one answer to "which variable
+/// holds it" rather than two.
+pub(crate) fn declared_credential() -> Option<String> {
+    credential(DECLARED.get())
+}
+
 /// The bearer token this forge needs, or `None`.
 ///
 /// **Resolved here and returned to nobody outside this module.** It is
@@ -57,12 +130,25 @@ const ACCEPT: &str = "application/vnd.github+json";
 /// pointer. Keeping it inside the request builder means there is no value a
 /// caller could print by accident.
 ///
-/// `GH_TOKEN` first, matching the forge CLI's own precedence, so a session that
-/// set one for that tool does not have to set a second. **This is the reader
-/// `lease.rs` already had**, promoted rather than copied — a second one would be
-/// a second answer to "which variable holds the credential", and the four spawns
-/// this module replaces existed because nobody looked for the first.
-pub(crate) fn credential() -> Option<String> {
+/// **The names come from the consumer now** (CLOUD-1622). They were two
+/// forge-shaped literals in the engine, which is the mechanism half of
+/// non-negotiable rule 1: on a consumer whose host injects under a third name
+/// neither exists, no `Authorization` header is attached, the remote answers
+/// 401/403, and every caller reports could-not-look — so a landing says "no
+/// in-flight runs" at exit 0 while knowing nothing. A dead path and a clean
+/// answer, byte-identical from outside.
+///
+/// **Naming none yields none, and there is deliberately no fallback to the old
+/// pair.** A fallback is exactly how this stayed invisible: it worked in this
+/// repository, on this forge, and returned a safe-looking nothing everywhere
+/// else. A consumer that declares no names has said "read unauthenticated",
+/// which is legitimate for a public repository and now a DECLARATION rather than
+/// an inference.
+///
+/// **This is still the one reader**, promoted rather than copied — a second would
+/// be a second answer to "which variable holds the credential", and the four
+/// spawns this module replaces existed because nobody looked for the first.
+pub(crate) fn credential(forge: Option<&Forge>) -> Option<String> {
     // **THE EMPTINESS TEST IS INSIDE THE CLOSURE, and outside it the fallback
     // above was a sentence the code did not implement** (review of #848).
     // `find_map` commits to the first variable that EXISTS, so a trailing
@@ -77,9 +163,20 @@ pub(crate) fn credential() -> Option<String> {
     // REST read then goes out unauthenticated, and every caller reads the
     // resulting 403/404 as could-not-look, so a landing reports "no in-flight
     // runs" at exit 0 while knowing nothing at all.
-    ["GH_TOKEN", "GITHUB_TOKEN"]
-        .into_iter()
-        .find_map(|name| std::env::var(name).ok().filter(|token| !token.is_empty()))
+    pick(forge?, |name| std::env::var(name).ok())
+}
+
+/// [`credential`]'s choice, with the environment handed in.
+///
+/// Split out so the rule above is testable at all: this crate forbids `unsafe`,
+/// `std::env::set_var` is unsafe, and a test that mutated the process environment
+/// would be untestable AND shared with every other test in the binary. The
+/// lookup is the only impure part, so it is the only part that stays outside.
+fn pick(forge: &Forge, lookup: impl Fn(&str) -> Option<String>) -> Option<String> {
+    forge
+        .credential_names
+        .iter()
+        .find_map(|name| lookup(name).filter(|token| !token.is_empty()))
 }
 
 /// The request headers for one exchange.
@@ -119,7 +216,7 @@ fn headers(conditional: Option<&str>, json_body: bool) -> Vec<(String, String)> 
     if let Some(etag) = conditional {
         headers.push((String::from("If-None-Match"), etag.to_owned()));
     }
-    if let Some(token) = credential() {
+    if let Some(token) = credential(DECLARED.get()) {
         headers.push((String::from("Authorization"), format!("Bearer {token}")));
     }
     headers
@@ -510,6 +607,82 @@ mod tests {
                 "and HTTPS, which the connector enforces anyway"
             );
         }
+    }
+
+    /// **The names come from the consumer, and naming none yields none**
+    /// (CLOUD-1622).
+    ///
+    /// Driven through [`pick`] with the environment handed in, which is what makes
+    /// the rule testable without mutating the process: this crate forbids
+    /// `unsafe`, and `set_var` is unsafe. The arm that matters is the one with no
+    /// fallback — an undeclared forge must yield `None`, never the pair the engine
+    /// used to carry, because a fallback is precisely how this seam stayed
+    /// invisible.
+    #[test]
+    fn an_undeclared_forge_yields_no_credential_rather_than_a_default() {
+        let env = |name: &str| match name {
+            "TOKEN" => Some(String::from("t0ken")),
+            "EMPTY" => Some(String::new()),
+            _ => None,
+        };
+
+        assert_eq!(
+            credential(None),
+            None,
+            "no declaration is could-not-look, never the engine's old spellings"
+        );
+        assert_eq!(
+            pick(
+                &Forge {
+                    credential_names: Vec::new()
+                },
+                env
+            ),
+            None,
+            "and naming no variable is the same answer, said out loud"
+        );
+        assert_eq!(
+            pick(
+                &Forge {
+                    credential_names: vec![String::from("TOKEN")],
+                },
+                env
+            ),
+            Some(String::from("t0ken")),
+            "a declared name is read — without this the case above is satisfied \
+             by a reader that always answers None"
+        );
+        // AND THE ENGINE'S OLD SPELLINGS ARE NOT SPECIAL ANY MORE, which is the
+        // whole seam: a consumer who does not name them gets nothing from them.
+        assert_eq!(
+            pick(
+                &Forge {
+                    credential_names: vec![String::from("TOKEN")],
+                },
+                |name| if name == "GH_TOKEN" {
+                    Some(String::from("leaked"))
+                } else {
+                    env(name)
+                }
+            ),
+            Some(String::from("t0ken")),
+            "an undeclared variable must not be consulted, however conventional"
+        );
+
+        // THE EMPTINESS RULE SURVIVED THE MOVE. An exported-but-empty variable
+        // falls THROUGH to the next name rather than committing to the first that
+        // exists — the defect review of #848 found, re-asserted here because the
+        // list is the consumer's now and a consumer will order it that way.
+        assert_eq!(
+            pick(
+                &Forge {
+                    credential_names: vec![String::from("EMPTY"), String::from("TOKEN")],
+                },
+                env
+            ),
+            Some(String::from("t0ken")),
+            "an empty first name must not shadow a good second one"
+        );
     }
 
     /// The conditional header is attached only when there is a validator.
