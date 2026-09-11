@@ -16,6 +16,15 @@ listed at the bottom with their bypasses so a refusal can be told from a defect.
 fetch → rebase → `verify` → `verified` → push → `ci-wait` ∥ `main-watch` →
 `/fast-forward` → read the answer → lap.
 
+**What the lap is FOR, before any of its mechanics: landing is fast-forward and
+PRESERVES the sha**, so the runs that went green on the pushed head _are_ the
+runs on trunk and CI never runs twice. The lock is therefore the **linearization**
+mechanism — it exists to keep CI saturated with only green matrices on the
+critical path — and **speculation is pipelining**, not opportunism. The holder
+does NOT land by rebase; PR #934's body and commit `3a18fb5`'s message both claim
+it does and both are wrong. Full architecture, metrics and the consensus
+reasoning: `mem:decision/landing-architecture`.
+
 A refusal is **the design working**, not a failure. Each lap rebases onto a
 little more landed work, so conflicts arrive one small resolvable increment at a
 time; batching laps removes no refusal and only makes each one bigger. An agent
@@ -52,10 +61,20 @@ with the branch gone (`git ls-remote` confirms). There is nothing to repair here
 operation, no service, no API. Four things the design was pressure-tested into,
 each of which cost an incident:
 
-- **It is a BRANCH.** The agent proxy 403s a push outside `refs/heads`, and
-  GitHub does not enforce the fast-forward rule off `refs/heads` either — a
-  parentless orphan `PATCH` with `force:false` was _accepted_ on a custom
-  namespace. The atomicity the design rests on exists only on `refs/heads`.
+- **It is a BRANCH — and this premise is UNTESTED and probably a misdiagnosis.**
+  The claim was: the agent proxy 403s a push outside `refs/heads`, and GitHub does
+  not enforce the fast-forward rule off `refs/heads` either. **No test anywhere
+  asserts either half**; the code only _defaults_ unqualified names to
+  `refs/heads/` (`lease.rs:2845`), which is a naming convenience. `git ls-remote
+origin` shows `refs/notes` DOES exist on this remote. And `mem:github-access`
+  measures the real mechanism: **proxied, `git` authenticates with the INJECTED
+  token, which 403s any write it is not scoped for** — same symptom, different
+  cause, and the same root cause as CLOUD-1569. CLOUD-416 (Urgent, never started)
+  records that this misdiagnosis cost **the lease being implemented four times**,
+  and CLOUD-416 itself repeats the wrong cause, so its write probe must run
+  fenced and PAT-authenticated or it will re-measure the credential bug and bake
+  it in as an environment fact. Treat the namespace question as open; see
+  `mem:decision/landing-architecture`.
 - **Renewal is `--force-with-lease=<ref>:<observed>`**, a true CAS. `PATCH` with
   `force:false` does not give one. Create stays a plain push, so acquire is an
   atomic test-and-set.

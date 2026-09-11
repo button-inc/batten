@@ -11,6 +11,14 @@ This memory is the graph root: every other memory is reached from here, and the
 trigger for each is stated here rather than inside it (`mem:memory_maintenance`).
 Read on demand, never all of them.
 
+- `mem:evidence-hierarchy` — **before acting on anything a doc comment, a
+  `CLOUD-*` row, a PR body or a handoff asserts**, and before citing one as the
+  reason for a decision. The board audited at ~38% wrong; comments are no better.
+- `mem:decision/adr-process` — recording a decision; about to add a `status:`,
+  `superseded-by:` or version suffix to any document.
+- `mem:decision/landing-architecture` — touching `land.rs`, `lease.rs`,
+  `speculation.rs`, `pipeline.rs` or the landing workflows; any row about the
+  lease, the lap, speculation, eviction or landing throughput.
 - `mem:workflow/board-states` — starting or finishing a `CLOUD-*` issue;
   reasoning about what is in flight.
 - `mem:workflow/agent-fanout` — spawning a subagent, or running more than one

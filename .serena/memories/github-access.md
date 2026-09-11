@@ -81,9 +81,66 @@ mediated gate permitted for half a session: `no-tool-substitution`,
 `trailer_deny` trailer reach the remote. **At the hook boundary, refuse and permit
 are the same byte.** `mise run install:local` is the unblock.
 
+**Measured again 2026-09-10, with the version numbers, because this class recurs.**
+Installed binary **0.0.156**, tree at **0.0.159**. `batten.toml` declares
+`command_matcher` (commit `4bc4f57`'s key, whose own footer reads
+"`handler::Handler` gains a `command_matcher` field") and 0.0.156 cannot parse
+it, so `batten startup` refused the **whole config** — every mediated gate
+permitting, `egress-is-unproxied` never reachable, `hook-surfaces-are-battens`
+never reaped. `mise run install:local` fixed it; the gates went live immediately
+and began correctly denying `no-tool-substitution` and `background-redirect` on
+calls that had gone unjudged minutes earlier. `contract-drift` then self-reported:
+_"this session's SessionStart registration did not run … every mediated call until
+it appeared failed open and said nothing."_
+
+This is CLOUD-1775's shape and it is **self-referential**: the skew detector is
+declared with `command_matcher`, the very key a stale binary cannot parse, so it
+is unreachable in exactly the case it exists for.
+
+**`batten startup --repair` was ALSO needed by hand** in the same session, and
+`hook-surfaces-are-battens failed not-provisioned` went to `ok` only after it —
+which is what leaves the launcher's own stop hooks firing when batten is supposed
+to have zeroed them in place. Needing the repair by hand is the finding, not the
+fix.
+
 A repair the host refuses is the ONE ask to put to a human (CLOUD-680's shape).
 Name the refusal you actually got; never assert which settings key would have
 granted it unless you measured that key doing something.
+
+## The fence covers `mise` and NOT batten itself — measured 2026-09-10
+
+`/root/.local/bin/mise` is a `provision-exec` wrapper whose declared env fences
+`github.com` and four sibling hosts out of `NO_PROXY`, sources the token from a
+first-set chain including `BATTEN_GITHUB_TOKEN`, carries
+`reject_prefix = "proxy-"` to refuse the injected placeholder, and unsets
+`HTTPS_PROXY` where the trust store names Anthropic. It is correct and complete.
+
+**It covers exactly one binary.** `/root/.local/bin/batten` is a bare stripped
+ELF, not a wrapper — so the engine, the session shell and `git` all run
+un-fenced. Confirmed in-container: `NO_PROXY` carries no `github.com`, while the
+PAT reaches GitHub off-proxy (`rate_limit` core **5000**, not 15000).
+
+`fetch.rs` honouring `*_PROXY` is **deliberate and correct**, not a defect —
+CLOUD-1399 argues it explicitly: _"that behaviour is correct and is what lets
+batten work on a host where a proxy is mandatory. The defect is a container's
+values."_ Only `get_direct` (the credential probe) refuses a proxy, because a
+question about a credential has no answer on a route that substitutes its own.
+
+**But the repair never landed.** CLOUD-1399 is Done and claims commit `46530200`
+shipped an `egress-is-unproxied` `[[startup]]` row.
+`git log -S'egress-is-unproxied' --all -- batten.toml` is EMPTY and `46530200` is
+not a valid object here. `batten doctor egress` correctly answers
+`egress failed egress-unfenced` and **nothing repairs it** — non-negotiable rule
+2's own words: _a gate that detects what it is wired to fix and waits to be asked
+is sensor only._ `BATTEN_ENVIRONMENT=disposable` IS set, so the trigger is not
+the problem; the row does not exist.
+
+CLOUD-1400 is the row for batten owning its own proxy (a decision spike, not
+work). CLOUD-1475 replaces the PAT-in-environment entirely with
+`repository_dispatch` as an authenticated bus and a webhook listener holding the
+secrets — zero bearer in the VM. Until then the standing constraints are: a live
+PAT in the environment, rotated frequently; **no access to any other system**;
+MCP is credentialless.
 
 ## Why the toolchain runs here (a per-host fence, NOT unsetting the proxy)
 
@@ -302,6 +359,16 @@ dropped), confirm green, and land.
   just the old SHA dropped when you pushed a new head.)
 - Never echo a credential. Check presence with `${VAR:+SET}` — never a bare
   `$VAR` or a `${VAR:-…}` that expands the value into the transcript.
+- **`${VAR:+SET}${VAR:-UNSET}` LEAKS THE VALUE, and it reads as safe.** Measured
+  2026-09-10: it printed a live `ghp_` PAT into a session transcript. `:-`
+  substitutes only when the variable is UNSET or empty, so when it is set the
+  second half expands the credential. The concatenated "report either way" form
+  is the trap; `${VAR:+SET}` alone is the whole check.
+- **Rotate a leaked PAT AFTER the session, never during.** A refreshed PAT can
+  only reach a session through its context, so rotating mid-session strands the
+  container with a dead credential and no route to the new one. Note also that a
+  GitHub credential disclosed _to GitHub_ is the least-bad case: GitHub scans its
+  own token formats and auto-revokes its own disclosed credentials.
 
 ## Transparent TLS interception — tools that carry their own CA roots
 
