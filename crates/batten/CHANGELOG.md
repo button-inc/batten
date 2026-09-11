@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.160](https://github.com/button-inc/batten/compare/v0.0.159...v0.0.160) - 2026-09-11
+
+### Fixed
+
+- *(land)* a hold is bettable only if it is another AGENT's, not another branch's
+
 ## [0.0.159](https://github.com/button-inc/batten/compare/v0.0.158...v0.0.159) - 2026-09-09
 
 ### Added
