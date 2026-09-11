@@ -139,7 +139,8 @@
       "mcp__serena__replace_in_files",
       "mcp__serena__replace_symbol_body",
       "mcp__serena__safe_delete_symbol",
-      "mcp__serena__write_memory"
+      "mcp__serena__write_memory",
+      "mcp__github__pull_request_read"
     ],
     "deny": [
       "mcp__Claude_Code_Remote__send_later",
