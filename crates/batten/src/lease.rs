@@ -2502,6 +2502,58 @@ pub fn turn(
     Turn::Wait
 }
 
+/// Does a poison cooldown still hold this clone back from taking the lease?
+///
+/// **The condition is two EVENTS, never a duration** (CLOUD-1778). An agent whose
+/// head turned CI red takes no further turn until either the trunk moves or the
+/// pool goes idle — both observable, neither a timer, so the no-wall-clock
+/// invariant survives a mechanism that would obviously have been written as one.
+///
+/// # Why an agent that poisoned CI must not simply re-take
+///
+/// Nothing stops it today. A holder whose matrix goes red releases and may win
+/// the very next acquire, replay onto the same trunk and buy another matrix on
+/// the same defect — spending the metered resource twice to learn what it already
+/// knows, while every waiter that prepped behind it sits through both.
+///
+/// # Why the trunk moving lapses it
+///
+/// The cooldown is a claim about ONE base: that this branch, on that trunk, is
+/// red. When the trunk advances the claim is about a tree that no longer exists,
+/// and holding the agent back further would punish it for a state nobody is in.
+///
+/// # Why an idle pool lapses it, and this is the anti-outage half
+///
+/// Waiting exists so somebody ELSE gets the slot. With no lease on the ref there
+/// is nobody else, and a cooldown that survived an empty pool would strand a
+/// single-agent fleet completely — one red matrix and nothing can ever land
+/// again. `CLOUD-1043`'s releaser clause is the same argument for its own
+/// mechanism, and it is preserved here rather than rediscovered.
+///
+/// A released lease counts as idle for the same reason: the tombstone says the
+/// holder handed it back, so the ref exists but nobody is holding it.
+#[must_use]
+pub fn cooling(poisoned_at: Option<&str>, trunk_now: &str, observed: &Observed) -> bool {
+    let Some(at) = poisoned_at else {
+        return false;
+    };
+    // THE TRUNK MOVED — the claim was about a base that is no longer trunk.
+    if at != trunk_now {
+        return false;
+    }
+    // THE POOL IS IDLE — nobody is waiting, so waiting buys nothing and would
+    // strand a single-agent fleet.
+    match observed {
+        Observed::Absent => false,
+        Observed::Held { body, .. } => !body.released(),
+        // A ref nobody can read is NOT evidence the pool is idle, and reading it
+        // as idle would let the one agent that just poisoned CI take the lease on
+        // the strength of a failed parse. `turn` already answers `Wait` for this
+        // state; the cooldown agrees rather than arguing with it.
+        Observed::Garbage { .. } => true,
+    }
+}
+
 /// What the holder's own bookkeeping says about whether it is MOVING.
 ///
 /// **Liveness answers a different question, and answers it happily for a process
@@ -4167,6 +4219,66 @@ mod tests {
             turn(&Terms::default(), &body("them", 0, ""), "me", 0, 0, 60, 100),
             Turn::Take(_)
         ));
+    }
+
+    /// The poison cooldown lapses on either event and on neither timer
+    /// (CLOUD-1778).
+    ///
+    /// Fails by: making it a duration, which is the obvious implementation and
+    /// the one the no-wall-clock invariant forbids; or by dropping the idle arm,
+    /// which strands a single-agent fleet after one red matrix.
+    #[test]
+    fn a_poison_cooldown_lapses_when_the_trunk_moves_or_the_pool_idles() {
+        let held = Observed::Held {
+            sha: String::from("aaaa"),
+            body: Body {
+                holder: String::from("someone-else"),
+                expires: 1_700_000_060,
+                ..Body::default()
+            },
+        };
+        assert!(
+            cooling(Some("trunk-1"), "trunk-1", &held),
+            "same trunk and somebody is holding: the cooldown holds"
+        );
+        assert!(
+            !cooling(Some("trunk-1"), "trunk-2", &held),
+            "the trunk moved, so the claim is about a base that is no longer trunk"
+        );
+        assert!(
+            !cooling(Some("trunk-1"), "trunk-1", &Observed::Absent),
+            "nobody is waiting, so waiting buys nothing — and a surviving cooldown \
+             would strand a single-agent fleet after one red matrix"
+        );
+        assert!(
+            !cooling(
+                Some("trunk-1"),
+                "trunk-1",
+                &Observed::Held {
+                    sha: String::from("bbbb"),
+                    body: Body {
+                        expires: 0,
+                        ..Body::default()
+                    },
+                },
+            ),
+            "a tombstone is the holder handing it back: the ref exists, nobody holds it"
+        );
+        assert!(
+            !cooling(None, "trunk-1", &held),
+            "and an agent that poisoned nothing is never held back"
+        );
+        assert!(
+            cooling(
+                Some("trunk-1"),
+                "trunk-1",
+                &Observed::Garbage {
+                    sha: String::from("cccc"),
+                    why: String::from("not a lease"),
+                },
+            ),
+            "a ref nobody can read is not evidence the pool is idle"
+        );
     }
 
     #[test]
