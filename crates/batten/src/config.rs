@@ -1745,6 +1745,18 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
         // matters here: `trunk push forced` is neither a consumer row nor a
         // native site but a VENDORED PRESET's, and a set built from the first
         // two refuses it — measured, twice, before this line was written.
+        // A RETIRED CONSUMER ROW IS NOT FILTERED OUT, and the asymmetry with
+        // `policy::collidable_tokens` — which does filter one — is deliberate
+        // rather than an oversight. That set answers "could this name COLLIDE
+        // with a live class", where a tombstone is not a name in use; this one
+        // answers "is this name already held to the grammar by the class
+        // registry", and `verdict::validate_one` holds EVERY declared row to it,
+        // tombstones included. So a retired consumer token is three declared
+        // vocabulary words by the time this line reads it, and filtering it here
+        // would move it to a checker that reaches the identical verdict — a
+        // second authority over one name, which is the shape the exemption
+        // itself exists to avoid. The vendored and native halves stay unfiltered
+        // for the other reason: they are never held to a consumer's lists at all.
         let vendored = crate::preset::verdict_rows();
         let declared: std::collections::BTreeSet<&str> = config
             .verdicts

@@ -873,6 +873,71 @@ mod tests {
         );
     }
 
+    /// Every FINDING id a preset's modules declare is in the grammar.
+    ///
+    /// # The hole this closes
+    ///
+    /// The finding-id half of CLOUD-1638 had no reader over the vendored half.
+    /// `policy::load`'s general branch holds a module's `"rule":` literals to the
+    /// grammar with `check_finding_ids`; its PRESET branch does not call it, and
+    /// must not: a preset's bytes are in the binary, so a consumer refused for
+    /// one has no edit that fixes it, and held to a narrow consumer vocabulary an
+    /// enabled preset would simply be unloadable. That is the same reasoning that
+    /// makes the vendored verdict rows unconditional in `collidable_tokens`.
+    ///
+    /// So the authority moves to the VENDOR, which is the half that can act on a
+    /// refusal — this repository's own committed `[vocabulary]`, holding names
+    /// this repository ships.
+    ///
+    /// # Why not "every finding is one of the manifest's classes"
+    ///
+    /// Measured, and it is false BY DESIGN: `ci-hygiene` declares `job guard
+    /// missing`, which raises `cache build loose` at one site and `cache name
+    /// unknown` at another. A finding id and a class are different names —
+    /// `check_finding_ids` exempts an id that happens to be a class rather than
+    /// requiring it — so an assertion of containment would refuse the very
+    /// one-to-many shape the two-name split exists to allow.
+    #[test]
+    fn every_finding_a_preset_declares_is_in_the_grammar() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let text =
+            std::fs::read_to_string(root.join("batten.toml")).expect("the authority is readable");
+        let authority: toml::Value = toml::from_str(&text).expect("the authority parses");
+        let vocabulary: crate::verdict::Vocabulary = authority
+            .get("vocabulary")
+            .expect("the vendor has adopted the grammar it holds its presets to")
+            .clone()
+            .try_into()
+            .expect("the word lists deserialize");
+
+        let mut seen = 0_usize;
+        for manifest in MANIFESTS {
+            // A CLASS TOKEN IS EXEMPT, exactly as `check_finding_ids` exempts
+            // one: where the id IS a class the registry governs the name, and
+            // checking it again here would be the second authority over one name
+            // that the exemption exists to avoid.
+            let declared: BTreeSet<&str> = manifest.verdicts.iter().map(|entry| entry.id).collect();
+            for module in manifest.modules {
+                for id in crate::policy::finding_ids(module.source) {
+                    if declared.contains(id.as_str()) {
+                        continue;
+                    }
+                    seen += 1;
+                    crate::verdict::check_rule_id(&id, &vocabulary).unwrap_or_else(|error| {
+                        panic!(
+                            "`{}` declares the finding `{id}` in `{}`: {error}",
+                            manifest.name, module.pointer
+                        )
+                    });
+                }
+            }
+        }
+        assert!(
+            seen > 0,
+            "no preset finding id was judged, so this case is green over nothing"
+        );
+    }
+
     /// Rule 1 reaches a manifest as it reaches a preset source.
     ///
     /// Asserted rather than assumed, per the row: this file is under `crates/**`
