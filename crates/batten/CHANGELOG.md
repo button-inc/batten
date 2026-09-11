@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.162](https://github.com/button-inc/batten/compare/v0.0.161...v0.0.162) - 2026-09-11
+
+### Fixed
+
+- *(mise)* let the job's own credential outrank the one mise-action sets
+
 ## [0.0.161](https://github.com/button-inc/batten/compare/v0.0.160...v0.0.161) - 2026-09-11
 
 ### Added
