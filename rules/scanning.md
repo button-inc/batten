@@ -101,6 +101,35 @@ forge, and a command-position pass over the same files, comments stripped, gave
 forge bucket because the string appeared in a **comment**. Both passes were an
 hour apart, and the substring one was nearly published as the campaign's scoping.
 
+## A scanner that reads the file it lives in will match itself
+
+Row one's instrument has one failure mode that belongs to no other row, because
+it only arises when the corpus and the scanner are the same file. A presence or
+absence test written with `include_str!` over its own module — the shape
+`spawn_census.rs` and `scanner_taxonomy.rs` use — is scanning its own source,
+and **the needle it searches for is in that source.**
+
+Measured 2026-09-11, three times in one session, on two different files:
+
+- A test asserting a refuted claim cannot return **quoted the claim verbatim** in
+  its own doc, so it found the sentence in its own correction and failed.
+- A test asserting no spawn names its program directly **named one in its doc** as
+  the example of what it forbids, and found that.
+- The same test, with comments stripped, then matched **its own search literal**
+  in executable code.
+
+Each was the test working exactly as written. `git.rs` already carries the fix
+and has for longer than this section: it assembles its needle from parts
+(`["Command", "::new(\""].concat()`) so the string never appears whole. The
+idiom was undocumented, so three tests rediscovered the defect instead of the
+remedy.
+
+**So, for a scanner over its own file:** assemble the needle rather than spell it,
+strip comments when the property is about code, and **paraphrase the thing you
+forbid rather than quoting it** — a forbidden or refuted literal sitting in prose
+is one a reader lifts out of its context, which is the same reason the lease's
+own corrected premise is paraphrased rather than quoted.
+
 ## Row four's subject is not the tree, which is why it kept getting answered from memory
 
 The first three questions are about the tree, and the instrument for each is a

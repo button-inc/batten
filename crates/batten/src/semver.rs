@@ -218,22 +218,36 @@ pub fn against_rev(
     baseline: &str,
     release_type: &str,
 ) -> Option<Compared> {
-    let output = std::process::Command::new(ANALYSER)
-        .arg(format!("+{toolchain}"))
-        .args(["semver-checks", "check-release"])
-        .args(["--package", package])
-        .args(["--baseline-rev", baseline])
-        .args(["--release-type", release_type])
-        // Overriding whatever the caller's environment set, and load-bearing rather than
-        // cosmetic: the report below is PARSED, and a gate that parses colour is
-        // CLOUD-199's defect — an anchored pattern that can never match because
-        // escape sequences sit between the anchor and the word.
-        .env("CARGO_TERM_COLOR", "never")
-        .current_dir(root)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .ok()?;
+    // THROUGH THE LADDER, never `Command::new` directly (CLOUD-1494). The adapter
+    // placement above sanctions the SPAWN; it says nothing about how the program
+    // is resolved, and resolving it here bypassed rung 0 — the pin. `rules.rs`
+    // measured that exact shape: *"nothing a toolchain manager provides is on
+    // bare `PATH` -- nor should it be"*, so a `cargo` the project pins was
+    // reached around every time and an unpinned one silently used instead.
+    //
+    // `extra` goes ahead of `+{toolchain}` and that is still correct. The
+    // ordering rule below is about cargo's OWN argv; where rung 3 fires the
+    // program becomes an interpreter and `extra` carries the script, so
+    // `+{toolchain}` remains the first argument cargo itself sees.
+    let output = crate::rules::spawn_resolving(Some(root), ANALYSER, |program, extra| {
+        std::process::Command::new(program)
+            .args(extra)
+            .arg(format!("+{toolchain}"))
+            .args(["semver-checks", "check-release"])
+            .args(["--package", package])
+            .args(["--baseline-rev", baseline])
+            .args(["--release-type", release_type])
+            // Overriding whatever the caller's environment set, and load-bearing rather than
+            // cosmetic: the report below is PARSED, and a gate that parses colour is
+            // CLOUD-199's defect — an anchored pattern that can never match because
+            // escape sequences sit between the anchor and the word.
+            .env("CARGO_TERM_COLOR", "never")
+            .current_dir(root)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    })
+    .ok()?;
     Some(Compared {
         code: output.status.code(),
         report: merged(&output),
@@ -255,32 +269,38 @@ pub fn against_rustdoc(
     current: Option<&Path>,
     release_type: &str,
 ) -> Option<Compared> {
-    let mut command = std::process::Command::new(ANALYSER);
-    // `+toolchain` FIRST, always: cargo reads it as argv[1] and nowhere else, so
-    // an option pushed ahead of it silently runs the default toolchain — the
-    // failure that has no symptom until a version-dependent build breaks.
-    command
-        .arg(format!("+{toolchain}"))
-        .args(["semver-checks", "check-release"])
-        .args(["--package", package])
-        .arg("--baseline-rustdoc")
-        .arg(rustdoc);
-    // `--current-rustdoc` only when one was built. Absent, the tool generates the
-    // head side itself through the scratch resolve — which is the path CLOUD-1399
-    // measured failing, so this is the arm that matters here; it stays optional
-    // because a caller that could not build the head side is still better served
-    // by the tool's own generation than by no comparison at all.
-    if let Some(current) = current {
-        command.arg("--current-rustdoc").arg(current);
-    }
-    let output = command
-        .args(["--release-type", release_type])
-        .env("CARGO_TERM_COLOR", "never")
-        .current_dir(root)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .ok()?;
+    // Through the ladder, for `against_rev`'s reason (CLOUD-1494).
+    let output = crate::rules::spawn_resolving(Some(root), ANALYSER, |program, extra| {
+        let mut command = std::process::Command::new(program);
+        // `+toolchain` FIRST, always: cargo reads it as argv[1] and nowhere else, so
+        // an option pushed ahead of it silently runs the default toolchain — the
+        // failure that has no symptom until a version-dependent build breaks.
+        // `extra` is the ladder's own prefix and precedes it, which keeps
+        // `+{toolchain}` first in the argv cargo itself receives.
+        command
+            .args(extra)
+            .arg(format!("+{toolchain}"))
+            .args(["semver-checks", "check-release"])
+            .args(["--package", package])
+            .arg("--baseline-rustdoc")
+            .arg(rustdoc);
+        // `--current-rustdoc` only when one was built. Absent, the tool generates the
+        // head side itself through the scratch resolve — which is the path CLOUD-1399
+        // measured failing, so this is the arm that matters here; it stays optional
+        // because a caller that could not build the head side is still better served
+        // by the tool's own generation than by no comparison at all.
+        if let Some(current) = current {
+            command.arg("--current-rustdoc").arg(current);
+        }
+        command
+            .args(["--release-type", release_type])
+            .env("CARGO_TERM_COLOR", "never")
+            .current_dir(root)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    })
+    .ok()?;
     Some(Compared {
         code: output.status.code(),
         report: merged(&output),
@@ -312,13 +332,21 @@ pub fn toolchain(root: &Path) -> Option<String> {
     {
         return Some(named);
     }
-    let output = std::process::Command::new("rustc")
-        .arg("--version")
-        .current_dir(root)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
+    // Through the ladder (CLOUD-1494), and this one is the site where bypassing it
+    // was most clearly wrong: the doc above says the pin is READ rather than
+    // restated, and reading it off a `rustc` resolved on bare `PATH` reads a
+    // DIFFERENT compiler from the one the project pins — so the "authority" was
+    // whichever toolchain the ambient environment happened to expose.
+    let output = crate::rules::spawn_resolving(Some(root), "rustc", |program, extra| {
+        std::process::Command::new(program)
+            .args(extra)
+            .arg("--version")
+            .current_dir(root)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+    })
+    .ok()?;
     let text = String::from_utf8_lossy(&output.stdout).into_owned();
     let version = text.split_whitespace().nth(1)?;
     (!version.is_empty()).then(|| version.to_owned())
@@ -383,43 +411,51 @@ pub fn baseline_rustdoc(
     // this whole gate exists against.
     crate::git::materialize_rev(root, baseline, &worktree)
         .map_err(|err| format!("the baseline tree could not be materialized: {err}"))?;
-    let built = std::process::Command::new(ANALYSER)
-        .arg(format!("+{toolchain}"))
-        .args([
-            "doc",
-            "--locked",
-            "--no-deps",
-            "--lib",
-            "--package",
-            package,
-        ])
-        .env("RUSTC_BOOTSTRAP", "1")
-        .env(
-            "RUSTDOCFLAGS",
-            "-Z unstable-options --output-format json --document-private-items",
-        )
-        .env("CARGO_TARGET_DIR", &target)
-        .env("CARGO_TERM_COLOR", "never")
-        // THE OUTER CARGO'S ENVIRONMENT IS NOT THIS BUILD'S. When the binary
-        // itself is launched through `cargo run`, cargo exports its own manifest
-        // and toolchain into the child, and a nested `cargo doc` reads them as
-        // instructions about a package that is not the one in front of it. Every
-        // one is removed rather than overridden, because overriding requires
-        // knowing the whole set and removal does not.
-        .env_remove("CARGO")
-        .env_remove("CARGO_MANIFEST_DIR")
-        .env_remove("CARGO_MANIFEST_PATH")
-        .env_remove("CARGO_PKG_NAME")
-        .env_remove("CARGO_PKG_VERSION")
-        .env_remove("CARGO_MAKEFLAGS")
-        .env_remove("RUSTC")
-        .env_remove("RUSTDOC")
-        .env_remove("RUSTUP_TOOLCHAIN")
-        .current_dir(&worktree)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .map_err(|err| format!("the baseline doc build could not be run: {err}"))?;
+    // Through the ladder, for `against_rev`'s reason (CLOUD-1494). Resolved
+    // against `root` rather than the scratch worktree: the pin is the PROJECT's,
+    // and a materialized baseline tree carries no toolchain configuration of its
+    // own — asking it would resolve nothing and fall through to bare `PATH`,
+    // which is the bypass this change closes.
+    let built = crate::rules::spawn_resolving(Some(root), ANALYSER, |program, extra| {
+        std::process::Command::new(program)
+            .args(extra)
+            .arg(format!("+{toolchain}"))
+            .args([
+                "doc",
+                "--locked",
+                "--no-deps",
+                "--lib",
+                "--package",
+                package,
+            ])
+            .env("RUSTC_BOOTSTRAP", "1")
+            .env(
+                "RUSTDOCFLAGS",
+                "-Z unstable-options --output-format json --document-private-items",
+            )
+            .env("CARGO_TARGET_DIR", &target)
+            .env("CARGO_TERM_COLOR", "never")
+            // THE OUTER CARGO'S ENVIRONMENT IS NOT THIS BUILD'S. When the binary
+            // itself is launched through `cargo run`, cargo exports its own manifest
+            // and toolchain into the child, and a nested `cargo doc` reads them as
+            // instructions about a package that is not the one in front of it. Every
+            // one is removed rather than overridden, because overriding requires
+            // knowing the whole set and removal does not.
+            .env_remove("CARGO")
+            .env_remove("CARGO_MANIFEST_DIR")
+            .env_remove("CARGO_MANIFEST_PATH")
+            .env_remove("CARGO_PKG_NAME")
+            .env_remove("CARGO_PKG_VERSION")
+            .env_remove("CARGO_MAKEFLAGS")
+            .env_remove("RUSTC")
+            .env_remove("RUSTDOC")
+            .env_remove("RUSTUP_TOOLCHAIN")
+            .current_dir(&worktree)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    })
+    .map_err(|err| format!("the baseline doc build could not be run: {err}"))?;
     if !built.status.success() {
         return Err(format!(
             "the baseline doc build failed: {}",
@@ -482,37 +518,41 @@ pub fn current_rustdoc(
         .canonicalize()
         .map_err(|err| format!("the current scratch directory could not be resolved: {err}"))?
         .join("target");
-    let built = std::process::Command::new(ANALYSER)
-        .arg(format!("+{toolchain}"))
-        .args([
-            "doc",
-            "--locked",
-            "--no-deps",
-            "--lib",
-            "--package",
-            package,
-        ])
-        .env("RUSTC_BOOTSTRAP", "1")
-        .env(
-            "RUSTDOCFLAGS",
-            "-Z unstable-options --output-format json --document-private-items",
-        )
-        .env("CARGO_TARGET_DIR", &target)
-        .env("CARGO_TERM_COLOR", "never")
-        .env_remove("CARGO")
-        .env_remove("CARGO_MANIFEST_DIR")
-        .env_remove("CARGO_MANIFEST_PATH")
-        .env_remove("CARGO_PKG_NAME")
-        .env_remove("CARGO_PKG_VERSION")
-        .env_remove("CARGO_MAKEFLAGS")
-        .env_remove("RUSTC")
-        .env_remove("RUSTDOC")
-        .env_remove("RUSTUP_TOOLCHAIN")
-        .current_dir(root)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .map_err(|err| format!("the current doc build could not be run: {err}"))?;
+    // Through the ladder, for `against_rev`'s reason (CLOUD-1494).
+    let built = crate::rules::spawn_resolving(Some(root), ANALYSER, |program, extra| {
+        std::process::Command::new(program)
+            .args(extra)
+            .arg(format!("+{toolchain}"))
+            .args([
+                "doc",
+                "--locked",
+                "--no-deps",
+                "--lib",
+                "--package",
+                package,
+            ])
+            .env("RUSTC_BOOTSTRAP", "1")
+            .env(
+                "RUSTDOCFLAGS",
+                "-Z unstable-options --output-format json --document-private-items",
+            )
+            .env("CARGO_TARGET_DIR", &target)
+            .env("CARGO_TERM_COLOR", "never")
+            .env_remove("CARGO")
+            .env_remove("CARGO_MANIFEST_DIR")
+            .env_remove("CARGO_MANIFEST_PATH")
+            .env_remove("CARGO_PKG_NAME")
+            .env_remove("CARGO_PKG_VERSION")
+            .env_remove("CARGO_MAKEFLAGS")
+            .env_remove("RUSTC")
+            .env_remove("RUSTDOC")
+            .env_remove("RUSTUP_TOOLCHAIN")
+            .current_dir(root)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    })
+    .map_err(|err| format!("the current doc build could not be run: {err}"))?;
     if !built.status.success() {
         return Err(format!(
             "the current doc build failed: {}",
@@ -663,6 +703,60 @@ mod tests {
             code: Some(100),
             report: body.to_owned(),
             route: Route::Rev,
+        }
+    }
+
+    /// **EVERY SPAWN HERE GOES THROUGH THE LADDER** (CLOUD-1494).
+    ///
+    /// `policy/spawn-adapters.rego` places this module, which sanctions the
+    /// SPAWN — it says nothing about how the program is RESOLVED, and that gap is
+    /// what let five sites reach `Command::new(ANALYSER)` directly and skip rung
+    /// 0. `rules.rs` measured the cost of exactly that: *"nothing a toolchain
+    /// manager provides is on bare `PATH` -- nor should it be"*, so a pinned
+    /// `cargo` was reached around every time and whatever the ambient environment
+    /// exposed was used instead. `toolchain()` was the worst of the five: its own
+    /// doc calls itself a READ of the pin, and it read a different compiler.
+    ///
+    /// Asserted over this file's own text because the property is syntactic —
+    /// the argument to `Command::new` — and no exit code reaches it. The shape is
+    /// `git.rs:5127`'s, which greps this crate for `Command::new("git")` and
+    /// fails on a hit; here the refusal is narrower, since the spawn is legitimate
+    /// and only the unresolved program is not.
+    #[test]
+    fn no_spawn_in_this_module_names_its_program_directly() {
+        // COMMENT LINES ARE DROPPED FIRST, and this file's own first draft is why.
+        // The prose above names the defect in its own words, so a scan over raw
+        // text found the call spelled in a COMMENT and reported it as a live site.
+        // `rules/scanning.md` row two is exactly this — a syntax question answered
+        // with a text scanner — and CLOUD-843 measured the same class, where
+        // `ci-local-parity` landed in the wrong bucket because the string appeared
+        // in a comment. A line filter is the cheap half of the right instrument;
+        // it is sound here because every real call sits in command position on a
+        // line of its own.
+        let code: String = include_str!("semver.rs")
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // THE NEEDLE IS ASSEMBLED, never written whole, and `git.rs`'s own
+        // crate-wide scan does the same for the same reason: a scanner spelled
+        // literally matches ITSELF, so the first version reported its own search
+        // string as a defect. Stripping comments was not enough — this one is in
+        // executable code.
+        let needle = ["Command", "::new("].concat();
+        for site in code.match_indices(needle.as_str()) {
+            let (_, tail) = code.split_at(site.0 + needle.len());
+            // `unwrap_or` rather than `expect`: a call with no closing parenthesis
+            // is not this test's subject, and an empty argument fails the assertion
+            // below anyway — so the degenerate parse reports as a finding rather
+            // than as a panic in the checker.
+            let argument = tail.split(')').next().unwrap_or_default();
+            assert_eq!(
+                argument, "program",
+                "a spawn here must take the program the ladder resolved, never a \
+                 literal or a constant — that skips rung 0 and reaches around a \
+                 pinned toolchain"
+            );
         }
     }
 
