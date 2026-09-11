@@ -160,7 +160,7 @@ ritual is the whole rule: **before a claim about what is filed, decided or
 measured reaches a durable artifact — a commit message, a PR body, an issue
 body, or a sentence to a human — search for it.**
 
-**And the gate here only guards the write.** `filing-needs-a-search` refused
+**And the gate here only guards the write.** `issue list unread` refused
 three attempts to file without searching in that same session and was right
 every time; it cannot reach a claim that something is _unfiled_, because no tool
 call is being made. That asymmetry is the reason this row is prose: the write

@@ -2996,7 +2996,7 @@ row is unchanged, because the tracker offers no precondition on write. Measured 
 2026-08-13: a session read a row, planned against it for ~51 minutes, and wrote a \
 Ready block moving it into the ready queue — another session had marked it a \
 duplicate in between, and the write landed anyway (CLOUD-508). Creating an issue \
-is never gated by this row (that is `filing-needs-a-search`)."""
+is never gated by this row (that is `issue list unread`)."""
 
 # CLOUD-312 row 4: `connector-verb-guard` retires here. THREE ROWS, one per verb,
 # and every one is an existing AGENTS.md rule rather than a new one this config
@@ -4478,7 +4478,7 @@ fields = [
 # prohibition is the generalisation CLOUD-1380's own body records itself making.
 #
 # `title` and `url` are the identity half — what a human reads to know which row
-# matched — and `filing-needs-a-search` is the consumer that must not be blinded: a
+# matched — and `issue list unread` is the consumer that must not be blinded: a
 # reduction emitting only `hasNextPage` would satisfy every size predicate and
 # destroy the verb's purpose.
 #
@@ -4542,7 +4542,7 @@ fields = [
 #
 # `list_issues` IS DELIBERATELY NOT HERE. It is already projected on every
 # measured call, and a `shape` row cannot express "without `fields`" — a row
-# that refused it outright would deny the search `filing-needs-a-search`
+# that refused it outright would deny the search `issue list unread`
 # requires, which is how a guard gets switched off within a day (CLOUD-199).
 #
 # NOR IS `save_issue`, and that absence is recorded rather than pending. The
