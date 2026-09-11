@@ -1428,11 +1428,27 @@ impl Step {
     }
 }
 
+/// Whose base this lap's tree is sitting on when a step answers.
+///
+/// The one fact that decides whether a refused gate is a statement about THIS
+/// branch (CLOUD-1306).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Basis {
+    /// The branch is replayed onto trunk itself. A gate's refusal is about this
+    /// tree and nothing else.
+    Own,
+    /// The branch is replayed onto a lease holder's unlanded commits — "the main
+    /// that is about to exist". A gate's refusal is about this tree **and** that
+    /// borrowed base, and nothing in the exit code separates them.
+    Borrowed,
+}
+
 #[must_use]
 pub const fn progress_of(
     step: Step,
     code: crate::exit::ExitCode,
     seen: Option<TapVerdict>,
+    basis: Basis,
 ) -> Progress {
     // THE REFUSAL, NOT THE STEP. Keying on `(Wait, Red)` alone reads a wait that
     // SUCCEEDED as a stop whenever a red reading is in hand — which the driver
@@ -1442,6 +1458,39 @@ pub const fn progress_of(
         (step, code, seen)
     {
         return Progress::Stop;
+    }
+    // A REFUSED GATE OVER A BORROWED BASE IS NOT YET THIS BRANCH'S ANSWER.
+    //
+    // `progress`'s stop cell reasons that "the replay and the gate both answer
+    // about THIS tree, so a refusal from either is a decision no rebase clears".
+    // That is exactly right when the branch sits on trunk and exactly wrong when
+    // it does not: a speculative lap's tree is this branch's commits replayed
+    // onto a holder's unlanded ones, so a red gate has two candidate causes and
+    // the exit code distinguishes neither. Stopping attributes the failure to the
+    // author on no evidence.
+    //
+    // The cost of getting it wrong is not one branch's. Under fast-forward
+    // linearization the waiter's local prep is the free half of the pipeline, and
+    // a stop here discards a prepared branch — so when the slot frees there is
+    // nothing proven ready to take it, and the skew that speculation exists to
+    // drive toward zero opens back up. It also burns the agent's remaining
+    // tokens, which is the opposite of what this loop is for.
+    //
+    // **AND IT MADE THE POISONED-BASE MECHANISM INERT.** That path's own comment
+    // says "the NEXT lap settles `Poisoned`", and behind this cell there was no
+    // next lap — a mechanism whose every part existed and whose entry cell voided
+    // it, which is the dead-gate class this module already shipped once at
+    // `(Ready | Verify, Internal)`.
+    //
+    // LAPPING IS THE DISCRIMINATION, NOT AN EVASION. The next replay drops the
+    // borrowed base, so the same gate runs again over this branch on trunk — and
+    // a refusal THERE arrives with `Basis::Own` and stops, carrying the evidence
+    // the first refusal lacked. That is one extra local gate run, which costs no
+    // CI matrix at all, to avoid blaming an author for a neighbour's tree. The
+    // driver bounds the repeat under `Bound::SpeculativeRefusals` so a base that
+    // keeps refusing cannot lap forever.
+    if let (Step::Verify, crate::exit::ExitCode::Violation, Basis::Borrowed) = (step, code, basis) {
+        return Progress::Lap;
     }
     progress(step, code)
 }
@@ -1893,6 +1942,22 @@ pub enum Bound {
     /// as anything wrong with the branch. The remedy is a shorter gate or a
     /// quieter trunk, never a re-run.
     GateReclaims,
+    /// The gate refused over a borrowed base, repeatedly (CLOUD-1306).
+    ///
+    /// Like [`Bound::GateReclaims`] this has spent NO CI — `verify` refuses
+    /// before the matrix — so a caller reports it as a speculation that did not
+    /// pay off rather than as a verdict on the branch. **And that is the whole
+    /// reason it is its own bound rather than a lap charge**: the refusals it
+    /// counts are the ones nothing has yet attributed to this tree, so spending
+    /// the general lap budget on them would let a neighbour's poisoned base
+    /// exhaust an innocent branch and then report the exhaustion against it.
+    ///
+    /// The bound is SMALL by design. One lap off the borrowed base is the
+    /// discrimination — the same gate re-runs on trunk and answers with
+    /// [`Basis::Own`] — so a second and third refusal buy progressively less. The
+    /// cost of too few is abandoning a branch whose base merely churned; the cost
+    /// of too many is re-proving somebody else's defect on this agent's clock.
+    SpeculativeRefusals,
 }
 
 /// What a charge decided.
@@ -1944,6 +2009,8 @@ pub struct Ledger {
     pub transients: u32,
     /// Passes whose gate was reclaimed because the base moved under it.
     pub gate_reclaims: u32,
+    /// Passes whose gate refused over a base borrowed from a lease holder.
+    pub speculative_refusals: u32,
 }
 
 impl Ledger {
@@ -2015,6 +2082,30 @@ impl Ledger {
         self.gate_reclaims = self.gate_reclaims.saturating_add(1);
         if self.gate_reclaims > max {
             Charge::Stop(Bound::GateReclaims)
+        } else {
+            Charge::Lap
+        }
+    }
+
+    /// A pass whose gate refused over a borrowed base (CLOUD-1306).
+    ///
+    /// [`Ledger::reclaimed`]'s shape, and the refund is honest for the identical
+    /// reason: `verify` refuses before the matrix, so the pass bought no CI. What
+    /// differs is what the count MEANS. A reclaimed gate is a fact about the
+    /// trunk's pace; this is a refusal nothing has yet attributed to anybody, and
+    /// the next lap — replayed onto trunk rather than onto the holder — is the
+    /// experiment that attributes it.
+    ///
+    /// **Refunding the lap is what stops a neighbour's defect exhausting this
+    /// branch.** Charged to `laps`, a poisoned base would spend an innocent
+    /// branch's runaway backstop and the exhaustion would then be reported
+    /// against the branch, which is the misattribution this whole cell exists to
+    /// end — one bound lower down instead of one cell higher up.
+    pub const fn speculative_refusal(&mut self, max: u32) -> Charge {
+        self.laps = self.laps.saturating_sub(1);
+        self.speculative_refusals = self.speculative_refusals.saturating_add(1);
+        if self.speculative_refusals > max {
+            Charge::Stop(Bound::SpeculativeRefusals)
         } else {
             Charge::Lap
         }
@@ -2577,7 +2668,7 @@ pub fn rerun_failed(repo: &str, run: &str) -> bool {
 
 #[cfg(test)]
 mod lap_tests {
-    use super::{Progress, Step, progress};
+    use super::{Basis, Progress, Step, progress, progress_of};
     use crate::exit::ExitCode::{Internal, Success, Usage, Violation};
 
     /// **The discriminating claim: a refusal a rebase would clear laps, and one
@@ -2648,6 +2739,59 @@ mod lap_tests {
     fn a_refused_tree_still_stops_the_lap() {
         assert_eq!(progress(Step::Verify, Violation), Progress::Stop);
         assert_ne!(progress(Step::Verify, Violation), Progress::Lap);
+    }
+
+    /// **THE UNQUALIFIED TABLE IS NOT THE WHOLE ANSWER ANY MORE** (CLOUD-1306).
+    ///
+    /// [`progress`] above is the base table and still stops, which is correct for
+    /// a branch on trunk. [`progress_of`] is the qualified reading the driver
+    /// actually takes, and over a borrowed base it laps — because the tree that
+    /// refused is this branch's commits replayed onto a LEASE HOLDER's unlanded
+    /// ones, so the refusal has two candidate causes and the exit code separates
+    /// neither.
+    ///
+    /// This is deliberately the same shape as the `Wait`/`Red` qualifier beside
+    /// it: the base table carries the general answer and the qualifier reaches
+    /// exactly one cell. Keeping the general answer as `Stop` is what makes the
+    /// premise case above still meaningful.
+    #[test]
+    fn a_refused_tree_over_a_borrowed_base_laps_instead_of_blaming_this_branch() {
+        assert_eq!(
+            progress_of(Step::Verify, Violation, None, Basis::Borrowed),
+            Progress::Lap,
+            "a refusal over somebody else's base is not yet this branch's verdict"
+        );
+    }
+
+    /// The premise for the case above: the qualifier must not swallow the cell.
+    ///
+    /// Without this, "stop attributing failures to the author" is implementable as
+    /// "never stop", which is the dead-gate class — a branch with a genuinely
+    /// broken tree would lap until its budget ran out and then report exhaustion
+    /// rather than the defect it actually has.
+    #[test]
+    fn a_refused_tree_on_its_own_base_still_stops_under_the_qualifier() {
+        assert_eq!(
+            progress_of(Step::Verify, Violation, None, Basis::Own),
+            Progress::Stop,
+            "on trunk the gate answers about THIS tree, and no rebase clears it"
+        );
+    }
+
+    /// The qualifier reaches ONE cell, and the neighbours prove it.
+    ///
+    /// `Basis` is read on every step, so a qualifier written one match arm too
+    /// wide would turn a refused replay or a refused ready into a lap — and both
+    /// of those are statements no rebase clears, exactly as before.
+    #[test]
+    fn the_borrowed_base_qualifier_does_not_reach_the_other_stops() {
+        for step in [Step::Replay, Step::Ready] {
+            assert_eq!(
+                progress_of(step, Violation, None, Basis::Borrowed),
+                progress(step, Violation),
+                "{step:?} must answer the same whoever's base this is"
+            );
+        }
     }
 
     /// **The freshness probe fails OPEN, which is the opposite of every gate in
@@ -3237,6 +3381,45 @@ mod tests {
         assert_eq!(ledger.lease_waits, 1, "and charged to its own bound");
     }
 
+    /// A speculative refusal is refunded and charged to its own bound
+    /// (CLOUD-1306).
+    ///
+    /// Fails by: charging `laps` instead, which is the misattribution this whole
+    /// cell exists to end, arriving one bound lower down — a neighbour's poisoned
+    /// base would spend an innocent branch's runaway backstop and the exhaustion
+    /// would then be reported against that branch.
+    #[test]
+    fn a_speculative_refusal_refunds_its_lap_and_charges_its_own_bound() {
+        let mut ledger = Ledger::default();
+        ledger.attempt();
+        assert_eq!(ledger.speculative_refusal(2), Charge::Lap);
+        assert_eq!(ledger.laps, 0, "the attempt was refunded");
+        assert_eq!(
+            ledger.speculative_refusals, 1,
+            "and charged to its own bound"
+        );
+        assert_eq!(
+            ledger.paid, 0,
+            "verify refuses before the matrix, which is what makes the refund honest"
+        );
+    }
+
+    /// The bound is real, so a base that keeps refusing cannot lap forever.
+    ///
+    /// The premise for lapping at all: without a bound, "do not blame the author"
+    /// becomes an unbounded token burn on somebody else's defect — which is the
+    /// cost CLOUD-1306 is about, reintroduced by the fix for it.
+    #[test]
+    fn enough_speculative_refusals_stop_under_their_own_bound() {
+        let mut ledger = Ledger::default();
+        assert_eq!(ledger.speculative_refusal(1), Charge::Lap);
+        assert_eq!(
+            ledger.speculative_refusal(1),
+            Charge::Stop(Bound::SpeculativeRefusals),
+            "past the bound the laps are re-proving a neighbour's defect"
+        );
+    }
+
     /// **A RECLAIMED GATE IS THE SAME CLASS, AND THE RACE MADE IT COMMON**
     /// (CLOUD-1586).
     ///
@@ -3576,22 +3759,30 @@ mod tests {
         use crate::exit::ExitCode::Violation;
 
         assert_eq!(
-            progress_of(Step::Wait, Violation, Some(TapVerdict::Red)),
+            progress_of(Step::Wait, Violation, Some(TapVerdict::Red), Basis::Own),
             Progress::Stop,
             "no rebase clears a failing test"
         );
         assert_eq!(
-            progress_of(Step::Wait, Violation, None),
+            progress_of(Step::Wait, Violation, None, Basis::Own),
             Progress::Lap,
             "the staleness arm won the race, and the next replay is the remedy"
         );
     }
 
-    /// The qualifier reaches ONE cell and leaves the table alone otherwise —
-    /// without this, a validator that stopped everything would satisfy the case
+    /// The qualifiers reach TWO cells and leave the table alone otherwise —
+    /// without this, a validator that stopped everything would satisfy the cases
     /// above.
+    ///
+    /// **`Basis::Own` IS THE WHOLE SWEEP, AND THAT IS THE STRONGEST THING THIS
+    /// CASE SAYS** (CLOUD-1306). A branch on trunk reads exactly as it did before
+    /// the borrowed-base qualifier existed, for every step, every code and every
+    /// reading — so the change cannot have moved a cell for the ordinary,
+    /// non-speculating landing. The one borrowed-base cell is asserted by its own
+    /// case rather than carved out of this sweep, which is what keeps the
+    /// exception legible instead of hidden in a predicate here.
     #[test]
-    fn the_reading_qualifies_the_wait_row_and_nothing_else() {
+    fn the_reading_qualifies_two_cells_and_nothing_else() {
         use crate::exit::ExitCode::{Internal, Success, Usage, Violation};
 
         for step in [
@@ -3605,18 +3796,29 @@ mod tests {
             for code in [Success, Usage, Violation, Internal] {
                 for seen in [None, Some(TapVerdict::Green), Some(TapVerdict::Pending)] {
                     assert_eq!(
-                        progress_of(step, code, seen),
+                        progress_of(step, code, seen, Basis::Own),
                         progress(step, code),
-                        "{step:?}/{code:?}/{seen:?} must read as the table does"
+                        "{step:?}/{code:?}/{seen:?} on its own base must read as the table does"
                     );
                 }
                 // And the red reading moves only the wait's own refusal.
                 if !(step == Step::Wait && code == Violation) {
                     assert_eq!(
-                        progress_of(step, code, Some(TapVerdict::Red)),
+                        progress_of(step, code, Some(TapVerdict::Red), Basis::Own),
                         progress(step, code),
                         "{step:?}/{code:?} is not the wait's refusal"
                     );
+                }
+                // The borrowed base moves the gate's refusal and NOTHING else, so
+                // every other cell answers identically whoever's base it is.
+                if !(step == Step::Verify && code == Violation) {
+                    for seen in [None, Some(TapVerdict::Green), Some(TapVerdict::Red)] {
+                        assert_eq!(
+                            progress_of(step, code, seen, Basis::Borrowed),
+                            progress_of(step, code, seen, Basis::Own),
+                            "{step:?}/{code:?}/{seen:?} is not the gate's refusal"
+                        );
+                    }
                 }
             }
         }

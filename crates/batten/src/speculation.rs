@@ -168,6 +168,51 @@ pub struct Bet {
     /// it, and reading it as "no more bets at all" would give up speculating for
     /// the rest of the landing over one bad candidate.
     pub conflicts: Option<String>,
+    /// The holder's base whose tree was REFUSED by the gate (CLOUD-1306).
+    ///
+    /// **[`Bet::conflicts`]'s twin, and for the identical reason one field up.**
+    /// That one records a base known to conflict with this branch; this one
+    /// records a base known to poison it — the replay succeeded, the tree is well
+    /// formed, and `verify` refused it. Both are judgements about a COMMIT rather
+    /// than about this landing, so both survive [`Bet::forget`] and both are read
+    /// by [`Bet::would_rebet`].
+    ///
+    /// **WITHOUT IT, LAPPING ON A POISONED BASE IS A SPIN RATHER THAN A
+    /// DISCRIMINATION.** `land::Basis::Borrowed` turns a refused gate into a lap
+    /// so the failure is not blamed on this author, and the whole argument for
+    /// that is that the NEXT lap re-runs the same gate with the borrowed base
+    /// gone. The lap unwinds and calls `forget`, which clears `base` — and
+    /// `would_rebet` compares `base`, so a forgotten bet answered `true` for the
+    /// same holder and the next lap borrowed the identical poisoned commits. The
+    /// gate would then refuse again, for the same reason, having proved nothing,
+    /// until the bound stopped it. `the_same_candidate_is_not_bet_on_twice`
+    /// records that arm as *"CLOUD-1306's other half"*, and it is the half that
+    /// makes the first half worth anything.
+    ///
+    /// An `Option<String>` rather than a `bool`, for `conflicts`'s stated reason:
+    /// a flag cannot tell the holder that poisoned this branch from the one that
+    /// replaced it, so reading it as "no more bets at all" would give up
+    /// speculating for the rest of the landing over one bad candidate — and
+    /// speculation is the pipelining, so giving it up is the throughput loss this
+    /// mechanism exists to avoid.
+    ///
+    /// # "Poisoned" names the PAIR, and the field is right for both causes
+    ///
+    /// A gate refusing over a borrowed base has two candidate causes and this
+    /// clone can distinguish neither from here: the base is genuinely broken, or
+    /// the base and this branch are each fine and conflict semantically. The name
+    /// leans toward the first; the behaviour is correct under both, which is why
+    /// the field is a pair judgement — *this base, with these commits* — rather
+    /// than a verdict on the base alone.
+    ///
+    /// Under the second cause, declining to re-borrow is still right, and the
+    /// error does not survive: when the holder lands, the next replay puts their
+    /// change on trunk, the same gate refuses with [`crate::land::Basis::Own`],
+    /// and the loop STOPS with the conflict correctly attributed to a tree this
+    /// branch is now actually responsible for. So the worst case is one deferred
+    /// stop rather than a wrong one, and nothing here asserts a verdict about
+    /// somebody else's commits that this clone has not earned.
+    pub poisoned: Option<String>,
     /// This landing has already declined to publish a speculation (CLOUD-1681).
     ///
     /// **THE TERMINATION HALF, and without it the precheck is a spin.** The
@@ -224,6 +269,15 @@ impl Bet {
     #[must_use]
     pub fn would_rebet(&self, candidate: &str) -> bool {
         if self.conflicts.as_deref() == Some(candidate) {
+            return false;
+        }
+        // AND A BASE THAT POISONED THIS BRANCH IS NOT BORROWED AGAIN
+        // (CLOUD-1306). Same shape as the conflict arm above and the same
+        // argument: the judgement is about that COMMIT, it stays true of it after
+        // the bet is forgotten, and re-betting would spend the next lap proving
+        // it a second time. Declining sends the lap onto trunk, which is the
+        // experiment `land::Basis` laps in order to run.
+        if self.poisoned.as_deref() == Some(candidate) {
             return false;
         }
         self.base.as_deref() != Some(candidate)
@@ -538,6 +592,7 @@ mod tests {
             recovered: true,
             pushed: true,
             conflicts: Some(String::from("feedface")),
+            poisoned: Some(String::from("deadbeef")),
             declined: true,
         };
         bet.forget();
@@ -735,19 +790,23 @@ mod tests {
         assert_eq!(settle(&adopted, Some(MOVED), false, Live::No), Settle::Lost);
     }
 
-    /// **CLOUD-1306, PORTED AS-IS AND PINNED SO IT CANNOT BE FIXED BY ACCIDENT.**
+    /// **`settle` STILL CANNOT SEE A POISONED BASE, AND THAT STAYS TRUE.**
     ///
-    /// A poisoned base — one whose tree will never pass `verify` — is
-    /// byte-identical here to a holder that is simply slow: the lease is held,
-    /// `main` has not moved, so `settle` says pending and the waiter sits. This
-    /// case asserts that reading rather than the one a fixed version would give,
-    /// because a port that quietly improved behaviour could not be shown to
-    /// conserve it.
+    /// This case was pinned as CLOUD-1306's defect, with a note that its changing
+    /// would be the review's cue that behaviour moved. Behaviour has moved and
+    /// this case has NOT changed, which is the honest outcome rather than a
+    /// missed update: `settle` answers "is the bet won, lost or outstanding" from
+    /// the holder and the trunk, and from there a base that will never pass
+    /// `verify` is byte-identical to a holder that is merely slow. No fourth arm
+    /// can be derived from these inputs, because the discriminating fact — the
+    /// gate's verdict on the borrowed tree — is not among them.
     ///
-    /// When CLOUD-1306 lands, this case is the one that must change, and its
-    /// changing is the review's cue that behaviour moved.
+    /// The fix lives where that fact exists: the lap records [`Bet::poisoned`]
+    /// when the gate refuses over a borrowed base, and [`Bet::would_rebet`]
+    /// declines it afterwards. So this reading is conserved and the mechanism
+    /// sits beside it rather than inside it.
     #[test]
-    fn a_poisoned_base_is_conserved_as_pending_because_cloud_1306_owns_the_fix() {
+    fn settle_cannot_tell_a_poisoned_base_from_a_slow_holder() {
         assert_eq!(
             settle(&placed(), Some(MAIN), false, Live::Yes),
             Settle::Pending,
@@ -756,15 +815,36 @@ mod tests {
         );
     }
 
-    /// One outstanding bet at a time.
+    /// One outstanding bet at a time — and never twice on a base that poisoned us.
+    ///
+    /// **THE LAST ASSERTION INVERTED, WHICH IS CLOUD-1306's OTHER HALF LANDING.**
+    /// It used to assert that a forgotten bet re-bets on the same holder, and
+    /// named that as the defect. It was load-bearing for the defect and is now
+    /// load-bearing for the fix: `land::Basis::Borrowed` laps a refused gate on
+    /// the argument that the next lap runs without the borrowed base, and a
+    /// forgotten bet that re-borrowed the same commits would make that argument
+    /// false and the lap a spin.
     #[test]
     fn the_same_candidate_is_not_bet_on_twice() {
         let bet = placed();
         assert!(!bet.would_rebet(HOLDER), "already the outstanding bet");
         assert!(bet.would_rebet(MOVED), "a different candidate is a new bet");
+
+        // A FORGOTTEN BET STILL DECLINES THE BASE THAT POISONED IT. `forget`
+        // clears `base`, so this arm is reached only because `poisoned` survives
+        // it — which is the whole reason that field is a judgement about the
+        // commit rather than about this landing.
+        let mut poisoned = placed();
+        poisoned.poisoned = Some(String::from(HOLDER));
+        poisoned.forget();
         assert!(
-            Bet::default().would_rebet(HOLDER),
-            "and a forgotten bet re-bets on the same holder — CLOUD-1306's other half"
+            !poisoned.would_rebet(HOLDER),
+            "a base whose tree the gate refused is not borrowed a second time"
+        );
+        assert!(
+            poisoned.would_rebet(MOVED),
+            "and one bad candidate does not end speculation for the whole landing, \
+             because speculation is the pipelining"
         );
     }
 

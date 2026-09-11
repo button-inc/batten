@@ -248,9 +248,11 @@ fn every_lap_ending_is_reachable_from_some_step_and_code() {
                 Some(TapVerdict::Red),
                 Some(TapVerdict::Pending),
             ] {
-                let progress = land::progress_of(step, code, verdict);
-                if !seen.contains(&progress) {
-                    seen.push(progress);
+                for basis in [land::Basis::Own, land::Basis::Borrowed] {
+                    let progress = land::progress_of(step, code, verdict, basis);
+                    if !seen.contains(&progress) {
+                        seen.push(progress);
+                    }
                 }
             }
         }

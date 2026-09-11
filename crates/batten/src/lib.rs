@@ -6820,8 +6820,25 @@ fn base_moved(
 fn charge_the_lap(
     step: land::Step,
     code: ExitCode,
+    basis: land::Basis,
     ledger: &mut land::Ledger,
 ) -> Option<land::Bound> {
+    // THE GATE REFUSED OVER SOMEBODY ELSE'S BASE (CLOUD-1306). Charged to its own
+    // bound for `reclaimed`'s reason and one of its own: the pass bought no matrix
+    // — `verify` refuses before the ready — and the refusal is not yet attributed
+    // to anybody, so spending this branch's runaway backstop on it would let a
+    // neighbour's poisoned base exhaust an innocent branch and report the
+    // exhaustion against it.
+    //
+    // The pair identifies it without a second channel, exactly as the reclaim arm
+    // below does: `Violation` is the gate's own refusal, and `Basis::Borrowed` is
+    // the only reason `progress_of` turned that refusal into a lap at all.
+    if step == land::Step::Verify && code == ExitCode::Violation && basis == land::Basis::Borrowed {
+        return match ledger.speculative_refusal(speculative_refusal_bound()) {
+            land::Charge::Lap => None,
+            land::Charge::Stop(bound) => Some(bound),
+        };
+    }
     // THE RECLAIMED GATE, and it is charged to its own bound for `waited`'s
     // reason (CLOUD-1586). `verify_raced` aborts the gate when the base moves,
     // so this lap bought nothing — no matrix, no completed gate, no push — and
@@ -6842,6 +6859,27 @@ fn charge_the_lap(
         land::Charge::Lap => None,
         land::Charge::Stop(bound) => Some(bound),
     }
+}
+
+/// How many gate refusals over a borrowed base a landing absorbs before it stops.
+///
+/// **DELIBERATELY SMALL, and the two neighbours above are not the precedent.**
+/// `lease_wait_bound` and `gate_reclaim_bound` default to 60 because what they
+/// wait out is other branches landing, and the thing they are counting carries no
+/// information. This one does: the very next lap replays onto trunk instead of
+/// onto the holder, so the same gate re-runs with the borrowed base gone and
+/// answers with [`land::Basis::Own`] — which either stops the loop with real
+/// evidence or clears it outright.
+///
+/// One lap is therefore the experiment, and the default buys a second in case the
+/// first also drew a holder. Past that the laps are re-proving somebody else's
+/// defect on this agent's clock, which is the token burn CLOUD-1306 is about.
+fn speculative_refusal_bound() -> u32 {
+    std::env::var("LAND_MAX_SPECULATIVE_REFUSALS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
+        .filter(|refusals| *refusals > 0)
+        .unwrap_or(2)
 }
 
 /// How many reclaimed gates a landing absorbs before it stops.
@@ -7323,7 +7361,18 @@ fn run_land_lap(
                 entered.push(step);
             }
             note_the_push(step, code, &mut bet);
-            match land::progress_of(step, code, seen) {
+            // READ HERE, ONCE, AND BEFORE ANY OF THE ARMS BELOW CAN MOVE IT. The
+            // bet is what makes this lap's tree speculative, and `unwind_lap` on
+            // the lap arm can settle or forget it — so a second read inside the
+            // charge would ask about a different world than the one that answered
+            // (CLOUD-1306).
+            let basis = if bet.live() {
+                land::Basis::Borrowed
+            } else {
+                land::Basis::Own
+            };
+            note_the_poison(step, code, basis, &mut bet);
+            match land::progress_of(step, code, seen, basis) {
                 land::Progress::Proceed => {}
                 // `None` is not merged, or nobody could say. Either way this is
                 // a lap rather than a retirement — see `landed_for_real`.
@@ -7355,7 +7404,7 @@ fn run_land_lap(
                     // `refusal` rather than shadowing `code`: the STEP's code is
                     // what tells a reclaimed gate from a lease wait, so the
                     // charge needs it and a shadow would hide it (CLOUD-1586).
-                    if let Some(refusal) = charge_or_refuse(step, code, &mut ledger, err)? {
+                    if let Some(refusal) = charge_or_refuse(step, code, basis, &mut ledger, err)? {
                         unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
                         return Ok(refusal);
                     }
@@ -7804,10 +7853,11 @@ fn bet_liveness(root: &Path, branch: &str, base: &str) -> speculation::Live {
 fn charge_or_refuse(
     step: land::Step,
     code: ExitCode,
+    basis: land::Basis,
     ledger: &mut land::Ledger,
     err: &mut dyn Write,
 ) -> Result<Option<ExitCode>> {
-    let Some(bound) = charge_the_lap(step, code, ledger) else {
+    let Some(bound) = charge_the_lap(step, code, basis, ledger) else {
         return Ok(None);
     };
     // NO CATCH-ALL, and clippy is what insisted: the match is total inside this
@@ -7825,6 +7875,13 @@ fn charge_or_refuse(
         land::Bound::Unknowns => "the fast-forward bot never gave a readable answer",
         land::Bound::Transients => {
             "CI kept failing before reaching a verdict, so the provisioning path is broken rather than flaky"
+        }
+        // NAMES THE BORROWED BASE AS THE SUSPECT, and says what to do about it.
+        // The whole point of lapping here was to stop attributing a neighbour's
+        // refusal to this author; a diagnosis that said "the gate refused" would
+        // give the attribution back in the last sentence.
+        land::Bound::SpeculativeRefusals => {
+            "the gate kept refusing over a base borrowed from the branch ahead, and never over this branch on trunk — so the evidence points at that base rather than at this tree; re-run once the holder has landed or been evicted"
         }
     };
     writeln!(
@@ -7848,6 +7905,41 @@ fn charge_or_refuse(
 fn note_the_push(step: land::Step, code: ExitCode, bet: &mut speculation::Bet) {
     if step == land::Step::Push && code == ExitCode::Success && bet.live() {
         bet.pushed = true;
+    }
+}
+
+/// Record that the gate refused over the base this lap borrowed (CLOUD-1306).
+///
+/// **THE WRITER WITHOUT WHICH THE LAP IS A SPIN.** `land::Basis::Borrowed` turns
+/// a refused gate into a lap rather than a stop, on the argument that the next
+/// lap re-runs the same gate with the borrowed base gone. That argument is only
+/// true if the next lap declines to borrow the same base — and `unwind_lap` calls
+/// `Bet::forget`, which clears `base`, and `would_rebet` compares `base`. So
+/// without this line the next lap bets on the identical holder, the gate refuses
+/// for the identical reason, and the loop proves nothing until its bound stops
+/// it. `speculation.rs` calls that arm "CLOUD-1306's other half".
+///
+/// **Written BEFORE the progress arms run, beside `note_the_push` and for its
+/// reason**: the lap arm's `unwind_lap` settles or forgets the bet, so a writer
+/// downstream of it would be recording against a bet that no longer names the
+/// base that failed. `Bet::forget` deliberately preserves this field, exactly as
+/// it preserves `conflicts`.
+///
+/// Keyed on the pair the same way the charge is: `Violation` is the gate's own
+/// refusal (`Internal` is `Refusal::Moved`, which is the base moving and says
+/// nothing about the base's tree), and `Basis::Borrowed` is what makes the
+/// refusal somebody else's candidate rather than this branch's verdict.
+fn note_the_poison(
+    step: land::Step,
+    code: ExitCode,
+    basis: land::Basis,
+    bet: &mut speculation::Bet,
+) {
+    if step == land::Step::Verify && code == ExitCode::Violation && basis == land::Basis::Borrowed {
+        // The BORROWED base, never the head: the head is this branch's replayed
+        // commits and is minted fresh every lap, so recording it would name
+        // something no later lap can recognise.
+        bet.poisoned = bet.published().map(str::to_owned);
     }
 }
 
