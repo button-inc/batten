@@ -680,10 +680,24 @@ fn wired_command(tree: &Path, bin: &Path) -> Result<Vec<String>> {
             )
         })?;
 
-    // The settings file spells the project dir as a variable the harness expands.
+    // The settings file spells the project dir as a variable the harness expands,
+    // and WHICH variable is the host's fact rather than this function's
+    // (CLOUD-1624). Spelled as a literal, the replace was a no-op on every host
+    // but one and the measured arm ran against an unexpanded path — a wrong
+    // number, silently, which is worse here than no number at all.
+    //
+    // SO AN UNSURVEYED HOST REFUSES rather than measuring. `None` is
+    // could-not-look, and a measurement taken through a guess would be exactly
+    // the confident wrong answer the declaration declines to make.
     let tree_text = tree.to_string_lossy().into_owned();
     let bin_text = bin.to_string_lossy().into_owned();
-    let command = command.replace("$CLAUDE_PROJECT_DIR", &tree_text);
+    let project_dir_var = wiring.project_dir_var.ok_or_else(|| {
+        anyhow::anyhow!(
+            "perf-pair: this host's project-directory variable has not been surveyed, so the \
+             wired command cannot be expanded and the pair cannot be measured. No measurement."
+        )
+    })?;
+    let command = command.replace(&format!("${project_dir_var}"), &tree_text);
 
     // A wiring that names the BINARY rather than a path resolves on PATH, and
     // measuring whatever PATH happens to hold would compare two arms against one
@@ -701,7 +715,7 @@ fn wired_command(tree: &Path, bin: &Path) -> Result<Vec<String>> {
     let mut full = vec![
         String::from("env"),
         format!("-C{tree_text}"),
-        format!("CLAUDE_PROJECT_DIR={tree_text}"),
+        format!("{project_dir_var}={tree_text}"),
         format!("BATTEN_BIN={bin_text}"),
     ];
     full.extend(argv);

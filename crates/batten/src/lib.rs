@@ -5711,7 +5711,24 @@ fn run_policy_hooks(json: bool, overrides: &Overrides, out: &mut dyn Write) -> R
     let label = path.display().to_string();
     let body = std::fs::read_to_string(&path)
         .map_err(|_| UsageError::raise(format!("{}: {label}", transcript::UNREADABLE_NOTICE)))?;
-    let stream = transcript::parse(&body, &label)?;
+    // A REFUSAL RATHER THAN A COULD-NOT-LOOK, and the difference is this verb's
+    // subject (CLOUD-1624). `check` reads the transcript incidentally and must
+    // abstain when it cannot; `policy hooks` exists to measure that transcript
+    // and nothing else, so a run that cannot choose a grammar has no answer to
+    // give — and reporting a hook-cost reading of zero would be a measurement
+    // nobody took. Same shape as the missing-path raise above it.
+    let hook::TranscriptShape::Surveyed(shape) = config
+        .transcript
+        .as_ref()
+        .and_then(|declared| declared.harness)
+        .ok_or_else(|| UsageError::raise(transcript::UNNAMED_NOTICE.to_owned()))?
+        .transcript_shape()
+    else {
+        return Err(
+            UsageError::raise(format!("{}: {label}", transcript::UNSURVEYED_NOTICE)).into(),
+        );
+    };
+    let stream = transcript::parse(&body, &label, shape)?;
     let reading = hookcost::measure(&stream);
     let findings = hookcost::judge(&reading, config.hook_output.as_ref());
     if json {
@@ -14259,10 +14276,18 @@ fn extracted_facts(
     let Ok(body) = std::fs::read_to_string(path) else {
         return facts::Look::CouldNotLook;
     };
+    // THE GRAMMAR IS THE POLICY'S HOST, not a guess (CLOUD-1624). `--harness`
+    // declared it, so this path never has to sniff one; an unsurveyed host has no
+    // `RecordShape` to parse with and joins the could-not-look answers above
+    // rather than yielding a stream of zero events every extraction then reports
+    // as a real count.
+    let hook::TranscriptShape::Surveyed(shape) = policy.harness().transcript_shape() else {
+        return facts::Look::CouldNotLook;
+    };
     // POINTER-ONLY EVEN ON FAILURE: `parse` reports a `<label>:<line>` pointer
     // and never the line, and the label here is the path the host named rather
     // than anything read out of the file.
-    let Ok(stream) = transcript::parse(&body, path) else {
+    let Ok(stream) = transcript::parse(&body, path, shape) else {
         return facts::Look::CouldNotLook;
     };
     // PER-EXTRACTION COULD-NOT-LOOK (CLOUD-1344). An extraction this host records
@@ -16484,13 +16509,19 @@ fn transcript_view(
         // whole point: a reader of the `-J` document must be able to tell a seam
         // that was never wired from data that was damaged, because only the
         // second names something to repair (CLOUD-819).
-        transcript::Capability::Absent | transcript::Capability::Unreadable(_) => {
-            Some(TranscriptView {
-                capability: capability.as_str(),
-                counts: None,
-                unprompted_memory_writes: None,
-            })
-        }
+        // The two could-not-look states join them for the same reason and keep
+        // their own words too (CLOUD-1624): `unnamed` is a config that named no
+        // host, `unsurveyed` is a host whose record shape nobody has fetched.
+        // Neither has counts, and rendering either as a zero count would be the
+        // false green the seam closes.
+        transcript::Capability::Absent
+        | transcript::Capability::Unreadable(_)
+        | transcript::Capability::Unnamed
+        | transcript::Capability::Unsurveyed(_) => Some(TranscriptView {
+            capability: capability.as_str(),
+            counts: None,
+            unprompted_memory_writes: None,
+        }),
         transcript::Capability::Present(stream) => Some(TranscriptView {
             capability: capability.as_str(),
             counts: Some(stream.counts()),
@@ -17152,11 +17183,26 @@ fn register_transcript_detectors(
         .transcript
         .as_ref()
         .and_then(|declared| declared.path.as_deref());
-    let capability = transcript::resolve(Path::new("."), declared);
+    let capability = transcript::resolve(
+        Path::new("."),
+        declared,
+        config
+            .transcript
+            .as_ref()
+            .and_then(|declared| declared.harness),
+    );
     let stream = match &capability {
         transcript::Capability::Unconfigured => return Ok(()),
         transcript::Capability::Absent => {
             output::message(mode, Verbosity::Normal, err, transcript::ABSENT_NOTICE)?;
+            return Ok(());
+        }
+        // Both could-not-look states take the unreadable path below rather than
+        // the unconfigured one: a repository that declared a transcript and got
+        // no stream is owed the notice, where one that declared nothing is not
+        // (CLOUD-1624).
+        transcript::Capability::Unnamed | transcript::Capability::Unsurveyed(_) => {
+            report_transcript_capability(&capability, mode, err)?;
             return Ok(());
         }
         // The same could-not-look answer as absent, plus the pointer that names
@@ -17429,6 +17475,22 @@ fn report_transcript_capability(
                 &format!("{} ({pointer})", transcript::UNREADABLE_NOTICE),
             )?;
         }
+        // REPORTED, not silent, for the reason the two above are: a rule that did
+        // not run must say so, and these two are the states where it did not run
+        // because nobody named a grammar (CLOUD-1624). The unsurveyed one carries
+        // the row that owes the survey, the same way the unreadable one carries
+        // its `<label>:<line>`.
+        transcript::Capability::Unnamed => {
+            output::message(mode, Verbosity::Normal, err, transcript::UNNAMED_NOTICE)?;
+        }
+        transcript::Capability::Unsurveyed(owes) => {
+            output::message(
+                mode,
+                Verbosity::Normal,
+                err,
+                &format!("{} ({owes})", transcript::UNSURVEYED_NOTICE),
+            )?;
+        }
         transcript::Capability::Unconfigured | transcript::Capability::Present(_) => {}
     }
     Ok(())
@@ -17449,10 +17511,14 @@ fn scan_self_writes(
         // its own: all three mean the stream could not be read, and this function
         // answers only "what did the rule detect". WHY it detected nothing is the
         // notice's job and the `-J` field's, which is where the three stay
-        // distinguishable (CLOUD-819).
+        // distinguishable (CLOUD-819). The two could-not-look states CLOUD-1624
+        // adds join them on the same argument — no stream, so nothing detected,
+        // and an empty `Vec` here is never read as "scanned and found none".
         transcript::Capability::Unconfigured
         | transcript::Capability::Absent
-        | transcript::Capability::Unreadable(_) => Vec::new(),
+        | transcript::Capability::Unreadable(_)
+        | transcript::Capability::Unnamed
+        | transcript::Capability::Unsurveyed(_) => Vec::new(),
     }
 }
 
@@ -18388,6 +18454,10 @@ fn run_rules(
             .transcript
             .as_ref()
             .and_then(|declared| declared.path.as_deref()),
+        config
+            .transcript
+            .as_ref()
+            .and_then(|declared| declared.harness),
     );
     report_transcript_capability(&capability, mode, err)?;
 
