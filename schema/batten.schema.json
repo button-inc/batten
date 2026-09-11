@@ -2005,6 +2005,41 @@
         "run"
       ]
     },
+    "Harness": {
+      "description": "The harness adapters `batten hook` can speak. Each owns the decode of its\nhost's payload into an [`Envelope`] and the encode of a [`Decision`] into\nwhat that host consumes; the core between them is harness-blind.\n**THREE SPELLINGS OF ONE NAME, held together rather than trusted to agree.**\n`clap::ValueEnum` spells `--harness`, serde spells `[transcript] harness` in\n`batten.toml` (CLOUD-1624), and [`Harness::as_str`] spells it for a matrix\nthat builds no command. `kebab-case` is what makes the serde spelling the\nsame token as the other two, and\n`tests::every_harness_token_matches_its_serde_spelling` is what keeps it that\nway — the same guard `every_harness_token_matches_its_clap_spelling` already\nprovides for the flag.",
+      "oneOf": [
+        {
+          "description": "Claude Code's `PreToolUse` payload; a deny is returned as the\n`hookSpecificOutput.permissionDecision` JSON object on stdout with exit\n`0` — the channel the production shell guards already use.",
+          "type": "string",
+          "const": "claude-code"
+        },
+        {
+          "description": "Cursor. Two payload families under one host: a generic `preToolUse` that\nlooks like Claude's, and specialized events (`beforeShellExecution`,\n`beforeReadFile`, `beforeMCPExecution`) that carry the operand at top\nlevel and **no** `tool_name` at all. Session is `conversation_id`.",
+          "type": "string",
+          "const": "cursor"
+        },
+        {
+          "description": "GitHub Copilot CLI, registered in its **`PascalCase`** dialect — which\nyields `hook_event_name` natively. The camelCase dialect omits the event\nname entirely, so Batten does not speak it.",
+          "type": "string",
+          "const": "copilot-cli"
+        },
+        {
+          "description": "Gemini CLI. Claude-identical payload fields, different event names\n(`BeforeTool` rather than `PreToolUse`).",
+          "type": "string",
+          "const": "gemini-cli"
+        },
+        {
+          "description": "Codex CLI, whose wire format is a near-verbatim clone of Claude Code's —\nits own repo says so. No payload shim is needed; the adapter exists so\nthe host is nameable and its fixture is pinned against drift.",
+          "type": "string",
+          "const": "codex-cli"
+        },
+        {
+          "description": "The neutral core contract: envelope in, decision as exit code out —\n`0` allow, `2` deny (reason on stderr), for any host whose only decision\nchannel is an exit status. Both codes are the §7 table's, unmodified.",
+          "type": "string",
+          "const": "exit-code"
+        }
+      ]
+    },
     "HistoryQuery": {
       "description": "One `[[rule.history]]` row: a PATTERN whose matching set the engine resolves\n(CLOUD-1200).\n\n**The half `Fact::GitRef` and `Fact::GitRange` structurally cannot reach.**\nThose resolve what a rule NAMES — a ref, a `base..head` range — and thirteen\ngoverned programs need history the declaration cannot name in advance: every\ntag matching a pattern, the commit that deleted a path. The answer set is not\nknowable at declaration time, which is exactly why a literal cannot express\nit.\n\n**What stays declared is the PATTERN, and that is the whole safety property.**\nA pattern no row names resolves nothing, so this is a projection of a declared\nset rather than a git shell. Widening WHICH commits are visible is admissible;\nwidening what a commit CARRIES is not, and the per-entry shape stays a sha and\na subject for that reason.",
       "type": "object",
@@ -4400,9 +4435,20 @@
       ]
     },
     "TranscriptConfig": {
-      "description": "The configured transcript path, as `batten.toml` declares it.\n\nA path, not a format selector: which host wrote it is pinned by the fixtures,\nand a repository that points at one is saying \"read this\", not \"read this\ndialect\". Host-specific, never consumer-specific, so rule 1 holds — no\nconsumer's directory layout appears in the engine.",
+      "description": "The configured transcript, as `batten.toml` declares it: where it is, and\nwhose dialect it is in.\n\n**It used to say \"a path, not a format selector\", and that was the bug**\n(CLOUD-1624). Which host wrote the file was left to the fixtures, so the\nengine read every transcript through one host's grammar and reported the zero\nevents that produces on any other as a clean session. The dialect is a fact\nabout this consumer's setup, and non-negotiable rule 1 puts a consumer fact\nin the consumer's own `batten.toml` rather than in the core.\n\nHost-specific, never consumer-specific, so rule 1 holds in the other\ndirection too — no consumer's directory layout appears in the engine.",
       "type": "object",
       "properties": {
+        "harness": {
+          "description": "Which host wrote it, selecting the record grammar to read it with\n(CLOUD-1624).\n\n**Omitted is could-not-look, never a default.** `cli.rs`'s attribution\nhost is the precedent and states it: an unnamed host \"declares nothing\nrather than borrowing a default's declarations\". Defaulting here would\nread an unnamed host's transcript through one host's grammar and report\nthe zero events that yields as a clean session — the exact false green\nthis key exists to close. A consumer that declares a `path` and no\n`harness` gets [`Capability::Unnamed`] and every gate over the transcript\nabstains.\n\nThe fourth fact about one host on this table, joining `path`,\n`memory_root` and the task store for the reason those three already give:\nsplitting facts about a single host across tables is the widening rule 6\nforbids.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Harness"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "memory_root": {
           "description": "The host's memory-root prefix, for CLOUD-267's self-persistence match.\n\nHost-adapter data on the same table rather than a second authority: the\ntranscript's format and the host's memory layout are two facts about one\nhost, and splitting them across tables would be the widening rule 6\nforbids. Omitted, [`crate::selfwrite::DEFAULT_MEMORY_ROOT`] applies.\n\nA **prefix matched against targets the transcript recorded** — never a\npath this engine opens, stats, or globs, which is what keeps the rule\ninside the repo root.",
           "type": [

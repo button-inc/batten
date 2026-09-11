@@ -58,7 +58,26 @@ use crate::verbs::{MutatingVerb, OperandScope};
 /// The harness adapters `batten hook` can speak. Each owns the decode of its
 /// host's payload into an [`Envelope`] and the encode of a [`Decision`] into
 /// what that host consumes; the core between them is harness-blind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+/// **THREE SPELLINGS OF ONE NAME, held together rather than trusted to agree.**
+/// `clap::ValueEnum` spells `--harness`, serde spells `[transcript] harness` in
+/// `batten.toml` (CLOUD-1624), and [`Harness::as_str`] spells it for a matrix
+/// that builds no command. `kebab-case` is what makes the serde spelling the
+/// same token as the other two, and
+/// `tests::every_harness_token_matches_its_serde_spelling` is what keeps it that
+/// way — the same guard `every_harness_token_matches_its_clap_spelling` already
+/// provides for the flag.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    clap::ValueEnum,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
 pub enum Harness {
     /// Claude Code's `PreToolUse` payload; a deny is returned as the
     /// `hookSpecificOutput.permissionDecision` JSON object on stdout with exit
@@ -154,6 +173,9 @@ impl Harness {
                     key: "hooks",
                 },
                 spellings: CLAUDE_SPELLINGS,
+                // The one surveyed value: this host's own documentation names it,
+                // and it is the literal `perf.rs` used to spell unconditionally.
+                project_dir_var: Some("CLAUDE_PROJECT_DIR"),
             }),
             // "A near-verbatim clone of Claude Code's wire format, and the repo
             // says so out loud" (M1) — including the event names, so the
@@ -161,6 +183,10 @@ impl Harness {
             Harness::CodexCli => Some(Wiring {
                 file: WiringFile::Whole(".codex/hooks.json"),
                 spellings: CLAUDE_SPELLINGS,
+                // SHARING THE SPELLINGS IS NOT EVIDENCE ABOUT THE VARIABLE. M1
+                // recorded the wire format, not the environment a host expands,
+                // and the two are different fetches.
+                project_dir_var: None,
             }),
             // Registered in the PascalCase dialect deliberately: M1 records that
             // the camelCase one omits `hook_event_name` entirely, and the casing
@@ -170,6 +196,7 @@ impl Harness {
             Harness::CopilotCli => Some(Wiring {
                 file: WiringFile::Whole(".github/hooks/batten.json"),
                 spellings: CLAUDE_SPELLINGS,
+                project_dir_var: None,
             }),
             // The one host whose names are a structural gap in an otherwise
             // Claude-identical payload (M1). `AfterAgent` is its end-of-turn —
@@ -185,6 +212,7 @@ impl Harness {
                     (Event::Stop, "AfterAgent"),
                     (Event::SessionStart, "BeforeAgent"),
                 ],
+                project_dir_var: None,
             }),
             // The generic `preToolUse` rather than one of the three specialized
             // events: it covers all tools, where each specialized event covers
@@ -197,6 +225,7 @@ impl Harness {
                     (Event::Stop, "stop"),
                     (Event::SessionStart, "sessionStart"),
                 ],
+                project_dir_var: None,
             }),
             // Not a host. `exit-code` is the neutral contract — envelope in,
             // decision as exit status out — for any host whose only channel is
@@ -307,6 +336,81 @@ impl Harness {
             Harness::GeminiCli | Harness::CopilotCli => Operation::Other(raw_tool.to_owned()),
         }
     }
+
+    /// The record shape this host writes its session transcript in, or that
+    /// nobody has looked (CLOUD-1624).
+    ///
+    /// **`transcript.rs` used to carry one host's shape with no dispatch at all**,
+    /// so a transcript from any other host decoded to a record whose every field
+    /// was `None`, `parse` yielded zero events, and the four gates over it —
+    /// declared-done-not-landed, deny-then-retry, non-empty frontier at stop,
+    /// unprompted self-write — all reported clean. That is the false green the
+    /// module's own header forbids, and it is what this table exists to stop.
+    ///
+    /// The three-valued reading is [`PlanTools`]'s, one layer over: an
+    /// unsurveyed host is **could-not-look**, never "this host records nothing".
+    /// A host measured to write no transcript would be a surveyed answer and
+    /// would get its own arm; none is measured today.
+    #[must_use]
+    pub const fn transcript_shape(self) -> TranscriptShape {
+        match self {
+            Harness::ClaudeCode => TranscriptShape::Surveyed(RecordShape::Jsonl),
+            // The neutral contract states the normalized shape, exactly as
+            // `write_tools` reasons for the same variant: a caller composing the
+            // envelope by hand is naming the canonical record, not a host's.
+            Harness::ExitCode => TranscriptShape::Surveyed(RecordShape::Jsonl),
+            // **CODEX IS THE TRAP, AND IT IS LISTED HERE DELIBERATELY.** Its wire
+            // format is a near-verbatim clone of Claude's *today*, which is
+            // exactly why `write_tools` refuses to fold the two into a shared
+            // constant: coincidence is not agreement, and a shape assumed from a
+            // neighbour re-points silently the day that stops being true. Nobody
+            // has fetched Codex's transcript format, so it is unsurveyed —
+            // reading the clone as evidence would be the confident wrong answer
+            // `operation_of` declines for the other two.
+            Harness::CodexCli | Harness::Cursor | Harness::GeminiCli | Harness::CopilotCli => {
+                TranscriptShape::Unsurveyed("CLOUD-1781")
+            }
+        }
+    }
+}
+
+/// A transcript record grammar, named so a parser cannot be handed a host.
+///
+/// **One variant is the point, not a placeholder.** [`crate::transcript`] parses
+/// by grammar rather than by host, so the type system — not a branch somebody
+/// remembers to write — is what makes it impossible to parse an unsurveyed
+/// host's bytes: there is no [`RecordShape`] to hand the parser until
+/// [`Harness::transcript_shape`] has answered `Surveyed`. CLOUD-1781 adds the
+/// variants a survey measures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RecordShape {
+    /// One JSON object per line: a `sessionId`, a `message` carrying `role` and
+    /// `content`, and `attachment` records for what a hook emitted. Claude Code
+    /// writes it, and the neutral `exit-code` contract states it.
+    Jsonl,
+}
+
+/// Which grammar a host's transcript is in, or that nobody has looked
+/// (CLOUD-1624).
+///
+/// The same two-variants-for-a-three-valued-fact shape as [`PlanTools`], and for
+/// the same reason: the third value is a `Surveyed(…)` answer measuring that a
+/// host records nothing, which is an answer. What must never collapse together
+/// is *surveyed and empty* with *nobody asked* — the second is could-not-look,
+/// and reporting it as the first is the dead gate this row names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TranscriptShape {
+    /// Fetched from this host's own documentation.
+    Surveyed(RecordShape),
+    /// Nobody has looked, carrying the row that OWES the survey. NOT the same as
+    /// a host that records nothing, and never reported as one.
+    ///
+    /// As [`PlanTools::Unsurveyed`], the key changes no exit code: what it buys
+    /// is that the gap is STATED. A harness added without a transcript survey has
+    /// to name who owes one.
+    Unsurveyed(&'static str),
 }
 
 /// How a host spells the agent's plan/todo tool, or that nobody has looked
@@ -1102,6 +1206,24 @@ pub struct Wiring {
     /// harness declares it emits, so the SET is derived and only the NAMES are
     /// declared.
     pub spellings: &'static [(Event, &'static str)],
+    /// The variable this host expands to the repository root inside a registered
+    /// command, WITHOUT its `$` — or `None` where nobody has looked
+    /// (CLOUD-1624).
+    ///
+    /// Declared here beside the event names because it is the same class of fact
+    /// and was the last one still spelled as a literal: `perf.rs` replaced
+    /// `$CLAUDE_PROJECT_DIR` unconditionally, so on any other host the
+    /// substitution was a no-op and the measured arm ran against an unexpanded
+    /// path — a wrong measurement rather than a loud failure, which is the
+    /// quieter half of this row.
+    ///
+    /// **`None` IS COULD-NOT-LOOK, NOT "this host has none."** M1 surveyed event
+    /// names and write tools; it did not record the project-dir variable for the
+    /// four hosts below, and a variable guessed from a neighbour's is exactly the
+    /// confident wrong answer [`Harness::operation_of`] declines for the same
+    /// reason. CLOUD-1781 owes the fetch. A reader must not read the absence as a
+    /// host that expands nothing.
+    pub project_dir_var: Option<&'static str>,
 }
 
 impl Wiring {
@@ -14516,6 +14638,24 @@ deny contains "refused by themodule" if {
         for harness in Harness::ALL {
             let value = harness.to_possible_value().expect("harness is selectable");
             assert_eq!(harness.as_str(), value.get_name());
+        }
+    }
+
+    /// The third spelling, held to the other two (CLOUD-1624).
+    ///
+    /// `[transcript] harness` in `batten.toml` is read by serde, `--harness` by
+    /// clap, and neither would notice the other drifting: a `rename_all` change
+    /// or a variant rename would leave a config token the binary still accepts on
+    /// the flag and silently rejects in the file, which reads to an operator as a
+    /// typo in their own config. The sibling case above makes the same argument
+    /// for `as_str`.
+    #[test]
+    fn every_harness_token_matches_its_serde_spelling() {
+        for harness in Harness::ALL {
+            let json = serde_json::to_string(&harness).expect("a harness serializes");
+            assert_eq!(json, format!("\"{}\"", harness.as_str()));
+            let back: Harness = serde_json::from_str(&json).expect("and round-trips");
+            assert_eq!(&back, harness);
         }
     }
 

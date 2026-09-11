@@ -83,7 +83,11 @@ fn stream(fixture: &str) -> transcript::Stream {
     ));
     let path = dir.join("transcript.jsonl");
     fs::copy(&source, &path).expect("materialize the committed fixture");
-    match transcript::resolve(&dir, Some("transcript.jsonl")) {
+    match transcript::resolve(
+        &dir,
+        Some("transcript.jsonl"),
+        Some(batten::hook::Harness::ClaudeCode),
+    ) {
         Capability::Present(stream) => stream,
         other => panic!("fixture did not parse: {}", other.as_str()),
     }

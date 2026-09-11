@@ -745,6 +745,14 @@ pub enum WeakeningKind {
     /// The transcript path is gone, so `check` stops reading the completed
     /// session it judged against (CLOUD-95).
     TranscriptPathRemoved,
+    /// The transcript's declared harness is gone, so no record grammar can be
+    /// chosen and every rule reading the session abstains (CLOUD-1624).
+    ///
+    /// **The same loss as removing the path, by a different route**, and it needs
+    /// its own kind because the raise-only clamp compares kinds: a config that
+    /// kept `path` and dropped `harness` reads every gate silent while still
+    /// naming a file, which is the more deniable of the two spellings.
+    TranscriptHarnessRemoved,
     /// The `[advisory]` channel ceiling rose, or stopped being declared
     /// (CLOUD-896). Same direction as the two below: smaller is stricter, and an
     /// absent ceiling is unenforced rather than zero.
@@ -982,6 +990,7 @@ impl WeakeningKind {
         WeakeningKind::DefectsLedgerRemoved,
         WeakeningKind::DefectsClassAdded,
         WeakeningKind::TranscriptPathRemoved,
+        WeakeningKind::TranscriptHarnessRemoved,
         WeakeningKind::AdvisoryCeilingRaised,
         WeakeningKind::HookOutputCeilingRaised,
         WeakeningKind::HookRepeatsRaised,
@@ -1053,6 +1062,7 @@ impl WeakeningKind {
             WeakeningKind::DefectsLedgerRemoved => "defects-ledger-removed",
             WeakeningKind::DefectsClassAdded => "defects-class-added",
             WeakeningKind::TranscriptPathRemoved => "transcript-path-removed",
+            WeakeningKind::TranscriptHarnessRemoved => "transcript-harness-removed",
             WeakeningKind::AdvisoryCeilingRaised => "advisory-ceiling-raised",
             WeakeningKind::HookOutputCeilingRaised => "hook-output-ceiling-raised",
             WeakeningKind::HookRepeatsRaised => "hook-repeats-raised",
@@ -1439,7 +1449,10 @@ pub const CENSUS: &[FieldCoverage] = &[
     },
     FieldCoverage {
         field: "transcript",
-        coverage: Coverage::Compared(&[WeakeningKind::TranscriptPathRemoved]),
+        coverage: Coverage::Compared(&[
+            WeakeningKind::TranscriptPathRemoved,
+            WeakeningKind::TranscriptHarnessRemoved,
+        ]),
     },
     FieldCoverage {
         field: "drain",
@@ -2377,6 +2390,23 @@ fn scalar_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         found.push(Weakening::new(
             WeakeningKind::TranscriptPathRemoved,
             "transcript.path",
+            "present",
+            "absent",
+        ));
+    }
+
+    // THE SAME SILENCE BY THE OTHER ROUTE (CLOUD-1624). Without a declared
+    // harness no record grammar can be chosen, so every rule reading the
+    // transcript abstains — a config that keeps `path` and drops this is quieter
+    // than one that drops the path, and names a file while reading nothing.
+    // Keyed on the effective value for the reason the path arm is: deleting
+    // `[transcript]` and blanking its `harness` are one fact.
+    let declared_harness =
+        |config: &Config| config.transcript.as_ref().and_then(|table| table.harness);
+    if declared_harness(base).is_some() && declared_harness(working).is_none() {
+        found.push(Weakening::new(
+            WeakeningKind::TranscriptHarnessRemoved,
+            "transcript.harness",
             "present",
             "absent",
         ));
@@ -5023,6 +5053,30 @@ mod tests {
             "transcript.path"
         );
         assert!(weakenings(&config(""), &base).is_empty());
+    }
+
+    /// The quieter spelling of the same loss (CLOUD-1624): the file is still
+    /// named, and nothing reads it, because no grammar was chosen.
+    #[test]
+    fn losing_the_transcript_harness_is_a_weakening_too() {
+        let base = config("[transcript]\npath = \"session.jsonl\"\nharness = \"claude-code\"\n");
+        assert_eq!(
+            only(&base, &config("[transcript]\npath = \"session.jsonl\"\n")),
+            Weakening::new(
+                WeakeningKind::TranscriptHarnessRemoved,
+                "transcript.harness",
+                "present",
+                "absent",
+            )
+        );
+        // ANTI-VACUITY, and it is the direction that matters here: ADDING the
+        // harness is a strengthening, so the clamp must stay silent on it. A
+        // detector firing both ways would refuse the very edit that closes the
+        // seam.
+        assert!(
+            weakenings(&config("[transcript]\npath = \"session.jsonl\"\n"), &base).is_empty(),
+            "declaring a harness is a strengthening, never a weakening"
+        );
     }
 
     #[test]

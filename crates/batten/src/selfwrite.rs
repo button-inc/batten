@@ -232,10 +232,11 @@ pub fn counts(detections: &[Detection]) -> Counts {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::hook::RecordShape;
     use crate::transcript::parse;
 
     fn scan_body(body: &str) -> Vec<Detection> {
-        let stream = parse(body, "fixture").expect("fixture parses");
+        let stream = parse(body, "fixture", RecordShape::Jsonl).expect("fixture parses");
         scan(&stream, DEFAULT_MEMORY_ROOT)
     }
 

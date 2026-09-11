@@ -287,6 +287,16 @@ mutation = "change it in a pull request — a registered module is protected bec
 # could-not-look, which is honest and useless. Declared, it answers `1`.
 [transcript]
 path = ".claude/.transcript.jsonl"
+# Which host wrote it, selecting the grammar to read it with (CLOUD-1624). The
+# fourth fact about one host on this table, and the one that was missing: the
+# engine used to read every transcript through this host's shape whatever wrote
+# it, so on any other host it decoded to nothing and four gates reported clean
+# over a session they had not read.
+#
+# OMITTED WOULD BE COULD-NOT-LOOK, never a default — so this line is what keeps
+# those four deciding here rather than abstaining, and dropping it is a declared
+# weakening (`transcript-harness-removed`) rather than a silent quieting.
+harness = "claude-code"
 tasks = "~/.claude/tasks/{session}"
 
 # ---------------------------------------------------------------------------

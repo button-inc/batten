@@ -14,11 +14,12 @@
 //! split moves no verdict.
 
 use batten::completion;
+use batten::hook::RecordShape;
 use batten::transcript::{Event, StopReason, parse};
 
 /// The reasons a body yields, in stream order.
 fn reasons(body: &str) -> Vec<StopReason> {
-    parse(body, "t.jsonl")
+    parse(body, "t.jsonl", RecordShape::Jsonl)
         .expect("the fixture parses")
         .records
         .iter()
@@ -81,7 +82,8 @@ fn a_truncated_turn_is_still_not_a_completion() {
     // Verdict parity: a vocabulary split, not a behaviour change. A turn the
     // host cut off has declared no stopping point, exactly as before — so
     // `completion` finds no marker to anchor on and signals nothing.
-    let stream = parse(&ended_on("max_tokens"), "t.jsonl").expect("the fixture parses");
+    let stream =
+        parse(&ended_on("max_tokens"), "t.jsonl", RecordShape::Jsonl).expect("the fixture parses");
     assert!(
         completion::signal(&stream).is_none(),
         "truncation is not the model ending its own turn"

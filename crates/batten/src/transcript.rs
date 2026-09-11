@@ -85,6 +85,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::UsageError;
+use crate::hook::{Harness, RecordShape, TranscriptShape};
 
 /// What the human channel says when a configured transcript is not there.
 ///
@@ -112,6 +113,26 @@ pub const ABSENT_NOTICE: &str =
 /// transcript is the richest secret surface this engine can be pointed at.
 pub const UNREADABLE_NOTICE: &str =
     "transcript: configured but could not be decoded, so the rules that read it did not run";
+
+/// What a verb says when `[transcript]` names a path and no harness
+/// (CLOUD-1624).
+///
+/// The same "did not run" as the two above, because it is the same answer:
+/// could-not-look. It names the remedy because, unlike the other two, this one is
+/// repaired by a line of config rather than by finding or fixing a file.
+pub const UNNAMED_NOTICE: &str = "transcript: configured but `[transcript] harness` names no host, \
+     so no record grammar could be chosen and the rules that read it did not run";
+
+/// What a verb says when the named harness's record shape is unsurveyed
+/// (CLOUD-1624).
+///
+/// **The row that owes the survey travels with it**, which is what makes this a
+/// pointer rather than a shrug: the caller appends the key, so a reader learns
+/// not just that nobody looked but where the looking is tracked. Same bargain as
+/// [`crate::hook::PlanTools::Unsurveyed`] — the key changes no exit code, it
+/// states the gap.
+pub const UNSURVEYED_NOTICE: &str = "transcript: the declared harness's record shape has not been surveyed, \
+     so the rules that read it did not run";
 
 /// Whose turn a record belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -569,6 +590,25 @@ pub enum Capability {
     /// missing one in the `-J` document, which is the silent degrade this variant
     /// exists to prevent.
     Unreadable(String),
+    /// Configured, but `[transcript]` names no harness, so no grammar could be
+    /// chosen (CLOUD-1624).
+    ///
+    /// **Not a default.** `cli.rs`'s attribution host states the precedent: an
+    /// unnamed host "declares nothing rather than borrowing a default's
+    /// declarations". Picking one here would read somebody else's transcript
+    /// through this host's grammar and report the zero events that produces as a
+    /// clean session.
+    Unnamed,
+    /// Configured and named, but that harness's record shape has never been
+    /// surveyed (CLOUD-1624). Carries the row that owes the survey.
+    ///
+    /// **Distinct from [`Capability::Unreadable`], and the distinction is the
+    /// whole seam.** Unreadable is data that was damaged and has something to
+    /// repair; this is data nobody has a grammar for, where the repair is a
+    /// survey rather than a fix to the file. Collapsing either into
+    /// [`Capability::Present`] with an empty stream is the false green this
+    /// variant exists to prevent.
+    Unsurveyed(&'static str),
     /// Configured and parsed.
     Present(Stream),
 }
@@ -581,6 +621,8 @@ impl Capability {
             Capability::Unconfigured => "unconfigured",
             Capability::Absent => "absent",
             Capability::Unreadable(_) => "unreadable",
+            Capability::Unnamed => "unnamed",
+            Capability::Unsurveyed(_) => "unsurveyed",
             Capability::Present(_) => "present",
         }
     }
@@ -738,9 +780,21 @@ impl Stream {
 /// [`parse`] is unchanged and still refuses a stream containing a line that does
 /// not decode: nothing here hands anyone a partial transcript.
 #[must_use]
-pub fn resolve(root: &Path, configured: Option<&str>) -> Capability {
+pub fn resolve(root: &Path, configured: Option<&str>, harness: Option<Harness>) -> Capability {
     let Some(relative) = configured else {
         return Capability::Unconfigured;
+    };
+    // **THE GRAMMAR IS SETTLED BEFORE THE FILE IS TOUCHED**, and the order is
+    // load-bearing rather than tidy: reading first would let an absent file
+    // answer `Absent` for a host nobody has surveyed, which reports the weaker
+    // fact and hides the one somebody owes work on. Neither question depends on
+    // the other, so the one that can be answered without I/O goes first.
+    let Some(harness) = harness else {
+        return Capability::Unnamed;
+    };
+    let shape = match harness.transcript_shape() {
+        TranscriptShape::Surveyed(shape) => shape,
+        TranscriptShape::Unsurveyed(owes) => return Capability::Unsurveyed(owes),
     };
     let path = root.join(relative);
     let Ok(body) = std::fs::read_to_string(&path) else {
@@ -751,7 +805,7 @@ pub fn resolve(root: &Path, configured: Option<&str>) -> Capability {
         // worth telling apart, because it names a line somebody can repair.
         return Capability::Absent;
     };
-    match parse(&body, relative) {
+    match parse(&body, relative, shape) {
         Ok(stream) => Capability::Present(stream),
         Err(error) => Capability::Unreadable(error.to_string()),
     }
@@ -771,8 +825,8 @@ pub fn resolve(root: &Path, configured: Option<&str>) -> Capability {
 ///
 /// [`UsageError`] naming the line that did not decode — a pointer, never the
 /// line itself, which is the whole reason this module exists.
-pub fn parse(body: &str, label: &str) -> Result<Stream> {
-    parse_keyed(body, label, None)
+pub fn parse(body: &str, label: &str, shape: RecordShape) -> Result<Stream> {
+    parse_keyed(body, label, None, shape)
 }
 
 /// [`parse`], minting an observation identity for every result the host wrote
@@ -792,7 +846,16 @@ pub fn parse_keyed(
     body: &str,
     label: &str,
     key: Option<&crate::identity::IdentityKey>,
+    shape: RecordShape,
 ) -> Result<Stream> {
+    // A GRAMMAR RATHER THAN A HOST, and that is what makes the seam hold
+    // (CLOUD-1624). There is no `RecordShape` to hand this function until
+    // `Harness::transcript_shape` has answered `Surveyed`, so an unsurveyed
+    // host's bytes cannot reach the parser at all — the type system refuses it
+    // where a runtime check would be a branch somebody forgets. The `match` is
+    // exhaustive for the same reason every `match self` in `hook.rs` is: a
+    // surveyed second shape must not compile until it is parsed.
+    let RecordShape::Jsonl = shape;
     let mut session = None;
     let mut records = Vec::new();
     let mut agent = AgentContext::default();
@@ -1266,18 +1329,42 @@ struct Block {
     content: Option<Value>,
 }
 
-/// The configured transcript path, as `batten.toml` declares it.
+/// The configured transcript, as `batten.toml` declares it: where it is, and
+/// whose dialect it is in.
 ///
-/// A path, not a format selector: which host wrote it is pinned by the fixtures,
-/// and a repository that points at one is saying "read this", not "read this
-/// dialect". Host-specific, never consumer-specific, so rule 1 holds — no
-/// consumer's directory layout appears in the engine.
+/// **It used to say "a path, not a format selector", and that was the bug**
+/// (CLOUD-1624). Which host wrote the file was left to the fixtures, so the
+/// engine read every transcript through one host's grammar and reported the zero
+/// events that produces on any other as a clean session. The dialect is a fact
+/// about this consumer's setup, and non-negotiable rule 1 puts a consumer fact
+/// in the consumer's own `batten.toml` rather than in the core.
+///
+/// Host-specific, never consumer-specific, so rule 1 holds in the other
+/// direction too — no consumer's directory layout appears in the engine.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema, Default)]
 #[serde(deny_unknown_fields)]
 pub struct TranscriptConfig {
     /// Repo-relative path to the completed session transcript.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// Which host wrote it, selecting the record grammar to read it with
+    /// (CLOUD-1624).
+    ///
+    /// **Omitted is could-not-look, never a default.** `cli.rs`'s attribution
+    /// host is the precedent and states it: an unnamed host "declares nothing
+    /// rather than borrowing a default's declarations". Defaulting here would
+    /// read an unnamed host's transcript through one host's grammar and report
+    /// the zero events that yields as a clean session — the exact false green
+    /// this key exists to close. A consumer that declares a `path` and no
+    /// `harness` gets [`Capability::Unnamed`] and every gate over the transcript
+    /// abstains.
+    ///
+    /// The fourth fact about one host on this table, joining `path`,
+    /// `memory_root` and the task store for the reason those three already give:
+    /// splitting facts about a single host across tables is the widening rule 6
+    /// forbids.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<Harness>,
     /// The host's memory-root prefix, for CLOUD-267's self-persistence match.
     ///
     /// Host-adapter data on the same table rather than a second authority: the
@@ -1413,7 +1500,7 @@ mod tests {
 {"type":"user","sessionId":"s-1","message":{"role":"user","content":"a plain string turn"}}"#;
 
     fn sample() -> Stream {
-        parse(SAMPLE, "t.jsonl").expect("parses")
+        parse(SAMPLE, "t.jsonl", RecordShape::Jsonl).expect("parses")
     }
 
     /// The home a host would hand over, in the shape the resolver takes it.
@@ -1514,7 +1601,9 @@ mod tests {
 
     #[test]
     fn the_agent_context_is_gathered_as_sets() {
-        let agent = parse(CONTEXT, "t.jsonl").expect("parses").agent;
+        let agent = parse(CONTEXT, "t.jsonl", RecordShape::Jsonl)
+            .expect("parses")
+            .agent;
         // Distinct values accumulate; a repeated one does not double.
         assert_eq!(
             agent.models,
@@ -1543,7 +1632,9 @@ mod tests {
     /// member meaning "the model was the empty string".
     #[test]
     fn an_empty_agent_field_is_absent_not_a_member() {
-        let agent = parse(CONTEXT, "t.jsonl").expect("parses").agent;
+        let agent = parse(CONTEXT, "t.jsonl", RecordShape::Jsonl)
+            .expect("parses")
+            .agent;
         assert!(!agent.models.contains(""), "no empty member");
         assert_eq!(agent.models.len(), 2, "only the two real models");
     }
@@ -1592,6 +1683,7 @@ mod tests {
         let stream = parse(
             r#"{"type":"something-new","sessionId":"s","brandNew":{"nested":1}}"#,
             "t.jsonl",
+            RecordShape::Jsonl,
         )
         .expect("parses");
         assert!(stream.records.is_empty());
@@ -1599,8 +1691,12 @@ mod tests {
 
     #[test]
     fn a_line_that_is_not_json_is_refused_by_pointer_never_by_content() {
-        let error =
-            parse("{\"type\":\"user\"}\nnot json at all\n", "t.jsonl").expect_err("refuses");
+        let error = parse(
+            "{\"type\":\"user\"}\nnot json at all\n",
+            "t.jsonl",
+            RecordShape::Jsonl,
+        )
+        .expect_err("refuses");
         let rendered = error.to_string();
         assert!(rendered.contains("t.jsonl:2"), "got: {rendered}");
         assert!(
@@ -1621,11 +1717,94 @@ mod tests {
     #[test]
     fn an_absent_or_unconfigured_path_are_different_answers() {
         let dir = std::env::temp_dir();
-        assert_eq!(resolve(&dir, None), Capability::Unconfigured);
         assert_eq!(
-            resolve(&dir, Some("no-such-transcript-here.jsonl")),
+            resolve(&dir, None, Some(Harness::ClaudeCode)),
+            Capability::Unconfigured
+        );
+        assert_eq!(
+            resolve(
+                &dir,
+                Some("no-such-transcript-here.jsonl"),
+                Some(Harness::ClaudeCode)
+            ),
             Capability::Absent
         );
+    }
+
+    /// **A host nobody surveyed is could-not-look, never an empty stream**, and
+    /// this is the case CLOUD-1624 exists for: before it, a transcript from any
+    /// host but one decoded to a record whose every field was `None`, yielded
+    /// zero events, and let four gates report clean over a session they had not
+    /// read.
+    ///
+    /// The file is real and decodable here on purpose. If the arm were reached
+    /// only for a missing file, the test would pass over a resolver that still
+    /// parsed the bytes with the wrong grammar.
+    #[test]
+    fn an_unsurveyed_harness_is_could_not_look_rather_than_a_clean_parse() {
+        let dir = std::env::temp_dir().join("batten-transcript-unsurveyed");
+        std::fs::create_dir_all(&dir).expect("fixture dir");
+        std::fs::write(dir.join("s.jsonl"), SAMPLE).expect("fixture transcript");
+
+        let resolved = resolve(&dir, Some("s.jsonl"), Some(Harness::Cursor));
+        let Capability::Unsurveyed(owes) = resolved else {
+            panic!(
+                "an unsurveyed host must not resolve to {}",
+                resolved.as_str()
+            );
+        };
+        assert!(
+            owes.starts_with("CLOUD-"),
+            "names the row that owes: {owes}"
+        );
+        assert_eq!(Capability::Unsurveyed(owes).as_str(), "unsurveyed");
+    }
+
+    /// The mirror, and without it the arm above is satisfied by a resolver that
+    /// answers could-not-look for everything: the SAME bytes under a surveyed
+    /// host still parse to the same stream they always did.
+    #[test]
+    fn a_surveyed_harness_still_parses_the_same_bytes() {
+        let dir = std::env::temp_dir().join("batten-transcript-surveyed");
+        std::fs::create_dir_all(&dir).expect("fixture dir");
+        std::fs::write(dir.join("s.jsonl"), SAMPLE).expect("fixture transcript");
+
+        let Capability::Present(stream) = resolve(&dir, Some("s.jsonl"), Some(Harness::ClaudeCode))
+        else {
+            panic!("a surveyed host parses its own shape");
+        };
+        assert_eq!(stream.counts(), sample().counts());
+    }
+
+    /// Naming no host declares nothing rather than borrowing a default's
+    /// declarations — the `cli.rs` attribution precedent, one layer over. A
+    /// default here would read an unnamed host's file through one host's grammar
+    /// and report the zero events that yields as a clean session.
+    #[test]
+    fn an_unnamed_harness_chooses_no_grammar_at_all() {
+        let dir = std::env::temp_dir().join("batten-transcript-unnamed");
+        std::fs::create_dir_all(&dir).expect("fixture dir");
+        std::fs::write(dir.join("s.jsonl"), SAMPLE).expect("fixture transcript");
+
+        assert_eq!(resolve(&dir, Some("s.jsonl"), None), Capability::Unnamed);
+        assert_eq!(Capability::Unnamed.as_str(), "unnamed");
+    }
+
+    /// **THE SHAPE QUESTION IS PRIOR TO THE FILE**, so a host nobody surveyed
+    /// reports that rather than the weaker fact that its file is missing. The
+    /// two are different repairs — a survey against a path — and reporting the
+    /// one that is merely true would send a reader to the wrong one.
+    #[test]
+    fn an_unsurveyed_harness_outranks_an_absent_file() {
+        let dir = std::env::temp_dir();
+        assert!(matches!(
+            resolve(
+                &dir,
+                Some("no-such-transcript-here.jsonl"),
+                Some(Harness::CodexCli)
+            ),
+            Capability::Unsurveyed(_)
+        ));
     }
 
     /// The third state is its own answer, and it carries the pointer rather than
@@ -1638,7 +1817,9 @@ mod tests {
         std::fs::write(dir.join("s.jsonl"), "{\"type\":\"user\"}\nnot json\n")
             .expect("fixture transcript");
 
-        let Capability::Unreadable(pointer) = resolve(&dir, Some("s.jsonl")) else {
+        let Capability::Unreadable(pointer) =
+            resolve(&dir, Some("s.jsonl"), Some(Harness::ClaudeCode))
+        else {
             panic!("an undecodable line is neither absent nor present");
         };
         assert!(pointer.contains("s.jsonl:2"), "names the line: {pointer}");
@@ -1648,7 +1829,12 @@ mod tests {
 
     #[test]
     fn an_empty_session_id_is_none_never_some_empty() {
-        let stream = parse(r#"{"type":"user","sessionId":""}"#, "t.jsonl").expect("parses");
+        let stream = parse(
+            r#"{"type":"user","sessionId":""}"#,
+            "t.jsonl",
+            RecordShape::Jsonl,
+        )
+        .expect("parses");
         assert_eq!(stream.session, None);
     }
 
@@ -1672,7 +1858,7 @@ mod tests {
 {"type":"assistant","message":{"role":"assistant","content":[],"stop_reason":"tool_use"}}
 {"type":"assistant","message":{"role":"assistant","content":[],"stop_reason":"max_tokens"}}
 {"type":"assistant","message":{"role":"assistant","content":[],"stop_reason":"brand_new_token"}}"#;
-        let reasons: Vec<StopReason> = parse(body, "t.jsonl")
+        let reasons: Vec<StopReason> = parse(body, "t.jsonl", RecordShape::Jsonl)
             .expect("parses")
             .records
             .iter()
@@ -1719,6 +1905,7 @@ mod tests {
         let stream = parse(
             r#"{"message":{"role":"assistant","content":[],"stop_reason":"end_turn"}}"#,
             "t.jsonl",
+            RecordShape::Jsonl,
         )
         .expect("parses");
         assert!(matches!(
