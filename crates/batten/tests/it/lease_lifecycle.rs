@@ -157,6 +157,7 @@ fn held(branch: &str, expires: i64) -> Body {
         next: String::new(),
         progress: String::from("verify"),
         nonce: String::from("n1"),
+        ..Body::default()
     }
 }
 

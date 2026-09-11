@@ -274,6 +274,7 @@ fn a_stalled_holder_is_stealable_once_its_beat_has_published() {
         next: String::new(),
         progress: progress.to_owned(),
         nonce: String::from("n1"),
+        ..Body::default()
     };
     let observed = |progress: &str| Observed::Held {
         sha: "f".repeat(40),

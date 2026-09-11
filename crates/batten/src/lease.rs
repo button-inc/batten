@@ -1095,8 +1095,60 @@ pub struct Body {
     /// EQUALITY OVER TIME and never interprets it, so no clock crosses the wire.
     /// Advisory.
     pub progress: String,
+    /// The body format's MAJOR, and the one field a reader may refuse over.
+    ///
+    /// **"There is one administrator" is false here by construction**: the fleet
+    /// runs whatever versions its agents happen to carry, and nothing coordinates
+    /// an upgrade. So a body needs a way to say "you do not speak this", and a
+    /// reader needs a way to hear it that is not "parse it loosely and act on the
+    /// fields I recognised" — which is what the old parser did, and which turns a
+    /// format change into silent disagreement across a mixed fleet.
+    ///
+    /// **ABSENT MEANS 1, AND THAT IS THE COMPATIBILITY HINGE.** Every lease
+    /// written before this field existed carries no `schema:` line, and those
+    /// bodies are exactly schema 1 — so the default is a reading rather than a
+    /// guess. A reader seeing a major it does not know treats the lease as
+    /// [`Observed::Garbage`]: held, respected until it ages out, and diagnosable.
+    /// That is the same safe arm an unreadable lease already takes, and the
+    /// opposite of ignoring the field and racing the writer.
+    ///
+    /// **READERS SHIP BEFORE WRITERS**, which is why this lands emitting 1 rather
+    /// than 2. An old reader ignores an unknown key, so it would parse a `schema:
+    /// 2` body loosely and act on it — the exact failure this field prevents. The
+    /// major may only be raised once a release that REFUSES an unknown one is out
+    /// across the fleet.
+    pub schema: u32,
+    /// The batten version that minted this body. Advisory, and never a gate.
+    ///
+    /// Advertised so that version skew is VISIBLE rather than inferred from
+    /// behaviour. A waiter that sees a holder older than itself can say so, and a
+    /// stale agent can be asked to stand down by a peer — but the asking is
+    /// advisory and this field decides nothing, for [`Body`]'s stated reason: an
+    /// identity another clone could derive is one another clone could accidentally
+    /// claim. Refusing to honour a lease because its writer is old would hand
+    /// every upgrade a fleet-wide outage.
+    pub writer: String,
     /// What makes every mint a distinct object. See [`lease_object`].
     pub nonce: String,
+}
+
+/// The body major this build writes and is the highest it can read.
+///
+/// One constant for both directions deliberately: a build that wrote a major it
+/// could not read would be announcing a format to a fleet it is not itself part
+/// of.
+pub const BODY_SCHEMA: u32 = 1;
+
+/// This build's own version, as [`Body::writer`] advertises it.
+///
+/// `CARGO_PKG_VERSION` here, and `spec.rs`'s argument against it does not reach
+/// this use: that one refuses it for a SPEC version, where the number is a claim
+/// about a document's content and must not move just because the crate shipped.
+/// This is the opposite — the claim IS "which build wrote this", so tracking the
+/// crate is the whole point.
+#[must_use]
+pub fn writer_version() -> String {
+    String::from(env!("CARGO_PKG_VERSION"))
 }
 
 /// The banner every lease body opens with, so a commit that is not a lease is not
@@ -1109,9 +1161,23 @@ impl Body {
     pub fn render(&self) -> String {
         // `nonce:` STAYS LAST. Its uniqueness argument is what makes every mint a
         // distinct sha, and the check half treats it as the terminal line.
+        //
+        // `schema:` IS FIRST AFTER THE BANNER, so a reader that refuses an unknown
+        // major has seen it before it has read a single field it might act on.
+        // Ordering is not what makes the refusal correct — the parser reads the
+        // whole body before deciding — but a format whose version is buried in the
+        // middle invites a streaming reader that acts before it checks.
         format!(
-            "{BANNER}\nholder: {}\nexpires: {}\nbranch: {}\nhead: {}\nnext: {}\nprogress: {}\nnonce: {}\n",
-            self.holder, self.expires, self.branch, self.head, self.next, self.progress, self.nonce
+            "{BANNER}\nschema: {}\nholder: {}\nexpires: {}\nbranch: {}\nhead: {}\nnext: {}\nprogress: {}\nwriter: {}\nnonce: {}\n",
+            self.schema,
+            self.holder,
+            self.expires,
+            self.branch,
+            self.head,
+            self.next,
+            self.progress,
+            self.writer,
+            self.nonce
         )
     }
 
@@ -1149,6 +1215,10 @@ pub fn parse_body(object: &[u8]) -> Option<Body> {
     let mut body = Body::default();
     let mut banner = false;
     let mut expires = None;
+    // `Option<Option<u32>>`: absent, present-and-unreadable, present-and-a-number.
+    // The three are different answers and collapsing the middle into either
+    // neighbour is the loose parse this field exists to refuse.
+    let mut schema: Option<Option<u32>> = None;
     for line in text.lines() {
         if line == BANNER {
             banner = true;
@@ -1177,13 +1247,30 @@ pub fn parse_body(object: &[u8]) -> Option<Body> {
             "head" => value.clone_into(&mut body.head),
             "next" => value.clone_into(&mut body.next),
             "progress" => value.clone_into(&mut body.progress),
+            "writer" => value.clone_into(&mut body.writer),
             "nonce" => value.clone_into(&mut body.nonce),
+            // PARSED PERMISSIVELY, REFUSED BELOW. A `schema:` line this reader
+            // cannot turn into a number is not schema 1 — it is a body written by
+            // something that does not agree with us about what the field even is,
+            // and reading it as the oldest format would be the loose parse this
+            // field exists to stop. `None` here falls into the unknown-major arm.
+            "schema" => schema = Some(value.parse::<u32>().ok()),
             _ => {}
         }
     }
     if !banner {
         return None;
     }
+    // ABSENT IS 1, UNREADABLE AND TOO-NEW ARE REFUSALS. Every body written before
+    // this field existed is schema 1, so the absent case is a reading rather than
+    // a default — and a major above what this build speaks yields `None`, which
+    // the caller renders as `Observed::Garbage`: still held, still respected until
+    // it ages out, and now diagnosable instead of silently misread.
+    body.schema = match schema {
+        None => BODY_SCHEMA,
+        Some(Some(major)) if major <= BODY_SCHEMA => major,
+        Some(_) => return None,
+    };
     body.expires = expires?;
     Some(body)
 }
@@ -1925,6 +2012,8 @@ pub fn claim(terms: &Terms, holder: &str, branch: &str, head: &str, now: i64) ->
         head: head.to_owned(),
         next: String::new(),
         progress: String::new(),
+        schema: BODY_SCHEMA,
+        writer: writer_version(),
         nonce: nonce(),
     }
 }
@@ -1978,6 +2067,14 @@ pub fn lands_by_fast_forward(branch: &str, prefixes: &[String]) -> bool {
 pub fn tombstone(body: &Body) -> Body {
     Body {
         expires: 0,
+        // STAMPED, NEVER CARRIED. Every mint here is THIS build writing a body
+        // now, so advertising the version it inherited would name a writer that
+        // did not write it — and on `reservation`, which a WAITER mints onto the
+        // holder's body, the inherited value is a different agent's entirely.
+        // Carrying forward would make the one field that exists to expose skew
+        // the field that hides it.
+        schema: BODY_SCHEMA,
+        writer: writer_version(),
         nonce: nonce(),
         ..body.clone()
     }
@@ -1996,6 +2093,8 @@ pub fn renewal(terms: &Terms, body: &Body, progress: Option<&str>, now: i64) -> 
     Body {
         expires: now + terms.ttl,
         progress: progress.map_or_else(|| body.progress.clone(), str::to_owned),
+        schema: BODY_SCHEMA,
+        writer: writer_version(),
         nonce: nonce(),
         ..body.clone()
     }
@@ -2077,6 +2176,12 @@ pub fn beat(root: &Path, terms: &Terms, progress: Option<&str>, now: i64) -> boo
 pub fn reservation(body: &Body, want: &str) -> Body {
     Body {
         next: want.to_owned(),
+        // THE WAITER'S VERSION, NOT THE HOLDER'S — see `tombstone`. This is the
+        // one mint where the writer is a DIFFERENT agent from the holder the body
+        // names, so carrying `writer` forward would attribute this write to the
+        // holder and make the skew field actively misleading.
+        schema: BODY_SCHEMA,
+        writer: writer_version(),
         nonce: nonce(),
         ..body.clone()
     }
@@ -4106,6 +4211,8 @@ mod tests {
             progress: String::from("100.200"),
             nonce: String::from("aaaaaaaaaaaaaaaa"),
             next: String::new(),
+            schema: BODY_SCHEMA,
+            writer: String::from("0.0.1"),
         };
         let reserved = reservation(&body, "claude/b");
         assert_eq!(reserved.next, "claude/b");
@@ -4229,10 +4336,108 @@ mod tests {
             head: String::from("2222222222222222222222222222222222222222"),
             next: String::from("claude/y"),
             progress: String::from("1700000000.1700000030"),
+            schema: BODY_SCHEMA,
+            writer: String::from("0.0.1"),
             nonce: String::from("deadbeefdeadbeef"),
         };
         let object = lease_object(&body.render(), 1_700_000_000).expect("mint");
         assert_eq!(parse_body(&object.body), Some(body));
+    }
+
+    /// **THE COMPATIBILITY HINGE, and the case the rollout turns on.**
+    ///
+    /// Every lease written before `schema:` existed carries no such line, and
+    /// those bodies ARE schema 1. A reader that refused them would stop the fleet
+    /// on the deploy that introduced the field; one that defaulted them to
+    /// anything else would mislabel every lease in flight.
+    #[test]
+    fn a_body_written_before_the_schema_field_reads_as_the_first_major() {
+        let object = lease_object(
+            "land-lock\nholder: host-1-aa\nexpires: 1700000060\nnonce: bb\n",
+            1_700_000_000,
+        )
+        .expect("mint");
+        let body = parse_body(&object.body).expect("a pre-schema body still parses");
+        assert_eq!(
+            body.schema, BODY_SCHEMA,
+            "an absent major is a reading, not a guess: these bodies are major 1"
+        );
+        assert_eq!(body.holder, "host-1-aa", "and the rest still parses");
+        assert!(
+            body.writer.is_empty(),
+            "a pre-schema body advertises no writer, and inventing one would \
+             report skew that was never measured"
+        );
+    }
+
+    /// A major above what this build speaks does not parse, so the caller renders
+    /// it as `Observed::Garbage` — held, respected until it ages out, diagnosable.
+    ///
+    /// **This is the arm that makes the field worth having.** Without it the
+    /// parser ignores the unknown key, acts on the fields it recognised, and a
+    /// format change becomes silent disagreement across a mixed fleet — which is
+    /// the "one administrator" fallacy with a lock under it.
+    #[test]
+    fn a_body_from_a_newer_major_is_refused_rather_than_read_loosely() {
+        let object = lease_object(
+            "land-lock\nschema: 99\nholder: host-9-zz\nexpires: 1700000060\nnonce: bb\n",
+            1_700_000_000,
+        )
+        .expect("mint");
+        assert_eq!(
+            parse_body(&object.body),
+            None,
+            "a body this build does not speak must not be acted on"
+        );
+    }
+
+    /// A `schema:` this reader cannot turn into a number is refused too.
+    ///
+    /// Reading it as the oldest format would be exactly the loose parse the field
+    /// exists to stop: a body whose version field is unintelligible was written by
+    /// something that does not agree with us about what the field is.
+    #[test]
+    fn an_unreadable_major_is_refused_rather_than_treated_as_the_oldest() {
+        let object = lease_object(
+            "land-lock\nschema: tomorrow\nholder: a\nexpires: 1700000060\nnonce: bb\n",
+            1_700_000_000,
+        )
+        .expect("mint");
+        assert_eq!(parse_body(&object.body), None);
+    }
+
+    /// Every mint stamps THIS build, and never inherits a predecessor's.
+    ///
+    /// `reservation` is the discriminating one: a WAITER mints it onto the
+    /// holder's body, so a carried `writer` would attribute the write to the
+    /// holder — making the one field that exists to expose skew the field that
+    /// hides it. The holder itself must still be carried, which is what separates
+    /// this from a steal.
+    #[test]
+    fn every_mint_advertises_the_build_that_wrote_it() {
+        let held = Body {
+            holder: String::from("host-1-aa"),
+            expires: 1_700_000_060,
+            writer: String::from("0.0.1"),
+            schema: BODY_SCHEMA,
+            ..Body::default()
+        };
+        for minted in [
+            reservation(&held, "claude/y"),
+            tombstone(&held),
+            renewal(&Terms::default(), &held, None, 1_700_000_000),
+        ] {
+            assert_eq!(
+                minted.writer,
+                writer_version(),
+                "a mint advertises the build that performed it"
+            );
+            assert_eq!(minted.schema, BODY_SCHEMA);
+            assert_eq!(
+                minted.holder, "host-1-aa",
+                "and stamping the writer must not become a steal of the holder"
+            );
+        }
     }
 
     #[test]
