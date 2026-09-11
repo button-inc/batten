@@ -22,6 +22,25 @@ use batten::facts::Look;
 use batten::policy;
 use batten::rules::Rule;
 
+/// The provider a preset's modules read at `scope`, spelled as a row's own
+/// `provider` value — or `None` where they read none (CLOUD-1625).
+///
+/// DERIVED FROM THE MANIFEST, never a literal. A preset whose modules at a scope
+/// read a CI provider is refused where the row declares none, and asking the
+/// manifest is what keeps these cases honest as presets change: a provider added
+/// to a module later is covered here without editing a test, where a literal
+/// would have to be found and updated.
+fn provider_at(preset: &str, scope: batten::rules::RuleScope) -> Option<&'static str> {
+    // `None` for a preset that does not ship, rather than a panic: one case here
+    // names an unknown preset ON PURPOSE and asserts the LOADER refuses it. A
+    // helper that failed first would move that refusal into the harness and stop
+    // the case testing the mechanism it was written for.
+    batten::preset::find(preset)?
+        .providers_at(scope)
+        .into_iter()
+        .find(|reads| *reads != "no provider")
+}
+
 /// A mediated-call row enabling a vendored preset by name.
 fn preset_row(id: &str, preset: &str) -> Rule {
     serde_json::from_value(serde_json::json!({
@@ -29,6 +48,7 @@ fn preset_row(id: &str, preset: &str) -> Rule {
         "kind": "policy",
         "scope": "mediated_call",
         "preset": preset,
+        "provider": provider_at(preset, batten::rules::RuleScope::MediatedCall),
         "severity": "deny",
     }))
     .expect("a preset row the loader accepts")
@@ -586,6 +606,7 @@ fn tree_preset_row(id: &str, preset: &str) -> Rule {
         "kind": "policy",
         "scope": "tree",
         "preset": preset,
+        "provider": provider_at(preset, batten::rules::RuleScope::Tree),
         "severity": "deny",
     }))
     .expect("a tree preset row the loader accepts")

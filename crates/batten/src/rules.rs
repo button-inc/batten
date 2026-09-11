@@ -2031,6 +2031,29 @@ pub struct Rule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(schema_with = "preset_name_schema")]
     pub preset: Option<String>,
+    /// The CI provider this repository runs, where the enabled preset reads one
+    /// (CLOUD-1625).
+    ///
+    /// **A consumer fact, so it lives in the consumer's config** — which is
+    /// non-negotiable rule 1 applied to the seam that broke it. The engine
+    /// declares which provider's language a preset's modules read
+    /// ([`crate::preset::Manifest::provider`]); this declares which one is in
+    /// use here; and the two are compared at load. Neither guesses the other.
+    ///
+    /// Omitted is the ordinary case: six of the seven presets read no provider's
+    /// language, so a row enabling one needs nothing here. A row enabling a
+    /// preset that DOES read one, and naming no provider or a different one, is
+    /// refused before compilation — because the alternative is the preset
+    /// evaluating over an empty document set and reporting clean.
+    ///
+    /// ON THIS ROW rather than in `[ci]`: that table is "this repository's
+    /// committed copy of the host's contract" (`crate::ci::Ci`), a mirror of the
+    /// host's branch protection that `ci-drift` polices key by key, and a key
+    /// with no host counterpart breaks the mirror. `[host]` is the host's repo
+    /// settings and is no better a fit. One optional key beside the `preset` it
+    /// qualifies keeps the configuration narrow, which is rule 6.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
     /// The bundle root this rule enables, as a repository-relative directory
     /// (CLOUD-833). [`RuleKind::Policy`] only, and the **alternative** to
     /// [`Rule::module`] rather than an addition to it.
@@ -3475,6 +3498,13 @@ pub const COLUMN_CENSUS: &[ColumnCensus] = &[
         ),
     },
     ColumnCensus {
+        field: "provider",
+        declares: Declares::NotFactBearing(
+            "qualifies `preset`, selecting which of its modules compile; the facts stay \
+             those modules' own declarations (CLOUD-1625)",
+        ),
+    },
+    ColumnCensus {
         field: "bundle",
         declares: Declares::NotFactBearing("names a vendored bundle, as `preset` does"),
     },
@@ -4361,6 +4391,21 @@ impl Rule {
     /// one, when a mediated-call row declares `documents`, or when a tree-scoped
     /// row declares none.
     fn validate_policy_source(&self) -> anyhow::Result<()> {
+        // A QUALIFIER WITH NOTHING TO QUALIFY IS THE DEAD COLUMN THIS ROW EXISTS
+        // TO END (CLOUD-1625). `provider` selects among a preset's modules and is
+        // read nowhere else, so a row declaring it without `preset` — on this kind
+        // or any other — parses, loads, and has the key read by nothing, which is
+        // exactly the silence `columns()`'s census refuses one layer over. Checked
+        // BEFORE the kind guard, because the wrong kind is the case where the
+        // silence is total.
+        if self.provider.is_some() && self.preset.is_none() {
+            return Err(UsageError::raise(format!(
+                "rule {}: `provider` qualifies `preset`, and this row names no preset; \
+                 nothing reads the column, so it would declare a CI provider that \
+                 selects nothing",
+                self.id
+            )));
+        }
         if self.kind != RuleKind::Policy {
             return Ok(());
         }
@@ -14061,6 +14106,8 @@ mod tests {
             module: None,
             bundle: None,
             preset: None,
+            // No preset, so nothing here reads a CI provider (CLOUD-1625).
+            provider: None,
             documents: Vec::new(),
             requires_path: Vec::new(),
             sources: Vec::new(),
@@ -14252,6 +14299,47 @@ mod tests {
                 "`{path}` leaves the root it was declared beneath and must be refused"
             );
         }
+    }
+
+    /// A `provider` with no `preset` to qualify is refused at load (CLOUD-1625).
+    ///
+    /// The column is read in exactly one place — [`crate::policy::preset_sources`],
+    /// which only runs for a row naming a preset. So without one the key parses,
+    /// loads, and decides nothing: a consumer declaring their CI provider would be
+    /// told nothing while the row reads no provider at all.
+    #[test]
+    fn a_provider_with_no_preset_is_refused_at_load() {
+        let mut rule = blank("dangling-provider", RuleKind::Policy);
+        rule.module = Some(String::from("probe.rego"));
+        rule.provider = Some(String::from("github-actions"));
+        let err = rule
+            .validate()
+            .expect_err("a provider qualifying nothing must not load");
+        assert!(
+            format!("{err}").contains("provider"),
+            "the refusal names the column to remove: {err}"
+        );
+    }
+
+    /// The anti-vacuity mirror: the same row loads once a preset is there to
+    /// qualify. Without this the case above is satisfied by a build that refuses
+    /// every `provider`, which would name the column every time and prove nothing.
+    #[test]
+    fn the_same_provider_loads_beside_the_preset_it_qualifies() {
+        let mut rule = blank("qualified-provider", RuleKind::Policy);
+        // `ci-hygiene` decides the tree, and `sources` is a tree-surface column:
+        // left at `blank`'s mediated-call default the row is refused for a reason
+        // that has nothing to do with `provider`, which would pass this test while
+        // observing the wrong refusal.
+        rule.scope = RuleScope::Tree;
+        rule.preset = Some(String::from("ci-hygiene"));
+        rule.sources = vec![String::from("**/*.yml")];
+        rule.provider = Some(String::from("github-actions"));
+        assert!(
+            rule.validate().is_ok(),
+            "a provider beside the preset it selects within must load: {:?}",
+            rule.validate().err()
+        );
     }
 
     /// Every `Rule` column, read off the struct's own source.

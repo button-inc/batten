@@ -107,6 +107,7 @@ fn every_declared_preset_can_be_enabled_at_its_own_scope() {
                  scope = \"{}\"\n\
                  {}\
                  preset = \"{}\"\n\
+                 {}\
                  severity = \"deny\"\n",
                 scope.as_str(),
                 if scope == batten::rules::RuleScope::Tree {
@@ -115,6 +116,17 @@ fn every_declared_preset_can_be_enabled_at_its_own_scope() {
                     ""
                 },
                 manifest.name,
+                // DERIVED FROM THE MANIFEST, never hardcoded (CLOUD-1625). A
+                // preset whose modules at this scope read a CI provider needs the
+                // row to declare it, and asking the manifest is what keeps this
+                // reachability claim honest as presets change: a provider added
+                // to a module later is covered without editing this test, and a
+                // literal here would have to be found and updated instead.
+                manifest
+                    .providers_at(scope)
+                    .into_iter()
+                    .find(|reads| *reads != "no provider")
+                    .map_or_else(String::new, |reads| format!("provider = \"{reads}\"\n")),
             ))
             .build();
             let output = common::run(&root, &["check"]);
@@ -128,4 +140,106 @@ fn every_declared_preset_can_be_enabled_at_its_own_scope() {
             );
         }
     }
+}
+
+/// A preset whose modules read one CI provider is refused where the row names
+/// none, and the refusal names BOTH sides (CLOUD-1625).
+///
+/// # What this DOES claim, unlike its scope sibling above
+///
+/// The scope case is careful to say it closes no dead gate — the input-key check
+/// catches a wrong-surface module anyway. **This one does.** Nothing downstream
+/// notices a consumer on another CI provider: `ci-hygiene`'s modules key on
+/// documents carrying a `jobs:` mapping, which GitLab, Buildkite and a
+/// Jenkinsfile all fail to produce, so the rule set evaluates over an empty
+/// document set, refuses nothing, and reports a clean tree it never read.
+#[test]
+fn a_preset_reading_a_provider_is_refused_where_the_row_names_none() {
+    let root = Fixture::new("preset-no-provider")
+        .config(
+            "version = 1\n\n\
+             [[rule]]\n\
+             id = \"no-provider\"\n\
+             kind = \"policy\"\n\
+             scope = \"tree\"\n\
+             sources = [\"**/*.yml\"]\n\
+             preset = \"ci-hygiene\"\n\
+             severity = \"deny\"\n",
+        )
+        .build();
+    let output = common::run(&root, &["check"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(batten::exit::ExitCode::Usage.code()),
+        "an undeclared provider is a config fault: {stderr}"
+    );
+    assert!(
+        stderr.contains("ci-hygiene") && stderr.contains("github-actions"),
+        "the refusal names the preset and what its modules read: {stderr}"
+    );
+    assert!(
+        stderr.contains("no provider"),
+        "and names what the row declared, so a reader sees which half to change: {stderr}"
+    );
+}
+
+/// The same preset loads once the row declares the provider its modules read.
+///
+/// **The first half of the anti-vacuity pair.** Without it the case above is
+/// satisfied by a build that refuses `ci-hygiene` unconditionally.
+#[test]
+fn the_same_preset_loads_once_the_row_declares_the_provider() {
+    let root = Fixture::new("preset-matching-provider")
+        .config(
+            "version = 1\n\n\
+             [[rule]]\n\
+             id = \"matching-provider\"\n\
+             kind = \"policy\"\n\
+             scope = \"tree\"\n\
+             sources = [\"**/*.yml\"]\n\
+             preset = \"ci-hygiene\"\n\
+             provider = \"github-actions\"\n\
+             severity = \"deny\"\n",
+        )
+        .build();
+    let output = common::run(&root, &["check"]);
+    assert_eq!(
+        output.status.code(),
+        Some(batten::exit::ExitCode::Success.code()),
+        "the preset must load where the row names the provider it reads: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// **The second half, and the one a manifest-level field would have failed.**
+///
+/// `mise` ships two modules: `action-version-matches-the-pin` matches a step's
+/// `uses:` coordinate, and `task-over-executable` decides task argv and reads no
+/// provider at all. At `mediated_call` only the second is compiled, so the row
+/// needs no provider and must load without one — where a declaration on the
+/// MANIFEST would have called the whole preset GitHub-specific and switched off
+/// a module that works on every host.
+#[test]
+fn a_module_reading_no_provider_loads_with_no_provider_declared() {
+    let root = Fixture::new("preset-agnostic-module")
+        .config(
+            "version = 1\n\n\
+             [[rule]]\n\
+             id = \"agnostic-module\"\n\
+             kind = \"policy\"\n\
+             scope = \"mediated_call\"\n\
+             preset = \"mise\"\n\
+             severity = \"deny\"\n",
+        )
+        .build();
+    let output = common::run(&root, &["check"]);
+    assert_eq!(
+        output.status.code(),
+        Some(batten::exit::ExitCode::Success.code()),
+        "a provider-agnostic module must load with no provider declared: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

@@ -48,6 +48,13 @@ fn row() -> Rule {
         "kind": "policy",
         "scope": "tree",
         "preset": "mise",
+        // Declared because `batten.toml` declares it on this row and not on its
+        // `mediated_call` sibling (CLOUD-1625). At THIS scope the preset compiles
+        // `action-version-matches-the-pin`, which reads one provider's workflow
+        // language; at the other it compiles `task-over-executable`, which reads
+        // none and so needs no provider — the asymmetry that forced the column
+        // onto the module rather than the manifest.
+        "provider": "github-actions",
         "sources": [
             "batten.toml",
             ".github/workflows/*.yml",

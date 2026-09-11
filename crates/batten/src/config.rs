@@ -3585,6 +3585,9 @@ fn default_rules() -> Vec<Rule> {
         module: None,
         bundle: None,
         preset: None,
+        // No preset, so no provider to qualify: the default rule is a `forbid`
+        // over conflict markers and reads no CI language at all (CLOUD-1625).
+        provider: None,
         documents: Vec::new(),
         // Unconditional (CLOUD-125): the zero-config layer has no repository
         // shape to declare a precondition against, and a default rule that

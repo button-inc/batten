@@ -1232,6 +1232,13 @@
             }
           ]
         },
+        "provider": {
+          "description": "The CI provider this repository runs, where the enabled preset reads one\n(CLOUD-1625).\n\n**A consumer fact, so it lives in the consumer's config** — which is\nnon-negotiable rule 1 applied to the seam that broke it. The engine\ndeclares which provider's language a preset's modules read\n([`crate::preset::Manifest::provider`]); this declares which one is in\nuse here; and the two are compared at load. Neither guesses the other.\n\nOmitted is the ordinary case: six of the seven presets read no provider's\nlanguage, so a row enabling one needs nothing here. A row enabling a\npreset that DOES read one, and naming no provider or a different one, is\nrefused before compilation — because the alternative is the preset\nevaluating over an empty document set and reporting clean.\n\nON THIS ROW rather than in `[ci]`: that table is \"this repository's\ncommitted copy of the host's contract\" (`crate::ci::Ci`), a mirror of the\nhost's branch protection that `ci-drift` polices key by key, and a key\nwith no host counterpart breaks the mirror. `[host]` is the host's repo\nsettings and is no better a fit. One optional key beside the `preset` it\nqualifies keeps the configuration narrow, which is rule 6.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "ranges": {
           "description": "The commit ranges this policy row reads, **declared** (CLOUD-907).\n\nSpelled `<base>..<head>`, and each becomes an entry of\n`input.tree[\"git-ranges\"]` carrying that range's commits as a sha and a\nsubject each. A range whose endpoints do not resolve is **absent**, never\nan empty list — \"nothing landed in this range\" and \"I could not read this\nrange\" are the two answers a migration gate most needs kept apart.\n\nPointer-only at the boundary: a subject is git's `%s`, which is how the\nlog itself points at a commit. A message body or a diff would put tracked\ncontent on the policy input, and rule 4 is decided at the acquisition\nrather than at the report.",
           "type": "array",

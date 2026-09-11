@@ -58,10 +58,10 @@ use common::{batten, stdout};
 /// link the hook parks, and the substitution is exercised where it lives. What
 /// the key's PRESENCE decides here is could-not-look versus a real reading,
 /// which is the distinction `an_undeclared_template_is_could_not_look_too` pins.
-const DECLARED: &str = "version = 1\n\n[transcript]\npath = \".claude/.transcript.jsonl\"\ntasks = \"/nonexistent/{session}\"\n";
+const DECLARED: &str = "version = 1\n\n[transcript]\npath = \".claude/.transcript.jsonl\"\nharness = \"claude-code\"\ntasks = \"/nonexistent/{session}\"\n";
 
 /// The same repository with the store undeclared.
-const UNDECLARED: &str = "version = 1\n\n[transcript]\npath = \".claude/.transcript.jsonl\"\n";
+const UNDECLARED: &str = "version = 1\n\n[transcript]\npath = \".claude/.transcript.jsonl\"\nharness = \"claude-code\"\n";
 
 fn scratch(name: &str, config: &str) -> PathBuf {
     let dir = common::scratch_outside_tree("batten-session-e2e", name);

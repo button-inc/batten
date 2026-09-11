@@ -869,7 +869,10 @@ pub fn load(
                     decided.join(" and ")
                 )));
             }
-            let sources: Vec<(String, String)> = manifest.modules_at(rule.scope);
+            // The provider comparison (CLOUD-1625), in its own function for
+            // `clippy::too_many_lines`: a nameable step lifted out whole, which is
+            // the remedy `lib.rs` takes for the same lint rather than raising a cap.
+            let sources: Vec<(String, String)> = preset_sources(rule, manifest, name)?;
             let bundle = compile(&rule.id, &sources, &pattern_data)?;
             let declared = bundle.declared.clone();
             check_predicate_severity(rule, &declared, source_key)?;
@@ -927,6 +930,53 @@ pub fn load(
         check_collapse(rules, &per_rule, &tokens)?;
     }
     Ok(bundles)
+}
+
+/// Which of a preset's modules this row compiles, given the CI provider it
+/// declares — refusing where that selection is empty (CLOUD-1625).
+///
+/// Lifted out of [`load`] whole rather than inlined: `clippy::too_many_lines`
+/// refuses the flat function, and moving a nameable step is the remedy this
+/// crate already takes for that lint instead of raising a cap.
+fn preset_sources(
+    rule: &Rule,
+    manifest: &crate::preset::Manifest,
+    name: &str,
+) -> Result<Vec<(String, String)>> {
+    // THE PROVIDER COMPARISON, AND UNLIKE THE SCOPE ONE ITS CALLER RUNS FIRST,
+    // IT CLOSES A REAL HOLE (CLOUD-1625). That scope refusal's comment is candid
+    // that `check_tree_paths_are_emittable` catches a wrong-surface
+    // module downstream anyway. **Nothing downstream notices a consumer
+    // on another CI provider**: `ci-hygiene`'s modules key on documents
+    // carrying a `jobs:` mapping, which GitLab, Buildkite and a
+    // Jenkinsfile all fail to produce, so the rule set evaluates over an
+    // empty document set, refuses nothing, and reports clean. A dead gate
+    // and a clean tree, byte-identical from outside.
+    //
+    // Per MODULE, not per manifest, because a preset can mix: `mise`
+    // ships one module reading a step's `uses:` coordinate and one
+    // deciding task argv on any host. Filtering rather than refusing the
+    // whole preset is what keeps the second one working off GitHub.
+    let declared_provider = rule.provider.as_deref();
+    let sources: Vec<(String, String)> = manifest.modules_for(rule.scope, declared_provider);
+    // REFUSED WHEN THE SELECTION IS EMPTY, for the reason the scope arm
+    // refuses: a row that compiles no modules is a rule that decides
+    // nothing, and shipping it silently is the state this row exists to
+    // end. Named both ways — what the preset reads, and what the row
+    // declared — so the reader can see which half to change.
+    if sources.is_empty() {
+        let reads: Vec<&str> = manifest.providers_at(rule.scope);
+        return Err(UsageError::raise(format!(
+            "rule `{}` enables the preset `{name}` at scope `{}`, but every module \
+             there reads {}, and this row declares {} — on another provider those \
+             modules match nothing and would report a clean tree they never read",
+            rule.id,
+            rule.scope.as_str(),
+            reads.join(" and "),
+            declared_provider.map_or_else(|| String::from("no provider"), |p| format!("`{p}`")),
+        )));
+    }
+    Ok(sources)
 }
 
 /// Read one row's declared module text, from the working tree or from a ref.

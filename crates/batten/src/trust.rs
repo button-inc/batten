@@ -2383,6 +2383,21 @@ fn scalar_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         working.defects.as_ref(),
     ));
 
+    found.extend(transcript_weakenings(base, working));
+
+    found
+}
+
+/// The two ways a consumer stops the transcript rules deciding (CLOUD-95,
+/// CLOUD-1624).
+///
+/// Its own function beside [`ci_weakenings`] and [`deferral_weakenings`] rather
+/// than inline in [`scalar_weakenings`], which `clippy::too_many_lines` refuses
+/// once both arms are there — and the two arms are one subject, so a reader
+/// comparing them has them adjacent.
+fn transcript_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
+    let mut found = Vec::new();
+
     // A transcript path gone stops `check` reading the session it judged
     // against (CLOUD-95). Keyed on the effective path rather than the table, so
     // deleting `[transcript]` and blanking its `path` report the same key.

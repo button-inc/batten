@@ -49,6 +49,12 @@ fn row() -> Rule {
         "kind": "policy",
         "scope": "tree",
         "preset": "ci-hygiene",
+        // Declared here because `batten.toml` declares it (CLOUD-1625), and this
+        // builder's contract is to be that row. Its modules read GitHub Actions,
+        // so a row naming no provider is refused before compilation — which is
+        // the seam: off this provider they would match nothing and report a clean
+        // tree they never read.
+        "provider": "github-actions",
         "sources": [".github/workflows/*.yml", ".github/workflows/*.yaml"],
         "line_sources": [".github/workflows/*.yml", ".github/workflows/*.yaml"],
         "severity": "deny",

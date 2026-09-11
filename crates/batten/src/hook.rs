@@ -352,6 +352,13 @@ impl Harness {
     /// A host measured to write no transcript would be a surveyed answer and
     /// would get its own arm; none is measured today.
     #[must_use]
+    // `match_same_arms` would collapse the two surveyed rows. Refused for
+    // `merge_surfaces`'s reason: they are JSONL for DIFFERENT measured reasons —
+    // one is a host's fetched wire format, the other the neutral contract's
+    // normalized record, which is not a host's at all. Collapsing them would
+    // delete the distinction and make the day either moves a structural edit
+    // rather than a one-value one.
+    #[allow(clippy::match_same_arms)]
     pub const fn transcript_shape(self) -> TranscriptShape {
         match self {
             Harness::ClaudeCode => TranscriptShape::Surveyed(RecordShape::Jsonl),
@@ -10393,6 +10400,8 @@ mod tests {
             module: None,
             bundle: None,
             preset: None,
+            // No preset, so nothing here reads a CI provider (CLOUD-1625).
+            provider: None,
             documents: Vec::new(),
             requires_path: Vec::new(),
             sources: Vec::new(),

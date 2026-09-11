@@ -60,6 +60,27 @@ use crate::verdict::{DeclaredVerdict, VendoredVerdict, admit, read, run};
 pub struct PresetModule {
     /// The surface this module reads — `input.tree.*` or `input.call`/`facts`.
     pub scope: RuleScope,
+    /// The CI provider whose expression language this module reads, or `None`
+    /// where it reads none (CLOUD-1625).
+    ///
+    /// **PER MODULE RATHER THAN PER MANIFEST, and that is CLOUD-1672's lesson
+    /// applied before it had to be learned twice.** `scope` was a manifest field
+    /// once — true of every preset that existed when it was written, and false
+    /// the moment one preset had something to say about two surfaces. The same
+    /// is already true here: the `mise` preset's
+    /// `action-version-matches-the-pin` matches a step's `uses:` coordinate and
+    /// so reads one provider's workflow language, while its sibling `task-over-executable`
+    /// decides mise tasks and cares about no provider at all. A manifest-level
+    /// field would have to call that preset GitHub-specific and switch off a
+    /// module that works everywhere.
+    ///
+    /// **`None` is a measured answer, not an unsurveyed one**: it says this
+    /// module reads no provider's language, which is why it applies anywhere.
+    ///
+    /// Decided at LOAD rather than inside the module: a preset cannot read
+    /// consumer data — `data.batten.*` is undefined for it — so no Rego
+    /// conditional could ask "am I on the right provider".
+    pub provider: Option<&'static str>,
     /// `<preset:name>/….rego`, the pointer a refusal prints.
     pub pointer: &'static str,
     /// The module source, `include_str!`d at build time.
@@ -167,6 +188,49 @@ impl Manifest {
             .map(|module| (module.pointer.to_owned(), module.source.to_owned()))
             .collect()
     }
+
+    /// [`Manifest::modules_at`], narrowed to what this consumer's provider can
+    /// decide (CLOUD-1625).
+    ///
+    /// **A module reading no provider's language applies everywhere**, which is
+    /// what `None` on the module means and why it is not filtered out. A module
+    /// that DOES read one applies only where the row declares that same
+    /// provider — off it, the module matches nothing and would report the clean
+    /// tree it never read.
+    ///
+    /// Filtering rather than refusing the whole preset is what lets `mise` keep
+    /// deciding task argv on a host whose workflow language its sibling module
+    /// cannot read. The caller refuses when this comes back EMPTY, because a row
+    /// compiling no modules is a rule that decides nothing.
+    #[must_use]
+    pub fn modules_for(&self, scope: RuleScope, provider: Option<&str>) -> Vec<(String, String)> {
+        self.modules
+            .iter()
+            .filter(|module| module.scope == scope)
+            .filter(|module| match module.provider {
+                None => true,
+                Some(reads) => provider == Some(reads),
+            })
+            .map(|module| (module.pointer.to_owned(), module.source.to_owned()))
+            .collect()
+    }
+
+    /// What the modules at this scope read, for a refusal that names both sides.
+    ///
+    /// Deduplicated and ordered by the module table so the message is
+    /// byte-stable (§6). A module reading no provider's language renders as
+    /// `no provider`, which is an answer rather than an omission.
+    #[must_use]
+    pub fn providers_at(&self, scope: RuleScope) -> Vec<&'static str> {
+        let mut seen: Vec<&'static str> = Vec::new();
+        for module in self.modules.iter().filter(|m| m.scope == scope) {
+            let reads = module.provider.unwrap_or("no provider");
+            if !seen.contains(&reads) {
+                seen.push(reads);
+            }
+        }
+        seen
+    }
 }
 
 /// Every vendored preset, in a stable order.
@@ -182,11 +246,20 @@ pub const MANIFESTS: &[Manifest] = &[
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
+                // Matches `github.event.pull_request.draft == false` and keys on
+                // documents carrying a `jobs:` mapping — GitHub's workflow
+                // shape. GitLab names jobs at the top level, Buildkite uses
+                // `steps:`, a Jenkinsfile is not YAML: on any of them the set is
+                // empty and every rule here refuses nothing (CLOUD-1625).
+                provider: Some("github-actions"),
                 pointer: "<preset:ci-hygiene>/spend-is-authorised.rego",
                 source: include_str!("policy/presets/ci-hygiene/spend-is-authorised.rego"),
             },
             PresetModule {
                 scope: RuleScope::Tree,
+                // `github.event_name`, `github.event.comment.body` and
+                // `github.event.workflow_run` — the same language, same reason.
+                provider: Some("github-actions"),
                 pointer: "<preset:ci-hygiene>/wiring-can-be-reached.rego",
                 source: include_str!("policy/presets/ci-hygiene/wiring-can-be-reached.rego"),
             },
@@ -348,6 +421,7 @@ value is what does the work, and it is a boolean rather than the string `true`."
         version: 1,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
+            provider: None,
             pointer: "<preset:commit-hygiene>/no-empty-commit.rego",
             source: include_str!("policy/presets/commit-hygiene/no-empty-commit.rego"),
         }],
@@ -369,6 +443,7 @@ the pipeline.",
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
+                provider: None,
                 pointer: "<preset:landing-loop>/graded-head-is-not-regraded.rego",
                 source: include_str!(
                     "policy/presets/landing-loop/graded-head-is-not-regraded.rego"
@@ -376,6 +451,7 @@ the pipeline.",
             },
             PresetModule {
                 scope: RuleScope::Tree,
+                provider: None,
                 pointer: "<preset:landing-loop>/already-landed-work-is-not-relanded.rego",
                 source: include_str!(
                     "policy/presets/landing-loop/already-landed-work-is-not-relanded.rego"
@@ -383,6 +459,7 @@ the pipeline.",
             },
             PresetModule {
                 scope: RuleScope::Tree,
+                provider: None,
                 pointer: "<preset:landing-loop>/lease-authorises-the-branch.rego",
                 source: include_str!(
                     "policy/presets/landing-loop/lease-authorises-the-branch.rego"
@@ -390,6 +467,7 @@ the pipeline.",
             },
             PresetModule {
                 scope: RuleScope::Tree,
+                provider: None,
                 pointer: "<preset:landing-loop>/rebase-conflict-stops-the-lap.rego",
                 source: include_str!(
                     "policy/presets/landing-loop/rebase-conflict-stops-the-lap.rego"
@@ -397,6 +475,7 @@ the pipeline.",
             },
             PresetModule {
                 scope: RuleScope::Tree,
+                provider: None,
                 pointer: "<preset:landing-loop>/lap-waits-on-one-answer.rego",
                 source: include_str!("policy/presets/landing-loop/lap-waits-on-one-answer.rego"),
             },
@@ -559,11 +638,23 @@ abandon the other unread.",
         modules: &[
             PresetModule {
                 scope: RuleScope::MediatedCall,
+                // Decides whether an agent reproduced a task's argv. No CI
+                // provider is involved, so it applies everywhere.
+                provider: None,
                 pointer: "<preset:mise>/task-over-executable.rego",
                 source: include_str!("policy/presets/mise/task-over-executable.rego"),
             },
             PresetModule {
                 scope: RuleScope::Tree,
+                // **THIS PAIR IS WHY `provider` IS PER MODULE** (CLOUD-1625).
+                // This one matches a step's `uses: jdx/mise-action@<sha>`, so it
+                // reads one provider's workflow language, while the sibling
+                // above cares about no provider at all. A
+                // manifest-level field would have to call the whole `mise`
+                // preset GitHub-specific and switch off a module that works on
+                // every host — the exact mistake CLOUD-1672 corrected for
+                // `scope`, one subject later.
+                provider: Some("github-actions"),
                 pointer: "<preset:mise>/action-version-matches-the-pin.rego",
                 source: include_str!("policy/presets/mise/action-version-matches-the-pin.rego"),
             },
@@ -634,6 +725,7 @@ could not, which is a gate reporting on a surface it never saw.",
         modules: &[
             PresetModule {
                 scope: RuleScope::MediatedCall,
+                provider: None,
                 pointer: "<preset:pinned-toolchain>/pinned-program-via-the-pin.rego",
                 source: include_str!(
                     "policy/presets/pinned-toolchain/pinned-program-via-the-pin.rego"
@@ -641,6 +733,7 @@ could not, which is a gate reporting on a surface it never saw.",
             },
             PresetModule {
                 scope: RuleScope::MediatedCall,
+                provider: None,
                 pointer: "<preset:pinned-toolchain>/pinned-program-probed-bare.rego",
                 source: include_str!(
                     "policy/presets/pinned-toolchain/pinned-program-probed-bare.rego"
@@ -698,6 +791,7 @@ declares, and a probe inside the pin's environment is already correct",
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
+                provider: None,
                 pointer: "<preset:shell-hygiene>/shebang-names-its-language.rego",
                 source: include_str!(
                     "policy/presets/shell-hygiene/shebang-names-its-language.rego"
@@ -705,6 +799,7 @@ declares, and a probe inside the pin's environment is already correct",
             },
             PresetModule {
                 scope: RuleScope::Tree,
+                provider: None,
                 pointer: "<preset:shell-hygiene>/sibling-resolves.rego",
                 source: include_str!("policy/presets/shell-hygiene/sibling-resolves.rego"),
             },
@@ -738,6 +833,7 @@ asserted rather than tested.",
         version: 1,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
+            provider: None,
             pointer: "<preset:trunk-based>/no-force-push.rego",
             source: include_str!("policy/presets/trunk-based/no-force-push.rego"),
         }],
