@@ -197,8 +197,40 @@ impl Commit {
 /// which is the whole reason the block spells every binding field out instead of
 /// carrying a reference. A tier that needed the store would pass locally and
 /// abstain in CI, which is the shape of a gate that is not there.
+///
+/// # A path with a sanctioned mutation owes no block, and that is the override
+/// route's own precondition read back (CLOUD-1303)
+///
+/// `path write refused` declares its override route for the case where *"the
+/// surface this class names cannot express the change, so writing the protected
+/// path directly is the only route left"*. A path a `[[redirect]]` speaks for is
+/// the negation of that sentence: the surface exists, the write goes through it,
+/// nothing is refused, and so **no admission is ever issued and there is nothing
+/// to articulate**. Demanding a block there leaves exactly one route — an
+/// override whose precondition is false — so the honest author must either write
+/// a false articulation or not commit at all. Measured: `.serena/memories/**`
+/// joined `protected` and the `[[redirect]]` table together, and the first commit
+/// to write a memory through `write_memory` was refused six times over.
+///
+/// Articulation is therefore owed by protected paths with **no** sanctioned
+/// mutation — which is the set the precondition describes.
+///
+/// **ONLY THE DEMAND IS DROPPED, NEVER THE INSPECTION.** The earlier shape of
+/// this fix exempted the path before looking at it, which silently lost
+/// `admits-tampered` for the whole exempted set — a doctored block on a memory
+/// would have gone unexamined. Here the redirect answers only the *absence* case:
+/// a block that claims the path is still verified, and still reported when it
+/// does not recompute. The graver finding keeps its whole subject set.
+///
+/// `redirects` is the config's own table, passed in rather than resolved here for
+/// [`ArmSequence`]'s reason: the predicate stays a pure function of its arguments,
+/// so it decides identically on a runner that cannot reach the store OR the
+/// config — which is what keeps the range half and the pending half from drifting.
 #[must_use]
-pub fn judge_admissions(writes: &[crate::git::CommitWrite]) -> Vec<Finding> {
+pub fn judge_admissions(
+    writes: &[crate::git::CommitWrite],
+    redirects: &[crate::redirect::Redirect],
+) -> Vec<Finding> {
     let mut found = Vec::new();
     for write in writes {
         let blocks = crate::admission::blocks(&write.message);
@@ -207,15 +239,23 @@ pub fn judge_admissions(writes: &[crate::git::CommitWrite]) -> Vec<Finding> {
                 .iter()
                 .filter(|block| block.binding.subject == *path)
                 .collect();
-            // A path with no block at all is the missing case. A path with blocks
-            // of which at least one verifies is clean — several are legitimate,
-            // since re-articulating the same path on one commit chains rather than
-            // replaces.
+            // A path with no block at all is the missing case — unless a
+            // `[[redirect]]` sanctions a mutation for it, which means the write
+            // had a route that refuses nothing and issues nothing. A path with
+            // blocks of which at least one verifies is clean — several are
+            // legitimate, since re-articulating the same path on one commit chains
+            // rather than replaces.
             let field = if claims.is_empty() {
+                if crate::redirect::resolve(redirects, path).is_some() {
+                    continue;
+                }
                 "admits"
             } else if claims.iter().any(|block| block.recomputes()) {
                 continue;
             } else {
+                // REACHED FOR A REDIRECTED PATH TOO, and that is the half the
+                // superseded fix dropped.
+                //MUTANT admits-tampered-survives-the-redirect|s/^            } else if claims/            } else if crate::redirect::resolve(redirects, path).is_some() || claims/|a tampered block on a redirected path is still refused
                 "admits-tampered"
             };
             found.push(Finding {
@@ -239,12 +279,19 @@ pub fn judge_admissions(writes: &[crate::git::CommitWrite]) -> Vec<Finding> {
 /// explicitly not what this commit is about, and demanding a block for it would
 /// refuse a commit that does not touch the path at all.
 #[must_use]
-pub fn judge_pending(message: &str, staged: &std::collections::BTreeSet<String>) -> Vec<Finding> {
-    judge_admissions(&[crate::git::CommitWrite {
-        commit: "pending".to_owned(),
-        message: message.to_owned(),
-        paths: staged.clone(),
-    }])
+pub fn judge_pending(
+    message: &str,
+    staged: &std::collections::BTreeSet<String>,
+    redirects: &[crate::redirect::Redirect],
+) -> Vec<Finding> {
+    judge_admissions(
+        &[crate::git::CommitWrite {
+            commit: "pending".to_owned(),
+            message: message.to_owned(),
+            paths: staged.clone(),
+        }],
+        redirects,
+    )
 }
 
 /// One commit's two conserves-ledger sets, ready to intersect (CLOUD-1402).

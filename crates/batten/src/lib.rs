@@ -11375,7 +11375,14 @@ fn commit_admissions(
     overrides: &Overrides,
 ) -> Result<Vec<commit::Finding>> {
     let root = Path::new(".");
-    let protected = resolve::resolve(root, overrides)?.protected.clone();
+    // ONE resolve for both tables. `protected` answers "is this guarded" and
+    // `redirects` answers "what should they run instead" — deliberately
+    // independent sets (`redirect.rs`), and the articulation clause is the one
+    // reader that needs both: it demands a block from the first set minus the
+    // second (CLOUD-1303).
+    let resolved = resolve::resolve(root, overrides)?;
+    let protected = resolved.protected.clone();
+    let redirects = resolved.redirects.clone();
     match (range, message) {
         (Some(range), None) => {
             // Already validated above; re-split rather than threaded, because a
@@ -11384,9 +11391,10 @@ fn commit_admissions(
             let Some((base, head)) = range.split_once("..") else {
                 return Ok(Vec::new());
             };
-            Ok(commit::judge_admissions(&git::writes_in_range(
-                root, base, head, &protected,
-            )?))
+            Ok(commit::judge_admissions(
+                &git::writes_in_range(root, base, head, &protected)?,
+                &redirects,
+            ))
         }
         (None, Some(message)) => {
             let body = std::fs::read_to_string(message).map_err(|error| {
@@ -11405,7 +11413,7 @@ fn commit_admissions(
                 .into_iter()
                 .filter(|path| selectors.iter().any(|selector| selector.matches(path)))
                 .collect();
-            Ok(commit::judge_pending(&body, &staged))
+            Ok(commit::judge_pending(&body, &staged, &redirects))
         }
         // Both modes and neither are refused above, before this is reached.
         _ => Ok(Vec::new()),

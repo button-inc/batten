@@ -41,6 +41,10 @@ use common::{Fixture, git_in, run, stdout, write};
 const GUARDED: &str = "guarded.toml";
 const ORDINARY: &str = "notes.md";
 
+/// A protected path that ALSO has a `[[redirect]]` naming its sanctioned
+/// mutation — the CLOUD-1303 set.
+const SURFACED: &str = "memories/note.md";
+
 /// A fixture protecting one path, with a base commit that predates every case.
 ///
 /// `[commit]` is present because `commit check` refuses a config without one
@@ -53,6 +57,29 @@ fn fixture(name: &str) -> PathBuf {
              [commit]\nsubject_pattern = \"^(feat|fix|chore)(\\\\(.+\\\\))?!?: .+\"\n"
         ))
         .file(GUARDED, "original = 1\n")
+        .file(ORDINARY, "just notes\n")
+        .git()
+        .base_commit()
+        .build()
+}
+
+/// The same fixture, plus a second protected path that a `[[redirect]]` speaks
+/// for (CLOUD-1303).
+///
+/// **BOTH paths are protected and only one is redirected**, which is what makes
+/// the third case below able to fail. A fixture where the redirect covered the
+/// whole protected set would pass an implementation that dropped the demand
+/// entirely.
+fn fixture_with_redirect(name: &str) -> PathBuf {
+    Fixture::new(name)
+        .config(&format!(
+            "version = 1\nprotected = [\"{GUARDED}\", \"memories/**\"]\n\n\
+             [[redirect]]\nglob = \"memories/**\"\n\
+             mutation = \"use the memory tools\"\n\n\
+             [commit]\nsubject_pattern = \"^(feat|fix|chore)(\\\\(.+\\\\))?!?: .+\"\n"
+        ))
+        .file(GUARDED, "original = 1\n")
+        .file(SURFACED, "original\n")
         .file(ORDINARY, "just notes\n")
         .git()
         .base_commit()
@@ -252,6 +279,78 @@ fn a_deleted_protected_path_owes_an_articulation_too() {
     assert!(
         report.contains(&format!("admits {GUARDED}")),
         "the deleted path is named: {report}"
+    );
+}
+
+#[test]
+fn a_protected_path_with_a_sanctioned_mutation_owes_no_block() {
+    // CLOUD-1303, and the whole of it. A write through the surface the class
+    // declares is refused by nothing, so no admission is issued and there is
+    // nothing to articulate — while the override route's own precondition says it
+    // exists for when "writing the protected path directly is the only route
+    // left". Demanding a block here leaves an honest author a choice between a
+    // false articulation and not committing.
+    let dir = fixture_with_redirect("commit-admits-surfaced");
+    write(&dir, SURFACED, "changed\n");
+    let range = commit(&dir, "chore(memory): record something");
+    let (code, report) = check(&dir, &range);
+    assert_eq!(
+        code,
+        Some(0),
+        "a path with a declared mutation surface owes no articulation: {report}"
+    );
+}
+
+#[test]
+fn a_tampered_block_on_a_redirected_path_is_still_refused() {
+    // THE HALF THE SUPERSEDED FIX DROPPED, and the reason CLOUD-1303 refuted it.
+    // Exempting the path before inspecting it loses `admits-tampered` for exactly
+    // the exempted set: a doctored block on a memory would go unexamined. The
+    // redirect answers only the ABSENCE case; a block that claims the path is
+    // still verified.
+    let dir = fixture_with_redirect("commit-admits-surfaced-tampered");
+    write(&dir, SURFACED, "changed\n");
+    let block = articulate(&dir, SURFACED);
+    let doctored = block.replace(
+        "the owning surface cannot express it",
+        "a reason nobody articulated",
+    );
+    assert_ne!(doctored, block, "the case must actually change the answer");
+    let range = commit(
+        &dir,
+        &format!("chore(memory): record something\n\n{doctored}"),
+    );
+    let (code, report) = check(&dir, &range);
+    assert_eq!(
+        code,
+        Some(2),
+        "a doctored block is refused whether or not the path has a surface: {report}"
+    );
+    assert!(
+        report.contains(&format!("admits-tampered {SURFACED}")),
+        "the tampered finding keeps its whole subject set: {report}"
+    );
+}
+
+#[test]
+fn a_redirect_for_one_path_does_not_excuse_another() {
+    // Without this, an implementation that dropped the demand for every protected
+    // path the moment ANY redirect was declared would pass the case above, and the
+    // clause would be off. The commit writes both; only the redirected one is
+    // excused.
+    let dir = fixture_with_redirect("commit-admits-surfaced-narrow");
+    write(&dir, SURFACED, "changed\n");
+    write(&dir, GUARDED, "original = 2\n");
+    let range = commit(&dir, "chore(config): change both");
+    let (code, report) = check(&dir, &range);
+    assert_eq!(code, Some(2), "the unredirected path still owes: {report}");
+    assert!(
+        report.contains(&format!("admits {GUARDED}")),
+        "the finding names the path with no sanctioned surface: {report}"
+    );
+    assert!(
+        !report.contains(SURFACED),
+        "the redirected path is not reported: {report}"
     );
 }
 
