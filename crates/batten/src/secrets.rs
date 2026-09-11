@@ -1098,6 +1098,7 @@ pub fn scan(
             // would have silently dropped every secret finding at the store
             // boundary.
             remediation: rule.remediation(),
+            reason: None,
         });
     }
     Ok(())

@@ -376,6 +376,7 @@ impl Problem {
             remediation: Some(crate::findings::Remediation::NoFix(
                 "rewrite or withdraw the design claim this points at".to_owned(),
             )),
+            reason: None,
         }
     }
 }

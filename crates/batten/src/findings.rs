@@ -1187,6 +1187,7 @@ mod tests {
             identity: identity_for("r", "src/a.rs", "TODO"),
             check: Check::Reevaluate,
             remediation: Some(Remediation::NoFix("fixture".to_owned())),
+            reason: None,
         }
     }
 

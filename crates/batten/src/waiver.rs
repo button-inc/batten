@@ -639,6 +639,7 @@ mod tests {
             ),
             check: crate::findings::Check::Reevaluate,
             remediation: Some(crate::findings::Remediation::NoFix("fixture".to_owned())),
+            reason: None,
         }
     }
 

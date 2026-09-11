@@ -6846,6 +6846,38 @@ severity = "deny"
 id = "release-tags"
 tags = "v*"
 
+# CLOUD-1787's demonstration, and the row that found the defect it demonstrates.
+#
+# Both gates below read frontmatter, which nothing could do before
+# `Format::Markdown`. They ship WITH it rather than after it: non-negotiable
+# rule 2 — a rule without a runnable gate is half a change — and a parser with
+# no consumer is a mechanism nobody has shown decides anything.
+#
+# `sources` RATHER THAN `documents`, because the set is a glob and not a list.
+# A stub added tomorrow is judged without anybody remembering to name it here,
+# which is the whole difference between a gate over a directory and a gate over
+# the five files somebody typed.
+[[rule]]
+id = "rules-paths-trigger"
+kind = "policy"
+scope = "tree"
+module = "policy/rules-paths-trigger.rego"
+severity = "deny"
+sources = [".claude/rules/*.md"]
+
+# The second consumer, and the one that is GREEN on the tree it ships against —
+# which is the half that makes the pair honest. A gate landed only where it
+# already fires proves it can deny and never that it can pass; this one has four
+# conforming files under it and a fixture proving it red, so both directions are
+# demonstrated rather than one asserted.
+[[rule]]
+id = "skill-frontmatter-complete"
+kind = "policy"
+scope = "tree"
+module = "policy/skill-frontmatter-complete.rego"
+severity = "deny"
+sources = ["skills/*/SKILL.md", ".claude/skills/*/SKILL.md"]
+
 # The lockfile as it was STAGED (CLOUD-1203 unit A, the successor shape for
 # `lock-complete`).
 #
@@ -10291,6 +10323,80 @@ gloss = "declared and spent nowhere"
 [[vocabulary.condition]]
 word = "wrong"
 gloss = "does not match the declared shape"
+
+[[verdict]]
+id = "prose declare missing"
+gloss = "a rule stub carries no `paths:` trigger, so the one mechanism it exists for does not fire"
+class = """
+The stub is kept for its loading trigger and nothing else — its own body says
+deleting it would cost that trigger. Without one it is a file that loads for
+nobody, asserting in prose that it does. Measured: one stub had never carried
+the trigger, from the commit that wrote the claim onward, because no gate could
+read frontmatter to notice (CLOUD-1787, CLOUD-1152).
+"""
+
+[[verdict.route]]
+id = "prose write now"
+kind = "document"
+target = ".claude/rules"
+
+[[verdict]]
+id = "prose read unread"
+gloss = "a rule stub's frontmatter would not parse, so its trigger could not be read"
+class = """
+Could-not-look, refused rather than reported clean: a module that iterates only
+the stubs that parsed reports green over the one it never saw, and a dead gate
+and a clean tree are byte-identical on the decision surface.
+"""
+
+[[verdict.route]]
+id = "prose write now"
+kind = "document"
+target = ".claude/rules"
+
+[[verdict]]
+id = "prompt declare missing"
+gloss = "a SKILL.md declares no usable `name` or `description`, so a harness has no basis to load it"
+class = """
+The failure is silent by construction: a skill a harness never selects looks
+exactly like one it selected and that had nothing to say. Blank counts as absent
+because `name:` with nothing after it and `name: \"\"` both parse, and a
+predicate testing only for the key passes both.
+"""
+
+[[verdict.route]]
+id = "prompt declare now"
+kind = "document"
+target = "skills"
+
+[[verdict]]
+id = "prompt name wrong"
+gloss = "a SKILL.md's declared `name` is not the directory it ships in"
+class = """
+Two authorities for one identity. A harness routes by directory and displays by
+`name`; while they disagree, neither is wrong on its own terms and the
+disagreement is invisible to both.
+"""
+
+[[verdict.route]]
+id = "prompt declare now"
+kind = "document"
+target = "skills"
+
+[[verdict]]
+id = "prompt read unread"
+gloss = "a SKILL.md carries no frontmatter or would not parse, so its declared fields could not be read"
+class = """
+Could-not-look, refused rather than reported clean, for `rules trigger unread`'s
+reason. A `SKILL.md` with no fence declares no fields at all, which is the
+violation above reaching this module through the acquisition layer instead of
+through the document.
+"""
+
+[[verdict.route]]
+id = "prompt declare now"
+kind = "document"
+target = "skills"
 
 [[verdict]]
 id = "provision declare dropped"

@@ -258,6 +258,7 @@ impl Report {
             remediation: Some(crate::findings::Remediation::NoFix(
                 "cut instruction text until the set is under its budget".to_owned(),
             )),
+            reason: None,
         })
     }
 }
@@ -311,16 +312,22 @@ pub fn loaded(text: &str) -> String {
     strip_comments(strip_frontmatter(text))
 }
 
-/// Drop a leading `---\n … \n---\n` frontmatter fence, if there is one.
+/// Drop a leading frontmatter fence, if there is one.
+///
+/// **The fence rule is `facts::split_frontmatter`'s and not a second one here**
+/// (CLOUD-1787). Both sides answer the same question — where does this file's
+/// frontmatter end — and they answered it in two hand-rolled scans until
+/// `Format::Markdown` needed the other half of the same split. Two spellings of
+/// one rule is how a file gets taxed for bytes the loader drops, or read as a
+/// document the loader counts.
+///
+/// Sharing it widened this side: a BOM, `\r\n` and a `...` terminator are now
+/// recognised where the scan here saw only `---\n` … `\n---\n`. That is a
+/// correction rather than a drift — the loader drops those fences too, so
+/// counting them was always over-taxing.
 fn strip_frontmatter(text: &str) -> &str {
-    let Some(rest) = text.strip_prefix("---\n") else {
-        return text;
-    };
-    // The closing fence is a `---` on its own line. Without one the document has
-    // no frontmatter, only a horizontal rule — leave it alone rather than
-    // guessing where it ends.
-    match rest.find("\n---\n") {
-        Some(end) => &rest[end + "\n---\n".len()..],
+    match crate::facts::split_frontmatter(text) {
+        Some(found) => found.body,
         None => text,
     }
 }
@@ -634,6 +641,16 @@ mod tests {
         );
         // An unterminated fence is not frontmatter.
         assert_eq!(loaded("---\nname: x\n"), "---\nname: x\n");
+        // The three spellings the shared rule recognises that the scan here did
+        // not (CLOUD-1787). Each was over-taxed before: the loader drops these
+        // fences too, so counting them charged for bytes that never reach a
+        // context window.
+        //
+        // Fails by: re-hand-rolling the fence scan in this module, which is how
+        // the two readers disagreed about the same bytes in the first place.
+        assert_eq!(loaded("\u{feff}---\nname: x\n---\nbody\n"), "body\n");
+        assert_eq!(loaded("---\r\nname: x\r\n---\r\nbody\n"), "body\n");
+        assert_eq!(loaded("---\nname: x\n...\nbody\n"), "body\n");
     }
 
     #[test]

@@ -33,6 +33,13 @@ const WELL_FORMED: &[(Format, &str)] = &[
         Format::Json5,
         "{\n  // the pin\n  pin: { rust: \"1.97.1\", },\n}",
     ),
+    // The body is deliberately the thing that breaks a whole-stream YAML read:
+    // a table, a task list and a block quote are the three shapes CLOUD-1787
+    // measured failing. If this fixture parses, the body is not being read.
+    (
+        Format::Markdown,
+        "---\npin:\n  rust: \"1.97.1\"\n---\n# heading\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\n- [ ] a task\n\n> **NOTE** text\n",
+    ),
 ];
 
 /// Text that is not a document in the paired format. Each is malformed in that
@@ -43,6 +50,14 @@ const MALFORMED: &[(Format, &str)] = &[
     (Format::Yaml, "pin:\n\t- bad tab indent\n  - and: [unclosed"),
     (Format::Json, "{\"pin\": {\"rust\": }"),
     (Format::Json5, "{ pin: { rust: \"1.97.1\" "),
+    // A fence that IS there and whose contents are not YAML. The other markdown
+    // non-answer — no fence at all — is `Look::IsNot` and belongs to
+    // `a_markdown_file_without_a_fence_is_is_not_and_never_could_not_look`,
+    // which is the distinction this format exists to make.
+    (
+        Format::Markdown,
+        "---\npin:\n\t- bad tab indent\n  - and: [unclosed\n---\n# heading\n",
+    ),
 ];
 
 #[test]
@@ -114,18 +129,152 @@ fn a_declared_pkl_path_answers_could_not_look_rather_than_nothing() {
 }
 
 #[test]
+fn a_markdown_file_without_a_fence_is_is_not_and_never_could_not_look() {
+    // CLOUD-1787's distinction, and the reason `Format::Markdown` is the one
+    // format whose `read` may answer `IsNot`. A well-formed markdown file with
+    // no frontmatter is not one the reader failed on — it read the whole thing
+    // and there is no document in it. Reporting that as `CouldNotLook` says the
+    // reader broke, and sends an author looking for a malformed fence that is
+    // simply absent.
+    //
+    // Fails by: collapsing the no-fence case into `CouldNotLook` (or into
+    // `Look::Is` of an empty map, which would be the vacuous pass).
+    for text in [
+        "# heading\n\nprose only.\n",
+        // A `---` that is not on the first line is a horizontal rule. A reader
+        // that went looking for one anywhere would turn prose into a document.
+        "# heading\n---\npin:\n  rust: \"1.97.1\"\n---\n",
+        // A leading blank line is not a fence either.
+        "\n---\npin:\n  rust: \"1.97.1\"\n---\n",
+        // Opened and never closed: guessing where it ends is the same error as
+        // finding one mid-file.
+        "---\npin:\n  rust: \"1.97.1\"\n\n# heading\n",
+    ] {
+        assert_eq!(
+            Format::Markdown.read(text),
+            Look::IsNot,
+            "markdown read a file with no frontmatter as something other than IsNot"
+        );
+    }
+    assert_ne!(
+        Look::<Node>::IsNot,
+        Look::<Node>::CouldNotLook,
+        "the two markdown non-answers must not be the same value"
+    );
+}
+
+#[test]
+fn a_markdown_body_never_reaches_a_parser() {
+    // THE defect (CLOUD-1787). Identical correct frontmatter; only the body
+    // varies, over the exact shapes measured failing when the file was read as
+    // one YAML stream. Every one of them must read `pin.rust` identically,
+    // because the body is not read at all.
+    //
+    // Fails by: handing the whole file to the YAML reader, which is what
+    // `format = "yaml"` over a `*.md` glob does — four of these six then answer
+    // `CouldNotLook` and report as a node mismatch.
+    const FRONTMATTER: &str = "---\npin:\n  rust: \"1.97.1\"\n---\n";
+    for body in [
+        "prose only.\n",
+        "*emphasis*, **bold**, Rate: 3:1\n",
+        "a [[wikilink]] mid-sentence.\n",
+        "[[wikilink]] opening the body.\n",
+        "- [ ] a task\n",
+        "| a | b |\n| - | - |\n| 1 | 2 |\n",
+        "> **HEADING** text\n",
+    ] {
+        let text = format!("{FRONTMATTER}{body}");
+        let Look::Is(document) = Format::Markdown.read(&text) else {
+            panic!("a markdown body changed whether the frontmatter parsed");
+        };
+        assert_eq!(
+            document.at("pin.rust"),
+            Look::Is(&Node::Text("1.97.1".to_owned())),
+            "a markdown body changed what the frontmatter said"
+        );
+    }
+}
+
+#[test]
+fn an_empty_fence_is_an_empty_document_and_not_an_absent_one() {
+    // Present-and-empty is an ANSWER. A file whose fence is `---\n---` has
+    // frontmatter and it has no keys, which is a different authoring fault from
+    // having no fence at all — and a gate over `name:` must be able to deny the
+    // first rather than skip it.
+    //
+    // Fails by: routing the empty block through the YAML reader, where an empty
+    // stream is `CouldNotLook`, or by collapsing it into the no-fence `IsNot`.
+    let Look::Is(document) = Format::Markdown.read("---\n---\n# heading\n") else {
+        panic!("an empty fence did not read as a document");
+    };
+    assert_eq!(document, Node::Map(std::collections::BTreeMap::new()));
+    // Looked, and the key is not there — which is exactly what it should say,
+    // and is NOT the same answer as the file having no fence at all.
+    assert_eq!(document.at("name"), Look::IsNot);
+    assert_eq!(Format::Markdown.read("# heading\n"), Look::IsNot);
+}
+
+#[test]
+fn the_fence_is_recognised_across_the_spellings_a_consumer_actually_writes() {
+    // A BOM is invisible to the author, `\r\n` is what a Windows editor writes,
+    // and `...` is YAML's other document terminator. Refusing any of them would
+    // blame a file for its encoding or for reading the YAML spec.
+    //
+    // Fails by: anchoring the fence rule to `---\n` and a `\n---\n` terminator
+    // alone, which is what the byte scan it shares with `budget` used to do.
+    for text in [
+        "\u{feff}---\npin:\n  rust: \"1.97.1\"\n---\n# heading\n",
+        "---\r\npin:\r\n  rust: \"1.97.1\"\r\n---\r\n# heading\r\n",
+        "---\npin:\n  rust: \"1.97.1\"\n...\n# heading\n",
+    ] {
+        let Look::Is(document) = Format::Markdown.read(text) else {
+            panic!("a legitimate fence spelling did not read as a document");
+        };
+        assert_eq!(
+            document.at("pin.rust"),
+            Look::Is(&Node::Text("1.97.1".to_owned()))
+        );
+    }
+}
+
+#[test]
+fn markdown_is_declarable_by_extension_and_names_no_second_parser() {
+    // `.md` was a load-time refusal before CLOUD-1787 ("this build has no parser
+    // for that extension"), so widening it breaks no config that could exist.
+    assert_eq!(Format::for_path("notes/entity.md"), Some(Format::Markdown));
+    assert!(Format::Markdown.parseable());
+    assert_eq!(Format::Markdown.as_str(), "markdown");
+    // CLOUD-846's refusal stands: the frontmatter is YAML read by the one YAML
+    // reader, and no markdown grammar was added. A file whose fence holds YAML
+    // and a YAML file holding the same bytes are the same document.
+    let Look::Is(fenced) = Format::Markdown.read("---\npin:\n  rust: \"1.97.1\"\n---\nbody\n")
+    else {
+        panic!("the fence did not parse");
+    };
+    let Look::Is(plain) = Format::Yaml.read("pin:\n  rust: \"1.97.1\"\n") else {
+        panic!("the YAML did not parse");
+    };
+    assert_eq!(fenced, plain);
+}
+
+#[test]
 fn all_covers_every_format() {
     // The totality anchor, in `RuleKind::ALL`'s shape: the match below is
     // exhaustive by the compiler, and this asserts `ALL` agrees with it.
     let mut seen = Vec::new();
     for format in Format::ALL {
         match format {
-            Format::Toml | Format::Yaml | Format::Json | Format::Json5 | Format::Pkl => {
+            Format::Toml
+            | Format::Yaml
+            | Format::Json
+            | Format::Json5
+            | Format::Pkl
+            | Format::Markdown => {
                 seen.push(format.as_str());
             }
         }
     }
-    assert_eq!(seen, ["toml", "yaml", "json", "json5", "pkl"]);
+    assert_eq!(seen, ["toml", "yaml", "json", "json5", "pkl", "markdown"]);
 }
 
 #[test]

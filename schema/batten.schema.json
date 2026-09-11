@@ -1858,6 +1858,11 @@
           "description": "PKL. Declarable, never parsed — see the type's own note.",
           "type": "string",
           "const": "pkl"
+        },
+        {
+          "description": "Markdown, read as its YAML **frontmatter** and never as its prose\n(CLOUD-1787).\n\nStill a format and not an artifact: markdown is a markup language, the\nsame kind of name as TOML, and which paths carry it stays the consumer's\n`batten.toml`.\n\n**Not a fifth parser**, which CLOUD-846 refused and this keeps refused.\nThe body is never handed to anything — headings and tables stay line\npredicates. The fence's contents are YAML, parsed by the one YAML\nauthority this type already carries, so nothing here knows a second\ngrammar.",
+          "type": "string",
+          "const": "markdown"
         }
       ]
     },

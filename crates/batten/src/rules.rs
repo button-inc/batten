@@ -4461,11 +4461,13 @@ impl Rule {
                 return Err(UsageError::raise(format!(
                     "rule {}: `documents` names `{path}`, whose extension this build has no \
                      parser for — the row would skip silently rather than decide. Parseable \
-                     extensions are TOML, YAML, JSON and JSON5",
-                    self.id
+                     extensions are {}",
+                    self.id,
+                    crate::facts::parseable_extensions()
                 )));
             }
         }
+        self.validate_declared_format_matches_glob()?;
         // THE CONVERSE WAS A REFUSAL AND IS NOT ONE ANY MORE (CLOUD-845). It
         // read: a tree row with no declared documents "is handed an empty tree
         // and decides nothing about the repository", so refusing it was better
@@ -4486,6 +4488,56 @@ impl Rule {
         // a byte of any file — which is why widening here does not widen what a
         // module may see of a file's insides.
         Ok(())
+    }
+
+    /// Refuse a `document` row whose declared `format` contradicts the extension
+    /// its glob names (CLOUD-1787).
+    ///
+    /// # The trap this closes
+    ///
+    /// `format` is declared and never inferred, which is right — a `.json` file
+    /// that is really JSON5 must be declarable as JSON5. But nothing checked the
+    /// declaration against the paths it would meet, and one pairing is actively
+    /// dangerous rather than merely wrong: `format = "yaml"` over `*.md`
+    /// **appears to work**, because `---` is YAML's document-start marker, so a
+    /// markdown file's frontmatter is document 1 of the stream and gets read.
+    /// Document 2 is the body, which is only accidentally valid YAML. Measured
+    /// in CLOUD-1787: with identical correct frontmatter, prose and `**bold**`
+    /// passed while a table, a task list and a block quote failed — the verdict
+    /// decided by the prose, not the data.
+    ///
+    /// A row whose correctness depends on whether prose happens to lex is not a
+    /// gate, and it fails silently in both directions, so it is refused at load
+    /// where a config error costs a config error.
+    ///
+    /// # Why the literal suffix and not the glob
+    ///
+    /// Deciding what an arbitrary glob *can* match needs a glob engine and
+    /// answers "possibly" for most inputs. The extension a glob ENDS in is a
+    /// string, it is what every real row writes (`*.md`, `**/*.md`,
+    /// `notes/*.md`), and it is exactly the case above. A computed or
+    /// extensionless glob is not caught here and the message says so rather than
+    /// implying a totality this does not have.
+    fn validate_declared_format_matches_glob(&self) -> anyhow::Result<()> {
+        let (Some(declared), Some(glob)) = (self.format, self.glob.as_deref()) else {
+            return Ok(());
+        };
+        let Some(named) = crate::facts::Format::for_path(glob) else {
+            return Ok(());
+        };
+        if named == declared {
+            return Ok(());
+        }
+        Err(UsageError::raise(format!(
+            "rule {}: `glob` is `{glob}`, whose extension names {}, but `format` says {} — one \
+             of the two is wrong, and the pairing is admitted by neither. Declare `format = \
+             \"{}\"` to read the file as its extension says. (Checked on the literal extension \
+             a glob ends in; a computed glob is not checked.)",
+            self.id,
+            named.as_str(),
+            declared.as_str(),
+            named.as_str()
+        )))
     }
 
     /// Validate that the per-kind fields present match the declared `kind`.
@@ -5879,6 +5931,30 @@ pub struct Finding {
     /// [`Rule::validate`] would have refused; [`crate::findings::record`]
     /// refuses to store one.
     pub remediation: Option<Remediation>,
+    /// Which of the producing kind's answers this finding is, where the kind
+    /// has more than one (CLOUD-1787).
+    ///
+    /// `None` for every kind whose findings mean one thing. A `document` row
+    /// has three — the node differs, the node is absent, the document could not
+    /// be read, and now a fourth: there is no document here — and they were
+    /// **computed and then dropped**, reaching only
+    /// [`crate::identity::code_fingerprint`]. So two findings with opposite
+    /// remedies printed the same `path:1 rule-id`, and an author told their
+    /// `tier` was wrong went looking at a `tier` that was correct. That is the
+    /// harm CLOUD-1787 reports first, and it is an OUTPUT defect: the decision
+    /// was always right.
+    ///
+    /// # Still a pointer (rule 4)
+    ///
+    /// A closed vocabulary of `&'static str` tokens the engine owns, never a
+    /// byte of the file. `no-document` says what the reader found, not what the
+    /// file says.
+    ///
+    /// Skipped when absent, so every finding that does not set one serialises
+    /// exactly as it did before — §6 movement is confined to the kind that
+    /// gained the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<&'static str>,
 }
 
 /// The renderer this type went without (CLOUD-371).
@@ -5897,9 +5973,15 @@ pub struct Finding {
 /// degraded one.
 impl crate::output::Line for Finding {
     fn line(&self) -> String {
-        match self.line {
+        let at = match self.line {
             Some(line) => format!("{}:{} {}", self.path, line, self.rule),
             None => format!("{} {}", self.path, self.rule),
+        };
+        // Appended rather than interpolated into the pointer, so a consumer
+        // parsing `path:line rule` off the front still parses it.
+        match self.reason {
+            Some(reason) => format!("{at} {reason}"),
+            None => at,
         }
     }
 }
@@ -7490,9 +7572,12 @@ pub(crate) enum NotAcquired {
     ///
     /// Decided **before any I/O**, and it is the one arm that is a config fault
     /// rather than a verdict: no state of the filesystem makes a declared
-    /// `.md`/`.bats`/`.pkl` path parseable, so reporting it as could-not-look
-    /// would be a gate reporting a permanent authoring error as a transient
-    /// one.
+    /// `.bats`/`.pkl` path parseable, so reporting it as could-not-look would be
+    /// a gate reporting a permanent authoring error as a transient one.
+    ///
+    /// `.md` was in that list until CLOUD-1787 and no longer is — it names
+    /// [`crate::facts::Format::Markdown`], whose frontmatter is a document this
+    /// build can read.
     UnknownFormat,
     /// `ENOENT` — the tree does not carry the declared path.
     Absent,
@@ -7504,6 +7589,21 @@ pub(crate) enum NotAcquired {
     Unreadable,
     /// Read as text, and the parser refused it.
     Unparsed,
+    /// Read as text in full, and the format found no document in it
+    /// (CLOUD-1787).
+    ///
+    /// Its own arm rather than [`Unparsed`](Self::Unparsed), for the reason
+    /// [`RootUnset`](Self::RootUnset) has one below: a different claim and a
+    /// different remedy. `Unparsed` says *this document is malformed, fix it*;
+    /// this says *there is no document here to fix*. A markdown file with no
+    /// frontmatter fence is the only source of it today, and it is precisely the
+    /// case CLOUD-1787 reports being reported as the other one.
+    ///
+    /// **Not silence, and not an empty document.** It reaches `missing` like
+    /// every other cause, so a module that iterates only what it could read
+    /// still cannot report green over it — which is the vacuous pass the whole
+    /// three-valued contract exists to refuse.
+    NoDocument,
     /// An `[[rule.external]]` row named a root environment variable this machine
     /// does not set, or sets to nothing (CLOUD-1167).
     ///
@@ -7526,6 +7626,7 @@ impl NotAcquired {
             NotAcquired::Absent => "absent",
             NotAcquired::Unreadable => "unreadable",
             NotAcquired::Unparsed => "unparsed",
+            NotAcquired::NoDocument => "no-document",
             NotAcquired::RootUnset => "root-unset",
         }
     }
@@ -7794,13 +7895,24 @@ pub(crate) fn acquire(root: &Path, rel_path: &str, want: Option<Want>) -> Acquir
 /// [`NotAcquired::Unparsed`] when the grammar refused. A file that will not parse
 /// says nothing about what it contains, which is `Format::read`'s own
 /// three-valued contract — and the one thing it must never resolve to is silence.
+///
+/// [`NotAcquired::NoDocument`] when the format read the file completely and
+/// found no document in it — today only [`crate::facts::Format::Markdown`] over
+/// a file with no frontmatter fence. Its own cause rather than `Unparsed`,
+/// because the remedy is the opposite one: `Unparsed` says *fix this fence*,
+/// this says *there is no fence*.
 pub(crate) fn parse_node(
     format: crate::facts::Format,
     text: &str,
 ) -> Result<crate::facts::Node, NotAcquired> {
     match format.read(text) {
         crate::facts::Look::Is(node) => Ok(node),
-        crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => Err(NotAcquired::Unparsed),
+        // Both are non-answers, and they are DIFFERENT non-answers. Collapsing
+        // them — which this did until CLOUD-1787 — reports "no frontmatter" as
+        // a parse failure and sends an author looking for a malformed fence
+        // that is simply absent.
+        crate::facts::Look::IsNot => Err(NotAcquired::NoDocument),
+        crate::facts::Look::CouldNotLook => Err(NotAcquired::Unparsed),
     }
 }
 
@@ -9580,6 +9692,7 @@ fn policy_rule(
             // duplication that registry exists to remove.
             remediation: policy_remediation(registry, &violation.verdict),
             identity,
+            reason: None,
         });
     }
     None
@@ -10152,6 +10265,7 @@ fn ratchet_finding(
             // integer pair.
             identity::scope_fingerprint(&rule.id, glob),
         ),
+        reason: None,
     });
 }
 
@@ -10885,6 +10999,7 @@ fn push_case_finding(
         identity: identity_of(rule, identity::FindingKind::Code, default),
         check: rule.settling_check().unwrap_or(Check::Reevaluate),
         remediation: rule.remediation(),
+        reason: None,
     });
 }
 
@@ -10992,6 +11107,7 @@ fn unresolved_subject(
         identity: identity_of(rule, identity::FindingKind::Code, default),
         check: rule.settling_check().unwrap_or(Check::Reevaluate),
         remediation: rule.remediation(),
+        reason: None,
     });
 }
 
@@ -11640,6 +11756,7 @@ fn run_once(
             line: None,
             check: rule.settling_check().unwrap_or(Check::Reevaluate),
             remediation: rule.remediation(),
+            reason: None,
         });
     }
     Ok(())
@@ -11829,6 +11946,7 @@ fn forbid_in_files(
                     identity: identity_of(rule, identity::FindingKind::Code, default),
                     check: rule.settling_check().unwrap_or(Check::Reevaluate),
                     remediation: rule.remediation(),
+                    reason: None,
                 });
             }
         }
@@ -11929,6 +12047,12 @@ fn document_in_file(
             | NotAcquired::UnknownFormat
             | NotAcquired::RootUnset,
         ) => Some(DOCUMENT_UNREADABLE),
+        // Read in full, and there is no document in it — its own reason rather
+        // than folded into the arm above (CLOUD-1787). Still a FINDING and
+        // never silence, which is CLOUD-772's decision and unchanged: a row
+        // pointed at a file carrying no document has not been satisfied, it has
+        // been unable to look. What changes is that it now says which.
+        Acquired::No(NotAcquired::NoDocument) => Some(DOCUMENT_NO_DOCUMENT),
         // Unreachable: this site always asks for `Want::Parsed`. Arms rather
         // than a wildcard so a caller that ever asks for lines or call sites
         // here has to decide what a node path means over them.
@@ -11972,6 +12096,10 @@ fn document_in_file(
         identity: identity_of(rule, identity::FindingKind::Code, default),
         check: rule.settling_check().unwrap_or(Check::Reevaluate),
         remediation: rule.remediation(),
+        // The reason was already computed and already in the fingerprint above;
+        // until CLOUD-1787 it stopped there, so `node-differs` and
+        // `could-not-look` printed the same bytes.
+        reason: Some(reason),
     });
     Ok(())
 }
@@ -11995,6 +12123,8 @@ fn unreadable_document(rule: &Rule, rel_path: &str, node_path: &str) -> anyhow::
         identity: identity_of(rule, identity::FindingKind::Code, default),
         check: rule.settling_check().unwrap_or(Check::Reevaluate),
         remediation: rule.remediation(),
+        // The same token the fingerprint above already carries.
+        reason: Some(DOCUMENT_UNREADABLE),
     })
 }
 
@@ -12108,6 +12238,16 @@ const DOCUMENT_NODE_ABSENT: &str = "node-absent";
 
 /// The node is there and holds something other than the declared literal.
 const DOCUMENT_NODE_DIFFERS: &str = "node-differs";
+
+/// The file was read in full and holds no document at all — today a markdown
+/// file with no frontmatter fence (CLOUD-1787).
+///
+/// Distinct from [`DOCUMENT_UNREADABLE`] because the remedy is the opposite one.
+/// `could-not-look` says *this document is malformed*; this says *there is no
+/// document here*, and an author told the first about the second goes looking
+/// for a fence that is simply absent — which is the report CLOUD-1787 was filed
+/// on.
+const DOCUMENT_NO_DOCUMENT: &str = "no-document";
 
 /// The entry whose presence makes a directory a repository of its own — git's
 /// own boundary marker, and therefore the one this crate reads.
@@ -12937,6 +13077,16 @@ mod tests {
         std::fs::write(dir.join("broken.toml"), "key = = =\n").unwrap();
         // An extension this build has no parser for. Note it EXISTS: the point
         // is that the cause is the declaration, not the filesystem.
+        //
+        // `.bats` RATHER THAN `.md`, WHICH IS WHAT THIS FIXTURE USED TO BE
+        // (CLOUD-1787). `.md` names `Format::Markdown` now, so it is parseable
+        // and lands two lines down under its own cause. Swapping the extension
+        // keeps the case this assertion is about — a declaration the build
+        // cannot honour, decided before any I/O — rather than deleting it.
+        std::fs::write(dir.join("script.bats"), "@test \"x\" { true; }\n").unwrap();
+        // Read in full, and there is no document in it. A markdown file with no
+        // frontmatter fence: not a config fault, not a syntax error, and not an
+        // empty document either.
         std::fs::write(dir.join("prose.md"), "# heading\n").unwrap();
 
         let acquire =
@@ -12969,20 +13119,30 @@ mod tests {
         );
         assert!(
             matches!(
-                acquire("prose.md"),
+                acquire("script.bats"),
                 super::Acquired::No(super::NotAcquired::UnknownFormat)
             ),
             "an extension with no parser is a CONFIG fault, and is reached \
              without opening the file"
         );
+        assert!(
+            matches!(
+                acquire("prose.md"),
+                super::Acquired::No(super::NotAcquired::NoDocument)
+            ),
+            "A MARKDOWN FILE WITH NO FENCE IS `NoDocument`, NOT `Unparsed` — the \
+             pair CLOUD-1787 was filed on. `Unparsed` sends an author looking \
+             for a malformed fence that is simply absent"
+        );
 
-        // And the four tokens are distinct, or naming the cause would not
+        // And the tokens are distinct, or naming the cause would not
         // discriminate — the failure this whole split exists to prevent.
         let tokens = [
             super::NotAcquired::UnknownFormat.as_str(),
             super::NotAcquired::Absent.as_str(),
             super::NotAcquired::Unreadable.as_str(),
             super::NotAcquired::Unparsed.as_str(),
+            super::NotAcquired::NoDocument.as_str(),
         ];
         let unique: std::collections::BTreeSet<&str> = tokens.iter().copied().collect();
         assert_eq!(

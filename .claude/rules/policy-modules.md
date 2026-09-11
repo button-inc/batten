@@ -1,3 +1,9 @@
+---
+paths:
+  - "policy/**/*.rego"
+  - "batten.toml"
+---
+
 # Moved to `rules/policy-modules.md`
 
 **The authority is [`rules/policy-modules.md`](../../rules/policy-modules.md). This file is a

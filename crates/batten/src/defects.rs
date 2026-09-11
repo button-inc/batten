@@ -233,6 +233,7 @@ impl Problem {
             remediation: Some(crate::findings::Remediation::NoFix(
                 "resolve or rewrite the ledger row this points at".to_owned(),
             )),
+            reason: None,
         }
     }
 }

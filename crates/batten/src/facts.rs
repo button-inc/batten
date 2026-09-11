@@ -2644,6 +2644,19 @@ pub enum Format {
     Json5,
     /// PKL. Declarable, never parsed — see the type's own note.
     Pkl,
+    /// Markdown, read as its YAML **frontmatter** and never as its prose
+    /// (CLOUD-1787).
+    ///
+    /// Still a format and not an artifact: markdown is a markup language, the
+    /// same kind of name as TOML, and which paths carry it stays the consumer's
+    /// `batten.toml`.
+    ///
+    /// **Not a fifth parser**, which CLOUD-846 refused and this keeps refused.
+    /// The body is never handed to anything — headings and tables stay line
+    /// predicates. The fence's contents are YAML, parsed by the one YAML
+    /// authority this type already carries, so nothing here knows a second
+    /// grammar.
+    Markdown,
 }
 
 impl Format {
@@ -2654,6 +2667,7 @@ impl Format {
         Format::Json,
         Format::Json5,
         Format::Pkl,
+        Format::Markdown,
     ];
 
     /// The stable lowercase token used in config and machine output (§6).
@@ -2665,6 +2679,7 @@ impl Format {
             Format::Json => "json",
             Format::Json5 => "json5",
             Format::Pkl => "pkl",
+            Format::Markdown => "markdown",
         }
     }
 
@@ -2676,7 +2691,7 @@ impl Format {
     #[must_use]
     pub const fn parseable(self) -> bool {
         match self {
-            Format::Toml | Format::Yaml | Format::Json | Format::Json5 => true,
+            Format::Toml | Format::Yaml | Format::Json | Format::Json5 | Format::Markdown => true,
             Format::Pkl => false,
         }
     }
@@ -2731,18 +2746,37 @@ impl Format {
             Format::Json => &["json"],
             Format::Json5 => &["json5"],
             Format::Pkl => &[],
+            Format::Markdown => &["md"],
         }
     }
 
     /// Parse `text` as this format.
     ///
     /// Three-valued by construction (CLOUD-757): a document that parses is
-    /// [`Look::Is`], and **anything else is [`Look::CouldNotLook`]** — a syntax
-    /// error, an empty YAML stream, a format this crate cannot parse. It is
-    /// never [`Look::IsNot`], because a file failing to parse says nothing at
-    /// all about what it contains. That distinction is the whole point: the
-    /// hand-rolled readers this replaces default an empty extraction to
-    /// agreement, so a file they cannot read passes every gate over it.
+    /// [`Look::Is`], and a syntax error, an empty YAML stream or a format this
+    /// crate cannot parse is [`Look::CouldNotLook`] — because a file failing to
+    /// parse says nothing at all about what it contains. That distinction is the
+    /// whole point: the hand-rolled readers this replaces default an empty
+    /// extraction to agreement, so a file they cannot read passes every gate
+    /// over it.
+    ///
+    /// # `IsNot` has exactly one meaning here, and only [`Format::Markdown`] has it
+    ///
+    /// This arm said *never* [`Look::IsNot`] until CLOUD-1787, and the reason it
+    /// gave still holds for every case it was written about: a **parse failure**
+    /// is not evidence of absence. Markdown is not that case. A well-formed
+    /// markdown file with no frontmatter fence is not one this reader failed on
+    /// — it is one it read completely, and there is no document in it. That is
+    /// *looked, and it is not there*, which is what [`Look::IsNot`] means.
+    ///
+    /// The vacuous pass the old wording guarded against is closed one layer up
+    /// rather than here: [`crate::rules::parse_node`] maps this `IsNot` to a
+    /// **`NotAcquired`** cause of its own, so a file with no frontmatter is a
+    /// non-answer a module must handle, never an empty document that satisfies
+    /// every predicate over it. Collapsing it into [`Look::CouldNotLook`]
+    /// instead would say the reader broke, and send an author looking for a
+    /// malformed fence that is simply absent — CLOUD-1787's own harm, one
+    /// argument over.
     #[must_use]
     pub fn read(self, text: &str) -> Look<Node> {
         match self {
@@ -2750,17 +2784,7 @@ impl Format {
                 Ok(value) => Look::Is(Node::from_toml(&value)),
                 Err(_) => Look::CouldNotLook,
             },
-            Format::Yaml => match yaml_rust2::YamlLoader::load_from_str(text) {
-                // The first document of the stream, and only it. A multi-document
-                // stream addressed as one would need a document index in every
-                // node path, which no consumer here has; taking the first is the
-                // narrow answer rather than a silent merge of several.
-                Ok(documents) => match documents.first() {
-                    Some(document) => Look::Is(Node::from_yaml(document)),
-                    None => Look::CouldNotLook,
-                },
-                Err(_) => Look::CouldNotLook,
-            },
+            Format::Yaml => read_yaml(text),
             Format::Json => match serde_json::from_str::<serde_json::Value>(text) {
                 Ok(value) => Look::Is(Node::from_json(&value)),
                 Err(_) => Look::CouldNotLook,
@@ -2771,8 +2795,114 @@ impl Format {
             },
             // Declared, and honestly unanswerable. See the type's own note.
             Format::Pkl => Look::CouldNotLook,
+            // The fence, and only the fence. The body is never handed to a
+            // parser, which is the whole defect CLOUD-1787 reports: a markdown
+            // body is only accidentally valid YAML, so reading the file as one
+            // YAML stream makes every verdict depend on whether the prose
+            // happens to lex.
+            Format::Markdown => match split_frontmatter(text).map(|found| found.block) {
+                // Present and empty is an ANSWER, not a non-answer: a file whose
+                // fence is `---\n---` has frontmatter and it has no keys, which
+                // is a different authoring fault from having no fence at all and
+                // must be a different verdict. Routing it through `read_yaml`
+                // would make it an empty stream and so `CouldNotLook`, which is
+                // the one reading that is false.
+                Some(block) if block.trim().is_empty() => {
+                    Look::Is(Node::Map(std::collections::BTreeMap::new()))
+                }
+                Some(block) => read_yaml(block),
+                None => Look::IsNot,
+            },
         }
     }
+}
+
+/// The parseable extensions this build owns, as a prose list for a refusal.
+///
+/// Derived from [`Format::ALL`] rather than written out, so a format added
+/// later cannot leave a refusal naming a stale set — the class of defect the
+/// hardcoded "TOML, YAML, JSON and JSON5" was one instance of.
+#[must_use]
+pub(crate) fn parseable_extensions() -> String {
+    let mut names: Vec<&str> = Format::ALL
+        .iter()
+        .filter(|format| !format.extensions().is_empty())
+        .map(|format| format.as_str())
+        .collect();
+    names.sort_unstable();
+    names.join(", ")
+}
+
+/// Parse `text` as a YAML stream and answer with its first document.
+///
+/// Shared by [`Format::Yaml`] and [`Format::Markdown`] so there is exactly one
+/// YAML reader in this crate — the frontmatter format adds a *container*, never
+/// a grammar, and two spellings of one parse is how the two would drift into
+/// disagreeing about the same bytes.
+///
+/// The first document of the stream, and only it. A multi-document stream
+/// addressed as one would need a document index in every node path, which no
+/// consumer here has; taking the first is the narrow answer rather than a silent
+/// merge of several.
+fn read_yaml(text: &str) -> Look<Node> {
+    match yaml_rust2::YamlLoader::load_from_str(text) {
+        Ok(documents) => match documents.first() {
+            Some(document) => Look::Is(Node::from_yaml(document)),
+            None => Look::CouldNotLook,
+        },
+        Err(_) => Look::CouldNotLook,
+    }
+}
+
+/// The contents of a leading frontmatter fence, if `text` opens with one.
+///
+/// **Strict, and the strictness is the point.** The fence opens on the FIRST
+/// line or there is none: a `---` further down is a horizontal rule, and a
+/// reader that went looking for one would turn ordinary prose into a document
+/// and decide over it. A UTF-8 byte-order mark may precede it and nothing else,
+/// because a BOM is invisible to the author and refusing it would blame a file
+/// for its encoding.
+///
+/// The closing delimiter is `---` or `...` alone on a line — YAML's own two
+/// document terminators, so a consumer who writes the one this crate did not
+/// think of still gets read. Without a terminator there is no frontmatter:
+/// guessing where an unterminated fence ends is the same error as finding one
+/// mid-file.
+///
+/// `\r\n` is accepted throughout.
+///
+/// Returns both halves as NAMED fields rather than a tuple, because the two
+/// callers want opposite ones — [`Format::Markdown`] reads the block and
+/// [`crate::budget`] drops it and counts the body — and a tuple would have each
+/// of them spell `, _)`, which `no_axis_match_carries_a_wildcard_arm` refuses
+/// in this file for an unrelated and better reason.
+pub(crate) fn split_frontmatter(text: &str) -> Option<Frontmatter<'_>> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let rest = match text.strip_prefix("---\n") {
+        Some(rest) => rest,
+        None => text.strip_prefix("---\r\n")?,
+    };
+    let mut offset = 0usize;
+    for line in rest.split_inclusive('\n') {
+        let bare = line.strip_suffix('\n').unwrap_or(line);
+        let bare = bare.strip_suffix('\r').unwrap_or(bare);
+        if bare == "---" || bare == "..." {
+            return Some(Frontmatter {
+                block: &rest[..offset],
+                body: &rest[offset + line.len()..],
+            });
+        }
+        offset += line.len();
+    }
+    None
+}
+
+/// A markdown file split at its frontmatter fence, by [`split_frontmatter`].
+pub(crate) struct Frontmatter<'a> {
+    /// What the fence encloses, without either delimiter line.
+    pub(crate) block: &'a str,
+    /// Everything after the closing delimiter.
+    pub(crate) body: &'a str,
 }
 
 /// A parsed document, canonicalised into one shape whatever it was written in.

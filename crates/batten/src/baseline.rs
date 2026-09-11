@@ -542,6 +542,7 @@ impl Drifted {
                 "baseline".to_owned(),
                 "--prune".to_owned(),
             ])),
+            reason: None,
         })
     }
 }
@@ -709,6 +710,7 @@ mod tests {
             identity: StoredIdentity::new(FindingKind::Code, fingerprint),
             check: Check::Reevaluate,
             remediation: Some(Remediation::NoFix("fix it".to_owned())),
+            reason: None,
         }
     }
 

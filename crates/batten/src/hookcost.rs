@@ -317,6 +317,7 @@ fn finding(rule: &str, subject: String, line: Option<usize>, remedy: &str) -> Fi
         line,
         check: crate::findings::Check::Reevaluate,
         remediation: Some(crate::findings::Remediation::NoFix(remedy.to_owned())),
+        reason: None,
     }
 }
 
