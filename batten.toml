@@ -6858,7 +6858,7 @@ tags = "v*"
 # which is the whole difference between a gate over a directory and a gate over
 # the five files somebody typed.
 [[rule]]
-id = "rules-paths-trigger"
+id = "prose carry missing"
 kind = "policy"
 scope = "tree"
 module = "policy/rules-paths-trigger.rego"
@@ -6871,7 +6871,7 @@ sources = [".claude/rules/*.md"]
 # conforming files under it and a fixture proving it red, so both directions are
 # demonstrated rather than one asserted.
 [[rule]]
-id = "skill-frontmatter-complete"
+id = "prompt declare partial"
 kind = "policy"
 scope = "tree"
 module = "policy/skill-frontmatter-complete.rego"
@@ -8427,14 +8427,31 @@ measured = "2026-09-07"
 # COLD'S BASIS MOVES WITH WARM'S, for the 2026-09-06 entry's measured reason:
 # refreshing one and not the other made the very next lap refuse on the other arm
 # with warm never breached.
+# THE 2026-09-11 REBASE MOVE, 244 -> 255, BOTH BASES, AND NEITHER FLOOR MOVES.
+#
+# WHAT MOVED THE COUNT is again the rebase rather than the new work alone.
+# Replaying CLOUD-1787 onto the current trunk brought main's own additions —
+# `release_token_precedence.rs` among them, which took the tree to 254 by itself —
+# together with this branch's `frontmatter_gates.rs`. `target-prune` refused at
+# `declared 244, live 255, tolerance 10`: the staleness arm, one file past the
+# band, and not the disk.
+#
+# THE FLOORS DO NOT MOVE, for the 2026-09-08 entry's reason and not a new one. A
+# basis refresh is a trend counter rather than a byte budget, so the count follows
+# the tree and the floors stay where main re-measured them. Scaling them by
+# 255/244 would be that entry's "same staleness wearing a newer number", and
+# moving a floor still needs the independent measurement CLOUD-1158 owns.
+#
+# COLD'S BASIS MOVES WITH WARM'S, again because refreshing one and not the other
+# makes the very next lap refuse on the other arm with warm never breached.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 244
+count = 255
 tolerance = 10
 
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 244
+count = 255
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops

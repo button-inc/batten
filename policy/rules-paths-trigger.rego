@@ -36,7 +36,7 @@ package batten.rules_paths_trigger
 
 import rego.v1
 
-rules contains "rules-paths-trigger"
+rules contains "prose carry missing"
 
 # The fence is there and carries no `paths:`, or carries an empty one.
 #
@@ -47,7 +47,7 @@ rules contains "rules-paths-trigger"
 # lands in `missing` below — so both are decided rather than one silently
 # standing in for the other.
 violation contains {
-	"rule": "rules-paths-trigger",
+	"rule": "prose carry missing",
 	"verdict": "prose declare missing",
 	"subjects": [{"path": path}],
 } if {
@@ -63,7 +63,7 @@ triggers_on_something(document) if {
 # because the remedy differs: one says fix the trigger you wrote, this says you
 # wrote none.
 violation contains {
-	"rule": "rules-paths-trigger",
+	"rule": "prose carry missing",
 	"verdict": "prose declare missing",
 	"subjects": [{"path": path}],
 } if {
@@ -75,7 +75,7 @@ violation contains {
 # not judge, and a refusal is the only honest answer: iterating only the files
 # that parsed reports green over the one it never saw.
 violation contains {
-	"rule": "rules-paths-trigger",
+	"rule": "prose carry missing",
 	"verdict": "prose read unread",
 	"subjects": [{"path": path}],
 } if {

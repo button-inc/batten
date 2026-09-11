@@ -28,7 +28,7 @@ package batten.skill_frontmatter_complete
 
 import rego.v1
 
-rules contains "skill-frontmatter-complete"
+rules contains "prompt declare partial"
 
 # A field is absent, or present and blank.
 #
@@ -37,7 +37,7 @@ rules contains "skill-frontmatter-complete"
 # testing only for the KEY passes both — a skill that declares its fields and
 # fills in neither.
 violation contains {
-	"rule": "skill-frontmatter-complete",
+	"rule": "prompt declare partial",
 	"verdict": "prompt declare missing",
 	"subjects": [{"path": path}],
 } if {
@@ -53,7 +53,7 @@ stated(value) if {
 
 # The declared name and the directory it ships in disagree.
 violation contains {
-	"rule": "skill-frontmatter-complete",
+	"rule": "prompt declare partial",
 	"verdict": "prompt name wrong",
 	"subjects": [{"path": path}],
 } if {
@@ -75,7 +75,7 @@ directory_of(path) := segment if {
 # with no fence declares no fields, which is the violation above arriving
 # through the acquisition layer instead of through the document.
 violation contains {
-	"rule": "skill-frontmatter-complete",
+	"rule": "prompt declare partial",
 	"verdict": "prompt read unread",
 	"subjects": [{"path": path}],
 } if {

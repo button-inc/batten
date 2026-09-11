@@ -45,7 +45,7 @@ use batten::rules::{self, Rule};
 /// the same column census a consumer's config does.
 fn stub_row() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "rules-paths-trigger",
+        "id": "prose carry missing",
         "kind": "policy",
         "scope": "tree",
         "sources": [".claude/rules/*.md"],
@@ -57,7 +57,7 @@ fn stub_row() -> Rule {
 
 fn skill_row() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "skill-frontmatter-complete",
+        "id": "prompt declare partial",
         "kind": "policy",
         "scope": "tree",
         "sources": ["skills/*/SKILL.md", ".claude/skills/*/SKILL.md"],
@@ -91,6 +91,9 @@ fn findings_for(root: &Path, row: Rule, vocabulary_root: &Path) -> Vec<String> {
         batten::policy::Vocabulary {
             patterns: &[],
             verdicts: &verdicts,
+            // The scratch tree declares no `[vocabulary]` word lists, which is
+            // the exemption the field documents rather than a gap in the setup.
+            words: None,
             recorders: &[],
         },
         root,
