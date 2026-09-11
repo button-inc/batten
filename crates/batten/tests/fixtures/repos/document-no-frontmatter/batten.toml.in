@@ -1,0 +1,14 @@
+version = 1
+
+# CLOUD-1787's new cause, end to end over the compiled binary. The glob names a
+# markdown file and the format says so, which is the declaration that did not
+# exist before: `.md` named no parser at all, so this row was refused at load.
+[[rule]]
+id = "skill-tier"
+kind = "document"
+glob = "notes.md"
+format = "markdown"
+node = "tier"
+pattern = "2"
+severity = "deny"
+scope = "tree"

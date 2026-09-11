@@ -18160,14 +18160,23 @@ fn report_rule_costs(mode: Mode, err: &mut dyn Write) -> Result<()> {
     let elapsed: std::time::Duration = costs.iter().map(|cost| cost.elapsed).sum();
     let files: usize = costs.iter().map(|cost| cost.files_read).sum();
     let bytes: usize = costs.iter().map(|cost| cost.bytes_read).sum();
+    // COUNTS RULES, AND THE CENSUS NOW CARRIES A ROW THAT IS NOT ONE
+    // (CLOUD-1790). The shared acquisition earns its own row so its reads have
+    // somewhere to land; counting it here would report one more rule than the
+    // config declares, which is a second small lie in a line that exists to stop
+    // one. Its files and bytes still ride the totals above, because the run did
+    // read them.
+    let rules_counted = costs
+        .iter()
+        .filter(|cost| cost.rule != rules::DECLARED_ACQUISITION)
+        .count();
     output::message(
         mode,
         Verbosity::Debug,
         err,
         &format!(
-            "rule cost: {} rule(s) {}ms {files} file(s) {bytes} byte(s)",
-            costs.len(),
-            elapsed.as_millis(),
+            "rule cost: {rules_counted} rule(s) {}ms {files} file(s) {bytes} byte(s)",
+            elapsed.as_millis()
         ),
     )?;
     Ok(())

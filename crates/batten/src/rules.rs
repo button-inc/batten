@@ -6742,7 +6742,45 @@ fn run(
     // Resolved ONCE for the whole run, beside the two above and for the same
     // reason (CLOUD-850): every document the rule set declares, read and parsed
     // once rather than once per rule. `documents_acquired` is what asserts it.
+    //
+    // MEASURED, AND ON ITS OWN CENSUS ROW (CLOUD-1790). The per-rule deltas below
+    // wrap `run_rule`, and this runs once before that loop — so a `policy` row's
+    // declared reads happen outside every rule's measurement window and each such
+    // row reports `0 file(s) 0 byte(s)` however much the run read on its behalf.
+    // The run total is a SUM of those rows, so the reads were invisible at both
+    // levels, and a reader comparing a policy row's zero against a `forbid` row's
+    // real numbers concludes the policy row received nothing. That is what
+    // CLOUD-1790 was filed on.
+    //
+    // ATTRIBUTED TO THE STEP RATHER THAN TO A RULE, which is the only honest
+    // place for it. The cache is shared deliberately — N rows over one path in
+    // one form is one read — so charging it to whichever row the loop reached
+    // first would starve the others of an answer they equally caused, the same
+    // error the `(path, form)` key exists to prevent one level down.
+    //
+    // ONLY WHEN THERE IS A STEP TO REPORT: a rule set declaring no documents
+    // acquires nothing and gets no row, so a run of `forbid` rows reads exactly
+    // as it did before this landed.
+    // CLEARED, not appended to: the census describes THIS run, and a caller
+    // reading rows from the previous one would be reading a different tree.
+    //
+    // AT THE TOP OF THE RUN RATHER THAN AT THE TOP OF THE RULE LOOP, which is
+    // where it sat and what the line below needs (CLOUD-1790). The acquisition
+    // is part of this run and is measured before any rule evaluates, so a clear
+    // placed after it wipes the row that measured it — silently, since a missing
+    // census row and a step that cost nothing read identically.
+    costs_lock().clear();
+    let acquisition_started = std::time::Instant::now();
+    let (files_before, bytes_before) = (files_read(), bytes_read());
     let documents = acquire_declared(rules, root, &files)?;
+    if !documents.is_empty() {
+        costs_lock().push(RuleCost {
+            rule: DECLARED_ACQUISITION.to_owned(),
+            elapsed: acquisition_started.elapsed(),
+            files_read: files_read().saturating_sub(files_before),
+            bytes_read: bytes_read().saturating_sub(bytes_before),
+        });
+    }
 
     // WHAT EARLIER RUNS PRODUCED, acquired once for the whole run beside the
     // three above and for the same reason (CLOUD-851). Bounded by DECLARATION —
@@ -6917,9 +6955,6 @@ fn run(
     };
 
     let mut scan = Scan::default();
-    // CLEARED, not appended to: the census describes THIS run, and a caller
-    // reading rows from the previous one would be reading a different tree.
-    costs_lock().clear();
     evaluate_rules(rules, root, &inputs, &mut scan)?;
     // BEFORE the sort, deliberately (CLOUD-396): the sort is what makes the
     // output byte-stable, so a dedup running after it would be reading an order
@@ -7836,6 +7871,31 @@ pub(crate) fn acquire(root: &Path, rel_path: &str, want: Option<Want>) -> Acquir
         // share with its siblings before this collapse.
         Err(_) => return Acquired::No(NotAcquired::Unreadable),
     };
+    // COUNTED HERE, AND IT WAS COUNTED NOWHERE BEFORE (CLOUD-1790). This is the
+    // one function that acquires a document, so every `policy` and `document`
+    // rule's reads ran past `count_read` entirely and each reported
+    // `0 file(s) 0 byte(s)` however much it had read. The `forbid`/`ratchet`
+    // family counts at its own read sites, so the census was not empty — it was
+    // SELECTIVELY empty, which is worse: the kinds reporting nothing are exactly
+    // the kinds whose silence is hardest to tell from a gate that decided
+    // nothing.
+    //
+    // Measured: that false zero is what CLOUD-1790 was filed on, as "tree-scoped
+    // policy rules receive no input at all". They receive it — a row in the
+    // reporter's own shape reads its source, decides, and emits a finding while
+    // reporting zero. A consumer compared that zero against a `forbid` row in the
+    // same config reporting real numbers and rewrote three modules and about
+    // twenty predicates around a defect that was in the odometer.
+    //
+    // AFTER `fs::read` AND BEFORE THE UTF-8 DECODE, which is `count_read`'s own
+    // contract read literally: it counts a read that SUCCEEDED, and decoding is
+    // parsing rather than reading. A file of non-UTF-8 bytes cost exactly the
+    // open and the bytes this counter exists to account for, and skipping it
+    // would under-report the case most expensive to discover. The
+    // `UnknownFormat` arm above stays uncounted for the reason stated there — it
+    // is decided before any I/O — which is the same asymmetry `DOCUMENTS_ACQUIRED`
+    // is placed for.
+    count_read(bytes.len());
     let Ok(text) = String::from_utf8(bytes) else {
         return Acquired::No(NotAcquired::Unreadable);
     };
@@ -12238,6 +12298,15 @@ const DOCUMENT_NODE_ABSENT: &str = "node-absent";
 
 /// The node is there and holds something other than the declared literal.
 const DOCUMENT_NODE_DIFFERS: &str = "node-differs";
+
+/// The census row naming the one shared acquisition rather than a rule
+/// (CLOUD-1790).
+///
+/// Parenthesised so it cannot collide with a [`Rule::id`]: a row id is a config
+/// key and this is a step, and a reader sorting the census by cost must be able
+/// to tell "this gate was expensive" from "the run read this much before any gate
+/// ran".
+pub const DECLARED_ACQUISITION: &str = "(declared documents)";
 
 /// The file was read in full and holds no document at all — today a markdown
 /// file with no frontmatter fence (CLOUD-1787).

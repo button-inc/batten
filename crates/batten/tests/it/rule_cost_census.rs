@@ -208,3 +208,155 @@ fn the_census_describes_the_last_run_rather_than_accumulating() {
 
     let _ = fs::remove_dir_all(&root);
 }
+
+/// A `policy` row over `sources`, with a module that declares a predicate and
+/// never violates.
+///
+/// Never violating is the point: this case is about what the rule READ, and a
+/// finding would drag the verdict registry in for no gain — `vocabulary()` above
+/// is empty by design, and a module raising a token nothing declares fails the
+/// load.
+fn policy_row(id: &str, sources: &[&str]) -> Rule {
+    serde_json::from_value(serde_json::json!({
+        "id": id,
+        "kind": "policy",
+        "scope": "tree",
+        "module": "policy/census-probe.rego",
+        "sources": sources,
+        "severity": "deny",
+    }))
+    .expect("a tree-scoped policy row the loader accepts")
+}
+
+fn install_probe(root: &Path) {
+    fs::write(
+        root.join("policy/census-probe.rego"),
+        "package batten.census_probe\n\nimport rego.v1\n\nrules contains \"census-probe\"\n",
+    )
+    .expect("probe module");
+}
+
+/// Write `count` parseable documents of known, distinct sizes; return the total.
+///
+/// TOML rather than the `.txt` [`seed`] writes, and the difference is load-bearing
+/// here: `.txt` names no `Format`, so a `sources` glob over it resolves to
+/// `UnknownFormat` before any I/O and would measure the case below instead of
+/// this one.
+fn seed_documents(root: &Path, count: usize) -> usize {
+    (0..count)
+        .map(|i| {
+            let body = format!("key = {}\n", "9".repeat(i + 1));
+            fs::write(root.join(format!("d{i}.toml")), &body).expect("fixture");
+            body.len()
+        })
+        .sum()
+}
+
+#[test]
+fn the_shared_acquisition_reports_the_documents_it_read() {
+    // CLOUD-1790. `acquire` is the one function that acquires a document and it
+    // counted nothing, so these reads were counted NOWHERE — not in the global
+    // counters, and therefore not in any census row.
+    //
+    // THE ROW IS THE STEP, NOT A RULE, and that is the correction this case
+    // encodes. Declared documents are acquired ONCE for the whole run, before
+    // the per-rule loop, so a `policy` row's reads fall outside its own
+    // measurement window by construction: every such row reported
+    // `0 file(s) 0 byte(s)`, the run total summed those zeros, and a reader
+    // comparing that against a `forbid` row's real numbers concluded the policy
+    // row had received no input. Charging the shared read to whichever row the
+    // loop reached first would be the other error — the cache is shared on
+    // purpose, so the cost is the step's.
+    //
+    // Fails by: dropping the `count_read` call in `acquire` (both counts go to
+    // zero while the documents are still read and parsed), or by dropping the
+    // census row (the step disappears and the reads are unattributed again).
+    let root = scratch("declared-acquisition");
+    fs::create_dir_all(root.join("policy")).expect("scratch policy dir");
+    install_probe(&root);
+    let bytes = seed_documents(&root, 3);
+
+    rules::run_static(
+        &[policy_row("reads-three-documents", &["**/*.toml"])],
+        &[],
+        vocabulary(),
+        &root,
+    )
+    .expect("the read surface runs the row");
+
+    let costs = rules::rule_costs();
+    let shared = costs
+        .iter()
+        .find(|cost| cost.rule == "(declared documents)")
+        .expect("the shared acquisition earns its own census row");
+    assert_eq!(
+        shared.files_read, 3,
+        "the shared step reports one read per document the rule set declared"
+    );
+    assert_eq!(
+        shared.bytes_read, bytes,
+        "and the bytes those reads returned, not a placeholder"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_rule_set_declaring_no_documents_earns_no_acquisition_row() {
+    // The row appears only when there is a step to report. Without this, every
+    // run of `forbid` rows would grow a zero row for work it never did — which is
+    // the same "evaluated, and free" misreading the per-rule census already
+    // refuses one level up.
+    //
+    // Fails by: pushing the acquisition row unconditionally.
+    let root = scratch("no-acquisition");
+    seed(&root, 2);
+
+    rules::run_static(&[row("reads-the-txt", "*.txt")], &[], vocabulary(), &root)
+        .expect("the read surface runs the row");
+
+    let costs = rules::rule_costs();
+    assert!(
+        !costs.iter().any(|cost| cost.rule == "(declared documents)"),
+        "a rule set declaring no documents acquires nothing and reports no step"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_row_refused_before_any_io_reports_nothing_read() {
+    // The other side of the fix, and the one that keeps it honest. An extension
+    // this build has no parser for is `UnknownFormat`, decided BEFORE the file is
+    // opened — so it must still report zero. Counting it would turn a config
+    // fault that costs nothing into a charged read, which is the same class of
+    // lie in the opposite direction.
+    //
+    // The fixture files EXIST, so a passing assertion here is about the
+    // declaration rather than about an absent path.
+    //
+    // Fails by: moving the `count_read` call above the `UnknownFormat` early
+    // return in `acquire`.
+    let root = scratch("policy-unknown-format");
+    fs::create_dir_all(root.join("policy")).expect("scratch policy dir");
+    install_probe(&root);
+    seed(&root, 3);
+
+    rules::run_static(
+        &[policy_row("reads-nothing-parseable", &["**/*.txt"])],
+        &[],
+        vocabulary(),
+        &root,
+    )
+    .expect("the read surface runs the row");
+
+    let costs = rules::rule_costs();
+    let cost = costs.first().expect("the row has a census entry");
+    assert_eq!(
+        (cost.files_read, cost.bytes_read),
+        (0, 0),
+        "a declaration decided before any I/O is not charged for a read it never made"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}

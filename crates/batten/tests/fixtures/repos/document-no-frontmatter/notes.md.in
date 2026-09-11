@@ -1,0 +1,10 @@
+# notes
+
+No fence here, only prose — and a body that a whole-stream YAML read cannot
+survive, which is the point: the verdict must not depend on it.
+
+| a | b |
+| - | - |
+| 1 | 2 |
+
+- [ ] a task

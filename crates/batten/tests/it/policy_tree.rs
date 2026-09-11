@@ -543,9 +543,15 @@ violation contains {"rule": "reads-real-keys", "verdict": "fixture z probe"} if 
 ///
 /// An extension this build has no parser for was checked before any I/O and
 /// dropped into `missing`, so the rule skipped silently — a migrated gate could
-/// go dead by declaring `CLAUDE.md` or a `.bats` suite, with the file never
-/// opened. No state of the filesystem fixes that, which is what makes it a
-/// config error rather than a could-not-look.
+/// go dead by declaring a `.bats` suite, with the file never opened. No state of
+/// the filesystem fixes that, which is what makes it a config error rather than a
+/// could-not-look.
+///
+/// THE FIXTURE WAS `CLAUDE.md` AND IS A `.bats` SUITE (CLOUD-1787). `.md` names
+/// `Format::Markdown` now, so it is parseable and this case's own subject moved
+/// out from under it. The claim is unchanged — an extension with no parser is a
+/// config fault, decided before any I/O — so the extension is swapped rather than
+/// the case retired. Its doc named `.bats` as the other example all along.
 ///
 /// Asserted through `run_static`, the surface a consumer actually reaches, so
 /// the case covers the refusal REACHING them rather than a private helper
@@ -558,10 +564,10 @@ fn a_document_with_no_parser_is_refused_rather_than_skipped() {
     // not the tree, so this cannot pass by accident as an absent-file report.
     // The absent half is asserted by its own case below, because the two are
     // different claims and only together do they pin the precedence.
-    fs::write(root.join("CLAUDE.md"), "# prose\n").expect("fixture");
+    fs::write(root.join("suite.bats"), "@test \"x\" { true; }\n").expect("fixture");
 
     let err = rules::run_static(
-        &[tree_row("repo-policy", "policy/", &["CLAUDE.md"])],
+        &[tree_row("repo-policy", "policy/", &["suite.bats"])],
         &[],
         fixtures(&root),
         &root,
@@ -569,7 +575,7 @@ fn a_document_with_no_parser_is_refused_rather_than_skipped() {
     .expect_err("a declared document this build cannot parse is a config fault");
     let message = format!("{err}");
     assert!(
-        message.contains("CLAUDE.md"),
+        message.contains("suite.bats"),
         "the refusal names the path: {message}"
     );
     assert!(
@@ -578,7 +584,7 @@ fn a_document_with_no_parser_is_refused_rather_than_skipped() {
          be the silent skip this splits apart: {message}"
     );
     assert!(
-        !message.contains("# prose"),
+        !message.contains("@test"),
         "pointer-only: the file is not even opened, let alone quoted: {message}"
     );
 }
@@ -608,17 +614,17 @@ fn a_document_with_a_parser_still_evaluates() {
 /// `missing`.
 ///
 /// Without this, a regression that reordered the checks — testing the tree
-/// before the extension — would classify a declared `.md` the tree lacks as a
-/// could-not-look, which is the silent skip the split exists to remove, wearing
-/// the other cause's name.
+/// before the extension — would classify a declared `.bats` path the tree lacks
+/// as a could-not-look, which is the silent skip the split exists to remove,
+/// wearing the other cause's name.
 #[test]
 fn an_absent_unsupported_document_is_still_a_parser_fault() {
     let root = scratch("no-parser-absent");
     write_bundle(&root, NO_STRAY);
-    // `CLAUDE.md` is deliberately NOT created.
+    // `suite.bats` is deliberately NOT created.
 
     let err = rules::run_static(
-        &[tree_row("repo-policy", "policy/", &["CLAUDE.md"])],
+        &[tree_row("repo-policy", "policy/", &["suite.bats"])],
         &[],
         fixtures(&root),
         &root,
@@ -626,7 +632,7 @@ fn an_absent_unsupported_document_is_still_a_parser_fault() {
     .expect_err("the extension is decided before the tree is consulted");
     let message = format!("{err}");
     assert!(
-        message.contains("CLAUDE.md"),
+        message.contains("suite.bats"),
         "the refusal names the path: {message}"
     );
     assert!(
