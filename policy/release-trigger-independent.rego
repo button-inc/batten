@@ -146,4 +146,4 @@ test_no_workflow_answers_nothing if {
 	count(violation) == 0 with input as {"tree": {"documents": {}}}
 }
 
-#MUTANT release-trigger-absence-admitted|s@	not independent(path)@	false@|a_clock_alone_is_refused
+#MUTANT-EXEMPT CLOUD-1260|no `tests/release-trigger-independent.bats` exists and none may be added: `mutate` resolves a gate's suite as `tests/$gate.bats`, and `shell add refused` refuses adding one, so there is no named case a mutation could turn red. Measured rather than assumed — a `#MUTANT` row WAS declared here first, and `mutate sweep` answered `release-trigger-independent no-suite`, which is could-not-look and not a pass. The load-time tier is this file's own `test_` rules, and the engine tier is `batten-check` over this repository's committed workflow, neither of which is what the mutation runner drives. Same exemption and same reason as `policy/connector-not-granted.rego`
