@@ -1091,6 +1091,42 @@ pub struct Body {
     pub head: String,
     /// The one admitted successor, or empty. Advisory.
     pub next: String,
+    /// A peer's request that the holder release, naming the peer. Advisory, and
+    /// the most advisory field here (CLOUD-1778).
+    ///
+    /// # Why a REQUEST rather than an eviction
+    ///
+    /// No failure detector is accurate in an asynchronous system, so every
+    /// suspicion that a holder is wedged is a heuristic and some of them are
+    /// wrong. A design that let a peer TAKE the lease on suspicion would be wrong
+    /// under exactly those cases. So this field carries no authority at all: the
+    /// holder reads it, and the holder decides.
+    ///
+    /// The unilateral half — a fenced compare-and-set that advances a token the
+    /// evicted holder's next write then fails — is the referee's and is not built
+    /// here. Both halves exist because they are sound for different things: a
+    /// request is cheap and correct when the holder is healthy but idle, and
+    /// fencing is the only thing that is safe when it is not.
+    ///
+    /// # IT IS NOT A STEAL WEARING A DIFFERENT NAME
+    ///
+    /// Honouring a notice RELEASES the lease; it does not hand it to the
+    /// requester, who must then win the next acquire like anybody else. That is
+    /// the property to protect, and it is the same sentence [`reservation`]
+    /// carries about the holder id: a mechanism by which naming yourself gets you
+    /// the lease is a steal however politely it is spelled. A waiter that could
+    /// evict-and-inherit would make "I suspect you are stuck" the fastest route to
+    /// the front of the queue.
+    ///
+    /// # AND IT IS HONOURED AT A LAP BOUNDARY, NEVER MID-MATRIX
+    ///
+    /// The beat keeps renewing while a notice is pending, which looks like
+    /// ignoring it and is the opposite. A holder that stopped renewing here would
+    /// lose the lease inside its own CI matrix, a second lander would start, and
+    /// that is precisely the overlap [`beat`] was written to close. The notice is
+    /// reported to the lap driver, which honours it where releasing costs nothing
+    /// — between laps, with no matrix in flight.
+    pub stand_down: String,
     /// The holder's own progress token. **Opaque by design**: a rival tests it for
     /// EQUALITY OVER TIME and never interprets it, so no clock crosses the wire.
     /// Advisory.
@@ -1168,13 +1204,14 @@ impl Body {
         // whole body before deciding — but a format whose version is buried in the
         // middle invites a streaming reader that acts before it checks.
         format!(
-            "{BANNER}\nschema: {}\nholder: {}\nexpires: {}\nbranch: {}\nhead: {}\nnext: {}\nprogress: {}\nwriter: {}\nnonce: {}\n",
+            "{BANNER}\nschema: {}\nholder: {}\nexpires: {}\nbranch: {}\nhead: {}\nnext: {}\nstand-down: {}\nprogress: {}\nwriter: {}\nnonce: {}\n",
             self.schema,
             self.holder,
             self.expires,
             self.branch,
             self.head,
             self.next,
+            self.stand_down,
             self.progress,
             self.writer,
             self.nonce
@@ -1234,6 +1271,7 @@ pub fn parse_body(object: &[u8]) -> Option<Body> {
                     "branch" => body.branch.clear(),
                     "head" => body.head.clear(),
                     "next" => body.next.clear(),
+                    "stand-down" => body.stand_down.clear(),
                     "progress" => body.progress.clear(),
                     _ => {}
                 }
@@ -1248,6 +1286,7 @@ pub fn parse_body(object: &[u8]) -> Option<Body> {
             "next" => value.clone_into(&mut body.next),
             "progress" => value.clone_into(&mut body.progress),
             "writer" => value.clone_into(&mut body.writer),
+            "stand-down" => value.clone_into(&mut body.stand_down),
             "nonce" => value.clone_into(&mut body.nonce),
             // PARSED PERMISSIVELY, REFUSED BELOW. A `schema:` line this reader
             // cannot turn into a number is not schema 1 — it is a body written by
@@ -2011,6 +2050,11 @@ pub fn claim(terms: &Terms, holder: &str, branch: &str, head: &str, now: i64) ->
         branch: branch.to_owned(),
         head: head.to_owned(),
         next: String::new(),
+        // EMPTY ON ACQUISITION, which is what keeps a notice from outliving the
+        // holder it was aimed at. A fresh claim inheriting a stand-down would ask
+        // every future holder to release on the strength of one request made of
+        // somebody else.
+        stand_down: String::new(),
         progress: String::new(),
         schema: BODY_SCHEMA,
         writer: writer_version(),
@@ -2141,22 +2185,57 @@ pub fn renewal(terms: &Terms, body: &Body, progress: Option<&str>, now: i64) -> 
 /// [`crate::run_land_singleton`]'s heartbeat reads it from the task registry with
 /// [`progress_of`] — must pass it, and only a caller with nothing to say passes
 /// `None`.
+/// What one beat found.
+///
+/// **A richer answer than the `bool` this replaced, because the beat is the only
+/// thing that reads the lease every few seconds** — so it is where a peer's
+/// stand-down notice is seen, and a `bool` had nowhere to put it. Collapsing the
+/// notice into `false` would have been worse than dropping it: `false` means "one
+/// beat did not write", which the caller is explicitly told is not news.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Beat {
+    /// The lease was renewed.
+    Renewed,
+    /// Nothing was written, and it is not news — no identity, no lease, a lease
+    /// held by somebody else, a rejected CAS, a push that did not land. See
+    /// [`beat`] for why one of these is survivable by construction.
+    Quiet,
+    /// Renewed, AND a peer has asked this holder to release, naming itself.
+    ///
+    /// **Renewed as well, and the conjunction is the point.** Not renewing while a
+    /// notice is pending would drop the lease inside this holder's own CI matrix
+    /// and let a second lander start — the overlap [`beat`] exists to close,
+    /// reintroduced by the mechanism meant to be polite. The caller honours this
+    /// at a lap boundary, where releasing costs nothing.
+    StandDown(String),
+}
+
 #[must_use]
-pub fn beat(root: &Path, terms: &Terms, progress: Option<&str>, now: i64) -> bool {
+pub fn beat(root: &Path, terms: &Terms, progress: Option<&str>, now: i64) -> Beat {
     let Ok((_, holder)) = crate::lease_identity(root) else {
-        return false;
+        return Beat::Quiet;
     };
     let Ok(observed) = observe(terms) else {
-        return false;
+        return Beat::Quiet;
     };
     if !holds_now(&observed, &holder, now) {
-        return false;
+        return Beat::Quiet;
     }
     let Observed::Held { body, .. } = &observed else {
-        return false;
+        return Beat::Quiet;
     };
+    // READ BEFORE THE RE-MINT, because the re-mint carries `stand_down` forward
+    // like every other advisory field and the reading must be of what the peer
+    // actually wrote rather than of our own copy of it.
+    let asked = stand_down_requested(body, &holder).map(str::to_owned);
     let renewed = renewal(terms, body, progress, now);
-    matches!(cas(terms, &observed, &renewed, now), Ok(Outcome::Applied))
+    if !matches!(cas(terms, &observed, &renewed, now), Ok(Outcome::Applied)) {
+        return Beat::Quiet;
+    }
+    // THE RENEWAL FIRST, THE NOTICE SECOND. A holder that reported the notice
+    // without renewing would be honouring it immediately, which is exactly the
+    // mid-matrix release this ordering exists to prevent.
+    asked.map_or(Beat::Renewed, Beat::StandDown)
 }
 
 /// Fill the one successor slot, re-minting every other field verbatim.
@@ -2185,6 +2264,44 @@ pub fn reservation(body: &Body, want: &str) -> Body {
         nonce: nonce(),
         ..body.clone()
     }
+}
+
+/// A peer's request that the holder release, naming the peer (CLOUD-1778).
+///
+/// [`reservation`]'s shape exactly — one field moved, everything else re-minted
+/// verbatim — and for the same reasons. A notice that recomputed the holder id
+/// would be a steal; one that recomputed the expiry would hand the holder a fresh
+/// TTL for the trouble of being asked to leave.
+///
+/// **`next` IS NOT SET HERE, AND THAT IS THE WHOLE SAFETY PROPERTY.** The
+/// requester does not become the successor by asking. It releases the holder and
+/// then races the next acquire like anybody else, because a route by which naming
+/// yourself gets you the lease is a steal however politely it is spelled. A caller
+/// that wants both must take both, separately and visibly.
+#[must_use]
+pub fn notice(body: &Body, from: &str) -> Body {
+    Body {
+        stand_down: from.to_owned(),
+        schema: BODY_SCHEMA,
+        writer: writer_version(),
+        nonce: nonce(),
+        ..body.clone()
+    }
+}
+
+/// Has a peer asked this holder to stand down?
+///
+/// A pure reading over a body already in hand, so the beat pays no extra fetch
+/// for it and a caller can ask the same question of a lease it observed for some
+/// other reason.
+///
+/// **A notice naming the holder itself is ignored**, which is not a courtesy: the
+/// holder re-mints the whole body every beat, so a self-named notice would survive
+/// its own release and ask every future holder to stand down forever.
+#[must_use]
+pub fn stand_down_requested<'body>(body: &'body Body, holder: &str) -> Option<&'body str> {
+    let from = body.stand_down.trim();
+    (!from.is_empty() && from != holder).then_some(from)
 }
 
 /// Sixteen hex characters of entropy, which is what keeps every mint distinct.
@@ -4211,6 +4328,7 @@ mod tests {
             progress: String::from("100.200"),
             nonce: String::from("aaaaaaaaaaaaaaaa"),
             next: String::new(),
+            stand_down: String::new(),
             schema: BODY_SCHEMA,
             writer: String::from("0.0.1"),
         };
@@ -4335,6 +4453,7 @@ mod tests {
             branch: String::from("claude/x"),
             head: String::from("2222222222222222222222222222222222222222"),
             next: String::from("claude/y"),
+            stand_down: String::from("host-2-bb"),
             progress: String::from("1700000000.1700000030"),
             schema: BODY_SCHEMA,
             writer: String::from("0.0.1"),
@@ -4342,6 +4461,68 @@ mod tests {
         };
         let object = lease_object(&body.render(), 1_700_000_000).expect("mint");
         assert_eq!(parse_body(&object.body), Some(body));
+    }
+
+    /// **A NOTICE IS NOT A STEAL, and this is the case that says so.**
+    ///
+    /// The requester does not become the holder and does not become the
+    /// successor: it releases the holder and then races the next acquire like
+    /// anybody else. A mechanism by which naming yourself gets you the lease is a
+    /// steal however politely it is spelled, and "I suspect you are stuck" would
+    /// be the fastest route to the front of the queue.
+    #[test]
+    fn a_stand_down_notice_moves_one_field_and_grants_the_asker_nothing() {
+        let held = Body {
+            holder: String::from("host-1-aa"),
+            expires: 1_700_000_060,
+            branch: String::from("claude/a"),
+            next: String::new(),
+            ..Body::default()
+        };
+        let asked = notice(&held, "host-2-bb");
+        assert_eq!(asked.stand_down, "host-2-bb", "the peer names itself");
+        assert_eq!(
+            asked.holder, "host-1-aa",
+            "and does NOT become the holder by asking"
+        );
+        assert!(
+            asked.next.is_empty(),
+            "nor the admitted successor — that is a separate, visible act"
+        );
+        assert_eq!(
+            asked.expires, held.expires,
+            "asking must not hand the holder a fresh TTL for the trouble"
+        );
+        assert_eq!(asked.branch, held.branch);
+    }
+
+    /// The holder reads it; a notice naming the holder itself does not.
+    ///
+    /// Self-named is ignored because the holder re-mints the whole body every
+    /// beat, so such a notice would survive its own release and ask every future
+    /// holder to stand down forever.
+    #[test]
+    fn a_notice_is_read_by_the_holder_and_a_self_named_one_is_not() {
+        let asked = Body {
+            stand_down: String::from("host-2-bb"),
+            ..Body::default()
+        };
+        assert_eq!(
+            stand_down_requested(&asked, "host-1-aa"),
+            Some("host-2-bb"),
+            "a peer's request reaches the holder"
+        );
+        assert_eq!(
+            stand_down_requested(&asked, "host-2-bb"),
+            None,
+            "a holder does not ask itself to leave, and a self-named notice would \
+             outlive every release"
+        );
+        assert_eq!(
+            stand_down_requested(&Body::default(), "host-1-aa"),
+            None,
+            "and no notice is no request"
+        );
     }
 
     /// **THE COMPATIBILITY HINGE, and the case the rollout turns on.**

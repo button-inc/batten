@@ -6742,7 +6742,7 @@ fn run_land(
         // The verdict is the LAP's to read; a hand-driven wait reports the code
         // and nothing else, exactly as it did before the tap needed one.
         cli::LandCommand::Wait { reference } => {
-            run_land_wait(root, reference, &branch, out, err).map(|(code, _)| code)
+            run_land_wait(root, reference, &branch, out, err).map(|(code, _, _)| code)
         }
         cli::LandCommand::Push => {
             let Some(url) = land_remote(root, err)? else {
@@ -7286,7 +7286,14 @@ fn run_land_lap(
     // deferred. `pipeline::unwind` already dedupes, so a step entered twice
     // across two laps is still compensated once.
     let mut entered: Vec<land::Step> = Vec::new();
+    // Who asked this holder to stand down, latched across laps — see
+    // `honour_the_notice` for why it is a latch and why it is read here.
+    let mut stood_down: Option<String> = None;
     'laps: for lap in 1..=laps {
+        // Checked BEFORE `attempt`, so a lap that will not run is not charged.
+        if let Some(from) = stood_down.take() {
+            return honour_the_notice(&from, root, branch, &pipeline, &mut entered, out, err);
+        }
         ledger.attempt();
         writeln!(out, "land: lap {lap} of {laps}")?;
         // WHAT THE WAIT SAW, or `None` where no lap took a reading. The tap
@@ -7308,11 +7315,9 @@ fn run_land_lap(
             let step = row.step;
             // THE ROW'S OWN QUESTION, where the driver used to carry a
             // `step == Verify` exception. A pre-check runs BEFORE the primitive
-            // and can only lap, never land: it exists to spend nothing.
-            // THE BET IS SETTLED BEFORE ANYTHING IS SPENT, and before the
-            // replay that would otherwise build on somebody else's commits.
-            // THE TWO ROWS THAT CAN END A LAP BEFORE IT SPENDS, asked together
-            // because they share an unwind and differ only in what follows it.
+            // and can only lap, never land: it exists to spend nothing, and it
+            // settles the bet before the replay that would otherwise build on
+            // somebody else's commits.
             let asked = asks_before_the_step(*row, this_lap, &mut trunk_poll, &mut bet, out, err)?;
             if let Answered::Stop(code) = asked {
                 unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
@@ -7323,30 +7328,15 @@ fn run_land_lap(
                 continue 'laps;
             }
             // THE PHASE, PUSHED BEFORE THE STEP RUNS RATHER THAN AFTER IT. A step
-            // is what this lap is doing WHILE it blocks, and the whole reason a
-            // reader wants it is that a gate can hold for minutes — so announcing
-            // it on completion would name every phase exactly when it stopped
-            // being true. `land.sh` pushed at the transition for the same reason.
+            // is what this lap is doing WHILE it blocks, and a gate can hold for
+            // minutes — so announcing it on completion would name every phase
+            // exactly when it stopped being true.
             guard.phase(step.as_str(), lap);
-            let code = match step {
-                // NO RESOLUTIONS ON THE LAP, ever. A lap runs unattended, so a
-                // resolution it could apply would be one nobody looked at —
-                // `gitwrite`'s auto-resolution refusal, reached through the
-                // driver instead of through a flag.
-                land::Step::Replay => run_land_replay(root, url, reference, branch, &[], out)?,
-                land::Step::Verify => {
-                    run_land_verify(root, &bet, branch, Some(reference), out, err)?
-                }
-                land::Step::Lease => run_land_lease(root, branch, out, err)?,
-                land::Step::Ready => run_land_ready(root, branch, &bet, &mut ledger, out, err)?,
-                land::Step::Push => run_land_push(root, url, branch, out)?,
-                land::Step::Wait => {
-                    let (code, verdict) = run_land_wait(root, reference, branch, out, err)?;
-                    seen = verdict;
-                    code
-                }
-                land::Step::FastForward => run_land_fast_forward(root, branch, out, err)?,
-            };
+            let (code, verdict, asked) = run_the_step(step, this_lap, &bet, &mut ledger, out, err)?;
+            // The wait is the only step with readings to carry, and both are
+            // latched rather than acted on here — see `honour_the_notice`.
+            seen = verdict.or(seen);
+            stood_down = stood_down.or(asked);
             // ENTERED ON SUCCESS, OR ON THE ATTEMPT WHERE THE UNDO SAYS SO. The
             // first half is the discrimination the undo rests on: a `Ready` that
             // REFUSED bought no matrix, so re-drafting over it would draft a pull
@@ -7361,16 +7351,10 @@ fn run_land_lap(
                 entered.push(step);
             }
             note_the_push(step, code, &mut bet);
-            // READ HERE, ONCE, AND BEFORE ANY OF THE ARMS BELOW CAN MOVE IT. The
-            // bet is what makes this lap's tree speculative, and `unwind_lap` on
-            // the lap arm can settle or forget it — so a second read inside the
-            // charge would ask about a different world than the one that answered
-            // (CLOUD-1306).
-            let basis = if bet.live() {
-                land::Basis::Borrowed
-            } else {
-                land::Basis::Own
-            };
+            // READ ONCE, HERE, BEFORE ANY ARM BELOW CAN MOVE IT: `unwind_lap` can
+            // settle or forget the bet, so a later read would ask about a
+            // different world than the one that answered (CLOUD-1306).
+            let basis = land::Basis::of(bet.live());
             note_the_poison(step, code, basis, &mut bet);
             match land::progress_of(step, code, seen, basis) {
                 land::Progress::Proceed => {}
@@ -7889,6 +7873,86 @@ fn charge_or_refuse(
         "::error:: land: gave up after {bound:?} — {diagnosis}; this branch has spent no CI at all"
     )?;
     Ok(Some(ExitCode::Internal))
+}
+
+/// Run one step of the lap, and hand back what only the wait produces.
+///
+/// Split out of [`run_land_lap`] on this tree's own precedent — `trust.rs` and
+/// `cli.rs` both record splitting rather than suppressing `too_many_lines`, and
+/// the driver is the function that grows every time a step learns something new.
+///
+/// The two `Option`s are the wait's alone and are `None` for every other step:
+/// the tap's verdict, which the exit code cannot carry because a stale base and
+/// an unanswered wait are both a lap, and a peer's stand-down notice, which is
+/// latched by the caller and honoured at a lap boundary.
+fn run_the_step(
+    step: land::Step,
+    asked: Asked<'_>,
+    bet: &speculation::Bet,
+    ledger: &mut land::Ledger,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<(ExitCode, Option<land::TapVerdict>, Option<String>)> {
+    let Asked {
+        root,
+        url,
+        reference,
+        branch,
+        ..
+    } = asked;
+    let code = match step {
+        // NO RESOLUTIONS ON THE LAP, ever. A lap runs unattended, so a resolution
+        // it could apply would be one nobody looked at — `gitwrite`'s
+        // auto-resolution refusal, reached through the driver rather than a flag.
+        land::Step::Replay => run_land_replay(root, url, reference, branch, &[], out)?,
+        land::Step::Verify => run_land_verify(root, bet, branch, Some(reference), out, err)?,
+        land::Step::Lease => run_land_lease(root, branch, out, err)?,
+        land::Step::Ready => run_land_ready(root, branch, bet, ledger, out, err)?,
+        land::Step::Push => run_land_push(root, url, branch, out)?,
+        land::Step::Wait => return run_land_wait(root, reference, branch, out, err),
+        land::Step::FastForward => run_land_fast_forward(root, branch, out, err)?,
+    };
+    Ok((code, None, None))
+}
+
+/// Release the lease because a peer asked, and say who asked (CLOUD-1778).
+///
+/// **THE LAP BOUNDARY IS WHERE A NOTICE IS HONOURED, and it is the only place it
+/// can be honoured cheaply.** Between laps there is no matrix in flight and no
+/// ready pull request this lap created, so releasing costs the fleet nothing and
+/// costs this branch one re-run. A holder that stood down mid-wait would abandon a
+/// matrix it had already paid for AND let a second lander start — the overlap the
+/// heartbeat exists to close, reintroduced by the mechanism meant to be polite.
+///
+/// **EXIT 3, NEVER 2.** Standing down is not a verdict about this branch: nothing
+/// about the tree is wrong and the head is still landable. `3` is the same reading
+/// a spent lap budget gets — the loop stopped asking — and the caller runs it
+/// again. A `2` here would tell an agent to go and fix a defect that does not
+/// exist.
+///
+/// # The caller's latch, and why it is one
+///
+/// The request is made inside a wait and honoured at the NEXT lap's boundary, so
+/// the driver holds it in a binding declared outside the loop — a per-lap one
+/// would drop it in the gap between the two, which is the whole distance it has
+/// to travel. And a latch rather than a live re-read, because the beat re-mints
+/// the body every few seconds and a later writer can overwrite the field: once
+/// asked, this holder has been asked.
+fn honour_the_notice(
+    from: &str,
+    root: &Path,
+    branch: &str,
+    pipeline: &pipeline::Pipeline,
+    entered: &mut Vec<land::Step>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    writeln!(
+        out,
+        "land: {from} asked this holder to stand down; releasing at the lap boundary rather than mid-matrix"
+    )?;
+    unwind_lap(root, branch, pipeline, entered, None, out, err)?;
+    Ok(ExitCode::Internal)
 }
 
 /// Record that the speculative range reached the remote.
@@ -9776,10 +9840,10 @@ fn run_land_wait(
     branch: &str,
     out: &mut dyn Write,
     err: &mut dyn Write,
-) -> Result<(ExitCode, Option<land::TapVerdict>)> {
+) -> Result<(ExitCode, Option<land::TapVerdict>, Option<String>)> {
     let Ok(sha) = git::head_commit(root) else {
         writeln!(err, "::error:: land: cannot read this clone's HEAD")?;
-        return Ok((ExitCode::Internal, None));
+        return Ok((ExitCode::Internal, None, None));
     };
     let required = std::env::var("CI_REQUIRED_CHECKS").unwrap_or_default();
     let roster = checks_green::Roster {
@@ -9798,7 +9862,7 @@ fn run_land_wait(
     // would be a hang whose cause is a typo.
     if let Err(problem) = checks_green::decide(&[], &roster) {
         writeln!(err, "::error:: land wait: {problem}")?;
-        return Ok((ExitCode::Usage, None));
+        return Ok((ExitCode::Usage, None, None));
     }
 
     // The base as this clone last saw it. The wait is asking whether the REMOTE
@@ -9822,7 +9886,7 @@ fn run_land_wait(
             err,
             "::error:: land wait: {tracking} will not resolve, so this wait has no base to judge staleness against and would race with one arm"
         )?;
-        return Ok((ExitCode::Internal, None));
+        return Ok((ExitCode::Internal, None, None));
     };
 
     let config = pr_watch::Config {
@@ -9843,7 +9907,7 @@ fn run_land_wait(
             err,
             "::error:: land wait: no repository resolved, so every check-run read would 404 — set $GH_REPO, or run this in a clone whose remote names one"
         )?;
-        return Ok((ExitCode::Usage, None));
+        return Ok((ExitCode::Usage, None, None));
     }
     // A COUNT, never a deadline (CLOUD-1177). The default is generous because
     // the cost of too many asks is a few conditional requests the forge answers
@@ -9883,8 +9947,39 @@ fn run_land_wait(
         land::Waited::Unanswered => (land::answers(&sha, None, None), ExitCode::Internal),
     };
     land::record_wait(root, branch, &answers)?;
+    say_what_the_wait_saw(&waited, &sha, reference, asks, out, err)?;
+    // THE READING TRAVELS WITH THE CODE, because the exit table cannot carry it:
+    // a stale base and an unanswered wait are both a lap, and only one of them
+    // took a checks reading at all. Deriving the tap's verdict from the code in
+    // the driver would be a second authority over an answer this function holds.
+    //
+    // AND SO DOES A PEER'S NOTICE, for the same reason and one of its own: the
+    // heartbeat is scoped to THIS wait, so a request latched inside it dies here
+    // unless it is handed back. The driver honours it at the lap boundary, which
+    // is the only place releasing costs nothing.
+    Ok((
+        code,
+        land::tap_verdict(&waited),
+        holding.was_asked_to_stand_down(),
+    ))
+}
 
-    match &waited {
+/// What the wait saw, said once, in the channel each reading belongs in.
+///
+/// Split out of [`run_land_wait`] because the two do different jobs: that one
+/// decides and records, this one reports. They were one function until the
+/// reporting arms grew past the line ceiling, and the ceiling was right — a
+/// decision and its narration are separable, and separating them is what keeps a
+/// new arm from being added to the wrong one.
+fn say_what_the_wait_saw(
+    waited: &land::Waited,
+    sha: &str,
+    reference: &str,
+    asks: u32,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<()> {
+    match waited {
         land::Waited::Green { .. } => {
             writeln!(out, "land: {sha} is green; the loser was voided unread")?;
         }
@@ -9926,11 +10021,7 @@ fn run_land_wait(
             writeln!(out, "land: no answer yet on {sha} after {asks} ask(s)")?;
         }
     }
-    // THE READING TRAVELS WITH THE CODE, because the exit table cannot carry it:
-    // a stale base and an unanswered wait are both a lap, and only one of them
-    // took a checks reading at all. Deriving the tap's verdict from the code in
-    // the driver would be a second authority over an answer this function holds.
-    Ok((code, land::tap_verdict(&waited)))
+    Ok(())
 }
 
 /// The lap's landing-lease heartbeat, paced by the terms it read once.
@@ -9976,6 +10067,18 @@ struct Heartbeat<'clone> {
     git_dir: Option<PathBuf>,
     pid: u32,
     last: std::sync::atomic::AtomicI64,
+    /// Set once a peer has asked this holder to stand down, naming the peer.
+    ///
+    /// **A LATCH, not a level.** The beat re-mints the body every few seconds and
+    /// a peer's notice could be overwritten by a later writer, so a caller that
+    /// re-read the live value at the lap boundary could miss a request that was
+    /// made and then lost. Once asked, this holder has been asked.
+    ///
+    /// Written from inside the wait's poll and read at the lap boundary, which is
+    /// why it is a shared cell rather than a field on the lap: the two live in
+    /// different places and the whole point is that the request crosses between
+    /// them.
+    stood_down: std::sync::Mutex<Option<String>>,
 }
 
 impl<'clone> Heartbeat<'clone> {
@@ -9986,7 +10089,19 @@ impl<'clone> Heartbeat<'clone> {
             git_dir: crate::git::git_dir(root).ok(),
             pid: std::process::id(),
             last: std::sync::atomic::AtomicI64::new(0),
+            stood_down: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Who asked this holder to stand down, if anybody has.
+    ///
+    /// A poisoned lock reads as "nobody asked", which is the fail-open this whole
+    /// struct takes: the notice is advisory, so losing one costs a holder that
+    /// keeps its lease until TTL or completion — the behaviour before the notice
+    /// existed. Failing closed here would let a panic anywhere in the poll release
+    /// a healthy lease.
+    fn was_asked_to_stand_down(&self) -> Option<String> {
+        self.stood_down.lock().ok()?.clone()
     }
 
     /// This lap's own progress token, or `None` when the registry has nothing to
@@ -10035,9 +10150,16 @@ impl<'clone> Heartbeat<'clone> {
             );
         }
         let progress = self.progress();
-        // Bound rather than dropped: `beat` answers a `bool`, and dropping a
-        // `Copy` is a lint of its own.
-        let _renewed = lease::beat(self.root, terms, progress.as_deref(), now);
+        // THE ONE READER OF A PEER'S NOTICE, because the beat is the only thing
+        // that looks at the lease every few seconds. Latched here and honoured at
+        // the lap boundary — never here, where a release would drop the lease
+        // inside this holder's own matrix and let a second lander start.
+        if let lease::Beat::StandDown(from) =
+            lease::beat(self.root, terms, progress.as_deref(), now)
+            && let Ok(mut asked) = self.stood_down.lock()
+        {
+            asked.get_or_insert(from);
+        }
     }
 }
 

@@ -1443,6 +1443,22 @@ pub enum Basis {
     Borrowed,
 }
 
+impl Basis {
+    /// The basis for a lap whose bet is or is not outstanding.
+    ///
+    /// One place that turns "is a bet live" into this reading, so a caller cannot
+    /// spell the mapping backwards — which on this type would silently invert the
+    /// whole cell it qualifies.
+    #[must_use]
+    pub const fn of(speculating: bool) -> Self {
+        if speculating {
+            Self::Borrowed
+        } else {
+            Self::Own
+        }
+    }
+}
+
 #[must_use]
 pub const fn progress_of(
     step: Step,
