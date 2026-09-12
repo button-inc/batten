@@ -58,8 +58,17 @@ const ACCEPT: &str = "application/vnd.github+json";
 /// above: pointing this tier at another host asks for a different CLIENT, not a
 /// different value, and that reasoning is unchanged by this table. What a
 /// consumer genuinely knows, and what the engine had no way to be told, is which
-/// environment variables carry the token — which differs per forge AND per host,
-/// since a CI provider injects a job token under its own name.
+/// environment variables carry the token.
+///
+/// **IT IS NOT THE FORGE'S CONVENTIONAL NAMES, and the first revision of this
+/// type said it was.** That revision argued a CI provider injects a job token
+/// under its own name and so those names are what a REST read should present.
+/// Measured, the opposite holds on this class of host: the injected value is a
+/// substitutable PLACEHOLDER — batten's own provisioning carries a
+/// `reject_prefix` to refuse it — and the credential the consumer holds lives
+/// under a name only they can state. Reading a conventional spelling as a
+/// credential is the same rule-1 defect as hard-coding it, one level of
+/// indirection along.
 #[derive(
     Debug, Clone, Default, serde::Serialize, serde::Deserialize, schemars::JsonSchema, PartialEq, Eq,
 )]
@@ -69,9 +78,10 @@ pub struct Forge {
     /// The environment variables that may carry the forge credential, in
     /// precedence order.
     ///
-    /// Ordered rather than a set, and the order is the consumer's: a session that
-    /// sets one variable for the forge's own CLI should not have to set a second,
-    /// and which of several wins is a fact about that consumer's host.
+    /// Ordered rather than a set, and the order is the consumer's: which of
+    /// several wins is a fact about that consumer's host, and the emptiness rule
+    /// below means a name that is exported but blank falls THROUGH to the next
+    /// rather than committing the read to the first that exists.
     ///
     /// **An empty list is could-not-look, never "no credential needed."** A
     /// public repository genuinely needs none, so an unauthenticated read is a
@@ -137,6 +147,15 @@ pub(crate) fn declared_credential() -> Option<String> {
 /// 401/403, and every caller reports could-not-look — so a landing says "no
 /// in-flight runs" at exit 0 while knowing nothing. A dead path and a clean
 /// answer, byte-identical from outside.
+///
+/// **AND A DECLARED NAME CAN STILL BE THE WRONG ONE, which is why the row is the
+/// consumer's to get right rather than a spelling to copy.** Measured while
+/// landing this seam: naming the forge's conventional variables resolved to a
+/// substitutable placeholder in a bare shell and to a real token under the task
+/// runner, because the runner re-exports the same name. A key whose meaning
+/// depends on who launched the process is the coupling this rule removes, wearing
+/// a config row as a disguise — so the emptiness fall-through below is load
+/// bearing, and a consumer names the variable that holds THEIR credential.
 ///
 /// **Naming none yields none, and there is deliberately no fallback to the old
 /// pair.** A fallback is exactly how this stayed invisible: it worked in this

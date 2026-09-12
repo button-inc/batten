@@ -8792,23 +8792,33 @@ names = ["GITHUB_PERSONAL_ACCESS_TOKEN", "BATTEN_GITHUB_TOKEN"]
 
 # Which variables the REST tier may authenticate with (CLOUD-1622).
 #
-# A SEPARATE LIST FROM `[credential] names` DIRECTLY ABOVE, and the difference is
-# the whole reason this is its own table rather than a reuse of that one. That
-# list names credentials WE hold, and deliberately excludes the forge's
-# conventional spellings: this host injects a substitutable placeholder under
-# them, so probing those would measure the host's credential rather than ours.
-# This list is the opposite question — what a REST read may PRESENT — and the
-# host-injected job token is exactly what belongs in it. Folding the two would
-# have stopped every REST read using that token.
+# THE SAME QUESTION `[credential] names` DIRECTLY ABOVE ANSWERS, and on this host
+# the same answer. An earlier revision of this comment claimed the opposite — that
+# the probe list excludes the forge's conventional spellings, so this list should
+# PRESENT them — and it was refuted by measurement. The exclusion is real and the
+# conclusion was backwards: those names hold a placeholder, which is precisely WHY
+# the probe list omits them.
 #
-# These two spellings are what `crates/batten` carried as literals until this
-# change, so declaring them here keeps this repository's behaviour byte for byte
-# while the engine stops assuming any forge at all. `GH_TOKEN` first, which is the
-# forge CLI's own precedence: a session that set one for that tool does not have
-# to set a second. Naming none would be could-not-look, never "no credential
+# Measured in this container: `GH_TOKEN` literally begins `proxy-`, the injected
+# placeholder the provisioned `mise` wrapper carries `reject_prefix = "proxy-"`
+# expressly to refuse. The credential we actually hold is `BATTEN_GITHUB_TOKEN`.
+# Worse, `mise.toml [env]` re-sets `GH_TOKEN` to the real token, so the old value
+# resolved to a placeholder bare and to a token under `mise` — a key whose meaning
+# depended on WHO LAUNCHED THE PROCESS, which is the silent host coupling
+# non-negotiable rule 1 exists to delete. CLOUD-1474 is the same finding: one
+# missing name in a token chain.
+#
+# `GITHUB_PERSONAL_ACCESS_TOKEN` is unset here and kept second on purpose — it is
+# the spelling the provisioned chain and CI carry, and the reader falls through an
+# exported-but-empty name rather than committing to the first that exists.
+#
+# It is still its own table rather than a reuse of the probe list: `[credential]`
+# declares how a credential is PROVED before anything is stripped on the strength
+# of it, and a consumer may omit that probe entirely while still needing a REST
+# read to authenticate. Naming none is could-not-look, never "no credential
 # needed" — there is deliberately no fallback in the engine to fall back to.
 [forge]
-credential_names = ["GH_TOKEN", "GITHUB_TOKEN"]
+credential_names = ["BATTEN_GITHUB_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN"]
 
 # --- the scripts the launcher re-arms every spawn (CLOUD-1704) -----------------
 #
