@@ -459,6 +459,41 @@ jobs:
     env:
       GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
     steps:
+      # THE `||` IS A SILENT DOWNGRADE, AND THIS IS WHERE IT STOPS BEING ONE
+      # (CLOUD-94). `${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}`
+      # appears three times below and three more in `auto-release-land.yml`. With
+      # the secret absent, every one of them silently becomes the default job
+      # token and the run reports green — indistinguishable from a correct
+      # release, and less capable in the one way that matters: GitHub fires NO
+      # workflow events for the default token, so a tag cut under it reaches no
+      # `release-artifacts` run and publishes with no binaries. That is exactly
+      # how v0.0.159, v0.0.160 and v0.0.161 shipped (CLOUD-1789).
+      #
+      # THE FALLBACK IS KEPT, because on a fork or a secretless checkout it is
+      # correct — there the default token is the only credential there is, and
+      # refusing would remove a capability rather than protect anything. What is
+      # refused is the fallback being taken SILENTLY on the canonical repository,
+      # which is the only place a release is actually cut.
+      #
+      # The same shape as "Release tracking requires its credential" below, and
+      # for its reason stated there: the secret is asserted to exist, nothing in
+      # this tree can confirm it, so a step is where a wrong assertion surfaces.
+      # FIRST, before anything consumes the credential — a guard after the
+      # checkout it guards would be reporting on work already done.
+      #
+      # `github.event.repository.fork` rather than a repository name: a literal
+      # here would go stale on a rename and says nothing a fork check does not.
+      # The App migration does not retire this guard — a missing
+      # APP_ID/APP_PRIVATE_KEY lands in the identical `||`.
+      - name: The release credential must not fall back silently
+        if: github.event.repository.fork != true
+        env:
+          RELEASE_PLZ_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+        run: |
+          if [ -z "$RELEASE_PLZ_TOKEN" ]; then
+            echo "::error:: RELEASE_PLZ_TOKEN is empty, so every credential below would fall back to the default job token. GitHub fires no workflow events for it, so the tag this cuts would reach no release-artifacts run and publish with no binaries (CLOUD-1789). Set the secret; do not remove this guard." >&2
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
