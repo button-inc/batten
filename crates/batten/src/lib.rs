@@ -12042,8 +12042,42 @@ fn run_attribution(
             overrides,
             out,
         ),
+        AttributionCommand::Tagger { tag, json } => {
+            run_attribution_tagger(&tag, json, overrides, out)
+        }
         AttributionCommand::Identity => run_attribution_identity(overrides, err),
     }
+}
+
+/// Judge who cut one tag (CLOUD-1794).
+///
+/// No `AttributionDocument` here, and the absence is deliberate rather than an
+/// omission: that document reports a HOST's attribution capabilities, and a tag
+/// object has no host — it was cut by a credential, in a workflow, possibly years
+/// after whatever session wrote the commit under it. Emitting an undeclared caller
+/// beside a tag verdict would invite reading one as evidence about the other.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when the tag does not resolve or the
+/// repository will not read — could-not-look, never a clean pass over a tag
+/// nobody judged.
+fn run_attribution_tagger(
+    tag: &str,
+    json: bool,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    let policy = attribution_policy(overrides)?;
+    let tagger = git::tagger_of(Path::new("."), tag)?;
+    let findings = policy.judge_tagger(tag, &tagger)?;
+    if json {
+        writeln!(out, "{}", serde_json::to_string_pretty(&findings)?)?;
+    } else {
+        // Silence is the success signal on the human channel (§6).
+        write!(out, "{}", attribution::report(&findings))?;
+    }
+    Ok(ExitCode::verdict(!findings.is_empty()))
 }
 
 fn run_attribution_check(

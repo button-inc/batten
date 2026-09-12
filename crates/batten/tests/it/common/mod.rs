@@ -1064,6 +1064,21 @@ impl Fixture {
         self
     }
 
+    /// Cut an ANNOTATED tag at `HEAD`, carrying a tagger header (CLOUD-1789).
+    ///
+    /// `-m` is what makes it annotated, and that is the whole point rather than
+    /// a detail: a lightweight tag is a ref pointing straight at a commit and
+    /// carries no identity at all, so a fixture built with `git tag <name>`
+    /// would exercise the `Lightweight` arm while looking like it exercised the
+    /// accountable one. The tagger is the template's `t <t@example.com>`, which
+    /// is why a consumer of this builder declares that identity rather than
+    /// `[attribution.identity]`'s.
+    #[must_use]
+    pub(crate) fn annotated_tag(self, name: &str) -> Self {
+        git_in(&self.dir, &["tag", "-a", name, "-m", "release"]);
+        self
+    }
+
     /// The materialized directory.
     #[must_use]
     pub(crate) fn path(&self) -> &Path {

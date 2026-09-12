@@ -1487,6 +1487,20 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The THIRD attribution verb, and the discipline is the same one its sibling
+    // above states (CLOUD-1789). What it reads is an annotated tag's tagger — an
+    // identity — so a finding carrying the matched text would print the very
+    // thing being judged, and on the failing path that text is a credential's
+    // account name. Findings are `<tag> tagger` and `<tag> tagger:unannotated`:
+    // the tag name is safe to print because the caller supplied it, and the
+    // identity never leaves the matcher. `no_finding_carries_the_tagger_identity`
+    // holds that in an assertion rather than in this comment.
+    Verb {
+        path: "attribution tagger",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The subject convention, same object and same discipline (CLOUD-701). A
     // subject carries whatever its author typed, so echoing it back is the gate
     // republishing arbitrary content — which is exactly what the shell task this

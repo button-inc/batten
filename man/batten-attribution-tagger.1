@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-attribution-tagger 1  batten 
+.SH NAME
+batten\-attribution\-tagger \- Refuse a tag cut by an identity this repository is not accountable to
+.SH SYNOPSIS
+\fBbatten attribution tagger\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fItag\fR> 
+.SH DESCRIPTION
+Refuse a tag cut by an identity this repository is not accountable to
+.SH OPTIONS
+.TP
+\fB\-J\fR, \fB\-\-json\fR
+Emit byte\-stable JSON instead of pointer lines
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fItag\fR>
+The tag to judge, by short name (v0.0.162)

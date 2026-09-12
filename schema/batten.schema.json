@@ -635,6 +635,13 @@
             "type": "string"
           }
         },
+        "tag_identity_allow": {
+          "description": "Identities permitted to have cut a release tag (CLOUD-1794).\n\nAN ALLOW LIST, AND A SEPARATE ONE FROM [`Attribution::identity`], because\nthe two answer different questions and measurably hold different values.\n`identity` is what `attribution identity` WRITES into a clone's git config\n— the identity commits must be authored by. A release tag is cut by\nwhatever credential the release workflow holds, which renders as that\naccount's identity and need not be the committing one. Measured on this\nrepository: every tag from v0.0.155 to v0.0.162 was cut by an address that\nis not `identity`'s, and the history carries both as legitimate.\n\nJudging tags against `identity` therefore refuses every release, which is a\nworse outage than the one this gate exists to catch — and is exactly what\nthe first draft did before it was run against real tags.\n\nA LIST rather than one value, because the accountable credential changes:\nmigrating from a personal token to an org-owned App (CLOUD-94) changes the\nidentity tags carry, and a transition where both are briefly valid should\nbe expressible without leaving the gate off.\n\nDEFAULTED, AND THAT IS NOT THE SAME CLAIM AS \"AN EMPTY LIST IS FINE\"\n(CLOUD-1789). The first draft made this mandatory and conflated two\nquestions: whether an empty list is a policy — it is not — and whether\nevery consumer must answer this one, which it must not. `Attribution`\ncarries `deny_unknown_fields`, so a required field here makes any config\nwritten before this key existed fail to parse, which is a breaking change\nto a table that governs commits rather than tags; it was caught by\n`trust::tests::shrinking_a_deny_list_or_widening_the_carve_out_is_a_weakening`,\nwhose fixture is a `[attribution]` table with no reason to mention tags.\n\nABSENT IS COULD-NOT-LOOK, NEVER CLEAN, which is where the \"empty is not a\npolicy\" half survives: [`Attribution::judge_tagger`] refuses to decide over\nan empty list rather than passing every tag. So a consumer that does not\ngovern tag identity is unaffected — it never calls the verb — and one that\ncalls the verb without declaring the key gets a loud exit `1` instead of a\nfalse green. That is the asymmetry rather than a softening of it.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "trailer_allow": {
           "description": "The carve-out from [`Attribution::trailer_deny`]. Absent or empty exempts\n**nothing**, which is how a silent posture is expressed as data.",
           "type": "array",

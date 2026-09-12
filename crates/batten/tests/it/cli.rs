@@ -5321,6 +5321,19 @@ const CENSUS_CONFIG: &str = concat!(
     "identity_deny = [\"^Nobody <\"]\n",
     "trailer_deny = [\"^Nobody-Session:\"]\n",
     "body_deny = [\"^Nobody generated\"]\n",
+    // `attribution tagger`'s minimum input, and the one key here that is
+    // OPTIONAL in the schema (CLOUD-1789). The verb declines to decide over
+    // an undeclared allow list rather than passing every tag, so a census
+    // without this would exercise the could-not-look arm — which writes an
+    // `::error::` line, the one thing a data-channel verb's stderr may not
+    // carry unprompted.
+    //
+    // The fixture's OWN git identity, not `[attribution.identity]` below, and
+    // that asymmetry is the real shape: a release tag is cut by whatever
+    // credential the release workflow holds, which need not be the committing
+    // identity. Measured on this repository, every tag from v0.0.155 carries
+    // an address `identity` does not.
+    "tag_identity_allow = [\"^t <t@example\\\\.com>$\"]\n",
     "[attribution.identity]\n",
     "name = \"Census Human\"\n",
     "email = \"census@example.test\"\n",
@@ -5414,8 +5427,18 @@ fn census_repo(root: &Path) -> PathBuf {
             &format!("{CENSUS_CARRY_BASE}census/action@bbb\tMIT\tCopyright (c) 2026 Census\n"),
         )
         .work_commit()
+        // `attribution tagger`'s minimum input (CLOUD-1789), and the first that
+        // is a property of a REF rather than of a file or a diff. Annotated, so
+        // the tag carries a tagger header; cut after `work_commit` so it points
+        // at HEAD. Named by `CENSUS_POSITIONALS` rather than by this call site,
+        // so the argv and the ref it names cannot drift apart.
+        .annotated_tag(CENSUS_TAG)
         .build()
 }
+
+/// The release tag the census fixture cuts, named once so
+/// [`CENSUS_POSITIONALS`] and [`census_repo`] cannot disagree about it.
+const CENSUS_TAG: &str = "v0.0.1";
 
 /// A git repo with a committed authority, isolated state dir, and a work commit —
 /// enough for every `data_channel` verb to have something real to answer about.
@@ -5564,6 +5587,12 @@ const CENSUS_POSITIONALS: &[(&str, &[&str])] = &[
     // An empty but resolvable range: the clean answer is `[]`, which is a
     // document like any other, and it needs no commit the fixture did not make.
     ("attribution check", &["HEAD..HEAD"]),
+    // The annotated tag `census_repo` cuts at HEAD, whose tagger is the
+    // fixture's own identity and therefore matches `tag_identity_allow` —
+    // so the census asserts about a CLEAN run. A name no ref carries would be
+    // could-not-look, which writes the `::error::` line a data-channel verb's
+    // stderr may not carry unprompted.
+    ("attribution tagger", &[CENSUS_TAG]),
     // The same empty-but-resolvable range, for the same reason (CLOUD-701).
     ("commit check", &["HEAD..HEAD"]),
     // A valid check name; `receipt status` answers `missing` for it, which is a

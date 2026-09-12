@@ -4167,6 +4167,95 @@ fn tags_matching(repo: &gix::Repository, glob: Option<&str>) -> Result<Vec<Histo
     Ok(found)
 }
 
+/// Who cut an annotated tag, as git renders a signature.
+///
+/// THREE OUTCOMES AND THEY DO NOT COLLAPSE. A tag object carrying a `tagger`
+/// header is the ordinary case. A tag object *without* one and a lightweight tag
+/// both leave nothing to read, and they are still different things: the first is a
+/// malformed annotation, the second is a ref pointing straight at a commit, which
+/// is a normal thing to create. Folding either into the other would report "nobody
+/// cut this" where the truth is "this was never annotated".
+///
+/// Errors are the fourth outcome and stay errors — could-not-look, never
+/// [`Tagger::Unsigned`]. A repository that will not open is not a tag nobody
+/// signed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Tagger {
+    /// An annotated tag whose header carries a tagger, rendered `Name <email>`.
+    Signed(String),
+    /// An annotated tag object whose header carries no tagger line.
+    Unsigned,
+    /// A lightweight tag: the ref names a commit directly, so no tag object
+    /// exists and there is no tagger.
+    Lightweight,
+}
+
+/// Read `refs/tags/<tag>`'s tagger without peeling the tag object away.
+///
+/// **[`tags_matching`]'s `into_fully_peeled_id` is the door this deliberately does
+/// not use.** Peeling is what lets the history fact answer "which commit did this
+/// tag ship", and it is the same act that makes the fact unable to answer this
+/// one: it discards the tag object, and with it the only record of who created
+/// the tag. An annotated tag's tagger and its commit's committer are different
+/// identities — `release-plz` cuts both, and in the CLOUD-1789 outage they
+/// disagreed — so a reader that peels answers a question nobody asked here.
+///
+/// Reads the tag object directly, so it answers on a shallow clone that carries
+/// the ref. [`history_facts`] refuses the whole family when the repository is
+/// shallow; this does not have to, which is why the gate above it can live on the
+/// landing path rather than on a clock.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when the repository will not open, the
+/// ref does not resolve, or the object will not read. Every one of those is "could
+/// not look", and none is an answer about who cut the tag.
+pub fn tagger_of(dir: &Path, tag: &str) -> Result<Tagger> {
+    let repo = open(dir)?;
+    let reference = repo
+        .find_reference(&format!("refs/tags/{tag}"))
+        .map_err(|_| UsageError::raise(format!("no tag named `{tag}` in this repository")))?;
+    let id = reference
+        .target()
+        .try_id()
+        .ok_or_else(|| UsageError::raise(format!("tag `{tag}` is symbolic and names no object")))?
+        .to_owned();
+    let object = repo.find_object(id).map_err(|_| {
+        UsageError::raise(format!("tag `{tag}` names an object that will not read"))
+    })?;
+    if object.kind != gix::object::Kind::Tag {
+        // The ref points straight at a commit: a lightweight tag. This is a
+        // `Kind` discrimination rather than a missing field, which is exactly why
+        // it is not the same answer as `Unsigned`.
+        return Ok(Tagger::Lightweight);
+    }
+    let annotated = object
+        .try_into_tag()
+        .map_err(|_| UsageError::raise(format!("tag `{tag}` will not read as a tag object")))?;
+    let decoded = annotated
+        .decode()
+        .map_err(|_| UsageError::raise(format!("tag `{tag}`'s header will not decode")))?;
+    let Some(line) = decoded.tagger else {
+        return Ok(Tagger::Unsigned);
+    };
+    // `tagger` is the RAW header line, not a parsed signature: `Name <email>
+    // <timestamp> <tz>`. The identity is everything up to and including the
+    // closing bracket, and git forbids `<` and `>` inside both halves, so that
+    // bracket is unambiguous rather than a guess about the name.
+    //
+    // The timestamp is deliberately dropped. It is not identity, and carrying it
+    // would make the judged value differ between two tags the same person cut —
+    // which is the comparison this exists to make.
+    //
+    // A header with no bracket is malformed, and that is could-not-look: a line
+    // this reader cannot parse is not evidence that nobody signed the tag.
+    let rendered = String::from_utf8_lossy(line.as_ref());
+    let close = rendered.rfind('>').ok_or_else(|| {
+        UsageError::raise(format!("tag `{tag}`'s tagger header carries no identity"))
+    })?;
+    Ok(Tagger::Signed(rendered[..=close].to_owned()))
+}
+
 /// The commits at which `path` appeared (`added`) or vanished (`!added`).
 ///
 /// Compares the path's presence in each commit's tree against its FIRST parent's,

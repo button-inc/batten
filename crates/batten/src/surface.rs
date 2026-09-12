@@ -580,6 +580,27 @@ const RANGE: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// The tag `attribution tagger` judges (CLOUD-1794).
+///
+/// Positional and REQUIRED, which is `RANGE`'s reasoning taken one step further.
+/// The tag is the verb's object, and there is no defensible default: resolving
+/// "the latest" would need an ordering the history surface deliberately does not
+/// carry, and guessing one would make the verb answer about a tag the caller did
+/// not name. A missing tag is a usage error, never a vacuous pass.
+const TAG: FlagDecl = FlagDecl {
+    id: "tag",
+    long: None,
+    short: None,
+    help: "The tag to judge, by short name (v0.0.162)",
+    env: EnvDecl::None,
+    global: false,
+    positional: true,
+    required: true,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 /// The pull request every `pr` bot-lane verb is about (CLOUD-1295).
 ///
 /// Positional and required, for `RANGE`'s reason: the pull request IS the verb's
@@ -4043,6 +4064,18 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[JSON, RANGE, MESSAGE, ATTRIBUTION_HARNESS],
+    },
+    // Reads one tag object through git and compares its tagger against the
+    // declared identity. Same `read` promise as `attribution check`: git's own
+    // plumbing and nothing user-supplied.
+    CommandDecl {
+        path: "attribution tagger",
+        id: "attribution.tagger",
+        about: "Refuse a tag cut by an identity this repository is not accountable to",
+        data_channel: true,
+        exits: EXITS_VERDICT,
+        effect: Effect::Read,
+        flags: &[TAG, JSON],
     },
     // The one write this subject introduces, self-declared (§5). Repo-local only:
     // it writes `.git/config` in this checkout and never `--global`, which covers

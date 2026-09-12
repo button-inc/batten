@@ -8755,6 +8755,26 @@ trailer_allow = []
 # The accountable identity `batten attribution identity` writes into the
 # repo-local git config. Consumer-specific by nature: who answers for this
 # repository's commits is a property of this repository.
+# Who is permitted to have cut a release tag (CLOUD-1794).
+#
+# SEPARATE FROM `[attribution.identity]` BECAUSE THEY MEASURABLY DIFFER HERE, and
+# the first draft of this gate conflated them and refused every release in the
+# repository -- the good ones included. `identity` below is what `attribution
+# identity` writes into a clone's git config, so commits carry it. A tag is cut by
+# whatever credential `release-plz.yml` holds, which renders as that ACCOUNT's
+# identity: every tag from v0.0.155 to v0.0.162 carries the address below and not
+# `identity`'s, and both are legitimate in this history.
+#
+# An ALLOW list rather than a deny list, so an unexpected credential is refused
+# whether or not anyone predicted it -- which is the whole point, since what broke
+# the pipeline was the CI job token nobody had thought to name. It also means no
+# bot identity is written here at all.
+#
+# A LIST because the accountable credential changes: CLOUD-94 migrates this from a
+# personal token to an org-owned App, and that transition wants both valid briefly
+# rather than the gate switched off for a day.
+tag_identity_allow = ['^Alec Wenzowski <alec@button\.is>$']
+
 [attribution.identity]
 name = "Alec Wenzowski"
 email = "alec@wenzowski.com"

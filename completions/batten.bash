@@ -154,6 +154,9 @@ _batten() {
             batten__subcmd__attribution,identity)
                 cmd="batten__subcmd__attribution__subcmd__identity"
                 ;;
+            batten__subcmd__attribution,tagger)
+                cmd="batten__subcmd__attribution__subcmd__tagger"
+                ;;
             batten__subcmd__attribution__subcmd__help,check)
                 cmd="batten__subcmd__attribution__subcmd__help__subcmd__check"
                 ;;
@@ -162,6 +165,9 @@ _batten() {
                 ;;
             batten__subcmd__attribution__subcmd__help,identity)
                 cmd="batten__subcmd__attribution__subcmd__help__subcmd__identity"
+                ;;
+            batten__subcmd__attribution__subcmd__help,tagger)
+                cmd="batten__subcmd__attribution__subcmd__help__subcmd__tagger"
                 ;;
             batten__subcmd__capture,find)
                 cmd="batten__subcmd__capture__subcmd__find"
@@ -513,6 +519,9 @@ _batten() {
                 ;;
             batten__subcmd__help__subcmd__attribution,identity)
                 cmd="batten__subcmd__help__subcmd__attribution__subcmd__identity"
+                ;;
+            batten__subcmd__help__subcmd__attribution,tagger)
+                cmd="batten__subcmd__help__subcmd__attribution__subcmd__tagger"
                 ;;
             batten__subcmd__help__subcmd__capture,find)
                 cmd="batten__subcmd__help__subcmd__capture__subcmd__find"
@@ -1480,7 +1489,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__attribution)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help check identity help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help check tagger identity help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1548,7 +1557,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__attribution__subcmd__help)
-            opts="check identity help"
+            opts="check tagger identity help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1603,8 +1612,52 @@ _batten() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        batten__subcmd__attribution__subcmd__help__subcmd__tagger)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         batten__subcmd__attribution__subcmd__identity)
             opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --strictness)
+                    COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-level)
+                    COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__attribution__subcmd__tagger)
+            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3592,7 +3645,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__attribution)
-            opts="check identity"
+            opts="check tagger identity"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3620,6 +3673,20 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__attribution__subcmd__identity)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__help__subcmd__attribution__subcmd__tagger)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
