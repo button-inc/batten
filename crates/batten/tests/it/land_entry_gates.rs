@@ -240,7 +240,18 @@ fn retiring_a_landed_branch_drops_every_branch_keyed_receipt() {
     // sweep spelling the slug differently would delete nothing and report a clean
     // count — the silent-empty-answer shape, one layer down.
     let branch = "claude/some-work";
-    let families = ["board-writes", "filed-here-nudged", "filed-set-nudged"];
+    // `unlanded-nudged` is the fourth and was missing from the sweep (CLOUD-1390).
+    // It is the one whose survival costs most: the nudge is once-per-claim
+    // because the agent cannot clear `¬landed` inside the turn it is asked to, so
+    // the file exists precisely on branches that stopped with work unlanded —
+    // and a reused branch name would inherit the suppression, silencing the one
+    // nudge that says the work exists nowhere but here.
+    let families = [
+        "board-writes",
+        "filed-here-nudged",
+        "filed-set-nudged",
+        "unlanded-nudged",
+    ];
     for family in families {
         std::fs::write(store.join(format!("{family}.claude-some-work")), "x\n")
             .expect("write a receipt");
