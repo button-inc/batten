@@ -37,6 +37,7 @@
 #MUTANT cover-may-skip-the-reach|s@\tlane_reaches(covering)@\ttrue@|a_covered_lane_verify_never_reaches_is_still_refused
 #MUTANT both-lanes-may-be-named|s@\tnames_the_covering_lane(list, covering)@\tfalse@|a_depends_list_naming_a_lane_and_its_cover_is_refused
 #
+#MUTANT dist-list-unread|s@\tnot provisions_from_a_list(job)@\tfalse@|a_release_leg_that_installs_everything_is_refused
 #MUTANT-SUITE crates/batten/tests/it/ci_parity.rs
 
 # METADATA
@@ -71,6 +72,8 @@ rules contains "branch watch missing"
 rules contains "cargo spelling wrong"
 
 rules contains "path reach dead"
+
+rules contains "job list loose"
 
 # --- the manifest, and the guard ----------------------------------------------
 
@@ -834,6 +837,57 @@ violation contains {
 	path_varies_between_runs(step)
 }
 
+# --- a release leg provisions what it needs, not everything (CLOUD-1786) ------
+#
+# "INSTALLS EVERYTHING" IS THE PROPERTY THAT COST A PLATFORM BINARY. Unset,
+# `mise-action` installs every `[tools]` entry, so a release leg's success
+# depends on every pinned tool resolving — including ones with no part in
+# building a binary. Measured on v0.0.160: the aarch64-unknown-linux-gnu leg died
+# resolving `zizmor`, a GitHub Actions linter, against Sigstore's TUF CDN before
+# compilation started, and the release shipped without that architecture.
+# `renovate` and its 611 npm packages sit on the same path.
+#
+# PRESENCE, NOT MEMBERSHIP, and the narrowness is deliberate. Asserting WHICH
+# tools the list must name would make this a second authority on what a release
+# build needs, which is `mise.toml`'s and `dist.sh`'s to answer — the same
+# objection `ci-parity`'s own header raises against re-deriving the task graph
+# here. `ci-tools-check` already holds the other direction, that every name in a
+# list resolves to a `[tools]` entry. What has no gate is the list existing at
+# all, and that is the half whose absence is silent.
+#
+# THE JOB IS DERIVED, NEVER NAMED, for `bats-invocation`'s measured reason: a
+# clause naming `jobs.dist` would keep asserting about a job that no longer
+# builds the release the moment the work moved, staying green over the one that
+# does. So the subject is whichever job runs the dist task, and it follows it.
+#
+# `install_args` is read as non-empty rather than merely present: an empty string
+# is what a half-finished narrowing leaves behind, and `mise-action` treats it as
+# "install everything" — the exact state this refuses, wearing the shape of a
+# list.
+
+builds_a_release_artifact(job) if {
+	some step in job.steps
+	contains(object.get(step, "run", ""), "mise run dist")
+}
+
+provisions_from_a_list(job) if {
+	some step in job.steps
+	startswith(object.get(step, "uses", ""), "jdx/mise-action@")
+	object.get(step, ["with", "install_args"], "") != ""
+}
+
+violation contains {
+	"rule": "job list loose",
+	"verdict": "job list loose",
+	"subjects": [{"path": path}, {"artifact": name}],
+} if {
+	governed
+	some path, _ in workflow
+	some name, job in workflow[path].jobs
+	builds_a_release_artifact(job)
+	not provisions_from_a_list(job)
+}
+
 # --- could not look -----------------------------------------------------------
 #
 # A DECLARED SOURCE THAT WOULD NOT PARSE is not an absent one. Absent is
@@ -1035,6 +1089,67 @@ sound_input := {"tree": {
 swap(key, doc) := out if {
 	docs := object.union(object.remove(sound_input.tree.documents, [key]), {key: doc})
 	out := {"tree": object.union(object.remove(sound_input.tree, ["documents"]), {"documents": docs})}
+}
+
+# --- a release leg's provisioning list (CLOUD-1786) --------------------------
+
+# The dist job as `release-artifacts.yml` carries it, reduced to the two steps
+# this arm reads. Built here rather than pasted from the real workflow: a fixture
+# carrying the shipped file would re-assert the file under test.
+release_leg(provisioning) := {
+	"on": {"release": {"types": ["published"]}},
+	"jobs": {"dist": {
+		"runs-on": "ubuntu-latest",
+		"steps": [
+			object.union({"uses": "jdx/mise-action@3c2e0cf8"}, provisioning),
+			{"run": "mise run dist x86_64-unknown-linux-gnu"},
+		],
+	}},
+}
+
+# THE DEFECT: every pinned tool on every leg, so an unrelated tool's registry
+# outage costs a platform binary. This is v0.0.160's shape.
+test_a_release_leg_that_installs_everything_is_refused if {
+	found := violation with input as swap(".github/workflows/release-artifacts.yml", release_leg({"with": {"version": "2026.9.1"}}))
+	some f in found
+	f.verdict == "job list loose"
+	some s in f.subjects
+	s.artifact == "dist"
+}
+
+# ANTI-VACUITY. Without this the arm is satisfied by a clause refusing every
+# release leg, which is a gate that never passes.
+test_a_release_leg_that_names_its_tools_is_clean if {
+	narrowed := release_leg({"with": {"version": "2026.9.1", "install_args": "rust zig"}})
+	found := violation with input as swap(".github/workflows/release-artifacts.yml", narrowed)
+	every f in found {
+		f.verdict != "job list loose"
+	}
+}
+
+# AN EMPTY STRING IS NOT A LIST. `mise-action` reads it as "install everything",
+# so a half-finished narrowing must not read as a finished one.
+test_an_empty_provisioning_list_is_refused if {
+	empty := release_leg({"with": {"version": "2026.9.1", "install_args": ""}})
+	found := violation with input as swap(".github/workflows/release-artifacts.yml", empty)
+	some f in found
+	f.verdict == "job list loose"
+}
+
+# NOT-APPLICABLE, NEVER A VACUOUS PASS. A job that builds no release artifact has
+# nothing to answer for here, whatever it provisions.
+test_a_job_that_builds_no_artifact_is_not_this_arms_business if {
+	other := {
+		"on": {"release": {"types": ["published"]}},
+		"jobs": {"notes": {
+			"runs-on": "ubuntu-latest",
+			"steps": [{"uses": "jdx/mise-action@3c2e0cf8"}, {"run": "mise run release-notes"}],
+		}},
+	}
+	found := violation with input as swap(".github/workflows/release-artifacts.yml", other)
+	every f in found {
+		f.verdict != "job list loose"
+	}
 }
 
 # --- the foreign cargo spelling ----------------------------------------------

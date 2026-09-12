@@ -11845,6 +11845,26 @@ kind = "document"
 target = "mise.toml"
 
 [[verdict]]
+id = "job list loose"
+gloss = "a release leg provisions every pinned tool, so any one of them can cost a platform binary"
+class = """
+Left unset, the provisioning step installs every pinned tool, and a release \
+leg's success then depends on every one of them resolving — including tools with \
+no part in building a binary. Measured on v0.0.160: the aarch64 Linux leg died \
+resolving a workflow linter against its registry before compilation started, and \
+the release shipped without that architecture. The failure has no local symptom \
+and no bearing on the change that caused it, which is why the list is asserted \
+rather than left to whoever last edited the job. What the list must CONTAIN is \
+deliberately not this class's business — that is the manifest's answer, and a \
+second one here would be a second authority.
+"""
+
+[[verdict.route]]
+id = "workflow read first"
+kind = "document"
+target = ".github/workflows/release-artifacts.yml"
+
+[[verdict]]
 id = "job list missing"
 gloss = "a pull-request job is silently unrequired, so green can be reported without it"
 class = """
