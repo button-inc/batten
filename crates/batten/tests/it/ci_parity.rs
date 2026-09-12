@@ -587,6 +587,77 @@ fn a_task_yielding_no_cargo_invocation_is_refused() {
     );
 }
 
+/// A release workflow whose dist leg provisions as the `provisioning` lines say.
+///
+/// Written here rather than lifted from the shipped `release-artifacts.yml`: a
+/// fixture pasting the real file would re-assert the file under test, and every
+/// edit to it would be a fixture edit too.
+fn release_workflow(provisioning: &str) -> String {
+    format!(
+        "on:\n  release:\n    types: [published]\njobs:\n  dist:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: jdx/mise-action@3c2e0cf8\n        with:\n          version: 2026.9.1\n{provisioning}      - run: mise run dist x86_64-unknown-linux-gnu\n"
+    )
+}
+
+#[test]
+fn a_release_leg_that_installs_everything_is_refused() {
+    // THE DEFECT, and it is v0.0.160's shape exactly: unset, the provisioning
+    // step installs every pinned tool, so the leg's success depends on every one
+    // of them resolving. That release's aarch64 Linux leg died fetching a
+    // workflow linter before compilation started and shipped no binary for the
+    // architecture. Asserted over the compiled binary because the arm reads a
+    // step's `with:` mapping inside a job's step sequence — a depth a
+    // `with input as` case fabricates and therefore cannot vouch for.
+    let root = sound("dist-installs-everything");
+    common::write(
+        &root,
+        ".github/workflows/release-artifacts.yml",
+        &release_workflow(""),
+    );
+    assert!(
+        verdicts_raised(&root).contains(&"job list loose".to_owned()),
+        "a dist leg with no install_args should be refused: {:?}",
+        verdicts_raised(&root)
+    );
+}
+
+#[test]
+fn a_release_leg_that_names_its_tools_is_clean() {
+    // ANTI-VACUITY. Without this the case above is satisfied by a clause that
+    // refuses every release leg, which is a gate that never passes — the shape
+    // that gets switched off in a day.
+    let root = sound("dist-narrowed");
+    common::write(
+        &root,
+        ".github/workflows/release-artifacts.yml",
+        &release_workflow("          install_args: rust zig\n"),
+    );
+    assert!(
+        !verdicts_raised(&root).contains(&"job list loose".to_owned()),
+        "a dist leg naming its tools should pass: {:?}",
+        verdicts_raised(&root)
+    );
+}
+
+#[test]
+fn an_empty_provisioning_list_does_not_read_as_a_narrowed_one() {
+    // `mise-action` treats an empty string as "install everything", so a
+    // half-finished narrowing must not satisfy the gate. This is the arm a
+    // presence-only reading of the key would get wrong, and the engine tier is
+    // where it matters: whether YAML renders `install_args:` with no value as an
+    // empty string or as null is the boundary's answer, not the module's.
+    let root = sound("dist-empty-list");
+    common::write(
+        &root,
+        ".github/workflows/release-artifacts.yml",
+        &release_workflow("          install_args: \"\"\n"),
+    );
+    assert!(
+        verdicts_raised(&root).contains(&"job list loose".to_owned()),
+        "an empty install_args should be refused: {:?}",
+        verdicts_raised(&root)
+    );
+}
+
 #[test]
 fn a_pull_request_job_missing_from_the_roster_is_refused() {
     // CLOUD-327's false green arriving through the roster: the job is not waited

@@ -146,6 +146,32 @@ jobs:
           # 11s on v0.0.152 and the release published with zero binaries.
           version: 2026.9.1
           cache: false
+          # NARROWED, BECAUSE "INSTALL EVERYTHING" COST A PLATFORM BINARY
+          # (CLOUD-1786). Unset, this step installs every `[tools]` entry on
+          # every leg — and on v0.0.160 the aarch64-unknown-linux-gnu leg died
+          # resolving `zizmor`, a GitHub Actions linter with no part in building
+          # a binary, against Sigstore's TUF CDN before compilation started. The
+          # release shipped without that platform. `renovate` and its 611 npm
+          # packages are on the same path.
+          #
+          # THE UNION OF WHAT A LEG USES, not a per-leg list, because the matrix
+          # mixes build tools and `install_args` is one string:
+          #
+          #   rust              the compiler, and the rustup that adds the target
+          #   cargo-auditable   every non-`cross` leg builds through it
+          #   zig, cargo-zigbuild   the three `zigbuild` legs' linker chain
+          #   syft              `sbom-binary` on every non-`cross` leg
+          #   gh                the two `gh release upload` steps
+          #
+          # `cross` is deliberately absent: `taiki-e/install-action` provides it
+          # below, and it is not a `[tools]` entry — `ci-tools-check` would refuse
+          # a name here that resolves to none.
+          #
+          # This does NOT unpin anything. Naming tools selects which pinned
+          # versions are installed, so `darwin-link` still links against the same
+          # `zig` this builds with, which is the shared-pin property the comment
+          # below depends on.
+          install_args: rust zig github:rust-cross/cargo-zigbuild github:rust-secure-code/cargo-auditable aqua:anchore/syft aqua:cli/cli
       - name: Install cross
         if: matrix.build-tool == 'cross'
         uses: taiki-e/install-action@91ddec75689c4c78665b598d188dc821c5a43e5c # v2
