@@ -8765,12 +8765,51 @@ fn run_land_fast_forward(
                     writeln!(out, "land: #{} was accepted", ask.pr)?;
                     Ok(ExitCode::Success)
                 }
+                // THE GROUND IS READ, NEVER ASSERTED (CLOUD-1617). This line used
+                // to say "this head is no longer a direct descendant" from a bare
+                // `failure` conclusion, which names one of the bot's four grounds
+                // and was measured wrong: on PR #895 the refusal was a DRAFT head
+                // (CLOUD-853), `main` had not moved, the branch was a perfect
+                // descendant — and the head was a draft because `land` re-drafts
+                // on a failed lap. The loop created the condition, reported it as
+                // external, and sent its reader looking for a moved trunk.
+                //
+                // The bot names its row in the comment it posts, so this is a
+                // lookup. What it must never do is fill the gap with a cause.
                 fast_forward::Answer::Refused => {
-                    writeln!(
-                        out,
-                        "land: #{} was refused; this head is no longer a direct descendant",
-                        ask.pr
-                    )?;
+                    match fast_forward::ground(&ask) {
+                        // LAPPING CANNOT CLEAR THIS ONE, which is why it says so.
+                        // `land` re-drafts on a failed lap, so the remedy the
+                        // predecessor narrated — rebase, re-verify, retry —
+                        // regenerates exactly the condition being refused.
+                        fast_forward::Ground::Draft => writeln!(
+                            out,
+                            "land: #{} was refused — a draft head grades no required check (CLOUD-853). Rebasing cannot clear it; ready the pull request, let CI grade the head, then land again",
+                            ask.pr
+                        )?,
+                        fast_forward::Ground::ForkUnreviewed => writeln!(
+                            out,
+                            "land: #{} was refused — a fork head's green CI is the contributor's own harness (CLOUD-867). Read the diff and approve, then land again",
+                            ask.pr
+                        )?,
+                        fast_forward::Ground::RosterUngraded => writeln!(
+                            out,
+                            "land: #{} was refused — the required roster has not graded this head (CLOUD-1570). Wait for the matrix rather than rebasing",
+                            ask.pr
+                        )?,
+                        // EVERYTHING ELSE, INCLUDING A RUN THAT NEVER REACHED ITS
+                        // REFUSAL. Measured this session: `fast-forward.yml` runs
+                        // `./install.sh`, v0.0.161 carried no binaries, and the
+                        // run died at that step — conclusion `failure`, no
+                        // refusal posted, and the predecessor called it
+                        // non-descent and recommended a re-run. Every implied
+                        // fact was false and two laps were spent on the advice.
+                        fast_forward::Ground::Unclassified => writeln!(
+                            out,
+                            "land: #{} was refused and the bot named no ground this build recognises — read the run before rebasing; it may have failed before reaching its refusal",
+                            ask.pr
+                        )?,
+                    }
                     Ok(ExitCode::Violation)
                 }
                 fast_forward::Answer::Pending => {
