@@ -87,8 +87,48 @@ const WARMUP_VAR: &str = "BENCH_WARMUP";
 const OUT_DIR_VAR: &str = "BENCH_OUT_DIR";
 
 const DEFAULT_BASE_REF: &str = "origin/main";
-const DEFAULT_RUNS: &str = "100";
-const DEFAULT_WARMUP: &str = "10";
+
+/// The sample size, **measured against this comparison's own null** (CLOUD-1803).
+///
+/// [`REGRESSION_RATIO`] records the 2026-08-11 null — 100 runs after 10 warmups,
+/// the identical binary as both arms, spreading 0.966 to 1.102 — and closes with
+/// "Re-measure with `perf pair --null`". Re-measured 2026-09-12 on a busier
+/// container at those same 100/10 defaults, that spread is **0.45 to 1.88**:
+///
+/// | path | ratio, identical binaries |
+/// | -- | -- |
+/// | `check` | **1.88** |
+/// | `noop` | **0.45** |
+/// | `posttool` | 1.12 |
+/// | `passthrough` | 1.08 |
+/// | `wired` | 1.05 |
+/// | `hook` | 1.00 |
+///
+/// A control at 1.88 is refused by a 1.30 threshold, so the gate was deciding
+/// about the machine. Measured again at **300 runs after 30 warmups**, same
+/// container, same binary: 0.95 to 1.145 — back inside the band the original
+/// experiment produced, and clear of the threshold.
+///
+/// **So the constant moved and the threshold did not.** The differencing premise
+/// in this module's header — both arms on one machine within seconds, so the
+/// noise divides out — holds for a machine under steady load and fails when a
+/// preemption burst lands inside one arm's window and not the other's. A larger
+/// sample is what makes a burst a smaller fraction of each window; it is the
+/// remedy that adds no machinery, and interleaving the arms, re-measuring on a
+/// failure, and self-calibrating the threshold per run were each considered and
+/// are each a way of working around a sample that simply needs to be bigger.
+///
+/// Raising [`REGRESSION_RATIO`] instead was rejected outright: it would have to
+/// clear 1.88, which is above the 1.462 real regression CLOUD-875 measured and
+/// caught, trading a false positive for a false negative.
+///
+/// The cost is three times the runs, paid only by a commit that touches crate
+/// source, a manifest or the lockfile — [`Decision`] skips clean otherwise.
+//MUTANT-SUITE crates/batten/tests/it/perf_pair.rs
+//MUTANT sample-too-small-to-decide|s@const DEFAULT_RUNS: \&str = "300";@const DEFAULT_RUNS: \&str = "100";@|the_default_sample_is_at_least_what_the_null_was_remeasured_at
+const DEFAULT_RUNS: &str = "300";
+/// Warmups, moved with [`DEFAULT_RUNS`] and measured in the same pair of nulls.
+const DEFAULT_WARMUP: &str = "30";
 const DEFAULT_OUT_DIR: &str = "target/perf";
 
 /// What a diff has to touch for the measurement to be worth taking.

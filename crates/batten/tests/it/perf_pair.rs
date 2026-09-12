@@ -348,3 +348,74 @@ fn every_path_perf_assert_budgets_is_paired() {
         );
     }
 }
+
+/// **The default sample is at least what the null was re-measured at.**
+///
+/// A FLOOR, never an equality, and the difference is the whole case. Asserting
+/// `== "300"` would pass any later edit back to a sample this comparison is
+/// measured to fail at, so long as whoever made it moved the case too. A floor
+/// says what was established rather than what is currently written.
+///
+/// # What was established
+///
+/// `perf pair --null` measures the identical binary as both arms, so every ratio
+/// it produces is 1.0 plus pure noise. `REGRESSION_RATIO` records the original:
+/// 2026-08-11, 100 runs after 10 warmups, spread 0.966 to 1.102. Re-measured
+/// 2026-09-12 on a busier container at those same defaults the spread was 0.45
+/// to 1.88 — a control at 1.88 against a 1.30 threshold, which is the gate
+/// deciding about the machine. At 300 runs after 30 warmups: 0.95 to 1.145.
+///
+/// # Why this is a test and not only a comment
+///
+/// Because the number it defends is invisible in its effect. A sample too small
+/// does not fail loudly — it makes a random budgeted path exceed the threshold on
+/// a random run, which reads as a regression in whatever branch happened to be
+/// measured. `scanner_taxonomy.rs`'s shape: the prose carries the measurement and
+/// the assertion stops it evaporating. It does NOT re-run the null, for
+/// `lease_namespace_premise.rs`'s reason — a case that benchmarked a real binary
+/// would take minutes and would itself be the noisy measurement it is about.
+#[test]
+fn the_default_sample_is_at_least_what_the_null_was_remeasured_at() {
+    /// The re-measured sample, below which the null is known to exceed the
+    /// threshold on this class of container.
+    const MEASURED_AT: u32 = 300;
+
+    let module = std::fs::read_to_string(common::at_root("crates/batten/src/perf.rs"))
+        .expect("the module is where the ledger says it is");
+
+    let declared = |name: &str| -> u32 {
+        let needle = format!("const {name}: &str = \"");
+        let rest = module
+            .split_once(&needle)
+            .unwrap_or_else(|| panic!("{name} is declared as a string constant"))
+            .1;
+        rest.split_once('"')
+            .expect("the constant is closed")
+            .0
+            .parse()
+            .expect("the constant is a count")
+    };
+
+    assert!(
+        declared("DEFAULT_RUNS") >= MEASURED_AT,
+        "the default run count is below the sample the null was re-measured at \
+         ({MEASURED_AT}); at 100 runs the identical binary measured 1.88x against \
+         a 1.30x threshold, so the gate decides about the machine — see CLOUD-1803"
+    );
+    assert!(
+        declared("DEFAULT_WARMUP") >= MEASURED_AT / 10,
+        "the warmups moved with the runs in the same pair of nulls, and a sample \
+         grown without them re-admits the cold-start the warmups exist to drop"
+    );
+
+    // THE MEASUREMENT IS NAMED SO IT CAN BE RE-RUN, which is what separates this
+    // from a bare constant somebody must trust. Both arms of the controlled pair
+    // have to stay legible or the next reader re-derives instead of re-measuring.
+    for evidence in ["--null", "1.88", "CLOUD-1803"] {
+        assert!(
+            module.contains(evidence),
+            "crates/batten/src/perf.rs must keep naming {evidence:?}, so the \
+             sample size reads as a measurement rather than a preference"
+        );
+    }
+}
