@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.164](https://github.com/button-inc/batten/compare/v0.0.163...v0.0.164) - 2026-09-12
+
+### Added
+
+- *(facts)* read a markdown file's frontmatter, and say which non-answer it is
+
+### Fixed
+
+- *(perf)* raise the sample to what this comparison's own null needs to decide
+- *(lease)* give the stand-down notice its sender, so a stale holder can be asked
+- *(lease)* give the poison cooldown its writer, so a clone that reddened CI takes no further turn
+- *(rules)* count the reads `acquire` makes, so the rule-cost census stops lying
+
+### Other
+
+- *(rules)* extract the measured acquisition so `run` stays under its cap
+- *(config)* [**breaking**] carry this branch's two gates onto the new trunk
+
 ## [0.0.163](https://github.com/button-inc/batten/compare/v0.0.162...v0.0.163) - 2026-09-12
 
 ### Added
