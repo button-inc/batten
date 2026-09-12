@@ -333,8 +333,14 @@ pub struct Config {
     ///
     /// Consumer-specific by nature, and this table is where non-negotiable rule 1
     /// is paid: `get_issue`, `issue-read`, `id` and `updatedAt` name a tracker,
-    /// its tools and its schema, so a grep of `crates/batten` for any of them
-    /// returns nothing and every one of them lives here.
+    /// its tools and its schema, and every one of them is DECLARED here rather
+    /// than chosen by the engine.
+    ///
+    /// This paragraph used to assert that a scan of the crate for those names
+    /// found none. It was false — they appear throughout `crates/batten/src`,
+    /// including in prose explaining the rule — and nothing re-ran it, which is
+    /// the class `assertion_gates.rs` now refuses. What rule 1 actually requires
+    /// is that the engine not CHOOSE them, and that is what this table is for.
     #[serde(default, rename = "mint", skip_serializing_if = "Vec::is_empty")]
     pub mints: Vec<crate::mint::Declared>,
     /// Records written from the tool result that earned them (CLOUD-1051).
@@ -346,8 +352,9 @@ pub struct Config {
     ///
     /// Consumer-owned for the same reason `[[mint]]` is, and more so: the column
     /// names, the verdict tokens and the programs are all a tracker's vocabulary,
-    /// so a grep of `crates/batten` for any of them returns nothing and every one
-    /// of them lives here.
+    /// and every one of them is declared here rather than chosen by the engine.
+    /// (The scan this paragraph used to report having run is gone with
+    /// [`Config::mints`]' — same false claim, same reason.)
     #[serde(default, rename = "recorder", skip_serializing_if = "Vec::is_empty")]
     pub recorders: Vec<crate::recorder::Declared>,
     /// The programs a `[[recorder]]` may run, by id.
@@ -414,8 +421,9 @@ pub struct Config {
     ///
     /// Consumer-owned for [`Config::mints`]' reason and more sharply: the server
     /// id, the method names, the field sets and the reduction chosen per method
-    /// are all a tracker's vocabulary, so a grep of `crates/batten` for any of
-    /// them returns nothing and every one of them lives here. The crate knows
+    /// are all a tracker's vocabulary, and every one of them is declared here
+    /// rather than chosen by the engine. (The scan this paragraph used to report
+    /// having run is gone with [`Config::mints`]' — same false claim.) The crate knows
     /// only *dispatch a declared method; reduce by a declared projection*. The
     /// type, the transport and the reductions are [`crate::mcp`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -616,8 +624,10 @@ pub struct Config {
     /// Consumer-specific by nature, and the reason it lives here: the engine
     /// carries the matcher, this file carries the vendor literals. That extends
     /// non-negotiable rule 1 from consumers to vendors — a grep of `crates/` for
-    /// the configured patterns returns nothing. The type and the predicate are
-    /// [`crate::attribution`].
+    /// the configured patterns returns nothing (verified-by: batten-check — the
+    /// rule-1 `forbid` rows over `crates/**` in this repository's own
+    /// `batten.toml`, which run on every gate invocation). The type and the
+    /// predicate are [`crate::attribution`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attribution: Option<crate::attribution::Attribution>,
     /// How a session credential is PROVED usable before anything is stripped on
@@ -997,7 +1007,8 @@ pub struct Trust {
 /// meaningless in the next. The core therefore carries only the default (this
 /// file), and every consumer's own list lives in that consumer's own config, so
 /// a grep of `crates/batten` for any consumer's identifiers returns nothing
-/// (non-negotiable rule 1).
+/// (non-negotiable rule 1; verified-by: batten-check — the rule-1 `forbid` rows over `crates/**` in this repository's own `batten.toml`, which run on every gate invocation).
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Epoch {
@@ -1023,7 +1034,8 @@ pub struct Epoch {
 /// Declared as config for the reason [`Epoch`] gives: which files carry a
 /// repository's contract is that repository's business, so a grep of
 /// `crates/batten` for any consumer's identifiers returns nothing
-/// (non-negotiable rule 1).
+/// (non-negotiable rule 1; verified-by: batten-check — the rule-1 `forbid` rows over `crates/**` in this repository's own `batten.toml`, which run on every gate invocation).
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Contract {

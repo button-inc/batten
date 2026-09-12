@@ -16,7 +16,8 @@
 //! * **The tokens are config, never crate constants** (non-negotiable rule 1).
 //!   A marker's spelling is a property of the repository being gated, not of
 //!   Batten, so `crates/batten` contains no marker literal and a grep for one
-//!   returns zero hits. Batten's own markers live in Batten's own
+//!   returns zero hits (verified-by: batten-check — the rule-1 `forbid` rows over `crates/**` in this repository's own `batten.toml`, which run on every gate invocation).
+//!   Batten's own markers live in Batten's own
 //!   `batten.toml`, as consumer #1.
 //! * **Output is a pointer, never the payload** (rule 4): a [`Hit`] carries the
 //!   marker id and `path:line`, never the line's bytes. A suppression comment

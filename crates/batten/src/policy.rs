@@ -42,7 +42,10 @@
 //! zero.** This paragraph cited a test named `no_evaluator_feature_admits_io`
 //! that did not exist — one grep hit, and it was this comment making the claim
 //! (CLOUD-589's class, on the highest-consequence claim in the crate). Both
-//! halves are real now, and they answer different questions:
+//! halves are real now, and they answer different questions
+//! (verified-by: no_evaluator_feature_admits_io — the behavioural half named
+//! immediately below, which is the whole point of the correction this paragraph
+//! records; `assertion_gates.rs` is what now refuses the state it describes):
 //!
 //! * `no_evaluator_feature_admits_io` in `crates/batten/tests/it/policy_modules.rs`
 //!   is the BEHAVIOURAL half: it hands [`deny`] a module invoking `http.send`
