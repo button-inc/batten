@@ -12,7 +12,8 @@
 //! * **The table is config, never crate constants** (non-negotiable rule 1).
 //!   Which programs count as mutating is a property of the repository being
 //!   guarded — one repo's `terraform apply` is another's irrelevance — so
-//!   `crates/batten` names no verb, and a grep for one returns zero hits.
+//!   `crates/batten` names no verb, and a grep for one returns zero hits
+//!   (verified-by: batten-check — the rule-1 `forbid` rows over `crates/**` in this repository's own `batten.toml`, which run on every gate invocation).
 //!   Batten's own table lives in Batten's own `batten.toml`, as consumer #1.
 //! * **The severity axis is [`Effect`]**, the house-style §5 vocabulary, not a
 //!   second one invented here. A verb is `write` or `destructive` — the same

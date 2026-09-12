@@ -25,7 +25,8 @@
 //! a harness keeps its wiring — is a row in the consumer's `batten.toml`, because
 //! a tracker's vocabulary inside `crates/batten` is non-negotiable rule 1's
 //! violation. A grep of this crate for a method name, a config filename or a
-//! launcher path returns nothing, and that is an acceptance test rather than a
+//! launcher path returns nothing (verified-by: batten-check —
+//! the rule-1 `forbid` rows over `crates/**` in this repository's own `batten.toml`, which run on every gate invocation), and that is an acceptance test rather than a
 //! habit.
 //!
 //! Where the wiring lives is **declared, never scanned**, on

@@ -51,6 +51,7 @@ mod agent_facts;
 mod agentic_record;
 mod ambient_authority;
 mod ask_disposition;
+mod assertion_gates;
 mod attribution;
 mod attribution_provenance;
 mod authority_replay;

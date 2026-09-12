@@ -16,7 +16,7 @@
       ]
     },
     "attribution": {
-      "description": "What produced commits may carry about the tooling that made them\n(CLOUD-274), enforcing the attribution decision record (CLOUD-268).\nAbsent means this repository declares no attribution policy and the gate\nis simply not active — not that everything is permitted, which is why an\nabsent table is a usage error at the gate rather than a silent pass.\n\nConsumer-specific by nature, and the reason it lives here: the engine\ncarries the matcher, this file carries the vendor literals. That extends\nnon-negotiable rule 1 from consumers to vendors — a grep of `crates/` for\nthe configured patterns returns nothing. The type and the predicate are\n[`crate::attribution`].",
+      "description": "What produced commits may carry about the tooling that made them\n(CLOUD-274), enforcing the attribution decision record (CLOUD-268).\nAbsent means this repository declares no attribution policy and the gate\nis simply not active — not that everything is permitted, which is why an\nabsent table is a usage error at the gate rather than a silent pass.\n\nConsumer-specific by nature, and the reason it lives here: the engine\ncarries the matcher, this file carries the vendor literals. That extends\nnon-negotiable rule 1 from consumers to vendors — a grep of `crates/` for\nthe configured patterns returns nothing (verified-by: batten-check — the\nrule-1 `forbid` rows over `crates/**` in this repository's own\n`batten.toml`, which run on every gate invocation). The type and the\npredicate are [`crate::attribution`].",
       "anyOf": [
         {
           "$ref": "#/$defs/Attribution"
@@ -271,7 +271,7 @@
       }
     },
     "mcp": {
-      "description": "Where a harness keeps its MCP wiring, and what to hand back instead of a\nmethod's full response (CLOUD-1260). Absent means Batten dispatches\nnothing and reduces nothing.\n\nConsumer-owned for [`Config::mints`]' reason and more sharply: the server\nid, the method names, the field sets and the reduction chosen per method\nare all a tracker's vocabulary, so a grep of `crates/batten` for any of\nthem returns nothing and every one of them lives here. The crate knows\nonly *dispatch a declared method; reduce by a declared projection*. The\ntype, the transport and the reductions are [`crate::mcp`].",
+      "description": "Where a harness keeps its MCP wiring, and what to hand back instead of a\nmethod's full response (CLOUD-1260). Absent means Batten dispatches\nnothing and reduces nothing.\n\nConsumer-owned for [`Config::mints`]' reason and more sharply: the server\nid, the method names, the field sets and the reduction chosen per method\nare all a tracker's vocabulary, and every one of them is declared here\nrather than chosen by the engine. (The scan this paragraph used to report\nhaving run is gone with [`Config::mints`]' — same false claim.) The crate knows\nonly *dispatch a declared method; reduce by a declared projection*. The\ntype, the transport and the reductions are [`crate::mcp`].",
       "anyOf": [
         {
           "$ref": "#/$defs/McpConfig"
@@ -289,7 +289,7 @@
       ]
     },
     "mint": {
-      "description": "Receipts minted from the tool result that earned them (CLOUD-1024).\n\nThe complement of `[[fact]]` above, on the other selector: a fact is keyed\nto a COMMAND the agent ran, a mint to the TOOL whose result carries the\nevidence. Both are written by the boundary on the post-tool event, from\nbytes the harness hands back rather than text the agent re-typed, which is\nCLOUD-526's measured forgery surface.\n\nConsumer-specific by nature, and this table is where non-negotiable rule 1\nis paid: `get_issue`, `issue-read`, `id` and `updatedAt` name a tracker,\nits tools and its schema, so a grep of `crates/batten` for any of them\nreturns nothing and every one of them lives here.",
+      "description": "Receipts minted from the tool result that earned them (CLOUD-1024).\n\nThe complement of `[[fact]]` above, on the other selector: a fact is keyed\nto a COMMAND the agent ran, a mint to the TOOL whose result carries the\nevidence. Both are written by the boundary on the post-tool event, from\nbytes the harness hands back rather than text the agent re-typed, which is\nCLOUD-526's measured forgery surface.\n\nConsumer-specific by nature, and this table is where non-negotiable rule 1\nis paid: `get_issue`, `issue-read`, `id` and `updatedAt` name a tracker,\nits tools and its schema, and every one of them is DECLARED here rather\nthan chosen by the engine.\n\nThis paragraph used to assert that a scan of the crate for those names\nfound none. It was false — they appear throughout `crates/batten/src`,\nincluding in prose explaining the rule — and nothing re-ran it, which is\nthe class `assertion_gates.rs` now refuses. What rule 1 actually requires\nis that the engine not CHOOSE them, and that is what this table is for.",
       "type": "array",
       "items": {
         "$ref": "#/$defs/Declared2"
@@ -389,7 +389,7 @@
       ]
     },
     "recorder": {
-      "description": "Records written from the tool result that earned them (CLOUD-1051).\n\nThe third selector on the post-tool event, and the one that can carry a\nvalue another gate decided. A `[[mint]]` renders a template over the\npayload; a `[[recorder]]` may additionally run a declared program and\nrecord its verdict, which is what a board write's refinement column IS.\n\nConsumer-owned for the same reason `[[mint]]` is, and more so: the column\nnames, the verdict tokens and the programs are all a tracker's vocabulary,\nso a grep of `crates/batten` for any of them returns nothing and every one\nof them lives here.",
+      "description": "Records written from the tool result that earned them (CLOUD-1051).\n\nThe third selector on the post-tool event, and the one that can carry a\nvalue another gate decided. A `[[mint]]` renders a template over the\npayload; a `[[recorder]]` may additionally run a declared program and\nrecord its verdict, which is what a board write's refinement column IS.\n\nConsumer-owned for the same reason `[[mint]]` is, and more so: the column\nnames, the verdict tokens and the programs are all a tracker's vocabulary,\nand every one of them is declared here rather than chosen by the engine.\n(The scan this paragraph used to report having run is gone with\n[`Config::mints`]' — same false claim, same reason.)",
       "type": "array",
       "items": {
         "$ref": "#/$defs/Declared3"
@@ -1126,7 +1126,7 @@
       ]
     },
     "Contract": {
-      "description": "The `[contract]` table: which files a running session must re-read when they\nmove (CLOUD-461).\n\n**A second table rather than a reuse of [`Epoch`], and the reason is\nstructural.** `[epoch] tracked` is literal repo-relative paths, read one file\neach — right for a config epoch, which must be a function of a *stated* set\nor the value moves because of what happens to exist beside it. A contract\nsurface is the opposite case: a rules directory and a task tree, where a\nnewly added file **is** the drift. Globs are the whole point here and would\nbe a defect there, so the two tables answer different questions rather than\none table answering both badly.\n\nDeclared as config for the reason [`Epoch`] gives: which files carry a\nrepository's contract is that repository's business, so a grep of\n`crates/batten` for any consumer's identifiers returns nothing\n(non-negotiable rule 1).",
+      "description": "The `[contract]` table: which files a running session must re-read when they\nmove (CLOUD-461).\n\n**A second table rather than a reuse of [`Epoch`], and the reason is\nstructural.** `[epoch] tracked` is literal repo-relative paths, read one file\neach — right for a config epoch, which must be a function of a *stated* set\nor the value moves because of what happens to exist beside it. A contract\nsurface is the opposite case: a rules directory and a task tree, where a\nnewly added file **is** the drift. Globs are the whole point here and would\nbe a defect there, so the two tables answer different questions rather than\none table answering both badly.\n\nDeclared as config for the reason [`Epoch`] gives: which files carry a\nrepository's contract is that repository's business, so a grep of\n`crates/batten` for any consumer's identifiers returns nothing\n(non-negotiable rule 1; verified-by: batten-check — the rule-1 `forbid` rows over `crates/**` in this repository's own `batten.toml`, which run on every gate invocation).",
       "type": "object",
       "properties": {
         "tracked": {
@@ -1647,7 +1647,7 @@
       ]
     },
     "Epoch": {
-      "description": "The `[epoch]` table: which files govern this repository.\n\nDeclared as **config** rather than compiled in, because which files govern a\nrepository is that repository's business: an agent settings file, a\ncontributor guide, a hook config — each meaningful in one repository and\nmeaningless in the next. The core therefore carries only the default (this\nfile), and every consumer's own list lives in that consumer's own config, so\na grep of `crates/batten` for any consumer's identifiers returns nothing\n(non-negotiable rule 1).",
+      "description": "The `[epoch]` table: which files govern this repository.\n\nDeclared as **config** rather than compiled in, because which files govern a\nrepository is that repository's business: an agent settings file, a\ncontributor guide, a hook config — each meaningful in one repository and\nmeaningless in the next. The core therefore carries only the default (this\nfile), and every consumer's own list lives in that consumer's own config, so\na grep of `crates/batten` for any consumer's identifiers returns nothing\n(non-negotiable rule 1; verified-by: batten-check — the rule-1 `forbid` rows over `crates/**` in this repository's own `batten.toml`, which run on every gate invocation).",
       "type": "object",
       "properties": {
         "tracked": {
