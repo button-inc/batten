@@ -91,6 +91,44 @@ pub struct Attribution {
     /// **nothing**, which is how a silent posture is expressed as data.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trailer_allow: Vec<String>,
+    /// Identities permitted to have cut a release tag (CLOUD-1794).
+    ///
+    /// AN ALLOW LIST, AND A SEPARATE ONE FROM [`Attribution::identity`], because
+    /// the two answer different questions and measurably hold different values.
+    /// `identity` is what `attribution identity` WRITES into a clone's git config
+    /// — the identity commits must be authored by. A release tag is cut by
+    /// whatever credential the release workflow holds, which renders as that
+    /// account's identity and need not be the committing one. Measured on this
+    /// repository: every tag from v0.0.155 to v0.0.162 was cut by an address that
+    /// is not `identity`'s, and the history carries both as legitimate.
+    ///
+    /// Judging tags against `identity` therefore refuses every release, which is a
+    /// worse outage than the one this gate exists to catch — and is exactly what
+    /// the first draft did before it was run against real tags.
+    ///
+    /// A LIST rather than one value, because the accountable credential changes:
+    /// migrating from a personal token to an org-owned App (CLOUD-94) changes the
+    /// identity tags carry, and a transition where both are briefly valid should
+    /// be expressible without leaving the gate off.
+    ///
+    /// DEFAULTED, AND THAT IS NOT THE SAME CLAIM AS "AN EMPTY LIST IS FINE"
+    /// (CLOUD-1789). The first draft made this mandatory and conflated two
+    /// questions: whether an empty list is a policy — it is not — and whether
+    /// every consumer must answer this one, which it must not. `Attribution`
+    /// carries `deny_unknown_fields`, so a required field here makes any config
+    /// written before this key existed fail to parse, which is a breaking change
+    /// to a table that governs commits rather than tags; it was caught by
+    /// `trust::tests::shrinking_a_deny_list_or_widening_the_carve_out_is_a_weakening`,
+    /// whose fixture is a `[attribution]` table with no reason to mention tags.
+    ///
+    /// ABSENT IS COULD-NOT-LOOK, NEVER CLEAN, which is where the "empty is not a
+    /// policy" half survives: [`Attribution::judge_tagger`] refuses to decide over
+    /// an empty list rather than passing every tag. So a consumer that does not
+    /// govern tag identity is unaffected — it never calls the verb — and one that
+    /// calls the verb without declaring the key gets a loud exit `1` instead of a
+    /// false green. That is the asymmetry rather than a softening of it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tag_identity_allow: Vec<String>,
     /// The accountable identity `--set-identity` writes into the repo-local git
     /// config.
     pub identity: Identity,
@@ -199,6 +237,19 @@ impl Attribution {
             ("identity_deny", &self.identity_deny),
             ("trailer_deny", &self.trailer_deny),
             ("body_deny", &self.body_deny),
+            // `tag_identity_allow` IS DELIBERATELY NOT IN THIS LOOP, and that is
+            // the one row worth the sentence (CLOUD-1789). Every key above is
+            // mandatory because `[attribution]` exists to govern COMMITS and a
+            // table that declares no patterns for them is the half-change rule 2
+            // catches. Tag identity is a different question, asked only by a
+            // consumer that cuts release tags, and requiring it here would refuse
+            // every `[attribution]` table written before the key existed.
+            //
+            // The "empty is not a policy" half is not lost, only moved to where it
+            // can be answered honestly: `judge_tagger` refuses to DECIDE over an
+            // empty list rather than passing every tag, so absence is
+            // could-not-look at the point of use instead of a parse error for
+            // consumers who never ask the question.
         ] {
             if patterns.is_empty() {
                 return Err(UsageError::raise(format!(
@@ -264,6 +315,79 @@ impl Attribution {
             findings.push(point("body"));
         }
         Ok(findings)
+    }
+
+    /// Whether a rendered tagger identity is the one this repository is
+    /// accountable to.
+    ///
+    /// AN ALLOW-FORM, AND THAT IS THE POINT. A deny list would catch only the
+    /// identity somebody thought to name; this refuses every identity that is not
+    /// the declared one, so a release cut by an unexpected credential is refused
+    /// whether or not anyone predicted that credential. It is also why no vendor
+    /// literal appears in this crate for the tag surface at all — non-negotiable
+    /// rule 1 is satisfied by not needing the name rather than by relocating it.
+    ///
+    /// `identity_deny` is still consulted, so an identity that is both permitted
+    /// and denied is refused. Config that contradicts itself is a finding, not a
+    /// pass, and the deny list is the half that wins.
+    fn tagger_is_accountable(
+        &self,
+        rendered: &str,
+        permitted: &Matchers,
+        denied: &Matchers,
+    ) -> bool {
+        permitted.matches(rendered) && !denied.matches(rendered)
+    }
+
+    /// Judge who cut a tag, returning every refusal as a pointer.
+    ///
+    /// `label` is the tag name, which is safe to print. The tagger identity never
+    /// reaches a finding — the same rule-4 discipline [`Attribution::judge`] keeps
+    /// over commit metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UsageError`] (→ exit `1`) if `tag_identity_allow` is empty, or
+    /// if it or `identity_deny` does not compile.
+    pub fn judge_tagger(&self, label: &str, tagger: &git::Tagger) -> Result<Vec<Finding>> {
+        // COULD NOT LOOK, NEVER CLEAN, and this is where `validate`'s "an empty
+        // allow list is not a policy" lives now that the key is optional
+        // (CLOUD-1789). An empty list permits nothing, so deciding over it would
+        // refuse every tag — a gate that fires on correct behaviour, which gets
+        // switched off and then protects nothing. Passing every tag instead is the
+        // opposite and worse failure: the exact silent green that let three broken
+        // releases ship. So the verb declines to answer, loudly, at exit `1`.
+        if self.tag_identity_allow.is_empty() {
+            return Err(UsageError::raise(
+                "attribution.tag_identity_allow: declares no patterns, so who may cut a tag is \
+                 undeclared and nothing can be decided. Name the identity the release credential \
+                 renders as — never the bot identity being refused, which does not have to appear \
+                 anywhere",
+            ));
+        }
+        let permitted = Matchers::compile("tag_identity_allow", &self.tag_identity_allow)?;
+        let denied = Matchers::compile("identity_deny", &self.identity_deny)?;
+        let point = |field: &str| Finding {
+            label: label.to_owned(),
+            field: field.to_owned(),
+        };
+        // The two no-identity arms are written out separately rather than joined
+        // with `|`. They answer the same way today, and keeping them apart costs a
+        // line while buying two things: the match stays exhaustive if a fourth
+        // variant lands, and each arm is independently mutatable — a `|` inside a
+        // mutated expression is split as a field separator by the sweep and the
+        // row is refused.
+        Ok(match tagger {
+            git::Tagger::Signed(rendered) => {
+                if self.tagger_is_accountable(rendered, &permitted, &denied) {
+                    Vec::new()
+                } else {
+                    vec![point("tagger")]
+                }
+            }
+            git::Tagger::Unsigned => vec![point("tagger:unannotated")],
+            git::Tagger::Lightweight => vec![point("tagger:unannotated")],
+        })
     }
 }
 
@@ -492,6 +616,11 @@ mod tests {
             ],
             body_deny: vec![r"[Gg]enerated with".to_owned()],
             trailer_allow: Vec::new(),
+            // The release credential's identity, deliberately DIFFERENT from
+            // `identity` below: that asymmetry is the real shape this repository
+            // has, and a fixture where the two coincide would pass a judge that
+            // conflated them.
+            tag_identity_allow: vec![r"^Release Cutter <releases@example\.test>$".to_owned()],
             identity: Identity {
                 name: "Accountable Human".to_owned(),
                 email: "human@example.test".to_owned(),
@@ -512,6 +641,126 @@ mod tests {
     #[test]
     fn a_clean_commit_yields_nothing() {
         assert!(policy().judge(&commit()).unwrap().is_empty());
+    }
+
+    /// The tagger as git renders it, for a tag the release credential cut.
+    fn accountable_tagger() -> git::Tagger {
+        git::Tagger::Signed("Release Cutter <releases@example.test>".to_owned())
+    }
+
+    fn tagger_fields(tagger: &git::Tagger) -> Vec<String> {
+        policy()
+            .judge_tagger("v0.0.1", tagger)
+            .unwrap()
+            .into_iter()
+            .map(|finding| finding.field)
+            .collect()
+    }
+
+    #[test]
+    fn a_tag_cut_by_a_ci_bot_is_refused() {
+        // THE DEFECT, as a case. v0.0.159-v0.0.161 were cut by a CI job token
+        // rather than the accountable identity, and nothing in the tree could say
+        // so. Note the identity is never named in this crate: the allow-form
+        // refuses it for not being the declared one, not for being any particular
+        // bot.
+        let tagger = git::Tagger::Signed("github-actions[bot] <41898282+bot@users.noreply>".into());
+        assert_eq!(tagger_fields(&tagger), vec!["tagger".to_owned()]);
+    }
+
+    #[test]
+    fn a_tag_cut_by_the_accountable_identity_passes() {
+        // The partner. Without it the fix is satisfied by a rule that refuses
+        // every release, which would be a worse outage than the one it replaces.
+        assert!(tagger_fields(&accountable_tagger()).is_empty());
+    }
+
+    #[test]
+    fn a_tagger_differing_only_in_email_is_refused() {
+        // The match is the whole rendered identity. A same-name, different-address
+        // tagger is a different credential, which is exactly the substitution this
+        // gate exists to catch.
+        let tagger = git::Tagger::Signed("Release Cutter <other@example.test>".to_owned());
+        assert_eq!(tagger_fields(&tagger), vec!["tagger".to_owned()]);
+    }
+
+    #[test]
+    fn a_denied_identity_pattern_still_refuses_a_tagger() {
+        // The second conjunct is live rather than decorative.
+        let tagger = git::Tagger::Signed("Vendor <bot@no-reply.example>".to_owned());
+        assert_eq!(tagger_fields(&tagger), vec!["tagger".to_owned()]);
+    }
+
+    #[test]
+    fn an_unsigned_tag_object_is_its_own_arm() {
+        // An annotated tag whose header carries no tagger. Not clean, and not the
+        // same answer as a tag that was never annotated.
+        assert_eq!(
+            tagger_fields(&git::Tagger::Unsigned),
+            vec!["tagger:unannotated".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_lightweight_tag_is_refused_rather_than_read_as_accountable() {
+        // A ref pointing straight at a commit carries no identity at all. Reading
+        // that as clean is how a release cut by anyone would pass.
+        assert_eq!(
+            tagger_fields(&git::Tagger::Lightweight),
+            vec!["tagger:unannotated".to_owned()]
+        );
+    }
+
+    #[test]
+    fn an_undeclared_allow_list_declines_to_decide_rather_than_passing() {
+        // THE ARM THE KEY BEING OPTIONAL CREATES (CLOUD-1789), and the one that
+        // decides whether making it optional was safe. With no declared allow
+        // list, "who may cut a tag" is unanswered — and the two ways of answering
+        // it anyway are both wrong: refusing every tag is a gate that fires on
+        // correct behaviour, and passing every tag is the silent green that let
+        // three broken releases ship. So it is an error, not a verdict.
+        //
+        // Asserted over a tag that WOULD be clean under the fixture's policy, so a
+        // pass here could not be mistaken for the accountable arm working.
+        let mut undeclared = policy();
+        undeclared.tag_identity_allow = Vec::new();
+        let answer = undeclared.judge_tagger("v1.0.0", &accountable_tagger());
+        assert!(
+            answer.is_err(),
+            "an undeclared allow list must not decide: {answer:?}"
+        );
+    }
+
+    #[test]
+    fn a_declared_allow_list_still_decides_both_ways() {
+        // ANTI-VACUITY'S OTHER HALF. Without this, the arm above is satisfied by a
+        // `judge_tagger` that errors unconditionally — which would be a gate that
+        // never passes, the shape that gets switched off in a day.
+        assert!(
+            tagger_fields(&accountable_tagger()).is_empty(),
+            "the accountable identity must still pass"
+        );
+        assert_eq!(
+            tagger_fields(&git::Tagger::Signed(
+                "github-actions[bot] <bot@example.test>".to_owned()
+            )),
+            vec!["tagger".to_owned()]
+        );
+    }
+
+    #[test]
+    fn no_finding_carries_the_tagger_identity() {
+        // Rule 4 held in the assertion, not just in the comment: the refusal is a
+        // pointer, so the identity that failed must not reach the output.
+        let secret = "Leaky Person <leak@example.test>";
+        let findings = policy()
+            .judge_tagger("v0.0.1", &git::Tagger::Signed(secret.to_owned()))
+            .unwrap();
+        assert_eq!(findings.len(), 1);
+        for finding in &findings {
+            assert!(!finding.line().contains("leak@example.test"));
+            assert!(!finding.line().contains("Leaky Person"));
+        }
     }
 
     #[test]

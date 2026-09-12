@@ -1183,6 +1183,19 @@ pub enum AttributionCommand {
         /// git-native and host-independent.
         harness: Option<Harness>,
     },
+    /// Judge who cut a tag against the `[attribution]` policy.
+    ///
+    /// A separate verb from `Check` rather than another of its inputs: `Check`
+    /// judges a COMMIT's metadata against three pattern lists, and this judges a
+    /// TAG OBJECT's tagger against the declared identity. Different object,
+    /// different question, and folding them together would give one verb two
+    /// answer shapes.
+    Tagger {
+        /// The tag to judge, as a short name — `v0.0.162`, not a full ref.
+        tag: String,
+        /// Emit the findings as byte-stable JSON instead of pointer lines.
+        json: bool,
+    },
     /// Set this clone's repo-local git identity when it is unset or denied.
     Identity,
 }
@@ -1722,6 +1735,10 @@ fn attribution_of(matches: &ArgMatches) -> Option<AttributionCommand> {
             range: matches.get_one::<String>("range").cloned(),
             message: matches.get_one::<String>("message").cloned(),
             harness: matches.get_one::<Harness>("harness").copied(),
+        }),
+        ("tagger", matches) => Some(AttributionCommand::Tagger {
+            tag: matches.get_one::<String>("tag").cloned()?,
+            json: flag(matches, "json"),
         }),
         ("identity", _) => Some(AttributionCommand::Identity),
         _ => None,

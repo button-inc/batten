@@ -200,6 +200,32 @@ expression: stdout_of(&output)
           "data_channel": false,
           "flags": [],
           "subcommands": []
+        },
+        {
+          "path": "attribution tagger",
+          "id": "attribution.tagger",
+          "about": "Refuse a tag cut by an identity this repository is not accountable to",
+          "effect": "read",
+          "data_channel": true,
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "positional": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            },
+            {
+              "name": "tag",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The tag to judge, by short name (v0.0.162)"
+            }
+          ],
+          "subcommands": []
         }
       ]
     },
@@ -3006,6 +3032,10 @@ expression: stdout_of(&output)
     {
       "id": "attribution.check",
       "path": "attribution check"
+    },
+    {
+      "id": "attribution.tagger",
+      "path": "attribution tagger"
     },
     {
       "id": "capture.find",

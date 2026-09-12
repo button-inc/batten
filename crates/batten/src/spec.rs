@@ -409,6 +409,13 @@ mod tests {
                 // against it, so it is `read`; `attribution identity` writes
                 // .git/config and is deliberately absent, as is the noun above it.
                 "attribution check".to_owned(),
+                // The TAGGER half of the same pair, and it is `read` for exactly
+                // `attribution check`'s reason one row up: it opens the tag object
+                // through git's read-only plumbing, matches the rendered tagger
+                // against configured patterns, and writes nothing. It is a
+                // separate row rather than covered by the noun because
+                // `attribution identity` shares that noun and writes .git/config.
+                "attribution tagger".to_owned(),
                 // Both navigation verbs are on it, and the `capture` noun above
                 // them is not: the noun is unclassified because `capture prune`
                 // removes, which is the fail-safe reading a consumer treating an
@@ -726,6 +733,13 @@ mod tests {
             "attribution".to_owned(),
             "attribution check".to_owned(),
             "attribution identity".to_owned(),
+            // CLOUD-1789. The third verb under the noun, and the one that reads
+            // an identity nothing else in this tree could: an annotated tag's
+            // TAGGER, which is a different identity from the author and committer
+            // of the commit it points at. Every existing fact peels a tag with
+            // `into_fully_peeled_id()` and discards the tag object, which is the
+            // gap three releases cut by the CI default token went through.
+            "attribution tagger".to_owned(),
             // The adoption path for an already-dirty repository (CLOUD-67).
             // §2's listing gained the row in the same change, which is what
             // this assertion exists to prompt.
