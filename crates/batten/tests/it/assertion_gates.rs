@@ -3,7 +3,7 @@
 //!
 //! # The defect this closes
 //!
-//! Doc comments in this crate carry COMPLIANCE CLAIMS as well as doctrine, and
+//! Doc comments in this crate carry CONFORMANCE CLAIMS as well as doctrine, and
 //! the two read identically. *"Which files carry a repository's contract is that
 //! repository's business"* is doctrine — it states a rule and cannot go stale.
 //! *"a grep of `crates/batten` for any of them returns nothing"* is a claim about
@@ -26,6 +26,15 @@
 //! at a task or a test THAT EXISTS.
 //!
 //! So the rule is: assert and cite, or state the doctrine and make no claim.
+//!
+//! # Why "conformance" and not the obvious word
+//!
+//! The obvious word is a consumer identifier, and `batten.toml`'s `source name
+//! other` row forbids it anywhere under `crates/**`. This file spelled it four
+//! times in its first draft and the gate refused the commit — which is the file's
+//! own subject arriving one level up, and worth the line so nobody "corrects" the
+//! vocabulary back. The phrases this module hunts are assembled at runtime for
+//! the same reason; the prose had not been given the same care.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -38,7 +47,7 @@ use crate::common;
 /// The phrases that turn a comment from doctrine into a claim about the tree.
 ///
 /// **Deliberately narrow, and narrow in the honest direction.** Each is a
-/// compliance report — a statement that a SCAN was run and came back clean. A
+/// conformance report — a statement that a SCAN was run and came back clean. A
 /// wider net would catch doctrine and be switched off, which is the failure mode
 /// a gate over prose has: measured, the first draft of this took the phrases
 /// alone and reported twenty sites, of which most were ordinary prose about a
@@ -187,7 +196,7 @@ fn the_assertion_scan_would_find_an_ungated_claim() {
     );
 }
 
-/// **Every compliance claim in the engine names the gate that checks it.**
+/// **Every conformance claim in the engine names the gate that checks it.**
 ///
 /// Fails by: writing a comment that reports a grep came back clean without
 /// naming what re-runs it. The remedy is one of two, and both are fine — cite
@@ -195,7 +204,7 @@ fn the_assertion_scan_would_find_an_ungated_claim() {
 /// is the third thing, which is what this closes: a reader told the check was
 /// run, by a comment that is the only record it ever was.
 #[test]
-fn every_compliance_claim_names_its_gate() {
+fn every_conformance_claim_names_its_gate() {
     let phrases = claim_phrases();
     let marker = marker();
     let mut found = Vec::new();
