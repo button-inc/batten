@@ -1737,7 +1737,24 @@ pub struct Retired {
 /// under the same key shape, and it landed after the bash cleanup was written. A
 /// port that copied the two literals would have left one family accumulating
 /// forever, which is the drift a named list exists to stop.
-const BRANCH_KEYED_RECEIPTS: &[&str] = &["board-writes", "filed-here-nudged", "filed-set-nudged"];
+/// `unlanded-nudged` is the fourth, and its absence was the same drift one more
+/// time (CLOUD-1390). `unlanded_pointer` writes
+/// `unlanded-nudged.<slug>` under this same directory and keys the
+/// suppression by the completion finding's own fingerprint, so the family has
+/// the shape this list matches and was simply never added to it.
+///
+/// **What that costs is a SUPPRESSION that outlives the work it was about.** The
+/// nudge is once-per-claim by design — the agent cannot clear `¬landed` inside
+/// the turn it is asked to — so the file exists precisely on the branches that
+/// stopped with work unlanded. Left behind, the next piece of work to reuse the
+/// name inherits it, and the one nudge that says *the work exists nowhere but
+/// here and a container reclaim ends it* is the one that does not fire.
+const BRANCH_KEYED_RECEIPTS: &[&str] = &[
+    "board-writes",
+    "filed-here-nudged",
+    "filed-set-nudged",
+    "unlanded-nudged",
+];
 
 /// Retire a branch whose pull request has merged.
 ///
