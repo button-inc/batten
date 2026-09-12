@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.163](https://github.com/button-inc/batten/compare/v0.0.162...v0.0.163) - 2026-09-12
+
+### Added
+
+- *(policy)* [**breaking**] put the module finding ids in the grammar too
+- *(refusal)* [**breaking**] render the rule id only where it differs from the class
+- *(config)* [**breaking**] enforce the id grammar at load, and collapse where two names are one
+- *(config)* [**breaking**] put all 136 rule ids in the three-word grammar
+- *(verdict)* a rule id parses through the class grammar
+
+### Fixed
+
+- *(lease)* a present-but-empty schema field is refused, not read as the oldest
+- *(cli)* match a rule id by its stored spelling before normalising
+- *(cli)* normalise a rule id at the argument boundary, where it was not
+- *(config)* keep `validate_tables` inside the line budget
+- *(config)* a config read from a ref is compared, not judged by this grammar
+- *(commit)* an unreadable parent config leaves the commit unjudged
+- *(policy)* finish the grammar over what main added, tests and prose too
+- *(policy)* carry the grammar to what main added under the branch
+- *(tests)* stop forking the repo setup, and finish the bats migration
+- *(policy)* carry the finding-id migration to every surface that names one
+- *(policy)* keep `load` under its line budget, and migrate the rego test ids
+- *(tests)* carry the migration through every surface that names a rule
+
+### Other
+
+- *(preset)* hold a preset's finding ids to the vendor's grammar
+
 ## [0.0.162](https://github.com/button-inc/batten/compare/v0.0.161...v0.0.162) - 2026-09-11
 
 ### Fixed
