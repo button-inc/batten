@@ -6740,47 +6740,10 @@ fn run(
     // per consumer. Here the producer pays once and every reader reads.
     let derived = resolve_derived(rules, root, &files);
     // Resolved ONCE for the whole run, beside the two above and for the same
-    // reason (CLOUD-850): every document the rule set declares, read and parsed
-    // once rather than once per rule. `documents_acquired` is what asserts it.
-    //
-    // MEASURED, AND ON ITS OWN CENSUS ROW (CLOUD-1790). The per-rule deltas below
-    // wrap `run_rule`, and this runs once before that loop — so a `policy` row's
-    // declared reads happen outside every rule's measurement window and each such
-    // row reports `0 file(s) 0 byte(s)` however much the run read on its behalf.
-    // The run total is a SUM of those rows, so the reads were invisible at both
-    // levels, and a reader comparing a policy row's zero against a `forbid` row's
-    // real numbers concludes the policy row received nothing. That is what
-    // CLOUD-1790 was filed on.
-    //
-    // ATTRIBUTED TO THE STEP RATHER THAN TO A RULE, which is the only honest
-    // place for it. The cache is shared deliberately — N rows over one path in
-    // one form is one read — so charging it to whichever row the loop reached
-    // first would starve the others of an answer they equally caused, the same
-    // error the `(path, form)` key exists to prevent one level down.
-    //
-    // ONLY WHEN THERE IS A STEP TO REPORT: a rule set declaring no documents
-    // acquires nothing and gets no row, so a run of `forbid` rows reads exactly
-    // as it did before this landed.
-    // CLEARED, not appended to: the census describes THIS run, and a caller
-    // reading rows from the previous one would be reading a different tree.
-    //
-    // AT THE TOP OF THE RUN RATHER THAN AT THE TOP OF THE RULE LOOP, which is
-    // where it sat and what the line below needs (CLOUD-1790). The acquisition
-    // is part of this run and is measured before any rule evaluates, so a clear
-    // placed after it wipes the row that measured it — silently, since a missing
-    // census row and a step that cost nothing read identically.
-    costs_lock().clear();
-    let acquisition_started = std::time::Instant::now();
-    let (files_before, bytes_before) = (files_read(), bytes_read());
-    let documents = acquire_declared(rules, root, &files)?;
-    if !documents.is_empty() {
-        costs_lock().push(RuleCost {
-            rule: DECLARED_ACQUISITION.to_owned(),
-            elapsed: acquisition_started.elapsed(),
-            files_read: files_read().saturating_sub(files_before),
-            bytes_read: bytes_read().saturating_sub(bytes_before),
-        });
-    }
+    // reason (CLOUD-850), and measured onto its own census row. Extracted rather
+    // than inline only because it put `run` over `too_many_lines`; the reasoning
+    // it carries is the callee's own.
+    let documents = acquire_declared_measured(rules, root, &files)?;
 
     // WHAT EARLIER RUNS PRODUCED, acquired once for the whole run beside the
     // three above and for the same reason (CLOUD-851). Bounded by DECLARATION —
@@ -8147,6 +8110,53 @@ fn select_declared(
 /// Keyed by repo-relative path in a [`BTreeMap`], so iteration order is the
 /// paths' and never the rules' — the ordering property that has to hold before
 /// the batch could ever be filled concurrently.
+/// [`acquire_declared`] for one whole run, clearing the census first and charging
+/// what it read to a row of its own.
+///
+/// MEASURED, AND ON ITS OWN CENSUS ROW (CLOUD-1790). The per-rule deltas wrap
+/// `run_rule`, and this runs once before that loop — so a `policy` row's declared
+/// reads happen outside every rule's measurement window and each such row reports
+/// `0 file(s) 0 byte(s)` however much the run read on its behalf. The run total is
+/// a SUM of those rows, so the reads were invisible at both levels, and a reader
+/// comparing a policy row's zero against a `forbid` row's real numbers concludes
+/// the policy row received nothing. That is what CLOUD-1790 was filed on.
+///
+/// ATTRIBUTED TO THE STEP RATHER THAN TO A RULE, which is the only honest place
+/// for it. The cache is shared deliberately — N rows over one path in one form is
+/// one read — so charging it to whichever row the loop reached first would starve
+/// the others of an answer they equally caused, the same error the `(path, form)`
+/// key exists to prevent one level down.
+///
+/// ONLY WHEN THERE IS A STEP TO REPORT: a rule set declaring no documents acquires
+/// nothing and gets no row, so a run of `forbid` rows reads exactly as it did
+/// before this landed.
+///
+/// CLEARED HERE, not appended to, and at the TOP of the run rather than the top of
+/// the rule loop — which is where the clear sat and what this needs (CLOUD-1790).
+/// The census describes THIS run, and the acquisition is part of it and measured
+/// before any rule evaluates, so a clear placed after it wipes the row that
+/// measured it — silently, since a missing census row and a step that cost nothing
+/// read identically.
+fn acquire_declared_measured(
+    rules: &[Rule],
+    root: &Path,
+    files: &[String],
+) -> anyhow::Result<BTreeMap<(String, Wanted), Acquired>> {
+    costs_lock().clear();
+    let started = std::time::Instant::now();
+    let (files_before, bytes_before) = (files_read(), bytes_read());
+    let documents = acquire_declared(rules, root, files)?;
+    if !documents.is_empty() {
+        costs_lock().push(RuleCost {
+            rule: DECLARED_ACQUISITION.to_owned(),
+            elapsed: started.elapsed(),
+            files_read: files_read().saturating_sub(files_before),
+            bytes_read: bytes_read().saturating_sub(bytes_before),
+        });
+    }
+    Ok(documents)
+}
+
 pub(crate) fn acquire_declared(
     rules: &[Rule],
     root: &Path,
