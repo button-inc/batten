@@ -475,6 +475,106 @@ fn grade(conclusion: &str) -> Answer {
     }
 }
 
+/// Why the bot refused, as **it** said so (CLOUD-1617).
+///
+/// A `failure` conclusion says a run refused; it does not say on which ground,
+/// and the bot has four. The predecessor asserted non-descent from that bare
+/// token and was measured wrong: on PR #895 the log read `refusing #895: draft
+/// head, no graded checks (CLOUD-853)`, `main` had not moved, the branch was a
+/// perfect descendant — and the head was a draft because `land` itself re-drafts
+/// on a failed lap. The loop created the refusing condition, reported it as an
+/// external one, and lapped against something no rebase can change.
+///
+/// **A LOOKUP, NEVER A JUDGEMENT** (non-negotiable rule 3). Each refusing arm of
+/// `fast-forward.yml` posts a comment naming the row it enforces, so the ground
+/// is read out of the bot's own text by that key rather than inferred from
+/// anything. What this never does is decide what the prose MEANS.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ground {
+    /// A draft head grades no required check (`CLOUD-853`). Lapping cannot clear
+    /// it — `land` re-drafts on a failed lap, so the remedy is to ready the pull
+    /// request, which no amount of rebasing does.
+    Draft,
+    /// A fork head whose green CI is the contributor's own harness (`CLOUD-867`).
+    ForkUnreviewed,
+    /// A head whose required roster has not answered (`CLOUD-1570`).
+    RosterUngraded,
+    /// The bot refused and named no ground this build recognises — including the
+    /// case where it posted no refusal at all, which is what a run that DIED
+    /// before reaching its refusal logic looks like from here.
+    ///
+    /// A COULD-NOT-LOOK, NEVER A VERDICT. Reading it as non-descent is the defect
+    /// CLOUD-1617 records, and reading it as anything else would be the same
+    /// mistake wearing a different cause.
+    Unclassified,
+}
+
+/// THE FOUR GROUNDS, IN ONE PLACE A FIFTH MUST BE ADDED TO.
+///
+/// `fast-forward.yml` gaining another refusing arm cannot silently fall into an
+/// existing bucket: an unlisted key reads as [`Ground::Unclassified`], which
+/// narrates as could-not-look rather than as somebody else's cause. That is the
+/// safe direction, and it is the one the predecessor did not have.
+const GROUNDS: &[(&str, Ground)] = &[
+    ("CLOUD-853", Ground::Draft),
+    ("CLOUD-867", Ground::ForkUnreviewed),
+    ("CLOUD-1570", Ground::RosterUngraded),
+];
+
+/// The ground named in one refusal comment body, or `None` if it is not one.
+///
+/// Anchored on the bot's own opening words, so a human quoting a refusal — or
+/// the `/fast-forward` directive itself — is not read as one. The same
+/// `startsWith`-not-`contains` discipline `fast-forward.yml` applies to its own
+/// trigger, and for the same measured reason (CLOUD-853, PR #624).
+#[must_use]
+pub fn ground_in(body: &str) -> Option<Ground> {
+    if !body.starts_with("Refusing to fast-forward") {
+        return None;
+    }
+    for (key, ground) in GROUNDS {
+        if body.contains(key) {
+            return Some(ground.clone());
+        }
+    }
+    Some(Ground::Unclassified)
+}
+
+/// Read back why the bot refused, from the comments it posted on the pull
+/// request.
+///
+/// THE COMMENT RATHER THAN THE JOB LOG, and that is what makes this a read the
+/// engine can already make: every refusing arm posts one through
+/// `repos/{repo}/issues/{pr}/comments`, which is the endpoint this module
+/// already POSTs the directive to. The log would need the archive endpoint and a
+/// zip reader for the same answer.
+///
+/// Unreadable is [`Ground::Unclassified`], for [`run`]'s reason: a failure to
+/// reach the forge is a could-not-look, and a could-not-look must not become a
+/// claim about the branch.
+#[must_use]
+pub fn ground(ask: &Ask) -> Ground {
+    let path = format!("repos/{}/issues/{}/comments?per_page=100", ask.repo, ask.pr);
+    let Some(raw) = run(&path) else {
+        return Ground::Unclassified;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return Ground::Unclassified;
+    };
+    let Some(comments) = value.as_array() else {
+        return Ground::Unclassified;
+    };
+    // THE LAST ONE, because a pull request that has lapped carries the refusals
+    // of earlier laps too and the newest is this lap's. The endpoint returns
+    // oldest first.
+    comments
+        .iter()
+        .filter_map(|comment| comment.get("body").and_then(serde_json::Value::as_str))
+        .filter_map(ground_in)
+        .next_back()
+        .unwrap_or(Ground::Unclassified)
+}
+
 /// One REST call, or `None` where the forge could not be reached.
 ///
 /// **IN PROCESS, over [`crate::rest`].** This was a `gh` spawn annotated
@@ -509,6 +609,57 @@ mod tests {
         assert_eq!(comment_id(r#"{"id": 1001}"#), Some(String::from("1001")));
         assert_eq!(comment_id(r#"{"id": "1001"}"#), Some(String::from("1001")));
         assert_eq!(comment_id(r#"{"nothing": true}"#), None);
+    }
+
+    /// The refusal `fast-forward.yml` actually posts for a draft head, quoted
+    /// from the workflow rather than paraphrased: a fixture inventing the wording
+    /// would pass over a bot whose wording moved.
+    const DRAFT_REFUSAL: &str = "Refusing to fast-forward #895: it is a draft, so no required check has graded its head. `main` must not advance to a SHA CI never ran on (CLOUD-853). Mark it ready for review, let CI grade the head, then ask again.";
+
+    #[test]
+    fn the_ground_is_read_from_the_row_the_bot_names() {
+        // THE MEASURED CASE, PR #895. A bare `failure` conclusion says a run
+        // refused and nothing more; the bot's own comment says which of four
+        // grounds, and it names its row so the mapping is a lookup.
+        assert_eq!(ground_in(DRAFT_REFUSAL), Some(Ground::Draft));
+    }
+
+    #[test]
+    fn each_declared_ground_is_reachable_from_its_own_key() {
+        // ANTI-VACUITY over the table. Without this, `GROUNDS` is satisfied by a
+        // lookup that resolves one row and drops the rest — every other refusal
+        // silently becoming `Unclassified`, which reads as caution and is really
+        // coverage quietly going to zero.
+        for (key, expected) in GROUNDS {
+            let body = format!("Refusing to fast-forward #1: because reasons ({key}).");
+            assert_eq!(
+                ground_in(&body).as_ref(),
+                Some(expected),
+                "the table's own key {key} must resolve to its ground"
+            );
+        }
+    }
+
+    #[test]
+    fn a_refusal_naming_an_unknown_row_is_unclassified_rather_than_descent() {
+        // A FIFTH ARM ADDED TO THE WORKFLOW must not fall into an existing
+        // bucket. Unclassified narrates as could-not-look; anything else would be
+        // the engine asserting somebody else's cause, which is CLOUD-1617.
+        let body = "Refusing to fast-forward #1: some new ground (CLOUD-9999).";
+        assert_eq!(ground_in(body), Some(Ground::Unclassified));
+    }
+
+    #[test]
+    fn a_comment_that_is_not_a_refusal_is_not_read_as_one() {
+        // The directive itself, and a human quoting a refusal, both live in the
+        // same comment list. `startsWith`, never `contains` — the discipline
+        // `fast-forward.yml` applies to its own trigger after a comment
+        // DISCUSSING the trigger fired it (CLOUD-853, PR #624).
+        assert_eq!(ground_in("/fast-forward"), None);
+        assert_eq!(
+            ground_in(&format!("I think this is wrong: {DRAFT_REFUSAL}")),
+            None
+        );
     }
 
     #[test]
