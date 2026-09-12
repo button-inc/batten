@@ -335,6 +335,7 @@ pub fn no_fix_reason(target: &str) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::hook::RecordShape;
     use crate::transcript::parse;
 
     const USER: &str = r#"{"message":{"role":"user","content":"do it"}}"#;
@@ -344,7 +345,7 @@ mod tests {
         r#"{"attachment":{"type":"hook_success","hookEvent":"Stop","exitCode":0}}"#;
 
     fn signal_of(body: &str) -> Option<Signal> {
-        signal(&parse(body, "fixture").expect("fixture parses"))
+        signal(&parse(body, "fixture", RecordShape::Jsonl).expect("fixture parses"))
     }
 
     #[test]

@@ -1532,8 +1532,42 @@ fn record_agent_context(
         .transcript
         .as_ref()
         .and_then(|declared| declared.path.as_deref());
-    let agent = match crate::transcript::resolve(Path::new("."), declared) {
+    let agent = match crate::transcript::resolve(
+        Path::new("."),
+        declared,
+        config
+            .transcript
+            .as_ref()
+            .and_then(|declared| declared.harness),
+    ) {
         crate::transcript::Capability::Unconfigured => return Ok(()),
+        // The two could-not-look states CLOUD-1624 adds, each with its own words
+        // for the same reason the two below have theirs: a reader repairing this
+        // needs to know whether the fix is a config line or a survey.
+        crate::transcript::Capability::Unnamed => {
+            output::message(
+                mode,
+                Verbosity::Normal,
+                err,
+                &format!(
+                    "{}, so no agent-context statement was written",
+                    crate::transcript::UNNAMED_NOTICE
+                ),
+            )?;
+            return Ok(());
+        }
+        crate::transcript::Capability::Unsurveyed(owes) => {
+            output::message(
+                mode,
+                Verbosity::Normal,
+                err,
+                &format!(
+                    "{} ({owes}), so no agent-context statement was written",
+                    crate::transcript::UNSURVEYED_NOTICE
+                ),
+            )?;
+            return Ok(());
+        }
         // One arm per state, beside absent rather than catching an error before
         // the match. `resolve` is total (CLOUD-819), so there is no second
         // reading of the same fact hiding in an `Err` branch.

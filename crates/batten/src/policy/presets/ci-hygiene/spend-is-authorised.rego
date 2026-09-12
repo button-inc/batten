@@ -206,6 +206,37 @@ violation contains {
 	not subscribes_to_ready(path)
 }
 
+# --- could not look -----------------------------------------------------------
+#
+# A declared workflow that would not parse is not an absent one (CLOUD-1625).
+# Absent is not-applicable — this tree runs no such workflow — while unparsed
+# means the boundary tried and failed. Every rule above iterates `workflow`,
+# which is built from the documents that DID parse, so without this the module
+# reports green over exactly the file it could not read: the dead gate this
+# preset's own header forbids, reached by the one route its rules cannot see.
+#
+# Spelled as `mise`'s `action-version-matches-the-pin` spells it, and it carries
+# its own verdict rather than sharing that one because the registry declares a
+# class once and could not otherwise say which preset raises it.
+
+violation contains {
+	"rule": "spend-is-authorised",
+	"verdict": "workflow parse unseen",
+	"subjects": [{"path": path}],
+} if {
+	some path, _ in input.tree.missing
+	endswith(path, ".yml")
+}
+
+violation contains {
+	"rule": "spend-is-authorised",
+	"verdict": "workflow parse unseen",
+	"subjects": [{"path": path}],
+} if {
+	some path, _ in input.tree.missing
+	endswith(path, ".yaml")
+}
+
 # --- cases --------------------------------------------------------------------
 #
 # The load-time tier. It pins the predicate; it cannot prove the ENGINE builds
@@ -356,4 +387,20 @@ test_a_tree_with_no_workflow_is_not_this_rules_business if {
 # a file that parses and carries no jobs.
 test_a_document_with_no_jobs_is_not_a_workflow if {
 	count(violation) == 0 with input as with_workflow({"name": "notes"})
+}
+
+# THE COULD-NOT-LOOK PAIR (CLOUD-1625). The first alone is satisfied by a module
+# that refuses everything, so the second is what makes it a discriminator: a tree
+# whose workflows all parsed reports nothing here.
+test_an_unparsed_workflow_is_could_not_look if {
+	some finding in violation with input as {"tree": {
+		"documents": {},
+		"lines": {},
+		"missing": {".github/workflows/broken.yml": "Unparsed"},
+	}}
+	finding.verdict == "workflow parse unseen"
+}
+
+test_a_tree_with_nothing_unparsed_reports_no_could_not_look if {
+	count(violation) == 0 with input as {"tree": {"documents": {}, "lines": {}, "missing": {}}}
 }

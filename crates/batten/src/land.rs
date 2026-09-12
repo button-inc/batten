@@ -2861,6 +2861,18 @@ mod lap_tests {
     /// would burn a lap per network hiccup.
     #[test]
     fn a_race_neither_arm_answers_returns_rather_than_waiting_on_a_sender() {
+        // THIS CASE DIALS, so it needs the credential a real run would have
+        // (CLOUD-1622). The engine used to name two variables itself, and this
+        // test inherited that for free; now a consumer declares them, and a
+        // process that declared none reads unauthenticated. MEASURED: without
+        // this line the case stops failing and starts HANGING — the unauthenticated
+        // request is swallowed rather than refused, so the arms never exhaust and
+        // the very hang this case exists to pin is what it produces. `declare`
+        // ignores a later call, so whichever test in this binary reaches it first
+        // sets the same names.
+        crate::rest::declare(crate::rest::Forge {
+            credential_names: vec![String::from("GH_TOKEN"), String::from("GITHUB_TOKEN")],
+        });
         let config = crate::pr_watch::Config {
             sha: String::from("0000000000000000000000000000000000000000"),
             repo: String::from("nobody/nothing"),

@@ -34,6 +34,8 @@
 //! the matcher. A grep of `crates/batten` for a bot's name or a manifest path
 //! returns nothing, which is the same standing `[attribution]` has.
 //!
+//! verified-by: batten-check — the rule-1 `forbid` rows over `crates/**` in this repository's own `batten.toml`, which run on every gate invocation.
+//!
 //! # Pointer-only per non-negotiable rule 4
 //!
 //! Every refusal names a PR number, an issue key, a login or a path. Never a diff

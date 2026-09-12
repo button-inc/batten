@@ -394,7 +394,8 @@ fn task_alive(program_root: &str, pid: &str, task: &str) -> bool {
 ///
 /// `batten` is the crate's own name rather than a consumer's, so writing it here
 /// keeps non-negotiable rule 1 — a grep for a specific consumer's identifiers
-/// still returns nothing. The trailing space does the same work it does above:
+/// still returns nothing (verified-by: batten-check — the rule-1 `forbid` rows over `crates/**` in this repository's own `batten.toml`, which run on every gate invocation).
+/// The trailing space does the same work it does above:
 /// `batten land ` matches `batten land lap` and `batten land verify`, which are
 /// both this task, and not a hypothetical `batten land-lock`.
 fn matches_cmdline(program_root: &str, task: &str, cmdline: &str) -> bool {

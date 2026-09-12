@@ -287,6 +287,16 @@ mutation = "change it in a pull request — a registered module is protected bec
 # could-not-look, which is honest and useless. Declared, it answers `1`.
 [transcript]
 path = ".claude/.transcript.jsonl"
+# Which host wrote it, selecting the grammar to read it with (CLOUD-1624). The
+# fourth fact about one host on this table, and the one that was missing: the
+# engine used to read every transcript through this host's shape whatever wrote
+# it, so on any other host it decoded to nothing and four gates reported clean
+# over a session they had not read.
+#
+# OMITTED WOULD BE COULD-NOT-LOOK, never a default — so this line is what keeps
+# those four deciding here rather than abstaining, and dropping it is a declared
+# weakening (`transcript-harness-removed`) rather than a silent quieting.
+harness = "claude-code"
 tasks = "~/.claude/tasks/{session}"
 
 # ---------------------------------------------------------------------------
@@ -3723,6 +3733,49 @@ exclude = "^// (carried|subsumed|changed|withdrawn): "
 severity = "deny"
 scope = "tree"
 
+# The rule-2 half of CLOUD-1623: the board's column names left the engine, and
+# this is what refuses the next one. They arrived in the first place because
+# nothing refused them, and this file already carries the measured cost of that
+# shape one row up — twenty issue-key derivations accumulated because nothing
+# refused the twenty-first before it was typed.
+#
+# WHY THIS MATCHES THE COMPARISON AND NOT THE VOCABULARY, which is the whole
+# design and the reason the obvious row is unlandable. Measured over `crates/**`
+# at 32f9876: the four column literals occur 126 TIMES across 18 files, nearly
+# all of them legitimate — integration fixtures building board payloads
+# (`landed_check.rs` 19, `claim.rs` 25, `board_receipts.rs` 12), unit-test
+# vocabulary, and prose recording why a column is in the started set. A row
+# banning the WORDS would fire on every one of them, so it would either never
+# land or land with an exemption list longer than the rule.
+#
+# The violation was never the word. It was COMPARING A STATUS AGAINST A LITERAL
+# — `self.status == "In Progress"` — because that is the line that decides, and
+# the line that answers false on every other board while reading as a clean
+# sweep. So the regex is the comparison shape, in both operand orders, and it
+# reaches exactly the construct `board::Columns` exists to replace.
+#
+# IT LANDS AT ZERO, and that is a measurement rather than a hope: after the seam
+# commit the only match in the tree was `board.rs`'s own anti-vacuity test
+# asserting that a foreign board's set does not contain this one's word, and
+# that assertion was rewritten to compare the whole set — a stronger claim,
+# since a negative assertion also passes for a resolver that dropped every
+# column. So the row needs no `exclude`, which is the shape to prefer: an
+# exemption is where the next violation hides.
+#
+# `checks_green.rs`'s `status != "completed"` and `hk.rs`'s `!= "included"` are
+# deliberately NOT reached. They compare a check run's state and a plan's state,
+# which are a forge's and this engine's own vocabularies rather than a
+# tracker's — a row keyed on the bare word `status` would have caught both and
+# taught the next reader that the ban is about the field name.
+[[rule]]
+id = "config name other"
+kind = "forbid"
+glob = "crates/**"
+regex = '(==|!=)\s*"(Todo|Backlog|In Progress|In Review|Done)"|"(Todo|Backlog|In Progress|In Review|Done)"\s*(==|!=)'
+severity = "deny"
+scope = "tree"
+no_fix_reason = "read the column from the `[board]` table through `board::Columns` and compare against that; a board's column name in the core is rule 1's violation, and an undeclared column is could-not-look rather than a default"
+
 # The fixture corpus must stay repo-agnostic (CLOUD-63). The corpus exists so
 # coverage stops implicitly depending on *this* repository, which a fixture
 # naming this repository's origin would quietly undo.
@@ -5557,6 +5610,14 @@ id = "task table other"
 kind = "policy"
 scope = "tree"
 preset = "mise"
+# ONLY THIS ROW OF THE TWO, and that is the point of a per-module declaration
+# (CLOUD-1625). At `tree` the `mise` preset compiles
+# `action-version-matches-the-pin`, which matches a step's `uses:` coordinate —
+# GitHub Actions. At `mediated_call` the same preset compiles
+# `task-over-executable`, which decides task argv and reads no provider at all,
+# so `mise-preset` above needs nothing. A manifest-level declaration could not
+# have told those two apart.
+provider = "github-actions"
 sources = [
   "batten.toml",
   ".github/workflows/*.yml",
@@ -5594,6 +5655,12 @@ id = "job spelling wrong"
 kind = "policy"
 scope = "tree"
 preset = "ci-hygiene"
+# Both of this preset's modules read GitHub Actions expression language and key
+# on documents carrying a `jobs:` mapping (CLOUD-1625). Declaring the provider is
+# what lets them load: without it the engine refuses, because on any other
+# provider that document set is empty and the modules would report a clean tree
+# they never read.
+provider = "github-actions"
 sources = [".github/workflows/*.yml", ".github/workflows/*.yaml"]
 #
 # `line_sources` AS WELL, for exactly one clause. The swallowed-interpolation
@@ -7987,11 +8054,28 @@ delete_branch_on_merge = true
 root = "target"
 keep = 2
 
+# THE 2026-09-12 WARM RESCALE (CLOUD-1622's bundle). The rule-1 seam bundle added
+# `assertion_gates.rs` and took the live count to 255, eleven past a basis of 244
+# against a tolerance of 10 — this gate working, exactly as the 2026-08-30 entry
+# describes it working.
+#
+# WARM SCALES BY THE STEM MODEL, as every move above it did: 11140 at 244 is
+# 45.66 per stem, and 45.66 x 255 is 11642. Derived rather than independently
+# measured, and said so for the reason the basis block insists on: an honest warm
+# number needs a minimal post-prune tree, and a reader who needs it exact should
+# take it rather than trust this line.
+#
+# WORTH LEAVING BEHIND, because it is a second reading the same lap produced: the
+# LEARNED floor this container observed on 2026-09-11 was 15195 MB, well above
+# either declared figure. That is the learned mechanism doing its job — it lives in
+# $GIT_DIR/batten-prune/laps.json and already governs — so the declared number is
+# not raised to meet it. A declared floor that chases the worst observed lap is the
+# floor-nobody-can-satisfy this file warns about, two blocks down.
 [prune.warm]
-mb = 11140
-worst_mb = 11140
+mb = 11642
+worst_mb = 11642
 multiplier = 1
-measured = "2026-09-08"
+measured = "2026-09-12"
 
 [prune.cold]
 mb = 21455
@@ -8449,6 +8533,21 @@ glob = "crates/batten/tests/**/*.rs"
 count = 255
 tolerance = 10
 
+# COLD'S BASIS MOVES AND COLD'S FLOOR DOES NOT, and that is the entry above
+# `[prune.cold]` being obeyed rather than ignored (2026-09-12). It ends: "the next
+# move that raises cold should take the exact measurement rather than scale again",
+# because the derived figure already exceeded what this container can offer and
+# "a floor nothing can satisfy refuses every lap and gets switched off". Scaling
+# to 87.93 x 255 = 22422 would do precisely that.
+#
+# SO THIS IS RECORDED AS A KNOWN UNDER-BUDGET, not as a number that is fine. Cold
+# now budgets for 244 stems against a basis of 255, which is the direction this
+# file says fails silently. It is bounded: cold is judged only once the escalation
+# has dropped the cache, which is reached only after warm is breached, and warm
+# moved with the basis. The exact measurement — a build from an empty `target` —
+# is what this owes, and it cannot be taken from inside a lap that needs the cache
+# it would destroy. Whoever takes it moves `mb`, `worst_mb` and `measured`
+# together.
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
 count = 255
@@ -8672,8 +8771,44 @@ body_template = ".github/bot-lane-row.md"
 # `[[provision.env]]` no-proxy list above. Pointed at a route the proxy carries,
 # the control arm fails and the engine reports could-not-look rather than
 # inventing a verdict.
+#
+# `names` IS THIS REPOSITORY'S FACT AND WAS AN ENGINE LITERAL FOR ONE COMMIT
+# (CLOUD-1615). `crates/batten` carried `["GITHUB_PERSONAL_ACCESS_TOKEN",
+# "BATTEN_GITHUB_TOKEN"]`, which is rule 1: a consumer on any other forge, or on
+# a host injecting under a third name, finds neither variable set, so every
+# candidate is absent, the verdict is `Unusable`, and every removal above is
+# skipped FOREVER. That failure is invisible, because skipping a removal is also
+# the right answer for a genuinely bad credential.
+#
+# THE SAME TWO NAMES THE ROWS ABOVE PREFER, and no others. `GITHUB_TOKEN` and
+# `GH_TOKEN` are deliberately absent even though tools read them: this container
+# injects a `proxy-`-prefixed marker under both, so probing them would measure
+# the host's substituted credential rather than one we hold — the exact
+# conflation this whole mechanism exists to undo. They stay in `from_first_set`
+# as last resorts and stay out of here as evidence.
 [credential]
 probe_url = "https://api.github.com/rate_limit"
+names = ["GITHUB_PERSONAL_ACCESS_TOKEN", "BATTEN_GITHUB_TOKEN"]
+
+# Which variables the REST tier may authenticate with (CLOUD-1622).
+#
+# A SEPARATE LIST FROM `[credential] names` DIRECTLY ABOVE, and the difference is
+# the whole reason this is its own table rather than a reuse of that one. That
+# list names credentials WE hold, and deliberately excludes the forge's
+# conventional spellings: this host injects a substitutable placeholder under
+# them, so probing those would measure the host's credential rather than ours.
+# This list is the opposite question — what a REST read may PRESENT — and the
+# host-injected job token is exactly what belongs in it. Folding the two would
+# have stopped every REST read using that token.
+#
+# These two spellings are what `crates/batten` carried as literals until this
+# change, so declaring them here keeps this repository's behaviour byte for byte
+# while the engine stops assuming any forge at all. `GH_TOKEN` first, which is the
+# forge CLI's own precedence: a session that set one for that tool does not have
+# to set a second. Naming none would be could-not-look, never "no credential
+# needed" — there is deliberately no fallback in the engine to fall back to.
+[forge]
+credential_names = ["GH_TOKEN", "GITHUB_TOKEN"]
 
 # --- the scripts the launcher re-arms every spawn (CLOUD-1704) -----------------
 #
@@ -8960,6 +9095,48 @@ verified_by = ["verify", "linear-check"]
 
 [ready]
 prose_dialect_required_from = "2026-09-02T00:00:00.000Z"
+
+# THIS BOARD'S COLUMN VOCABULARY (CLOUD-1623). These four words were `const`s in
+# `crates/batten/src/landed.rs` and `claim.rs` — non-negotiable rule 1's worst
+# violation in the tree, because the failure is silent in the direction that
+# matters. Off a board spelling its columns this way every comparison is false:
+# `is_started` never fires, so the landed-honesty sweep reports ZERO FINDINGS
+# over a board full of dishonest columns, and `claim` never refuses. A gate that
+# cannot fire and a gate that found nothing emit the same bytes.
+#
+# THE ENGINE HOLDS NO DEFAULT FOR THESE, deliberately. An undeclared column is
+# could-not-look named by key, never a fallback to these values — a fallback
+# would put this repository's vocabulary back in the engine with one more step in
+# front of it, and restore exactly the property that made the original defect
+# unobservable. `crates/batten/src/board.rs` carries that reasoning.
+#
+# VALUES RATHER THAN `[[pattern]]` ROWS, per CLOUD-472's precedent one table up: a
+# column is matched by EQUALITY against the string the tracker echoes back, not by
+# a regex over it. The registry exists so one CONCEPT has one spelling; a literal
+# the round trip returns verbatim is a value.
+[board]
+# The ready queue: `claim check` refuses a row that is not sitting here.
+ready = "Todo"
+# Pulled. Both `landed check`'s behind-git direction and the abandonment drain
+# select on this one.
+in_progress = "In Progress"
+# Where a row whose work is already on `main` is asked to move.
+review = "In Review"
+# Every column meaning "somebody has this, or it landed, or it shipped".
+#
+# `Done` IS IN THE SET, AND LEAVING IT OUT WAS A MEASURED DEFECT (CLOUD-1458).
+# The engine constant read `["In Progress", "In Review"]`, so a declined key that
+# reached Done escaped the sweep entirely — and Done is RELEASED, where the claim
+# is strongest and the lie therefore costs most. Measured on that gate's own two
+# rows: CLOUD-186 and CLOUD-1127 were declined with `DO-NOT-CLOSE` in the body of
+# the pull request that landed the module, advanced to In Review by the merge,
+# moved back by hand, and advanced to Done by a release 2026-09-05T02:52:56Z —
+# past the far edge of a predicate written the day before.
+#
+# `Backlog` and `Todo` stay OUT, because they are the ready queue: a declined key
+# sitting there is `DO-NOT-CLOSE` working, and refusing it would make the marker
+# unwritable.
+started = ["In Progress", "In Review", "Done"]
 
 # ACCEPTED INVOCATION-LATENCY REGRESSIONS (CLOUD-1163 unit 10), transcribed
 # verbatim off the `EXEMPT` heredoc of the retired `mise-tasks/perf-compare.sh`.

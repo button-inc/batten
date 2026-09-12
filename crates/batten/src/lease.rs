@@ -115,7 +115,7 @@ impl Advertisement {
 /// forge credential"*, and one of them was written in this file — so the reader
 /// has one home now and the sentence has nowhere left to be true.
 fn credential() -> Option<String> {
-    crate::rest::credential()
+    crate::rest::declared_credential()
 }
 
 /// The request headers for one exchange, with the credential attached when there

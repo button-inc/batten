@@ -14,6 +14,9 @@ pub mod advisory;
 pub mod agent;
 pub mod attribution;
 pub mod baseline;
+/// The board's column vocabulary, resolved from config rather than held as
+/// engine constants (non-negotiable rule 1, CLOUD-1623).
+pub mod board;
 pub mod bot;
 pub mod brief;
 pub mod budget;
@@ -324,7 +327,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // The board sweep (CLOUD-186, CLOUD-1127). Judges a payload rather than
         // a tree, so it takes no config chain and no root: the evidence is what
         // the caller supplies, and the verdict is the predicate's alone.
-        Some(Command::Landed { command }) => run_landed(command, mode, out, err),
+        Some(Command::Landed { command }) => run_landed(command, mode, &overrides, out, err),
         Some(Command::Claim { command }) => run_claim(command, mode, &overrides, out, err),
         // The adopted runner's surface contract (CLOUD-947). No config chain and
         // no rule set: the subject is the pinned binary's own answer about
@@ -2585,6 +2588,7 @@ fn evidence_file(path: &str, what: &str) -> Result<Vec<(String, Option<String>)>
 fn run_landed(
     command: LandedCommand,
     mode: Mode,
+    overrides: &Overrides,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -2600,6 +2604,7 @@ fn run_landed(
             landed_by.as_deref(),
             declined.as_deref(),
             mode,
+            overrides,
             err,
         ),
         LandedCommand::Abandoned {
@@ -2610,6 +2615,7 @@ fn run_landed(
             instant,
             max_idle_days,
         } => run_landed_abandoned(
+            overrides,
             &AbandonAsk {
                 claimed: claimed.as_deref(),
                 merged_prs: merged_prs.as_deref(),
@@ -2654,6 +2660,7 @@ fn run_landed_check(
     landed_by: Option<&str>,
     declined: Option<&str>,
     mode: Mode,
+    overrides: &Overrides,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     // ABSENT EVIDENCE IS COULD-NOT-LOOK, NEVER A SHORT SWEEP. Half the landed
@@ -2726,7 +2733,35 @@ fn run_landed_check(
         }
     }
 
-    let report = landed::decide(&rows, &evidence);
+    // THE COLUMNS THIS SWEEP DECIDES OVER, DEMANDED BEFORE IT DECIDES.
+    //
+    // **Refusing here is the whole point, and reporting would be the defect.**
+    // `decide` compares a row's status against these; undeclared, every
+    // comparison is false, so it returns ZERO FINDINGS and this verb exits 0
+    // over a board it never looked at. That is byte-identical to a clean sweep
+    // and is exactly the failure CLOUD-1623 exists to remove — reintroducing it
+    // one layer up would be the same defect wearing the seam's clothes.
+    //
+    // Both directions are demanded, not just the one a given payload happens to
+    // exercise: a run that could only answer half the disjunction and said
+    // nothing about the other half is the silently-halved sweep CLOUD-1458
+    // already paid for.
+    let columns = board_columns(overrides)?;
+    columns.in_progress().map_err(|undeclared| {
+        UsageError::raise(format!(
+            "landed: {undeclared}. The behind-git direction compares a row's column \
+             against it, so without it this sweep would report a clean board it never \
+             read."
+        ))
+    })?;
+    columns.started().map_err(|undeclared| {
+        UsageError::raise(format!(
+            "landed: {undeclared}. The declined-but-advanced direction asks whether a \
+             row has left the queue, and an undeclared set matches nothing — every row \
+             would read as not-advanced."
+        ))
+    })?;
+    let report = landed::decide(&rows, &evidence, &columns);
 
     // Pointer-only per rule 4: a key, two column names and a reason class. Never
     // a line of any body — a PR body and an issue body both carry consumer
@@ -2740,15 +2775,24 @@ fn run_landed_check(
             .as_ref()
             .map(|reference| format!("  (asserted by --landed-by: {reference})"))
             .unwrap_or_default();
+        // THE REMEDY IS OMITTED RATHER THAN GUESSED when the consumer has not
+        // named the column it would send the reader to (CLOUD-1623). The finding
+        // — key, column held, reason class — needs no vocabulary and is always
+        // printed; only the arrow half does, so an undeclared column costs the
+        // suggestion and never the report.
+        let wants = finding
+            .reason
+            .wants(&columns)
+            .map(|column| format!(" -> {column}"))
+            .unwrap_or_default();
         output::message(
             mode,
             Verbosity::Normal,
             err,
             &format!(
-                "  {}  {} -> {}  {}{suffix}",
+                "  {}  {}{wants}  {}{suffix}",
                 finding.id,
                 finding.holds,
-                finding.reason.wants(),
                 finding.reason.token(),
             ),
         )?;
@@ -2780,6 +2824,7 @@ fn run_landed_check(
 /// or when a row whose verdict needs a key does not carry it. Every one is exit
 /// 2: a sweep that could not look must never render as a clean column.
 fn run_landed_abandoned(
+    overrides: &Overrides,
     ask: &AbandonAsk<'_>,
     mode: Mode,
     out: &mut dyn Write,
@@ -2873,6 +2918,18 @@ fn run_landed_abandoned(
         }
     }
 
+    // THE COLUMN THE DRAIN SELECTS ON, demanded for `run_landed_check`'s reason
+    // and with a sharper edge here: every candidate is chosen BY this column, so
+    // undeclared yields an empty candidate set and the drain reports "no
+    // abandoned claims" over a board full of them. An over-reporting drain gets
+    // switched off; a silently empty one is never noticed at all.
+    let columns = board_columns(overrides)?;
+    columns.in_progress().map_err(|undeclared| {
+        UsageError::raise(format!(
+            "landed abandoned: {undeclared}. Every candidate is selected by that \
+             column, so without it this drain would report a clean board it never read."
+        ))
+    })?;
     let report = landed::drain(
         &claims,
         &evidence,
@@ -2881,6 +2938,7 @@ fn run_landed_abandoned(
             max_idle_days,
             today,
         },
+        &columns,
     )?;
 
     render_drain(&report, max_idle_days, mode, out, err)?;
@@ -3908,6 +3966,23 @@ fn render_findings(findings: &[checks_green::Finding]) -> String {
         .join(", ")
 }
 
+/// This board's column vocabulary, resolved from the `[board]` table
+/// (CLOUD-1623).
+///
+/// [`board_grammar`]'s sibling, and deliberately a second function rather than a
+/// field on the grammar: a verb needing columns may need no patterns, and one
+/// resolver would make an unrelated table's gap look like this one's verdict —
+/// the reason `write_records` already resolves the grammar as `Option`.
+///
+/// **Absent is could-not-look, never a default.** [`crate::board::Columns`]
+/// refuses by naming the key, so a consumer who has not declared a column is
+/// told which one rather than being silently measured against this
+/// repository's own words.
+fn board_columns(overrides: &Overrides) -> Result<board::Columns> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    Ok(board::Columns::resolve(config.board.as_ref()))
+}
+
 /// The Ready grammar, resolved from this repository's own `[[pattern]]` table
 /// (CLOUD-1100).
 ///
@@ -3973,6 +4048,7 @@ fn run_claim(
             run_claim_check(
                 &board_root(),
                 &board_grammar(overrides)?,
+                &board_columns(overrides)?,
                 &ClaimAsk {
                     request: &request,
                     adopt,
@@ -4165,6 +4241,7 @@ const WRITE_TOOL: &str = "save_issue";
 fn run_claim_check(
     repo: &Path,
     grammar: &ready::Grammar,
+    columns: &board::Columns,
     ask: &ClaimAsk<'_>,
     mode: Mode,
     out: &mut dyn Write,
@@ -4187,7 +4264,14 @@ fn run_claim_check(
     }
 
     let issues = claim_payloads(repo, issue)?;
-    let verdict = claim::judge(grammar, &issues, request, repo, receipts.as_deref())?;
+    let verdict = claim::judge(
+        grammar,
+        columns,
+        &issues,
+        request,
+        repo,
+        receipts.as_deref(),
+    )?;
 
     if json {
         writeln!(
@@ -5627,7 +5711,25 @@ fn run_policy_hooks(json: bool, overrides: &Overrides, out: &mut dyn Write) -> R
     let label = path.display().to_string();
     let body = std::fs::read_to_string(&path)
         .map_err(|_| UsageError::raise(format!("{}: {label}", transcript::UNREADABLE_NOTICE)))?;
-    let stream = transcript::parse(&body, &label)?;
+    // A REFUSAL RATHER THAN A COULD-NOT-LOOK, and the difference is this verb's
+    // subject (CLOUD-1624). `check` reads the transcript incidentally and must
+    // abstain when it cannot; `policy hooks` exists to measure that transcript
+    // and nothing else, so a run that cannot choose a grammar has no answer to
+    // give — and reporting a hook-cost reading of zero would be a measurement
+    // nobody took. Same shape as the missing-path raise above it.
+    let hook::TranscriptShape::Surveyed(shape) = config
+        .transcript
+        .as_ref()
+        .and_then(|declared| declared.harness)
+        .ok_or_else(|| UsageError::raise(transcript::UNNAMED_NOTICE.to_owned()))?
+        .transcript_shape()
+    else {
+        return Err(UsageError::raise(format!(
+            "{}: {label}",
+            transcript::UNSURVEYED_NOTICE
+        )));
+    };
+    let stream = transcript::parse(&body, &label, shape)?;
     let reading = hookcost::measure(&stream);
     let findings = hookcost::judge(&reading, config.hook_output.as_ref());
     if json {
@@ -14175,10 +14277,18 @@ fn extracted_facts(
     let Ok(body) = std::fs::read_to_string(path) else {
         return facts::Look::CouldNotLook;
     };
+    // THE GRAMMAR IS THE POLICY'S HOST, not a guess (CLOUD-1624). `--harness`
+    // declared it, so this path never has to sniff one; an unsurveyed host has no
+    // `RecordShape` to parse with and joins the could-not-look answers above
+    // rather than yielding a stream of zero events every extraction then reports
+    // as a real count.
+    let hook::TranscriptShape::Surveyed(shape) = policy.harness().transcript_shape() else {
+        return facts::Look::CouldNotLook;
+    };
     // POINTER-ONLY EVEN ON FAILURE: `parse` reports a `<label>:<line>` pointer
     // and never the line, and the label here is the path the host named rather
     // than anything read out of the file.
-    let Ok(stream) = transcript::parse(&body, path) else {
+    let Ok(stream) = transcript::parse(&body, path, shape) else {
         return facts::Look::CouldNotLook;
     };
     // PER-EXTRACTION COULD-NOT-LOOK (CLOUD-1344). An extraction this host records
@@ -16400,13 +16510,19 @@ fn transcript_view(
         // whole point: a reader of the `-J` document must be able to tell a seam
         // that was never wired from data that was damaged, because only the
         // second names something to repair (CLOUD-819).
-        transcript::Capability::Absent | transcript::Capability::Unreadable(_) => {
-            Some(TranscriptView {
-                capability: capability.as_str(),
-                counts: None,
-                unprompted_memory_writes: None,
-            })
-        }
+        // The two could-not-look states join them for the same reason and keep
+        // their own words too (CLOUD-1624): `unnamed` is a config that named no
+        // host, `unsurveyed` is a host whose record shape nobody has fetched.
+        // Neither has counts, and rendering either as a zero count would be the
+        // false green the seam closes.
+        transcript::Capability::Absent
+        | transcript::Capability::Unreadable(_)
+        | transcript::Capability::Unnamed
+        | transcript::Capability::Unsurveyed(_) => Some(TranscriptView {
+            capability: capability.as_str(),
+            counts: None,
+            unprompted_memory_writes: None,
+        }),
         transcript::Capability::Present(stream) => Some(TranscriptView {
             capability: capability.as_str(),
             counts: Some(stream.counts()),
@@ -17068,20 +17184,36 @@ fn register_transcript_detectors(
         .transcript
         .as_ref()
         .and_then(|declared| declared.path.as_deref());
-    let capability = transcript::resolve(Path::new("."), declared);
+    let capability = transcript::resolve(
+        Path::new("."),
+        declared,
+        config
+            .transcript
+            .as_ref()
+            .and_then(|declared| declared.harness),
+    );
     let stream = match &capability {
         transcript::Capability::Unconfigured => return Ok(()),
         transcript::Capability::Absent => {
             output::message(mode, Verbosity::Normal, err, transcript::ABSENT_NOTICE)?;
             return Ok(());
         }
-        // The same could-not-look answer as absent, plus the pointer that names
-        // the line to repair (CLOUD-819). This path already returned `Ok(())`
-        // for absent, so recording nothing is the established reading here; what
-        // changes is only that a decode failure reaches it instead of raising.
-        // Reported through the shared helper, so the two callers cannot drift
-        // into wording the same state differently.
-        transcript::Capability::Unreadable(_) => {
+        // Both could-not-look states take the unreadable path below rather than
+        // the unconfigured one: a repository that declared a transcript and got
+        // no stream is owed the notice, where one that declared nothing is not
+        // (CLOUD-1624).
+        //
+        // `Unreadable` joins them: the same could-not-look answer as absent, plus
+        // the pointer that names the line to repair (CLOUD-819). This path already
+        // returned `Ok(())` for absent, so recording nothing is the established
+        // reading here; what changes is only that a decode failure reaches it
+        // instead of raising. One arm rather than two identical ones because the
+        // three states are told apart by the VALUE the shared helper reads, not by
+        // which arm ran — and routing all three through that one helper is what
+        // keeps the two callers from wording the same state differently.
+        transcript::Capability::Unnamed
+        | transcript::Capability::Unsurveyed(_)
+        | transcript::Capability::Unreadable(_) => {
             report_transcript_capability(&capability, mode, err)?;
             return Ok(());
         }
@@ -17345,6 +17477,22 @@ fn report_transcript_capability(
                 &format!("{} ({pointer})", transcript::UNREADABLE_NOTICE),
             )?;
         }
+        // REPORTED, not silent, for the reason the two above are: a rule that did
+        // not run must say so, and these two are the states where it did not run
+        // because nobody named a grammar (CLOUD-1624). The unsurveyed one carries
+        // the row that owes the survey, the same way the unreadable one carries
+        // its `<label>:<line>`.
+        transcript::Capability::Unnamed => {
+            output::message(mode, Verbosity::Normal, err, transcript::UNNAMED_NOTICE)?;
+        }
+        transcript::Capability::Unsurveyed(owes) => {
+            output::message(
+                mode,
+                Verbosity::Normal,
+                err,
+                &format!("{} ({owes})", transcript::UNSURVEYED_NOTICE),
+            )?;
+        }
         transcript::Capability::Unconfigured | transcript::Capability::Present(_) => {}
     }
     Ok(())
@@ -17365,10 +17513,14 @@ fn scan_self_writes(
         // its own: all three mean the stream could not be read, and this function
         // answers only "what did the rule detect". WHY it detected nothing is the
         // notice's job and the `-J` field's, which is where the three stay
-        // distinguishable (CLOUD-819).
+        // distinguishable (CLOUD-819). The two could-not-look states CLOUD-1624
+        // adds join them on the same argument — no stream, so nothing detected,
+        // and an empty `Vec` here is never read as "scanned and found none".
         transcript::Capability::Unconfigured
         | transcript::Capability::Absent
-        | transcript::Capability::Unreadable(_) => Vec::new(),
+        | transcript::Capability::Unreadable(_)
+        | transcript::Capability::Unnamed
+        | transcript::Capability::Unsurveyed(_) => Vec::new(),
     }
 }
 
@@ -18304,6 +18456,10 @@ fn run_rules(
             .transcript
             .as_ref()
             .and_then(|declared| declared.path.as_deref()),
+        config
+            .transcript
+            .as_ref()
+            .and_then(|declared| declared.harness),
     );
     report_transcript_capability(&capability, mode, err)?;
 

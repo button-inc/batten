@@ -206,6 +206,11 @@ pub struct Config {
     /// hand, where that one is an economy about somebody else's runner.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receipt: Option<Receipt>,
+    /// This consumer's board column vocabulary. Absent means this file does not
+    /// speak to it, which every reader takes as could-not-look rather than as a
+    /// default — see [`Board`] for why a default would be the violation again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board: Option<crate::board::Board>,
     /// Accepted invocation-latency regressions (CLOUD-1163 unit 10). Absent
     /// means this file accepts none, which is the safe direction — an absent
     /// table cannot exempt a path.
@@ -328,8 +333,14 @@ pub struct Config {
     ///
     /// Consumer-specific by nature, and this table is where non-negotiable rule 1
     /// is paid: `get_issue`, `issue-read`, `id` and `updatedAt` name a tracker,
-    /// its tools and its schema, so a grep of `crates/batten` for any of them
-    /// returns nothing and every one of them lives here.
+    /// its tools and its schema, and every one of them is DECLARED here rather
+    /// than chosen by the engine.
+    ///
+    /// This paragraph used to assert that a scan of the crate for those names
+    /// found none. It was false — they appear throughout `crates/batten/src`,
+    /// including in prose explaining the rule — and nothing re-ran it, which is
+    /// the class `assertion_gates.rs` now refuses. What rule 1 actually requires
+    /// is that the engine not CHOOSE them, and that is what this table is for.
     #[serde(default, rename = "mint", skip_serializing_if = "Vec::is_empty")]
     pub mints: Vec<crate::mint::Declared>,
     /// Records written from the tool result that earned them (CLOUD-1051).
@@ -341,8 +352,9 @@ pub struct Config {
     ///
     /// Consumer-owned for the same reason `[[mint]]` is, and more so: the column
     /// names, the verdict tokens and the programs are all a tracker's vocabulary,
-    /// so a grep of `crates/batten` for any of them returns nothing and every one
-    /// of them lives here.
+    /// and every one of them is declared here rather than chosen by the engine.
+    /// (The scan this paragraph used to report having run is gone with
+    /// [`Config::mints`]' — same false claim, same reason.)
     #[serde(default, rename = "recorder", skip_serializing_if = "Vec::is_empty")]
     pub recorders: Vec<crate::recorder::Declared>,
     /// The programs a `[[recorder]]` may run, by id.
@@ -409,8 +421,9 @@ pub struct Config {
     ///
     /// Consumer-owned for [`Config::mints`]' reason and more sharply: the server
     /// id, the method names, the field sets and the reduction chosen per method
-    /// are all a tracker's vocabulary, so a grep of `crates/batten` for any of
-    /// them returns nothing and every one of them lives here. The crate knows
+    /// are all a tracker's vocabulary, and every one of them is declared here
+    /// rather than chosen by the engine. (The scan this paragraph used to report
+    /// having run is gone with [`Config::mints`]' — same false claim.) The crate knows
     /// only *dispatch a declared method; reduce by a declared projection*. The
     /// type, the transport and the reductions are [`crate::mcp`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -611,8 +624,10 @@ pub struct Config {
     /// Consumer-specific by nature, and the reason it lives here: the engine
     /// carries the matcher, this file carries the vendor literals. That extends
     /// non-negotiable rule 1 from consumers to vendors — a grep of `crates/` for
-    /// the configured patterns returns nothing. The type and the predicate are
-    /// [`crate::attribution`].
+    /// the configured patterns returns nothing (verified-by: batten-check — the
+    /// rule-1 `forbid` rows over `crates/**` in this repository's own
+    /// `batten.toml`, which run on every gate invocation). The type and the
+    /// predicate are [`crate::attribution`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attribution: Option<crate::attribution::Attribution>,
     /// How a session credential is PROVED usable before anything is stripped on
@@ -627,6 +642,27 @@ pub struct Config {
     /// could-not-look rather than as healthy: no removal is authorised.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential: Option<crate::provision::CredentialProbe>,
+    /// Which forge this repository is hosted on, in the two places the engine
+    /// otherwise assumed one (CLOUD-1622).
+    ///
+    /// **A SEPARATE TABLE FROM `[credential]` ABOVE, and that separation is
+    /// measured rather than tidy.** `[credential] names` answers "which variables
+    /// hold a credential WE hold", and its own doc is explicit that the forge's
+    /// conventional names are deliberately excluded — a host may inject a
+    /// substitutable placeholder under them, so probing those would measure the
+    /// host's credential rather than ours. [`Forge::credential_names`] answers the
+    /// opposite question: which variables hold a token to AUTHENTICATE WITH,
+    /// host-injected job tokens emphatically included. Folding the two would have
+    /// stopped every REST read using the CI-provided token — a live regression,
+    /// and the reason the row's suggestion to reuse the existing key does not
+    /// survive contact with what that key declares.
+    ///
+    /// Absent is could-not-look rather than a default. The engine's own
+    /// spellings are gone rather than kept as a fallback, because a fallback is
+    /// how the seam stayed invisible: it worked here, on this forge, and returned
+    /// a safe-looking nothing everywhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forge: Option<crate::rest::Forge>,
     /// The commit-subject convention this repository holds itself to
     /// (CLOUD-701). Absent means no convention is declared and the gate is not
     /// active — which the gate reports as exit 1, never as a clean pass over
@@ -971,7 +1007,8 @@ pub struct Trust {
 /// meaningless in the next. The core therefore carries only the default (this
 /// file), and every consumer's own list lives in that consumer's own config, so
 /// a grep of `crates/batten` for any consumer's identifiers returns nothing
-/// (non-negotiable rule 1).
+/// (non-negotiable rule 1; verified-by: batten-check — the rule-1 `forbid` rows over `crates/**` in this repository's own `batten.toml`, which run on every gate invocation).
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Epoch {
@@ -997,7 +1034,8 @@ pub struct Epoch {
 /// Declared as config for the reason [`Epoch`] gives: which files carry a
 /// repository's contract is that repository's business, so a grep of
 /// `crates/batten` for any consumer's identifiers returns nothing
-/// (non-negotiable rule 1).
+/// (non-negotiable rule 1; verified-by: batten-check — the rule-1 `forbid` rows over `crates/**` in this repository's own `batten.toml`, which run on every gate invocation).
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Contract {
@@ -1028,6 +1066,16 @@ pub struct Contract {
 pub fn parse(text: &str, source: &str) -> Result<Config> {
     let config = parse_ungated(text, source)?;
     check_min_version(&config, source)?;
+    // THE ONE WRITER of the forge declaration (CLOUD-1622). Every load path —
+    // `load`, `load_authority`, `load_site` — funnels through here, so recording
+    // it once at the gate is what keeps the REST tier's credential reader a single
+    // authority instead of a parameter threaded up fifteen call chains. `declare`
+    // ignores a later call, so a second parse cannot move the credential a request
+    // in flight would use; an unparsed or absent config never reaches this line,
+    // and the REST tier then reads could-not-look rather than a default.
+    if let Some(forge) = config.forge.clone() {
+        crate::rest::declare(forge);
+    }
     Ok(config)
 }
 
@@ -2221,7 +2269,14 @@ fn binary_is_behind_the_config(source: &str, text: &str) -> bool {
     let Some(root) = Path::new(source).parent() else {
         return false;
     };
-    let at = root.join("schema").join("batten.schema.json");
+    // [`SCHEMA_PATH`], never a second spelling of it. It was hand-joined here
+    // for one commit, which is the two-authorities shape: the constant exists
+    // precisely because more than one reader needs the location, and a reader
+    // that spells its own is the one that keeps working after the constant
+    // moves. It is batten's own convention rather than a consumer identifier —
+    // the same class as [`CONFIG_FILE`] — so the fix is the constant, not
+    // config.
+    let at = root.join(SCHEMA_PATH);
     let (Ok(committed), Ok(derived)) = (fs::read_to_string(&at), schema()) else {
         return false;
     };
@@ -3314,6 +3369,7 @@ impl Config {
     pub fn declaring_nothing() -> Self {
         Config {
             credential: None,
+            forge: None,
             unresolvable: Vec::new(),
             version: SUPPORTED_VERSION,
             deferrals: Vec::new(),
@@ -3336,6 +3392,7 @@ impl Config {
             // reader takes as could-not-look and exempts everything — the same
             // direction every other field here grants.
             ready: None,
+            board: None,
             // Declaring nothing accepts no regression, which is also the safe
             // reading: an authority that cannot be read must not exempt a path.
             perf: None,
@@ -3579,6 +3636,9 @@ fn default_rules() -> Vec<Rule> {
         module: None,
         bundle: None,
         preset: None,
+        // No preset, so no provider to qualify: the default rule is a `forbid`
+        // over conflict markers and reads no CI language at all (CLOUD-1625).
+        provider: None,
         documents: Vec::new(),
         // Unconditional (CLOUD-125): the zero-config layer has no repository
         // shape to declare a precondition against, and a default rule that

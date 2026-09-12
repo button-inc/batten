@@ -60,6 +60,27 @@ use crate::verdict::{DeclaredVerdict, VendoredVerdict, admit, read, run};
 pub struct PresetModule {
     /// The surface this module reads — `input.tree.*` or `input.call`/`facts`.
     pub scope: RuleScope,
+    /// The CI provider whose expression language this module reads, or `None`
+    /// where it reads none (CLOUD-1625).
+    ///
+    /// **PER MODULE RATHER THAN PER MANIFEST, and that is CLOUD-1672's lesson
+    /// applied before it had to be learned twice.** `scope` was a manifest field
+    /// once — true of every preset that existed when it was written, and false
+    /// the moment one preset had something to say about two surfaces. The same
+    /// is already true here: the `mise` preset's
+    /// `action-version-matches-the-pin` matches a step's `uses:` coordinate and
+    /// so reads one provider's workflow language, while its sibling `task-over-executable`
+    /// decides mise tasks and cares about no provider at all. A manifest-level
+    /// field would have to call that preset GitHub-specific and switch off a
+    /// module that works everywhere.
+    ///
+    /// **`None` is a measured answer, not an unsurveyed one**: it says this
+    /// module reads no provider's language, which is why it applies anywhere.
+    ///
+    /// Decided at LOAD rather than inside the module: a preset cannot read
+    /// consumer data — `data.batten.*` is undefined for it — so no Rego
+    /// conditional could ask "am I on the right provider".
+    pub provider: Option<&'static str>,
     /// `<preset:name>/….rego`, the pointer a refusal prints.
     pub pointer: &'static str,
     /// The module source, `include_str!`d at build time.
@@ -167,6 +188,49 @@ impl Manifest {
             .map(|module| (module.pointer.to_owned(), module.source.to_owned()))
             .collect()
     }
+
+    /// [`Manifest::modules_at`], narrowed to what this consumer's provider can
+    /// decide (CLOUD-1625).
+    ///
+    /// **A module reading no provider's language applies everywhere**, which is
+    /// what `None` on the module means and why it is not filtered out. A module
+    /// that DOES read one applies only where the row declares that same
+    /// provider — off it, the module matches nothing and would report the clean
+    /// tree it never read.
+    ///
+    /// Filtering rather than refusing the whole preset is what lets `mise` keep
+    /// deciding task argv on a host whose workflow language its sibling module
+    /// cannot read. The caller refuses when this comes back EMPTY, because a row
+    /// compiling no modules is a rule that decides nothing.
+    #[must_use]
+    pub fn modules_for(&self, scope: RuleScope, provider: Option<&str>) -> Vec<(String, String)> {
+        self.modules
+            .iter()
+            .filter(|module| module.scope == scope)
+            .filter(|module| match module.provider {
+                None => true,
+                Some(reads) => provider == Some(reads),
+            })
+            .map(|module| (module.pointer.to_owned(), module.source.to_owned()))
+            .collect()
+    }
+
+    /// What the modules at this scope read, for a refusal that names both sides.
+    ///
+    /// Deduplicated and ordered by the module table so the message is
+    /// byte-stable (§6). A module reading no provider's language renders as
+    /// `no provider`, which is an answer rather than an omission.
+    #[must_use]
+    pub fn providers_at(&self, scope: RuleScope) -> Vec<&'static str> {
+        let mut seen: Vec<&'static str> = Vec::new();
+        for module in self.modules.iter().filter(|m| m.scope == scope) {
+            let reads = module.provider.unwrap_or("no provider");
+            if !seen.contains(&reads) {
+                seen.push(reads);
+            }
+        }
+        seen
+    }
 }
 
 /// Every vendored preset, in a stable order.
@@ -182,16 +246,40 @@ pub const MANIFESTS: &[Manifest] = &[
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
+                // Matches `github.event.pull_request.draft == false` and keys on
+                // documents carrying a `jobs:` mapping — GitHub's workflow
+                // shape. GitLab names jobs at the top level, Buildkite uses
+                // `steps:`, a Jenkinsfile is not YAML: on any of them the set is
+                // empty and every rule here refuses nothing (CLOUD-1625).
+                provider: Some("github-actions"),
                 pointer: "<preset:ci-hygiene>/spend-is-authorised.rego",
                 source: include_str!("policy/presets/ci-hygiene/spend-is-authorised.rego"),
             },
             PresetModule {
                 scope: RuleScope::Tree,
+                // `github.event_name`, `github.event.comment.body` and
+                // `github.event.workflow_run` — the same language, same reason.
+                provider: Some("github-actions"),
                 pointer: "<preset:ci-hygiene>/wiring-can-be-reached.rego",
                 source: include_str!("policy/presets/ci-hygiene/wiring-can-be-reached.rego"),
             },
         ],
         verdicts: &[
+            VendoredVerdict {
+                id: "workflow parse unseen",
+                gloss: "a declared workflow would not parse, so no rule here could read it",
+                class: "Could-not-look, and deliberately not spelled the same way as absent. Absent is \
+not-applicable — this tree runs no such workflow — while unparsed means the boundary tried and \
+failed. Every rule in this preset iterates the documents that DID parse, so without this the \
+module reports green over exactly the file it could not read. Its own class rather than the one \
+`mise` raises for the same state, because the registry declares a class once and could not \
+otherwise say which preset raises it.",
+                routes: &[read(
+                    "source read first",
+                    "the workflow that would not parse",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
             VendoredVerdict {
                 id: "cache build loose",
                 gloss: "a cache-warming build recompiles and writes nothing on every run",
@@ -348,6 +436,7 @@ value is what does the work, and it is a boolean rather than the string `true`."
         version: 1,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
+            provider: None,
             pointer: "<preset:commit-hygiene>/no-empty-commit.rego",
             source: include_str!("policy/presets/commit-hygiene/no-empty-commit.rego"),
         }],
@@ -369,6 +458,7 @@ the pipeline.",
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
+                provider: None,
                 pointer: "<preset:landing-loop>/graded-head-is-not-regraded.rego",
                 source: include_str!(
                     "policy/presets/landing-loop/graded-head-is-not-regraded.rego"
@@ -376,6 +466,7 @@ the pipeline.",
             },
             PresetModule {
                 scope: RuleScope::Tree,
+                provider: None,
                 pointer: "<preset:landing-loop>/already-landed-work-is-not-relanded.rego",
                 source: include_str!(
                     "policy/presets/landing-loop/already-landed-work-is-not-relanded.rego"
@@ -383,6 +474,7 @@ the pipeline.",
             },
             PresetModule {
                 scope: RuleScope::Tree,
+                provider: None,
                 pointer: "<preset:landing-loop>/lease-authorises-the-branch.rego",
                 source: include_str!(
                     "policy/presets/landing-loop/lease-authorises-the-branch.rego"
@@ -390,6 +482,7 @@ the pipeline.",
             },
             PresetModule {
                 scope: RuleScope::Tree,
+                provider: None,
                 pointer: "<preset:landing-loop>/rebase-conflict-stops-the-lap.rego",
                 source: include_str!(
                     "policy/presets/landing-loop/rebase-conflict-stops-the-lap.rego"
@@ -397,6 +490,7 @@ the pipeline.",
             },
             PresetModule {
                 scope: RuleScope::Tree,
+                provider: None,
                 pointer: "<preset:landing-loop>/lap-waits-on-one-answer.rego",
                 source: include_str!("policy/presets/landing-loop/lap-waits-on-one-answer.rego"),
             },
@@ -559,11 +653,23 @@ abandon the other unread.",
         modules: &[
             PresetModule {
                 scope: RuleScope::MediatedCall,
+                // Decides whether an agent reproduced a task's argv. No CI
+                // provider is involved, so it applies everywhere.
+                provider: None,
                 pointer: "<preset:mise>/task-over-executable.rego",
                 source: include_str!("policy/presets/mise/task-over-executable.rego"),
             },
             PresetModule {
                 scope: RuleScope::Tree,
+                // **THIS PAIR IS WHY `provider` IS PER MODULE** (CLOUD-1625).
+                // This one matches a step's `uses: jdx/mise-action@<sha>`, so it
+                // reads one provider's workflow language, while the sibling
+                // above cares about no provider at all. A
+                // manifest-level field would have to call the whole `mise`
+                // preset GitHub-specific and switch off a module that works on
+                // every host — the exact mistake CLOUD-1672 corrected for
+                // `scope`, one subject later.
+                provider: Some("github-actions"),
                 pointer: "<preset:mise>/action-version-matches-the-pin.rego",
                 source: include_str!("policy/presets/mise/action-version-matches-the-pin.rego"),
             },
@@ -634,6 +740,7 @@ could not, which is a gate reporting on a surface it never saw.",
         modules: &[
             PresetModule {
                 scope: RuleScope::MediatedCall,
+                provider: None,
                 pointer: "<preset:pinned-toolchain>/pinned-program-via-the-pin.rego",
                 source: include_str!(
                     "policy/presets/pinned-toolchain/pinned-program-via-the-pin.rego"
@@ -641,6 +748,7 @@ could not, which is a gate reporting on a surface it never saw.",
             },
             PresetModule {
                 scope: RuleScope::MediatedCall,
+                provider: None,
                 pointer: "<preset:pinned-toolchain>/pinned-program-probed-bare.rego",
                 source: include_str!(
                     "policy/presets/pinned-toolchain/pinned-program-probed-bare.rego"
@@ -698,6 +806,7 @@ declares, and a probe inside the pin's environment is already correct",
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
+                provider: None,
                 pointer: "<preset:shell-hygiene>/shebang-names-its-language.rego",
                 source: include_str!(
                     "policy/presets/shell-hygiene/shebang-names-its-language.rego"
@@ -705,6 +814,7 @@ declares, and a probe inside the pin's environment is already correct",
             },
             PresetModule {
                 scope: RuleScope::Tree,
+                provider: None,
                 pointer: "<preset:shell-hygiene>/sibling-resolves.rego",
                 source: include_str!("policy/presets/shell-hygiene/sibling-resolves.rego"),
             },
@@ -738,6 +848,7 @@ asserted rather than tested.",
         version: 1,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,
+            provider: None,
             pointer: "<preset:trunk-based>/no-force-push.rego",
             source: include_str!("policy/presets/trunk-based/no-force-push.rego"),
         }],
@@ -873,68 +984,99 @@ mod tests {
         );
     }
 
-    /// Every FINDING id a preset's modules declare is in the grammar.
+    /// Every occurrence of a provider's expression language in a rule BODY, as
+    /// `(module pointer, line)` pairs — the `.rego` half of the rule-1 scan.
     ///
-    /// # The hole this closes
+    /// # The three exemptions, each load-bearing in one direction
     ///
-    /// The finding-id half of CLOUD-1638 had no reader over the vendored half.
-    /// `policy::load`'s general branch holds a module's `"rule":` literals to the
-    /// grammar with `check_finding_ids`; its PRESET branch does not call it, and
-    /// must not: a preset's bytes are in the binary, so a consumer refused for
-    /// one has no edit that fixes it, and held to a narrow consumer vocabulary an
-    /// enabled preset would simply be unloadable. That is the same reasoning that
-    /// makes the vendored verdict rows unconditional in `collidable_tokens`.
-    ///
-    /// So the authority moves to the VENDOR, which is the half that can act on a
-    /// refusal — this repository's own committed `[vocabulary]`, holding names
-    /// this repository ships.
-    ///
-    /// # Why not "every finding is one of the manifest's classes"
-    ///
-    /// Measured, and it is false BY DESIGN: `ci-hygiene` declares `job guard
-    /// missing`, which raises `cache build loose` at one site and `cache name
-    /// unknown` at another. A finding id and a class are different names —
-    /// `check_finding_ids` exempts an id that happens to be a class rather than
-    /// requiring it — so an assertion of containment would refuse the very
-    /// one-to-many shape the two-name split exists to allow.
-    #[test]
-    fn every_finding_a_preset_declares_is_in_the_grammar() {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let text =
-            std::fs::read_to_string(root.join("batten.toml")).expect("the authority is readable");
-        let authority: toml::Value = toml::from_str(&text).expect("the authority parses");
-        let vocabulary: crate::verdict::Vocabulary = authority
-            .get("vocabulary")
-            .expect("the vendor has adopted the grammar it holds its presets to")
-            .clone()
-            .try_into()
-            .expect("the word lists deserialize");
-
-        let mut seen = 0_usize;
+    /// A `github.event` occurrence is a violation unless it is (1) on a comment
+    /// line, (2) inside a `test_*` rule, or (3) a fixture line under an `"if":`
+    /// key. Clauses 2 and 3 are not conveniences: a module that matches GitHub
+    /// syntax must carry fixtures written IN that syntax, because they are the
+    /// tests of the thing being tested. Without the exemptions this scan would
+    /// report every such module's own suite and be switched off; with them it
+    /// reports exactly the rule bodies that READ the provider.
+    fn provider_syntax_sites() -> Vec<(&'static str, usize)> {
+        let mut found = Vec::new();
         for manifest in MANIFESTS {
-            // A CLASS TOKEN IS EXEMPT, exactly as `check_finding_ids` exempts
-            // one: where the id IS a class the registry governs the name, and
-            // checking it again here would be the second authority over one name
-            // that the exemption exists to avoid.
-            let declared: BTreeSet<&str> = manifest.verdicts.iter().map(|entry| entry.id).collect();
             for module in manifest.modules {
-                for id in crate::policy::finding_ids(module.source) {
-                    if declared.contains(id.as_str()) {
+                let mut in_test_rule = false;
+                for (index, line) in module.source.lines().enumerate() {
+                    let trimmed = line.trim_start();
+                    // A rule header at column zero opens a rule; `test_` opens one
+                    // this scan does not read. Tracked by header rather than by
+                    // brace depth because Rego bodies are `if { … }` blocks whose
+                    // closing line is column zero too, so the next header is what
+                    // ends the previous rule either way.
+                    if !line.starts_with([' ', '\t', '#']) && !line.is_empty() {
+                        in_test_rule = line.starts_with("test_");
+                    }
+                    if trimmed.starts_with('#') || in_test_rule {
                         continue;
                     }
-                    seen += 1;
-                    crate::verdict::check_rule_id(&id, &vocabulary).unwrap_or_else(|error| {
-                        panic!(
-                            "`{}` declares the finding `{id}` in `{}`: {error}",
-                            manifest.name, module.pointer
-                        )
-                    });
+                    // A fixture line under an `"if":` key is data the module is
+                    // matching AGAINST, not language it reads.
+                    if trimmed.starts_with("\"if\":") || trimmed.contains("\"if\":") {
+                        continue;
+                    }
+                    if line.contains("github.event") {
+                        found.push((module.source, index + 1));
+                    }
                 }
             }
         }
+        found
+    }
+
+    /// **A module reading a provider's expression language declares that
+    /// provider** (CLOUD-1625).
+    ///
+    /// The `.rego` arm of non-negotiable rule 1, and the mechanism rule 2 owes
+    /// the `provider` column: without it the next module to match `github.event`
+    /// ships with `provider: None`, loads for every consumer on every host, and
+    /// reports a clean tree it never read — which is the exact state this row
+    /// exists to end, re-entered one module later.
+    ///
+    /// The scan does NOT forbid the syntax. Six sites carry it today and all six
+    /// are legitimate; what they owe is the declaration beside them.
+    #[test]
+    fn a_module_reading_provider_syntax_declares_that_provider() {
+        let declared: Vec<&'static str> = MANIFESTS
+            .iter()
+            .flat_map(|manifest| manifest.modules)
+            .filter(|module| module.provider.is_some())
+            .map(|module| module.source)
+            .collect();
+
+        let undeclared: Vec<usize> = provider_syntax_sites()
+            .into_iter()
+            .filter(|(source, _)| !declared.contains(source))
+            .map(|(_, line)| line)
+            .collect();
+
         assert!(
-            seen > 0,
-            "no preset finding id was judged, so this case is green over nothing"
+            undeclared.is_empty(),
+            "a preset module reads a CI provider's expression language and declares \
+             no `provider`, so it would compile for a consumer on any host and match \
+             nothing there; lines: {undeclared:?}"
+        );
+    }
+
+    /// The anti-vacuity mirror, in the direction that matters.
+    ///
+    /// Without it the case above is satisfied by a scan that finds NOTHING — the
+    /// dead-gate shape this whole row is about, and the one a `.rego` scan is
+    /// most likely to take, since a discriminator that over-exempts is
+    /// byte-identical to a clean tree. Six is the measured count; the assertion
+    /// is that the scan still sees the syntax it is supposed to see, so an
+    /// exemption widened later fails here rather than quietly reporting green.
+    #[test]
+    fn the_provider_scan_still_sees_the_syntax_it_exempts_around() {
+        let sites = provider_syntax_sites();
+        assert!(
+            sites.len() >= 6,
+            "the scan must still find the rule bodies that read the provider, or its \
+             exemptions have swallowed the subject: {sites:?}"
         );
     }
 

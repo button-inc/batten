@@ -141,7 +141,7 @@ use crate::common;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{Fixture, declared_patterns, git_in, run_with_stdin, stderr, stdout};
+use common::{Fixture, declared_board, declared_patterns, git_in, run_with_stdin, stderr, stdout};
 
 /// A checkout on a feature branch, with the workspace version the §6 arrows read.
 fn repo(name: &str) -> PathBuf {
@@ -150,7 +150,18 @@ fn repo(name: &str) -> PathBuf {
         // Without these rows `claim check` reports could-not-look naming the
         // first missing id — which is the correct answer for a repository that
         // has declared no Ready grammar, and not what this suite is about.
-        .config(&format!("version = 1\n\n{}", declared_patterns()))
+        //
+        // THE COLUMN VOCABULARY IS THE CONSUMER'S TOO, for the identical reason
+        // one layer over (CLOUD-1623). Without `[board]` this gate refuses the
+        // RUN naming `board.ready` — again the correct answer for a repository
+        // that has declared no board, and again not what this suite is about.
+        // The two comments are the same sentence about two tables, which is the
+        // point: neither the grammar nor the columns are the engine's to assume.
+        .config(&format!(
+            "version = 1\n{}\n{}",
+            declared_board(),
+            declared_patterns()
+        ))
         .file(
             "Cargo.toml",
             "[workspace.package]\nversion = \"0.0.125\"\n\n[workspace.dependencies]\nserde = \"1\"\n",
@@ -617,7 +628,7 @@ fn outside_a_checkout_the_question_is_not_applicable_and_the_verdict_still_stand
     common::write(
         &dir,
         "batten.toml",
-        &format!("version = 1\n\n{}", declared_patterns()),
+        &format!("version = 1\n{}\n{}", declared_board(), declared_patterns()),
     );
     // NO §6 CLAUSE, and that is the shape rather than a convenience: the version
     // the arrows depend on is a property of a TREE, read lazily inside the clause

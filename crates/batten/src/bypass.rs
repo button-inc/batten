@@ -340,6 +340,7 @@ pub fn no_fix_reason() -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::hook::RecordShape;
     use crate::transcript::parse;
 
     /// A call, its refusal, and its retry, spelled as the host writes them.
@@ -368,7 +369,7 @@ mod tests {
     }
 
     fn scan_body(body: &str) -> Vec<Detection> {
-        scan(&parse(body, "fixture").expect("fixture parses"))
+        scan(&parse(body, "fixture", RecordShape::Jsonl).expect("fixture parses"))
     }
 
     #[test]

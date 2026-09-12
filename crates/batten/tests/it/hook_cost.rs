@@ -53,7 +53,7 @@ fn repo(name: &str, lines: &[String], ceiling: Option<&str>) -> PathBuf {
         &dir,
         "batten.toml",
         &format!(
-            "version = 1\n\n[transcript]\npath = \".session.jsonl\"\n\n{table}\n\n\
+            "version = 1\n\n[transcript]\npath = \".session.jsonl\"\nharness = \"claude-code\"\n\n{table}\n\n\
              [[rule]]\nid = \"probe\"\nkind = \"forbid\"\nglob = \"never/**\"\n\
              pattern = \"never\"\nseverity = \"deny\"\nscope = \"tree\"\n"
         ),

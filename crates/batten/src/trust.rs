@@ -745,6 +745,25 @@ pub enum WeakeningKind {
     /// The transcript path is gone, so `check` stops reading the completed
     /// session it judged against (CLOUD-95).
     TranscriptPathRemoved,
+    /// The transcript's declared harness is gone, so no record grammar can be
+    /// chosen and every rule reading the session abstains (CLOUD-1624).
+    ///
+    /// **The same loss as removing the path, by a different route**, and it needs
+    /// its own kind because the raise-only clamp compares kinds: a config that
+    /// kept `path` and dropped `harness` reads every gate silent while still
+    /// naming a file, which is the more deniable of the two spellings.
+    TranscriptHarnessRemoved,
+    /// The forge's declared credential variables are gone, so every REST read
+    /// goes out unauthenticated and the gates over it stop deciding (CLOUD-1622).
+    ///
+    /// **A silence, not a refusal, which is why it is a weakening rather than a
+    /// visible breakage.** With no name declared, no `Authorization` header is
+    /// attached, the remote answers 401/403, and every caller already reports
+    /// that as could-not-look — so a landing says "no in-flight runs" at exit 0
+    /// while knowing nothing at all. Its own kind for `TranscriptHarnessRemoved`'s
+    /// reason: the raise-only clamp compares kinds, and this is the deniable
+    /// spelling of switching the forge reads off.
+    ForgeCredentialsRemoved,
     /// The `[advisory]` channel ceiling rose, or stopped being declared
     /// (CLOUD-896). Same direction as the two below: smaller is stricter, and an
     /// absent ceiling is unenforced rather than zero.
@@ -982,6 +1001,8 @@ impl WeakeningKind {
         WeakeningKind::DefectsLedgerRemoved,
         WeakeningKind::DefectsClassAdded,
         WeakeningKind::TranscriptPathRemoved,
+        WeakeningKind::TranscriptHarnessRemoved,
+        WeakeningKind::ForgeCredentialsRemoved,
         WeakeningKind::AdvisoryCeilingRaised,
         WeakeningKind::HookOutputCeilingRaised,
         WeakeningKind::HookRepeatsRaised,
@@ -1053,6 +1074,8 @@ impl WeakeningKind {
             WeakeningKind::DefectsLedgerRemoved => "defects-ledger-removed",
             WeakeningKind::DefectsClassAdded => "defects-class-added",
             WeakeningKind::TranscriptPathRemoved => "transcript-path-removed",
+            WeakeningKind::TranscriptHarnessRemoved => "transcript-harness-removed",
+            WeakeningKind::ForgeCredentialsRemoved => "forge-credentials-removed",
             WeakeningKind::AdvisoryCeilingRaised => "advisory-ceiling-raised",
             WeakeningKind::HookOutputCeilingRaised => "hook-output-ceiling-raised",
             WeakeningKind::HookRepeatsRaised => "hook-repeats-raised",
@@ -1164,6 +1187,23 @@ pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
         field: "ready",
         coverage: Coverage::Compared(&[WeakeningKind::ReadyCutoverRelaxed]),
+    },
+    FieldCoverage {
+        field: "board",
+        coverage: Coverage::NotPolicyBearing(
+            "this board's column vocabulary (CLOUD-1623). It IS read by gates — `claim check` \
+             admits only the ready-queue column and `landed` selects on the pulled and started \
+             ones — so the reason is not that it lacks policy weight. It is that an override \
+             cannot speak to it at all: the key is absent from `OverrideConfig` and `resolve` \
+             reads the table from the committed authority alone, `contract`'s structural \
+             guarantee for `epoch`'s reason. That is what makes the obvious attack unwritable — \
+             an uncommitted layer renaming `ready` to a column every row already sits in would \
+             make every row pullable at once. A weakening row would be the wrong instrument, \
+             `mcp`'s point below: it reports a DIRECTION, and a column name has none. Renaming \
+             a queue is not more or less permissive as config — which rows it admits depends on \
+             where the board has put them, which is tracker state rather than a bar this file \
+             sets",
+        ),
     },
     FieldCoverage {
         field: "perf",
@@ -1408,6 +1448,10 @@ pub const CENSUS: &[FieldCoverage] = &[
         coverage: Coverage::Compared(&[WeakeningKind::ProvisionRemoved]),
     },
     FieldCoverage {
+        field: "forge",
+        coverage: Coverage::Compared(&[WeakeningKind::ForgeCredentialsRemoved]),
+    },
+    FieldCoverage {
         field: "credential",
         coverage: Coverage::NoMonotoneReading(
             "the endpoint a session's own credential is MEASURED against, which no rule \
@@ -1422,7 +1466,10 @@ pub const CENSUS: &[FieldCoverage] = &[
     },
     FieldCoverage {
         field: "transcript",
-        coverage: Coverage::Compared(&[WeakeningKind::TranscriptPathRemoved]),
+        coverage: Coverage::Compared(&[
+            WeakeningKind::TranscriptPathRemoved,
+            WeakeningKind::TranscriptHarnessRemoved,
+        ]),
     },
     FieldCoverage {
         field: "drain",
@@ -2353,6 +2400,41 @@ fn scalar_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         working.defects.as_ref(),
     ));
 
+    found.extend(transcript_weakenings(base, working));
+
+    found
+}
+
+/// The two ways a consumer stops the transcript rules deciding (CLOUD-95,
+/// CLOUD-1624).
+///
+/// Its own function beside [`ci_weakenings`] and [`deferral_weakenings`] rather
+/// than inline in [`scalar_weakenings`], which `clippy::too_many_lines` refuses
+/// once both arms are there — and the two arms are one subject, so a reader
+/// comparing them has them adjacent.
+fn transcript_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
+    let mut found = Vec::new();
+
+    // THE FORGE'S CREDENTIAL NAMES, by the same reading one subject over
+    // (CLOUD-1622). Keyed on the effective list rather than the table, so deleting
+    // `[forge]` and emptying its `credential_names` report the same key: both
+    // leave every REST read unauthenticated, and a 401 that every caller reports
+    // as could-not-look is how the gates go quiet without anything saying so.
+    let declared_forge = |config: &Config| {
+        config
+            .forge
+            .as_ref()
+            .is_some_and(|table| !table.credential_names.is_empty())
+    };
+    if declared_forge(base) && !declared_forge(working) {
+        found.push(Weakening::new(
+            WeakeningKind::ForgeCredentialsRemoved,
+            "forge.credential_names",
+            "present",
+            "absent",
+        ));
+    }
+
     // A transcript path gone stops `check` reading the session it judged
     // against (CLOUD-95). Keyed on the effective path rather than the table, so
     // deleting `[transcript]` and blanking its `path` report the same key.
@@ -2360,6 +2442,23 @@ fn scalar_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         found.push(Weakening::new(
             WeakeningKind::TranscriptPathRemoved,
             "transcript.path",
+            "present",
+            "absent",
+        ));
+    }
+
+    // THE SAME SILENCE BY THE OTHER ROUTE (CLOUD-1624). Without a declared
+    // harness no record grammar can be chosen, so every rule reading the
+    // transcript abstains — a config that keeps `path` and drops this is quieter
+    // than one that drops the path, and names a file while reading nothing.
+    // Keyed on the effective value for the reason the path arm is: deleting
+    // `[transcript]` and blanking its `harness` are one fact.
+    let declared_harness =
+        |config: &Config| config.transcript.as_ref().and_then(|table| table.harness);
+    if declared_harness(base).is_some() && declared_harness(working).is_none() {
+        found.push(Weakening::new(
+            WeakeningKind::TranscriptHarnessRemoved,
+            "transcript.harness",
             "present",
             "absent",
         ));
@@ -5006,6 +5105,60 @@ mod tests {
             "transcript.path"
         );
         assert!(weakenings(&config(""), &base).is_empty());
+    }
+
+    /// The quieter spelling of the same loss (CLOUD-1624): the file is still
+    /// named, and nothing reads it, because no grammar was chosen.
+    #[test]
+    fn losing_the_transcript_harness_is_a_weakening_too() {
+        let base = config("[transcript]\npath = \"session.jsonl\"\nharness = \"claude-code\"\n");
+        assert_eq!(
+            only(&base, &config("[transcript]\npath = \"session.jsonl\"\n")),
+            Weakening::new(
+                WeakeningKind::TranscriptHarnessRemoved,
+                "transcript.harness",
+                "present",
+                "absent",
+            )
+        );
+        // ANTI-VACUITY, and it is the direction that matters here: ADDING the
+        // harness is a strengthening, so the clamp must stay silent on it. A
+        // detector firing both ways would refuse the very edit that closes the
+        // seam.
+        assert!(
+            weakenings(&config("[transcript]\npath = \"session.jsonl\"\n"), &base).is_empty(),
+            "declaring a harness is a strengthening, never a weakening"
+        );
+    }
+
+    /// The same shape one subject over (CLOUD-1622): the forge's credential names
+    /// go, every REST read goes out unauthenticated, and the 401 reads as
+    /// could-not-look rather than as anything being wrong.
+    #[test]
+    fn losing_the_forge_credential_names_is_a_weakening() {
+        let base = config("[forge]\ncredential_names = [\"GH_TOKEN\"]\n");
+        assert_eq!(
+            only(&base, &config("")),
+            Weakening::new(
+                WeakeningKind::ForgeCredentialsRemoved,
+                "forge.credential_names",
+                "present",
+                "absent",
+            )
+        );
+        // Keyed on the effective list, so emptying the key and deleting the table
+        // report the same pointer — they are one fact, as the transcript pair is.
+        assert_eq!(
+            only(&base, &config("[forge]\ncredential_names = []\n")).key,
+            "forge.credential_names"
+        );
+        // ANTI-VACUITY in the direction that matters: DECLARING the names is the
+        // edit that closes the seam, and a detector firing both ways would refuse
+        // it.
+        assert!(
+            weakenings(&config(""), &base).is_empty(),
+            "declaring the forge's credentials is a strengthening, never a weakening"
+        );
     }
 
     #[test]

@@ -70,6 +70,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 
+use crate::board::Columns;
 use crate::error::UsageError;
 
 /// Which way a column is wrong, and therefore which remedy applies.
@@ -97,15 +98,26 @@ impl Reason {
         }
     }
 
-    /// Where the row should sit instead.
+    /// Where the row should sit instead, in the consumer's own words.
+    ///
+    /// **Takes the vocabulary rather than holding it** (non-negotiable rule 1).
+    /// The two columns were `const`s here, which made this remediation name a
+    /// board only this repository has — a consumer reading the finding was told
+    /// to move the row somewhere their tracker has no column for.
+    ///
+    /// An undeclared column yields [`None`] rather than a guess, and the caller
+    /// reports the finding without the remedy instead of inventing one. The
+    /// finding is the honest half; the remedy is the half that needs a
+    /// vocabulary.
     #[must_use]
-    pub const fn wants(self) -> &'static str {
+    pub fn wants(self, columns: &Columns) -> Option<&str> {
         match self {
-            // Landed is In Review, per the Definition of Ready & Done.
-            Self::BehindGit => "In Review",
+            // Landed belongs in the review column, per the Definition of Ready
+            // & Done.
+            Self::BehindGit => columns.review.as_deref(),
             // A declined row was never this PR's to advance, so it belongs back
             // in the queue it was pulled from rather than at some later column.
-            Self::DeclinedButAdvanced => "Todo",
+            Self::DeclinedButAdvanced => columns.ready.as_deref(),
         }
     }
 }
@@ -138,34 +150,34 @@ pub struct Row {
 }
 
 impl Row {
-    /// The columns that mean "somebody has this, or it has landed, or it has
-    /// shipped".
+    /// Whether this row sits in the column the consumer calls "pulled".
     ///
-    /// Named as a set rather than tested inline so the two directions below
-    /// cannot drift about what "advanced" means.
+    /// **Takes the vocabulary rather than holding it** (non-negotiable rule 1).
+    /// The columns were `const`s here until they were measured as rule 1's worst
+    /// violation: off this board every comparison is false, so this predicate
+    /// never fires and the sweep reports zero findings over a board full of
+    /// dishonest columns. See [`crate::board::Board`].
     ///
-    /// **`Done` is in the set, and leaving it out was a measured defect**
-    /// (CLOUD-1458). The set read `["In Progress", "In Review"]`, so a declined
-    /// key that reached Done escaped the sweep entirely — and Done is
-    /// RELEASED, which is where the claim is strongest and the lie therefore
-    /// costs most. Measured on this gate's own two rows: CLOUD-186 and
-    /// CLOUD-1127 were declined with `DO-NOT-CLOSE` in the body of the pull
-    /// request that landed this module, advanced to In Review by the merge,
-    /// moved back by hand, and advanced to Done by a release
-    /// 2026-09-05T02:52:56Z — past the far edge of a predicate written the day
-    /// before.
-    ///
-    /// `Backlog` and `Todo` stay out, because they are the ready queue: a
-    /// declined key sitting there is `DO-NOT-CLOSE` working, and refusing it
-    /// would make the marker unwritable.
-    const STARTED: [&'static str; 3] = ["In Progress", "In Review", "Done"];
-
-    fn is_in_progress(&self) -> bool {
-        self.status == "In Progress"
+    /// An undeclared column answers `false` **because there is nothing to
+    /// compare against, not because the row is elsewhere** — which is why every
+    /// caller resolves the vocabulary first and refuses when it is absent,
+    /// rather than letting this read as a clean answer.
+    fn is_in_progress(&self, columns: &Columns) -> bool {
+        columns
+            .in_progress
+            .as_ref()
+            .is_some_and(|column| self.status == *column)
     }
 
-    fn is_started(&self) -> bool {
-        Self::STARTED.contains(&self.status.as_str())
+    /// Whether this row sits in any column meaning "somebody has this, or it has
+    /// landed, or it has shipped".
+    ///
+    /// Read as a set rather than tested inline so the two directions cannot
+    /// drift about what "advanced" means. The set's membership doctrine — why
+    /// the released column is in it and the ready queue is not — moved to
+    /// [`crate::board::Board::started`] with the vocabulary it describes.
+    fn is_started(&self, columns: &Columns) -> bool {
+        columns.started.contains(&self.status)
     }
 }
 
@@ -230,8 +242,12 @@ impl Report {
 /// testable without a tracker or a forge, which is the split
 /// `crate::speculation` makes for the same reason — "does this do what the bash
 /// did" has to be answerable without a network.
+/// **Takes the board's vocabulary rather than holding it** (non-negotiable
+/// rule 1, CLOUD-1623). A caller resolves [`Columns`] from config and refuses
+/// before reaching here when a column it needs is undeclared — this function
+/// cannot report could-not-look, because its whole contract is that it decides.
 #[must_use]
-pub fn decide(rows: &[Row], evidence: &Evidence) -> Report {
+pub fn decide(rows: &[Row], evidence: &Evidence, columns: &Columns) -> Report {
     let mut findings = Vec::new();
 
     for row in rows {
@@ -243,7 +259,7 @@ pub fn decide(rows: &[Row], evidence: &Evidence) -> Report {
         // Bound here rather than at its arm so the arm can be an `else if`: the
         // two arms are mutually exclusive by the paragraph below, and spelling
         // that as a chain is what keeps the exclusion structural.
-        let behind_git = row.is_in_progress() && evidence.landed(&row.id);
+        let behind_git = row.is_in_progress(columns) && evidence.landed(&row.id);
 
         // **THE DECLINE IS ASKED FIRST, because it outranks the landing and the
         // two arms are mutually exclusive** (review of #848). A row can satisfy
@@ -261,7 +277,7 @@ pub fn decide(rows: &[Row], evidence: &Evidence) -> Report {
         // A declined row still in Todo passes, so this is not a blanket refusal
         // of the marker: `DO-NOT-CLOSE` on a row nothing advanced is the marker
         // working.
-        if row.is_started() && evidence.declined.contains(&row.id) {
+        if row.is_started(columns) && evidence.declined.contains(&row.id) {
             findings.push(Finding {
                 id: row.id.clone(),
                 holds: row.status.clone(),
@@ -376,8 +392,17 @@ pub struct Claim {
 }
 
 impl Claim {
-    fn is_in_progress(&self) -> bool {
-        self.status == "In Progress"
+    /// Whether this claim sits in the column the consumer calls "pulled".
+    ///
+    /// A SECOND, INDEPENDENT SPELLING of [`Row::is_in_progress`] — the two impls
+    /// decide over different row types and were separately hard-coded, so the
+    /// literal appeared twice and CLOUD-1623's own body carried only one of
+    /// them. Both take the vocabulary now, from the one declaration.
+    fn is_in_progress(&self, columns: &Columns) -> bool {
+        columns
+            .in_progress
+            .as_ref()
+            .is_some_and(|column| self.status == *column)
     }
 
     /// Whether any attachment is a pull request.
@@ -409,7 +434,22 @@ impl Claim {
 /// not a `[[pattern]]` row: a preset cannot read one (see
 /// `.claude/rules/policy-modules.md`), and this is a forge's URL shape rather
 /// than a consumer's vocabulary, so rule 1 is not in play.
-fn is_pull_request_url(url: &str) -> bool {
+///
+/// # The one spelling, shared (CLOUD-1623)
+///
+/// [`crate::claim`] carried its own divergent copy that additionally required
+/// the literal `github.com/`, which made a real merge-request URL on any other
+/// forge read as "not a pull request" — so the open-competitor check there was
+/// dead off GitHub. Two authorities for one predicate is the same defect class
+/// as a hand-joined second spelling of a path constant, so the host-free version
+/// is the survivor and the other module reads it from here.
+///
+/// **Still forge-shaped, and knowingly**: a GitLab merge request is
+/// `/merge_requests/<n>`, which this does not match. That is a narrower gap than
+/// the host literal it replaces and is recorded rather than silently widened —
+/// matching every `/<word>/<digits>` would admit `/issues/12` and turn an issue
+/// link into a claim.
+pub(crate) fn is_pull_request_url(url: &str) -> bool {
     url.match_indices("/pull/").any(|(at, marker)| {
         url.get(at + marker.len()..)
             .and_then(|rest| rest.chars().next())
@@ -531,6 +571,7 @@ pub fn drain(
     evidence: &Evidence,
     refs: &BTreeSet<String>,
     bound: &Bound,
+    columns: &Columns,
 ) -> Result<Drain> {
     let today = bound.today;
 
@@ -538,7 +579,7 @@ pub fn drain(
     let mut landed_unswept = Vec::new();
     let mut candidates = Vec::new();
     for claim in claims {
-        if !claim.is_in_progress() {
+        if !claim.is_in_progress(columns) {
             continue;
         }
         in_progress += 1;
@@ -549,7 +590,9 @@ pub fn drain(
         candidates.push(claim);
     }
 
-    demand("updatedAt", &candidates, |claim| claim.updated_at.is_none())?;
+    demand("updatedAt", &candidates, columns, |claim| {
+        claim.updated_at.is_none()
+    })?;
 
     let mut unreadable = Vec::new();
     let mut stale = Vec::new();
@@ -571,8 +614,12 @@ pub fn drain(
     // `attachments` first, matching the order the predecessor reports them in:
     // a row missing both names the one a tracker's list projection cannot
     // supply, which is the one whose remedy is a different fetch.
-    demand("attachments", &stale, |claim| claim.attachments.is_none())?;
-    demand("gitBranchName", &stale, |claim| claim.branch.is_none())?;
+    demand("attachments", &stale, columns, |claim| {
+        claim.attachments.is_none()
+    })?;
+    demand("gitBranchName", &stale, columns, |claim| {
+        claim.branch.is_none()
+    })?;
 
     let mut abandoned = Vec::new();
     for claim in stale {
@@ -600,7 +647,17 @@ pub fn drain(
 }
 
 /// Refuse when a row whose verdict needs `key` does not carry it.
-fn demand(key: &str, claims: &[&Claim], absent: impl Fn(&Claim) -> bool) -> Result<()> {
+///
+/// **The column is named in the consumer's words** (non-negotiable rule 1). This
+/// prose carried the literal, which made a refusal a consumer reads cite a
+/// column their board does not have — the finding stayed correct while its
+/// sentence became wrong, which is the quietest half of this class.
+fn demand(
+    key: &str,
+    claims: &[&Claim],
+    columns: &Columns,
+    absent: impl Fn(&Claim) -> bool,
+) -> Result<()> {
     let missing: Vec<&str> = claims
         .iter()
         .filter(|claim| absent(claim))
@@ -609,8 +666,11 @@ fn demand(key: &str, claims: &[&Claim], absent: impl Fn(&Claim) -> bool) -> Resu
     if missing.is_empty() {
         return Ok(());
     }
+    // The rows reaching here were selected BY that column, so it is declared;
+    // the fallback names the key rather than guessing a word for it.
+    let column = columns.in_progress.as_deref().unwrap_or("the pulled");
     Err(UsageError::raise(format!(
-        "landed: no `{key}` on unresolved In Progress issue(s): {}. \
+        "landed: no `{key}` on unresolved {column} issue(s): {}. \
          The abandonment verdict reads that key, so a payload without it cannot \
          answer — re-fetch those rows individually.",
         missing.join(" ")
@@ -681,6 +741,24 @@ pub fn claims_from(value: &serde_json::Value) -> Result<Vec<Claim>> {
 mod tests {
     use super::*;
 
+    /// This repository's own board vocabulary, as `batten.toml` declares it.
+    ///
+    /// Spelled here rather than reached for from config so the unit tests stay
+    /// pure — and named so a reader can see that the words are now an INPUT to
+    /// the predicate rather than a property of it.
+    fn columns() -> Columns {
+        Columns {
+            ready: Some("Todo".to_owned()),
+            in_progress: Some("In Progress".to_owned()),
+            review: Some("In Review".to_owned()),
+            started: vec![
+                "In Progress".to_owned(),
+                "In Review".to_owned(),
+                "Done".to_owned(),
+            ],
+        }
+    }
+
     fn row(id: &str, status: &str) -> Row {
         Row {
             id: id.to_owned(),
@@ -700,10 +778,14 @@ mod tests {
                 claimed: keys(&["CLOUD-1"]),
                 ..Evidence::default()
             },
+            &columns(),
         );
         assert_eq!(report.findings.len(), 1);
         assert_eq!(report.findings[0].reason, Reason::BehindGit);
-        assert_eq!(report.findings[0].reason.wants(), "In Review");
+        assert_eq!(
+            report.findings[0].reason.wants(&columns()),
+            Some("In Review")
+        );
     }
 
     /// THE SUBSTRING TRAP, asserted rather than assumed. `CLOUD-17` must not be
@@ -717,6 +799,7 @@ mod tests {
                 claimed: keys(&["CLOUD-179"]),
                 ..Evidence::default()
             },
+            &columns(),
         );
         assert!(report.is_clean());
     }
@@ -729,10 +812,11 @@ mod tests {
                 declined: keys(&["CLOUD-1"]),
                 ..Evidence::default()
             },
+            &columns(),
         );
         assert_eq!(report.findings.len(), 1);
         assert_eq!(report.findings[0].reason, Reason::DeclinedButAdvanced);
-        assert_eq!(report.findings[0].reason.wants(), "Todo");
+        assert_eq!(report.findings[0].reason.wants(&columns()), Some("Todo"));
     }
 
     /// DONE IS THE FAR EDGE, AND IT WAS OUTSIDE THE SET (CLOUD-1458).
@@ -749,6 +833,7 @@ mod tests {
                 declined: keys(&["CLOUD-1"]),
                 ..Evidence::default()
             },
+            &columns(),
         );
         assert_eq!(report.findings.len(), 1);
         assert_eq!(report.findings[0].reason, Reason::DeclinedButAdvanced);
@@ -765,6 +850,7 @@ mod tests {
                 declined: keys(&["CLOUD-1"]),
                 ..Evidence::default()
             },
+            &columns(),
         );
         assert!(report.is_clean());
     }
@@ -782,6 +868,7 @@ mod tests {
                     .collect(),
                 ..Evidence::default()
             },
+            &columns(),
         );
         assert_eq!(report.findings[0].asserted_by.as_deref(), Some("abc1234"));
     }
@@ -797,6 +884,7 @@ mod tests {
                     .collect(),
                 ..Evidence::default()
             },
+            &columns(),
         );
         assert_eq!(report.findings[0].asserted_by, None);
     }
@@ -847,7 +935,14 @@ mod tests {
     }
 
     fn swept(claims: &[Claim]) -> Drain {
-        drain(claims, &Evidence::default(), &BTreeSet::new(), &bound()).unwrap_or_default()
+        drain(
+            claims,
+            &Evidence::default(),
+            &BTreeSet::new(),
+            &bound(),
+            &columns(),
+        )
+        .unwrap_or_default()
     }
 
     #[test]
@@ -872,6 +967,7 @@ mod tests {
             },
             &BTreeSet::new(),
             &bound(),
+            &columns(),
         )
         .unwrap_or_default();
         assert_eq!(report.landed_unswept, vec!["CLOUD-1".to_owned()]);
@@ -925,6 +1021,7 @@ mod tests {
             &Evidence::default(),
             &keys(&["feat/live"]),
             &bound(),
+            &columns(),
         )
         .unwrap_or_default();
         assert!(report.abandoned.is_empty());
@@ -941,6 +1038,7 @@ mod tests {
             &Evidence::default(),
             &keys(&[""]),
             &bound(),
+            &columns(),
         )
         .unwrap_or_default();
         assert_eq!(report.abandoned, vec!["CLOUD-1".to_owned()]);
@@ -971,7 +1069,8 @@ mod tests {
                 &[fresh.clone()],
                 &Evidence::default(),
                 &BTreeSet::new(),
-                &bound()
+                &bound(),
+                &columns(),
             )
             .is_ok(),
             "a fresh row is already resolved by the bound, so it owes no attachments"
@@ -984,7 +1083,8 @@ mod tests {
                 &[fresh, stale],
                 &Evidence::default(),
                 &BTreeSet::new(),
-                &bound()
+                &bound(),
+                &columns(),
             )
             .is_err(),
             "the narrowing must not become a hole: a stale row still owes the key"
@@ -999,8 +1099,14 @@ mod tests {
         done.status = "Done".to_owned();
         done.attachments = None;
         done.updated_at = None;
-        let report =
-            drain(&[done], &Evidence::default(), &BTreeSet::new(), &bound()).unwrap_or_default();
+        let report = drain(
+            &[done],
+            &Evidence::default(),
+            &BTreeSet::new(),
+            &bound(),
+            &columns(),
+        )
+        .unwrap_or_default();
         assert!(report.is_clean());
         assert_eq!(report.in_progress, 0);
     }

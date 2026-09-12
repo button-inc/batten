@@ -13,6 +13,7 @@
 //! returned a fresh random value per call would pass the first case for the wrong
 //! reason.
 
+use batten::hook::RecordShape;
 use batten::identity::IdentityKey;
 use batten::transcript::{Event, parse, parse_keyed};
 
@@ -30,7 +31,7 @@ fn result_line(call: &str, text: &str) -> String {
 
 /// The digests a body yields, in stream order.
 fn digests(body: &str, key: Option<&IdentityKey>) -> Vec<Option<String>> {
-    parse_keyed(body, "t.jsonl", key)
+    parse_keyed(body, "t.jsonl", key, RecordShape::Jsonl)
         .expect("the fixture parses")
         .records
         .iter()
@@ -91,7 +92,7 @@ fn an_unkeyed_parse_mints_nothing_and_says_so() {
     // recorded — so a consumer cannot read it as the host having written no
     // result content.
     let body = result_line("call-1", "an answer nobody keyed");
-    let stream = parse(&body, "t.jsonl").expect("the fixture parses");
+    let stream = parse(&body, "t.jsonl", RecordShape::Jsonl).expect("the fixture parses");
     assert!(!stream.keyed);
     assert_eq!(digests(&body, None), vec![None]);
 }
@@ -109,7 +110,8 @@ fn a_result_the_host_wrote_no_content_for_has_no_identity() {
         },
     })
     .to_string();
-    let stream = parse_keyed(&body, "t.jsonl", Some(&key)).expect("the fixture parses");
+    let stream =
+        parse_keyed(&body, "t.jsonl", Some(&key), RecordShape::Jsonl).expect("the fixture parses");
     assert!(stream.keyed, "the parse held a key");
     assert_eq!(digests(&body, Some(&key)), vec![None]);
 }
@@ -147,7 +149,12 @@ fn no_result_byte_reaches_the_record() {
     // on, so a rendering of the whole stream is where a leak would show.
     let key = IdentityKey::new("k1", [7u8; 32]);
     let secret = "sk-live-notarealsecret-000";
-    let stream = parse_keyed(&result_line("call-1", secret), "t.jsonl", Some(&key))
-        .expect("the fixture parses");
+    let stream = parse_keyed(
+        &result_line("call-1", secret),
+        "t.jsonl",
+        Some(&key),
+        RecordShape::Jsonl,
+    )
+    .expect("the fixture parses");
     assert!(!format!("{stream:?}").contains(secret));
 }

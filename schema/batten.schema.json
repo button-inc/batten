@@ -16,10 +16,21 @@
       ]
     },
     "attribution": {
-      "description": "What produced commits may carry about the tooling that made them\n(CLOUD-274), enforcing the attribution decision record (CLOUD-268).\nAbsent means this repository declares no attribution policy and the gate\nis simply not active — not that everything is permitted, which is why an\nabsent table is a usage error at the gate rather than a silent pass.\n\nConsumer-specific by nature, and the reason it lives here: the engine\ncarries the matcher, this file carries the vendor literals. That extends\nnon-negotiable rule 1 from consumers to vendors — a grep of `crates/` for\nthe configured patterns returns nothing. The type and the predicate are\n[`crate::attribution`].",
+      "description": "What produced commits may carry about the tooling that made them\n(CLOUD-274), enforcing the attribution decision record (CLOUD-268).\nAbsent means this repository declares no attribution policy and the gate\nis simply not active — not that everything is permitted, which is why an\nabsent table is a usage error at the gate rather than a silent pass.\n\nConsumer-specific by nature, and the reason it lives here: the engine\ncarries the matcher, this file carries the vendor literals. That extends\nnon-negotiable rule 1 from consumers to vendors — a grep of `crates/` for\nthe configured patterns returns nothing (verified-by: batten-check — the\nrule-1 `forbid` rows over `crates/**` in this repository's own\n`batten.toml`, which run on every gate invocation). The type and the\npredicate are [`crate::attribution`].",
       "anyOf": [
         {
           "$ref": "#/$defs/Attribution"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "board": {
+      "description": "This consumer's board column vocabulary. Absent means this file does not\nspeak to it, which every reader takes as could-not-look rather than as a\ndefault — see [`Board`] for why a default would be the violation again.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Board"
         },
         {
           "type": "null"
@@ -186,6 +197,17 @@
         "null"
       ]
     },
+    "forge": {
+      "description": "Which forge this repository is hosted on, in the two places the engine\notherwise assumed one (CLOUD-1622).\n\n**A SEPARATE TABLE FROM `[credential]` ABOVE, and that separation is\nmeasured rather than tidy.** `[credential] names` answers \"which variables\nhold a credential WE hold\", and its own doc is explicit that the forge's\nconventional names are deliberately excluded — a host may inject a\nsubstitutable placeholder under them, so probing those would measure the\nhost's credential rather than ours. [`Forge::credential_names`] answers the\nopposite question: which variables hold a token to AUTHENTICATE WITH,\nhost-injected job tokens emphatically included. Folding the two would have\nstopped every REST read using the CI-provided token — a live regression,\nand the reason the row's suggestion to reuse the existing key does not\nsurvive contact with what that key declares.\n\nAbsent is could-not-look rather than a default. The engine's own\nspellings are gone rather than kept as a fallback, because a fallback is\nhow the seam stayed invisible: it worked here, on this forge, and returned\na safe-looking nothing everywhere else.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Forge"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "hook": {
       "description": "Side effects this repository attaches to hook events (CLOUD-91), the\nhouse-style §9 extension surface: `[[hook.action]]` names an event and a\ncommand already on the operator's PATH, so repo-specific cleanup or\nkeepalive is reconstructed here rather than carried by the engine\n(non-negotiable rule 1). Absent means the repository attaches nothing.\nThe type, its validator and the spawn are [`crate::action`].",
       "anyOf": [
@@ -249,7 +271,7 @@
       }
     },
     "mcp": {
-      "description": "Where a harness keeps its MCP wiring, and what to hand back instead of a\nmethod's full response (CLOUD-1260). Absent means Batten dispatches\nnothing and reduces nothing.\n\nConsumer-owned for [`Config::mints`]' reason and more sharply: the server\nid, the method names, the field sets and the reduction chosen per method\nare all a tracker's vocabulary, so a grep of `crates/batten` for any of\nthem returns nothing and every one of them lives here. The crate knows\nonly *dispatch a declared method; reduce by a declared projection*. The\ntype, the transport and the reductions are [`crate::mcp`].",
+      "description": "Where a harness keeps its MCP wiring, and what to hand back instead of a\nmethod's full response (CLOUD-1260). Absent means Batten dispatches\nnothing and reduces nothing.\n\nConsumer-owned for [`Config::mints`]' reason and more sharply: the server\nid, the method names, the field sets and the reduction chosen per method\nare all a tracker's vocabulary, and every one of them is declared here\nrather than chosen by the engine. (The scan this paragraph used to report\nhaving run is gone with [`Config::mints`]' — same false claim.) The crate knows\nonly *dispatch a declared method; reduce by a declared projection*. The\ntype, the transport and the reductions are [`crate::mcp`].",
       "anyOf": [
         {
           "$ref": "#/$defs/McpConfig"
@@ -267,7 +289,7 @@
       ]
     },
     "mint": {
-      "description": "Receipts minted from the tool result that earned them (CLOUD-1024).\n\nThe complement of `[[fact]]` above, on the other selector: a fact is keyed\nto a COMMAND the agent ran, a mint to the TOOL whose result carries the\nevidence. Both are written by the boundary on the post-tool event, from\nbytes the harness hands back rather than text the agent re-typed, which is\nCLOUD-526's measured forgery surface.\n\nConsumer-specific by nature, and this table is where non-negotiable rule 1\nis paid: `get_issue`, `issue-read`, `id` and `updatedAt` name a tracker,\nits tools and its schema, so a grep of `crates/batten` for any of them\nreturns nothing and every one of them lives here.",
+      "description": "Receipts minted from the tool result that earned them (CLOUD-1024).\n\nThe complement of `[[fact]]` above, on the other selector: a fact is keyed\nto a COMMAND the agent ran, a mint to the TOOL whose result carries the\nevidence. Both are written by the boundary on the post-tool event, from\nbytes the harness hands back rather than text the agent re-typed, which is\nCLOUD-526's measured forgery surface.\n\nConsumer-specific by nature, and this table is where non-negotiable rule 1\nis paid: `get_issue`, `issue-read`, `id` and `updatedAt` name a tracker,\nits tools and its schema, and every one of them is DECLARED here rather\nthan chosen by the engine.\n\nThis paragraph used to assert that a scan of the crate for those names\nfound none. It was false — they appear throughout `crates/batten/src`,\nincluding in prose explaining the rule — and nothing re-ran it, which is\nthe class `assertion_gates.rs` now refuses. What rule 1 actually requires\nis that the engine not CHOOSE them, and that is what this table is for.",
       "type": "array",
       "items": {
         "$ref": "#/$defs/Declared2"
@@ -367,7 +389,7 @@
       ]
     },
     "recorder": {
-      "description": "Records written from the tool result that earned them (CLOUD-1051).\n\nThe third selector on the post-tool event, and the one that can carry a\nvalue another gate decided. A `[[mint]]` renders a template over the\npayload; a `[[recorder]]` may additionally run a declared program and\nrecord its verdict, which is what a board write's refinement column IS.\n\nConsumer-owned for the same reason `[[mint]]` is, and more so: the column\nnames, the verdict tokens and the programs are all a tracker's vocabulary,\nso a grep of `crates/batten` for any of them returns nothing and every one\nof them lives here.",
+      "description": "Records written from the tool result that earned them (CLOUD-1051).\n\nThe third selector on the post-tool event, and the one that can carry a\nvalue another gate decided. A `[[mint]]` renders a template over the\npayload; a `[[recorder]]` may additionally run a declared program and\nrecord its verdict, which is what a board write's refinement column IS.\n\nConsumer-owned for the same reason `[[mint]]` is, and more so: the column\nnames, the verdict tokens and the programs are all a tracker's vocabulary,\nand every one of them is declared here rather than chosen by the engine.\n(The scan this paragraph used to report having run is gone with\n[`Config::mints`]' — same false claim, same reason.)",
       "type": "array",
       "items": {
         "$ref": "#/$defs/Declared3"
@@ -677,6 +699,41 @@
           "const": "temp"
         }
       ]
+    },
+    "Board": {
+      "description": "The `[board]` table: this consumer's column vocabulary.\n\n# Why this table exists (non-negotiable rule 1)\n\n[`crate::landed`] and [`crate::claim`] decide over a board's COLUMN NAMES —\nwhich column is the ready queue, which means \"pulled\", which mean \"somebody\nhas this, or it landed, or it shipped\". Those are one tracker's words. Linear\nships `Todo`/`In Progress`/`In Review`/`Done`; Jira ships `To Do`/`In\nDevelopment`; a GitHub Project ships whatever the owner typed.\n\nCarried as engine constants they were rule 1's violation in its worst form.\nOff this board every comparison is false, so `is_started` never fires, the\nlanded-honesty sweep reports **zero findings over a board full of dishonest\ncolumns**, and `claim` never refuses. A gate that cannot fire is\nindistinguishable from a gate that found nothing, which is the one failure\nthis whole module family exists to avoid.\n\n# Absent is could-not-look, never a default\n\nAn undeclared table does **not** fall back to this repository's own words.\nA default would reinstate the violation with an extra step and make the dead\npath byte-identical to the working one again — the exact shape that let the\nconstants survive. A verb needing a column this table does not declare says\nso, by name, and decides nothing.\n\n# Why values and not `[[pattern]]` rows\n\n[`crate::config::Ready`]'s reason (CLOUD-472), and one more directly: a\ncolumn is matched by\nEQUALITY against the string the tracker echoes back, never by a regex over\nit. The pattern registry exists so one CONCEPT has one spelling; a literal\nthe round trip returns verbatim is a value.",
+      "type": "object",
+      "properties": {
+        "in_progress": {
+          "description": "The column meaning \"pulled\": somebody is on this now.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ready": {
+          "description": "The column a row must sit in to be pullable — the ready queue.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "review": {
+          "description": "The column a row whose branch is behind git is asked to move back to.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "started": {
+          "description": "Every column meaning \"somebody has this, or it has landed, or it has\nshipped\".\n\n**The released column belongs in this set, and leaving it out was a\nmeasured defect** (CLOUD-1458). The engine constant this replaces read\n`[\"In Progress\", \"In Review\"]`, so a declined key that reached the\nreleased column escaped the sweep entirely — and released is where the\nclaim is strongest and the lie therefore costs most. Measured on that\ngate's own two rows: CLOUD-186 and CLOUD-1127 were declined with\n`DO-NOT-CLOSE` in the body of the pull request that landed the module,\nadvanced by the merge, moved back by hand, and advanced to the released\ncolumn by a release 2026-09-05T02:52:56Z — past the far edge of a\npredicate written the day before.\n\nThe ready-queue columns stay OUT: a declined key sitting there is\n`DO-NOT-CLOSE` working, and refusing it would make the marker unwritable.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
     },
     "BotLane": {
       "description": "The `[bot_lane]` table: which proposals this repository will file a row for.\n\nAbsent means the repository runs no bot lane, and the verbs say so rather than\nfiling against defaults — a lane assembled from engine literals would be a row\nasserting a bump nobody configured, which is the CLOUD-198 class with a new\nauthor.",
@@ -1069,7 +1126,7 @@
       ]
     },
     "Contract": {
-      "description": "The `[contract]` table: which files a running session must re-read when they\nmove (CLOUD-461).\n\n**A second table rather than a reuse of [`Epoch`], and the reason is\nstructural.** `[epoch] tracked` is literal repo-relative paths, read one file\neach — right for a config epoch, which must be a function of a *stated* set\nor the value moves because of what happens to exist beside it. A contract\nsurface is the opposite case: a rules directory and a task tree, where a\nnewly added file **is** the drift. Globs are the whole point here and would\nbe a defect there, so the two tables answer different questions rather than\none table answering both badly.\n\nDeclared as config for the reason [`Epoch`] gives: which files carry a\nrepository's contract is that repository's business, so a grep of\n`crates/batten` for any consumer's identifiers returns nothing\n(non-negotiable rule 1).",
+      "description": "The `[contract]` table: which files a running session must re-read when they\nmove (CLOUD-461).\n\n**A second table rather than a reuse of [`Epoch`], and the reason is\nstructural.** `[epoch] tracked` is literal repo-relative paths, read one file\neach — right for a config epoch, which must be a function of a *stated* set\nor the value moves because of what happens to exist beside it. A contract\nsurface is the opposite case: a rules directory and a task tree, where a\nnewly added file **is** the drift. Globs are the whole point here and would\nbe a defect there, so the two tables answer different questions rather than\none table answering both badly.\n\nDeclared as config for the reason [`Epoch`] gives: which files carry a\nrepository's contract is that repository's business, so a grep of\n`crates/batten` for any consumer's identifiers returns nothing\n(non-negotiable rule 1; verified-by: batten-check — the rule-1 `forbid` rows over `crates/**` in this repository's own `batten.toml`, which run on every gate invocation).",
       "type": "object",
       "properties": {
         "tracked": {
@@ -1123,6 +1180,13 @@
       "description": "How a credential is proved usable, declared by the consumer.\n\n**One field, and the control credential is NOT one of them.** A caller does\nnot get to choose what \"known bad\" means: the engine sends a syntactically\nplausible token that must be refused, because a consumer that could name it\ncould name one the route happens to accept and turn the control arm into a\nrubber stamp.",
       "type": "object",
       "properties": {
+        "names": {
+          "description": "The variables a session credential may arrive under, most specific first.\n\n**Declared here rather than listed in the engine, which is non-negotiable\nrule 1.** It was two GitHub-shaped literals in `crates/batten` for one\ncommit, and a consumer on another forge — or on a host that injects under\na third name — has neither: every candidate is then absent,\n[`credential_health`] answers [`Credential::Unusable`], and every removal\nis silently skipped forever. That failure is INVISIBLE, because skipping\na removal is also the correct behaviour when a credential is genuinely\nbad, so the dead path and the working path look identical from outside.\n\nWhich names belong here is a judgement only the consumer can make. A host\nmay inject a substitutable placeholder under the forge's conventional\nnames, so probing those would measure the host's credential rather than\none we hold — the exact conflation this mechanism exists to undo, and the\nreason this list is deliberately not \"every variable that looks like a\ntoken\". Naming none is could-not-look, not health: it authorises nothing.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "probe_url": {
           "description": "The endpoint that answers 2xx for a good credential and refuses a bad\none.\n\nIt must be a route the fence sends DIRECT. Pointed at one an intercepting\nproxy carries, the control arm fails — the junk credential is accepted —\nand the engine reports could-not-look rather than pretending to a verdict\nit cannot reach.",
           "type": [
@@ -1583,7 +1647,7 @@
       ]
     },
     "Epoch": {
-      "description": "The `[epoch]` table: which files govern this repository.\n\nDeclared as **config** rather than compiled in, because which files govern a\nrepository is that repository's business: an agent settings file, a\ncontributor guide, a hook config — each meaningful in one repository and\nmeaningless in the next. The core therefore carries only the default (this\nfile), and every consumer's own list lives in that consumer's own config, so\na grep of `crates/batten` for any consumer's identifiers returns nothing\n(non-negotiable rule 1).",
+      "description": "The `[epoch]` table: which files govern this repository.\n\nDeclared as **config** rather than compiled in, because which files govern a\nrepository is that repository's business: an agent settings file, a\ncontributor guide, a hook config — each meaningful in one repository and\nmeaningless in the next. The core therefore carries only the default (this\nfile), and every consumer's own list lives in that consumer's own config, so\na grep of `crates/batten` for any consumer's identifiers returns nothing\n(non-negotiable rule 1; verified-by: batten-check — the rule-1 `forbid` rows over `crates/**` in this repository's own `batten.toml`, which run on every gate invocation).",
       "type": "object",
       "properties": {
         "tracked": {
@@ -1831,6 +1895,20 @@
         "measured"
       ]
     },
+    "Forge": {
+      "description": "Which forge this repository is hosted on, in the parts the engine cannot\nderive (CLOUD-1622).\n\n**Only what a consumer can actually answer.** The REST base stays the constant\nabove: pointing this tier at another host asks for a different CLIENT, not a\ndifferent value, and that reasoning is unchanged by this table. What a\nconsumer genuinely knows, and what the engine had no way to be told, is which\nenvironment variables carry the token — which differs per forge AND per host,\nsince a CI provider injects a job token under its own name.",
+      "type": "object",
+      "properties": {
+        "credential_names": {
+          "description": "The environment variables that may carry the forge credential, in\nprecedence order.\n\nOrdered rather than a set, and the order is the consumer's: a session that\nsets one variable for the forge's own CLI should not have to set a second,\nand which of several wins is a fact about that consumer's host.\n\n**An empty list is could-not-look, never \"no credential needed.\"** A\npublic repository genuinely needs none, so an unauthenticated read is a\nlegitimate state — but it is one a consumer DECLARES by naming no\nvariables, rather than one the engine infers by finding none of the two\nspellings it used to carry.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "Format": {
       "description": "The document formats the engine can parse — the **format** half of a document\nfact (CLOUD-772).\n\n# Formats, never artifacts\n\nNon-negotiable rule 1 decides this shape. A `parse the toolchain manifest`\nfact would name a consumer's toolchain choice inside `crates/batten`; the\ncore knows only *formats*, and which paths carry which format is the\nconsumer's `batten.toml`. That is why the variants below are TOML and YAML\nrather than any file name, and why\n`tests/document_facts.rs`'s `no_artifact_name_reaches_the_core` is a gate on\nit rather than a convention anyone has to remember.\n\n# PKL is declarable and deliberately unparseable\n\nIt has no maintained Rust parser, and adopting one on speculation is the\nscope expansion this repository refuses. So it is a **variant** rather than\nan omission: a consumer that declares a PKL path gets [`Look::CouldNotLook`],\nexhaustively matched, instead of a fact that silently does not exist. An\nabsent variant would answer the same declaration with \"no rows\", and the only\nway to find that out is that the rule never fires — which is the vacuous pass\nthe whole issue is filed against.",
       "oneOf": [
@@ -1957,6 +2035,41 @@
         "id",
         "on",
         "run"
+      ]
+    },
+    "Harness": {
+      "description": "The harness adapters `batten hook` can speak. Each owns the decode of its\nhost's payload into an [`Envelope`] and the encode of a [`Decision`] into\nwhat that host consumes; the core between them is harness-blind.\n**THREE SPELLINGS OF ONE NAME, held together rather than trusted to agree.**\n`clap::ValueEnum` spells `--harness`, serde spells `[transcript] harness` in\n`batten.toml` (CLOUD-1624), and [`Harness::as_str`] spells it for a matrix\nthat builds no command. `kebab-case` is what makes the serde spelling the\nsame token as the other two, and\n`tests::every_harness_token_matches_its_serde_spelling` is what keeps it that\nway — the same guard `every_harness_token_matches_its_clap_spelling` already\nprovides for the flag.",
+      "oneOf": [
+        {
+          "description": "Claude Code's `PreToolUse` payload; a deny is returned as the\n`hookSpecificOutput.permissionDecision` JSON object on stdout with exit\n`0` — the channel the production shell guards already use.",
+          "type": "string",
+          "const": "claude-code"
+        },
+        {
+          "description": "Cursor. Two payload families under one host: a generic `preToolUse` that\nlooks like Claude's, and specialized events (`beforeShellExecution`,\n`beforeReadFile`, `beforeMCPExecution`) that carry the operand at top\nlevel and **no** `tool_name` at all. Session is `conversation_id`.",
+          "type": "string",
+          "const": "cursor"
+        },
+        {
+          "description": "GitHub Copilot CLI, registered in its **`PascalCase`** dialect — which\nyields `hook_event_name` natively. The camelCase dialect omits the event\nname entirely, so Batten does not speak it.",
+          "type": "string",
+          "const": "copilot-cli"
+        },
+        {
+          "description": "Gemini CLI. Claude-identical payload fields, different event names\n(`BeforeTool` rather than `PreToolUse`).",
+          "type": "string",
+          "const": "gemini-cli"
+        },
+        {
+          "description": "Codex CLI, whose wire format is a near-verbatim clone of Claude Code's —\nits own repo says so. No payload shim is needed; the adapter exists so\nthe host is nameable and its fixture is pinned against drift.",
+          "type": "string",
+          "const": "codex-cli"
+        },
+        {
+          "description": "The neutral core contract: envelope in, decision as exit code out —\n`0` allow, `2` deny (reason on stderr), for any host whose only decision\nchannel is an exit status. Both codes are the §7 table's, unmodified.",
+          "type": "string",
+          "const": "exit-code"
+        }
       ]
     },
     "HistoryQuery": {
@@ -3738,6 +3851,13 @@
             }
           ]
         },
+        "provider": {
+          "description": "The CI provider this repository runs, where the enabled preset reads one\n(CLOUD-1625).\n\n**A consumer fact, so it lives in the consumer's config** — which is\nnon-negotiable rule 1 applied to the seam that broke it. The engine\ndeclares which provider's language a preset's modules read\n([`crate::preset::Manifest::provider`]); this declares which one is in\nuse here; and the two are compared at load. Neither guesses the other.\n\nOmitted is the ordinary case: six of the seven presets read no provider's\nlanguage, so a row enabling one needs nothing here. A row enabling a\npreset that DOES read one, and naming no provider or a different one, is\nrefused before compilation — because the alternative is the preset\nevaluating over an empty document set and reporting clean.\n\nON THIS ROW rather than in `[ci]`: that table is \"this repository's\ncommitted copy of the host's contract\" (`crate::ci::Ci`), a mirror of the\nhost's branch protection that `ci-drift` polices key by key, and a key\nwith no host counterpart breaks the mirror. `[host]` is the host's repo\nsettings and is no better a fit. One optional key beside the `preset` it\nqualifies keeps the configuration narrow, which is rule 6.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "ranges": {
           "description": "The commit ranges this policy row reads, **declared** (CLOUD-907).\n\nSpelled `<base>..<head>`, and each becomes an entry of\n`input.tree[\"git-ranges\"]` carrying that range's commits as a sha and a\nsubject each. A range whose endpoints do not resolve is **absent**, never\nan empty list — \"nothing landed in this range\" and \"I could not read this\nrange\" are the two answers a migration gate most needs kept apart.\n\nPointer-only at the boundary: a subject is git's `%s`, which is how the\nlog itself points at a commit. A message body or a diff would put tracked\ncontent on the policy input, and rule 4 is decided at the acquisition\nrather than at the report.",
           "type": "array",
@@ -4354,9 +4474,20 @@
       ]
     },
     "TranscriptConfig": {
-      "description": "The configured transcript path, as `batten.toml` declares it.\n\nA path, not a format selector: which host wrote it is pinned by the fixtures,\nand a repository that points at one is saying \"read this\", not \"read this\ndialect\". Host-specific, never consumer-specific, so rule 1 holds — no\nconsumer's directory layout appears in the engine.",
+      "description": "The configured transcript, as `batten.toml` declares it: where it is, and\nwhose dialect it is in.\n\n**It used to say \"a path, not a format selector\", and that was the bug**\n(CLOUD-1624). Which host wrote the file was left to the fixtures, so the\nengine read every transcript through one host's grammar and reported the zero\nevents that produces on any other as a clean session. The dialect is a fact\nabout this consumer's setup, and non-negotiable rule 1 puts a consumer fact\nin the consumer's own `batten.toml` rather than in the core.\n\nHost-specific, never consumer-specific, so rule 1 holds in the other\ndirection too — no consumer's directory layout appears in the engine.",
       "type": "object",
       "properties": {
+        "harness": {
+          "description": "Which host wrote it, selecting the record grammar to read it with\n(CLOUD-1624).\n\n**Omitted is could-not-look, never a default.** `cli.rs`'s attribution\nhost is the precedent and states it: an unnamed host \"declares nothing\nrather than borrowing a default's declarations\". Defaulting here would\nread an unnamed host's transcript through one host's grammar and report\nthe zero events that yields as a clean session — the exact false green\nthis key exists to close. A consumer that declares a `path` and no\n`harness` gets [`Capability::Unnamed`] and every gate over the transcript\nabstains.\n\nThe fourth fact about one host on this table, joining `path`,\n`memory_root` and the task store for the reason those three already give:\nsplitting facts about a single host across tables is the widening rule 6\nforbids.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Harness"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "memory_root": {
           "description": "The host's memory-root prefix, for CLOUD-267's self-persistence match.\n\nHost-adapter data on the same table rather than a second authority: the\ntranscript's format and the host's memory layout are two facts about one\nhost, and splitting them across tables would be the widening rule 6\nforbids. Omitted, [`crate::selfwrite::DEFAULT_MEMORY_ROOT`] applies.\n\nA **prefix matched against targets the transcript recorded** — never a\npath this engine opens, stats, or globs, which is what keeps the rule\ninside the repo root.",
           "type": [

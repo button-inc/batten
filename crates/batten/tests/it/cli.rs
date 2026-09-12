@@ -19,8 +19,8 @@ use batten::decision::Outcome;
 use batten::rules::{Decidability, RuleKind};
 use batten::{ExitCode, ReportLevel, RuleSeverity, severity};
 use common::{
-    Fixture, StateHome, batten, declared_patterns, git_in, run, scratch, scratch_outside_tree,
-    stderr, stdout, write,
+    Fixture, StateHome, batten, declared_board, declared_patterns, git_in, run, scratch,
+    scratch_outside_tree, stderr, stdout, write,
 };
 
 /// Run `batten adjudicate --harness <harness>` with `payload` piped to stdin, against
@@ -5331,6 +5331,11 @@ const CENSUS_CONFIG: &str = concat!(
     // behind it is could-not-look, which is that same error.
     "[transcript]\n",
     "path = \".session.jsonl\"\n",
+    // And the host that wrote it (CLOUD-1624). The path alone is the minimum no
+    // longer: without a harness no record grammar is chosen, so the verbs below
+    // would meet `unnamed` — a could-not-look about the CONFIG — instead of the
+    // state each case declares here.
+    "harness = \"claude-code\"\n",
     // `policy rule`'s minimum input, and the sixth verb to need one
     // (CLOUD-1637). Unlike its sibling `policy explain`, which resolves a
     // class this BINARY vendors and so needs no consumer authority at all,
@@ -5382,6 +5387,14 @@ fn census_repo(root: &Path) -> PathBuf {
         // this census is about. Read from the committed table rather than re-typed
         // here, so a fixture cannot drift from the expressions it exercises.
         .config_append(&declared_patterns())
+        // `claim check`'s OTHER minimum input, and the fifth verb family to need
+        // one (CLOUD-1623). The board's column vocabulary is the CONSUMER's for
+        // the reason the grammar above is: a repository declaring no `[board]`
+        // has no ready queue, so the verb refuses by naming the key — the right
+        // answer, and again not the one this census is about. Read from the
+        // committed table for `declared_patterns`' reason, so the fixture cannot
+        // drift from the columns it exercises.
+        .config_append(&declared_board())
         .file("AGENTS.md", "instructions\n")
         // `lint brief`'s minimum input, the third verb to need one. Named by
         // `CENSUS_POSITIONALS` rather than by this call site, so the argv and the
@@ -6126,7 +6139,12 @@ fn the_agent_context_statement_is_bounded_and_never_carries_free_text() {
         secret = SECRET
     );
     let repo = Fixture::at(root.join("repo"))
-        .config("version = 1\n[transcript]\npath = \"session.jsonl\"\n")
+        // The harness is declared because the bytes below ARE Claude-shaped, and
+        // since CLOUD-1624 the grammar is chosen from this key rather than assumed.
+        // A path with no harness is could-not-look — `unnamed`, outranking even a
+        // missing file — so omitting it would quietly stop these cases testing
+        // what they were written for.
+        .config("version = 1\n[transcript]\npath = \"session.jsonl\"\nharness = \"claude-code\"\n")
         .file("session.jsonl", &transcript)
         .git()
         .base_commit()
@@ -6205,7 +6223,12 @@ fn transcript_fixture(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
     let root = scratch(name);
     let _ = fs::remove_dir_all(&root);
     let repo = Fixture::at(root.join("repo"))
-        .config("version = 1\n[transcript]\npath = \"session.jsonl\"\n")
+        // The harness is declared because the bytes below ARE Claude-shaped, and
+        // since CLOUD-1624 the grammar is chosen from this key rather than assumed.
+        // A path with no harness is could-not-look — `unnamed`, outranking even a
+        // missing file — so omitting it would quietly stop these cases testing
+        // what they were written for.
+        .config("version = 1\n[transcript]\npath = \"session.jsonl\"\nharness = \"claude-code\"\n")
         .git()
         .base_commit()
         .work_commit()
@@ -9034,7 +9057,9 @@ fn a_declared_parent_never_relinks_a_lineage_that_is_already_recorded() {
 fn repo_with_transcript(name: &str, transcript: Option<&str>) -> PathBuf {
     let dir = repo_with_config(
         name,
-        "version = 1\n\n[transcript]\npath = \"session.jsonl\"\n",
+        // Declared for `transcript_fixture`'s reason (CLOUD-1624): the captured
+        // sample is Claude-shaped, and the grammar is now chosen from this key.
+        "version = 1\n\n[transcript]\npath = \"session.jsonl\"\nharness = \"claude-code\"\n",
     );
     if let Some(body) = transcript {
         fs::write(dir.join("session.jsonl"), body).expect("write transcript");
@@ -9242,7 +9267,7 @@ fn a_torn_transcript_does_not_suppress_an_unrelated_finding() {
     fs::write(
         dir.join("batten.toml"),
         "version = 1\n\n\
-         [transcript]\npath = \"session.jsonl\"\n\n\
+         [transcript]\npath = \"session.jsonl\"\nharness = \"claude-code\"\n\n\
          [[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\n\
          glob = \"**/*.txt\"\npattern = \"TODO\"\nseverity = \"deny\"\nscope = \"tree\"\n",
     )

@@ -48,7 +48,8 @@
 //! Which files carry a repository's contract is that repository's business — an
 //! agent guide, a rules directory, a hook config, a task tree — so the paths live
 //! in `batten.toml`'s `[contract]` table and a grep of `crates/batten` for any
-//! consumer's identifiers returns nothing (non-negotiable rule 1).
+//! consumer's identifiers returns nothing (non-negotiable rule 1;
+//! verified-by: batten-check — the rule-1 `forbid` rows over `crates/**` in this repository's own `batten.toml`, which run on every gate invocation).
 //!
 //! **It is not `[epoch] tracked`, and the reason is a finding rather than a
 //! preference.** CLOUD-461 names that table as the source of truth, and the

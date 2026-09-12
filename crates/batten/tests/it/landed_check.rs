@@ -15,6 +15,29 @@
 
 use crate::common;
 
+/// A fixture repository that has DECLARED THE BOARD it is judged against
+/// (CLOUD-1623).
+///
+/// Shadows [`common::scratch`] throughout this suite, deliberately: every case
+/// here runs `landed`, and `landed` now refuses a run whose `[board]` columns are
+/// undeclared rather than reporting a clean sweep over a board it never read. A
+/// bare scratch directory declares nothing, so without this every case would
+/// assert about a missing column instead of about a dishonest one.
+///
+/// The table is READ FROM THE COMMITTED CONFIG rather than spelled here, for
+/// `common::declared_board`'s reason: this repository's columns have one
+/// authority, and a fixture holding a second copy drifts the day the board is
+/// renamed.
+fn scratch(name: &str) -> std::path::PathBuf {
+    let dir = common::scratch(name);
+    common::write(
+        &dir,
+        "batten.toml",
+        &format!("version = 1\n{}", common::declared_board()),
+    );
+    dir
+}
+
 /// Write the three evidence files a sweep reads, returning the fixture dir.
 ///
 /// Every case supplies `--merged-prs` because absent is could-not-look rather
@@ -25,7 +48,7 @@ fn evidence(
     declined: &[&str],
     asserted: &[(&str, &str)],
 ) -> std::path::PathBuf {
-    let dir = common::scratch(name);
+    let dir = scratch(name);
     std::fs::write(dir.join("merged.tsv"), tsv(merged)).expect("write merged evidence");
     let declined_body = declined.iter().fold(String::new(), |mut acc, key| {
         acc.push_str(key);
@@ -215,7 +238,7 @@ fn an_asserted_landing_names_its_ref_in_the_finding() {
 /// clean column it never checked.
 #[test]
 fn a_sweep_with_no_merged_pr_evidence_refuses_rather_than_passing() {
-    let dir = common::scratch("landed-no-evidence");
+    let dir = scratch("landed-no-evidence");
     let out = common::run_with_stdin(
         &dir,
         &["landed", "check"],
@@ -240,7 +263,7 @@ fn a_sweep_with_no_merged_pr_evidence_refuses_rather_than_passing() {
 /// disjunction and pass.
 #[test]
 fn evidence_that_cannot_be_read_refuses_rather_than_reading_as_empty() {
-    let dir = common::scratch("landed-unreadable");
+    let dir = scratch("landed-unreadable");
     let out = common::run_with_stdin(
         &dir,
         &["landed", "check", "--merged-prs", "nothing-here.tsv"],
@@ -272,7 +295,7 @@ fn a_payload_missing_status_is_could_not_look() {
 /// board. The key on the next line must still decide.
 #[test]
 fn a_header_line_in_the_evidence_does_not_stop_the_sweep() {
-    let dir = common::scratch("landed-header");
+    let dir = scratch("landed-header");
     std::fs::write(dir.join("merged.tsv"), "issue\tpr\nCLOUD-1120\t726\n")
         .expect("write evidence with a header");
     let out = common::run_with_stdin(
@@ -302,7 +325,7 @@ fn a_header_line_in_the_evidence_does_not_stop_the_sweep() {
 /// deliberately names a DIFFERENT key.
 #[test]
 fn a_key_closed_by_a_commit_on_main_is_behind_git() {
-    let dir = common::scratch("landed-claimed");
+    let dir = scratch("landed-claimed");
     std::fs::write(dir.join("merged.tsv"), "CLOUD-999\t1\n").expect("write merged evidence");
     std::fs::write(dir.join("claimed.tsv"), "CLOUD-1120\n").expect("write claimed evidence");
     let out = common::run_with_stdin(
@@ -335,7 +358,7 @@ fn a_key_closed_by_a_commit_on_main_is_behind_git() {
 /// the wrong reason — which is the shape that shipped.
 #[test]
 fn the_same_row_is_clean_when_the_claimed_evidence_is_withheld() {
-    let dir = common::scratch("landed-claimed-null");
+    let dir = scratch("landed-claimed-null");
     std::fs::write(dir.join("merged.tsv"), "CLOUD-999\t1\n").expect("write merged evidence");
     let out = common::run_with_stdin(
         &dir,
@@ -381,7 +404,7 @@ fn a_sweep_without_the_claimed_arm_says_the_arm_is_unsupplied() {
 /// notice that fired either way would carry no information at all.
 #[test]
 fn a_sweep_with_the_claimed_arm_is_quiet_about_it() {
-    let dir = common::scratch("landed-claimed-said");
+    let dir = scratch("landed-claimed-said");
     std::fs::write(dir.join("merged.tsv"), "CLOUD-1120\t726\n").expect("write merged evidence");
     std::fs::write(dir.join("claimed.tsv"), "CLOUD-903\n").expect("write claimed evidence");
     let out = common::run_with_stdin(
@@ -522,7 +545,7 @@ fn dated_board(id: &str, updated: &str, attachment: Option<&str>, branch: &str) 
 
 /// Run the arm against a scratch dir carrying empty merged-PR evidence.
 fn abandoned_run(name: &str, extra: &[&str], payload: &str) -> std::process::Output {
-    let dir = common::scratch(name);
+    let dir = scratch(name);
     std::fs::write(dir.join("merged.tsv"), "").expect("evidence is writable");
     let mut args = vec![
         "landed",
@@ -606,7 +629,7 @@ fn a_claim_a_pull_request_is_serving_is_left_alone() {
 /// set — the arm that keeps this verb off a `git ls-remote` spawn.
 #[test]
 fn a_branch_named_in_the_refs_evidence_rescues_a_claim() {
-    let dir = common::scratch("abandoned-refs-evidence");
+    let dir = scratch("abandoned-refs-evidence");
     std::fs::write(dir.join("merged.tsv"), "").expect("evidence is writable");
     std::fs::write(
         dir.join("refs.txt"),
@@ -673,7 +696,7 @@ fn a_stale_row_missing_a_key_refuses_rather_than_sweeping_clean() {
 /// switched off, which is why this arm is required where `--claimed` is not.
 #[test]
 fn a_sweep_with_no_merged_pr_evidence_refuses_rather_than_over_reporting() {
-    let dir = common::scratch("abandoned-needs-evidence");
+    let dir = scratch("abandoned-needs-evidence");
     let out = common::run_with_stdin(
         &dir,
         &["landed", "abandoned", "--instant", "2026-08-20"],
@@ -724,7 +747,7 @@ fn an_abandonment_sweep_without_the_claimed_arm_says_so() {
 
 #[test]
 fn an_abandonment_sweep_with_the_claimed_arm_is_quiet_about_it() {
-    let dir = common::scratch("abandoned-claimed-supplied");
+    let dir = scratch("abandoned-claimed-supplied");
     std::fs::write(dir.join("merged.tsv"), "").expect("evidence is writable");
     std::fs::write(dir.join("claimed.tsv"), "CLOUD-9\n").expect("evidence is writable");
     let out = common::run_with_stdin(

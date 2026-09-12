@@ -818,21 +818,38 @@ pub fn diagnose_commit_gate(dir: &Path) -> Check {
 /// The reason ids are `Capability`'s own labels rather than new spellings, so a
 /// reader who has seen one in a `-J` document sees the same token here.
 fn transcript_reason(root: &Path) -> Option<Check> {
-    let configured = resolve::resolve(root, &crate::Overrides::default())
+    let declared = resolve::resolve(root, &crate::Overrides::default())
         .ok()?
-        .transcript?
-        .path?;
+        .transcript?;
+    let configured = declared.path.clone()?;
     Some(
-        match crate::transcript::resolve(root, Some(configured.as_str())) {
+        match crate::transcript::resolve(root, Some(configured.as_str()), declared.harness) {
             // POINTER-ONLY: the capability carries a `<label>:<line>` and this
             // takes none of it. The reason id says WHAT is wrong; the line is the
             // rule-4 payload a diagnostic must not republish.
             crate::transcript::Capability::Unreadable(_) => {
                 Check::failed(TRANSCRIPT, "transcript-unreadable")
             }
+            // THE FIFTH AND SIXTH VARIANTS THE COMMENT BELOW PREDICTED, and they
+            // FAIL rather than pass (CLOUD-1624). A transcript declared with no
+            // harness, or one whose harness nobody has surveyed, parses to
+            // nothing and silently stops four gates deciding — which is exactly
+            // the state this verb exists to surface. Passing them would be the
+            // silent pass the wildcard was refused to prevent.
+            //
+            // Pointer-only like the arm above: the reason id names WHAT is wrong
+            // and takes neither the row key nor the host's name into the output.
+            crate::transcript::Capability::Unnamed => {
+                Check::failed(TRANSCRIPT, "transcript-unnamed")
+            }
+            crate::transcript::Capability::Unsurveyed(_) => {
+                Check::failed(TRANSCRIPT, "transcript-unsurveyed")
+            }
             // THE THREE READINGS THAT PASS, named individually rather than caught
-            // by a wildcard so a fifth variant is a compile error here instead of
-            // a silent pass — which is the whole reason this is a `match`:
+            // by a wildcard so a new variant is a compile error here instead of
+            // a silent pass — which is the whole reason this is a `match`, and
+            // which is what it did: CLOUD-1624's two states landed as a compile
+            // error on this arm rather than as two more ways to report `ok`:
             //
             //   * `Unconfigured` is unreachable, since an unconfigured transcript
             //     left above via `?`. It is spelled anyway, so the exhaustiveness

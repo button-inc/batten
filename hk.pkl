@@ -441,6 +441,10 @@ local gate = new Mapping<String, Step> {
         "crates/batten/src/action.rs",
         "crates/batten/src/advisory.rs",
         "crates/batten/src/attribution.rs",
+        // CLOUD-1623: `Board` derives `JsonSchema` here rather than in
+        // `config.rs`, so this file is a schema input now. The census test
+        // named it the moment the type moved.
+        "crates/batten/src/board.rs",
         "crates/batten/src/bot.rs",
         "crates/batten/src/budget.rs",
         "crates/batten/src/capture.rs",
@@ -470,6 +474,7 @@ local gate = new Mapping<String, Step> {
         "crates/batten/src/recorder.rs",
         "crates/batten/src/redirect.rs",
         "crates/batten/src/refusal.rs",
+        "crates/batten/src/rest.rs",
         "crates/batten/src/rules.rs",
         "crates/batten/src/severity.rs",
         "crates/batten/src/startup.rs",
