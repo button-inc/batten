@@ -8054,11 +8054,28 @@ delete_branch_on_merge = true
 root = "target"
 keep = 2
 
+# THE 2026-09-12 WARM RESCALE (CLOUD-1622's bundle). The rule-1 seam bundle added
+# `assertion_gates.rs` and took the live count to 255, eleven past a basis of 244
+# against a tolerance of 10 — this gate working, exactly as the 2026-08-30 entry
+# describes it working.
+#
+# WARM SCALES BY THE STEM MODEL, as every move above it did: 11140 at 244 is
+# 45.66 per stem, and 45.66 x 255 is 11642. Derived rather than independently
+# measured, and said so for the reason the basis block insists on: an honest warm
+# number needs a minimal post-prune tree, and a reader who needs it exact should
+# take it rather than trust this line.
+#
+# WORTH LEAVING BEHIND, because it is a second reading the same lap produced: the
+# LEARNED floor this container observed on 2026-09-11 was 15195 MB, well above
+# either declared figure. That is the learned mechanism doing its job — it lives in
+# $GIT_DIR/batten-prune/laps.json and already governs — so the declared number is
+# not raised to meet it. A declared floor that chases the worst observed lap is the
+# floor-nobody-can-satisfy this file warns about, two blocks down.
 [prune.warm]
-mb = 11140
-worst_mb = 11140
+mb = 11642
+worst_mb = 11642
 multiplier = 1
-measured = "2026-09-08"
+measured = "2026-09-12"
 
 [prune.cold]
 mb = 21455
@@ -8516,6 +8533,21 @@ glob = "crates/batten/tests/**/*.rs"
 count = 255
 tolerance = 10
 
+# COLD'S BASIS MOVES AND COLD'S FLOOR DOES NOT, and that is the entry above
+# `[prune.cold]` being obeyed rather than ignored (2026-09-12). It ends: "the next
+# move that raises cold should take the exact measurement rather than scale again",
+# because the derived figure already exceeded what this container can offer and
+# "a floor nothing can satisfy refuses every lap and gets switched off". Scaling
+# to 87.93 x 255 = 22422 would do precisely that.
+#
+# SO THIS IS RECORDED AS A KNOWN UNDER-BUDGET, not as a number that is fine. Cold
+# now budgets for 244 stems against a basis of 255, which is the direction this
+# file says fails silently. It is bounded: cold is judged only once the escalation
+# has dropped the cache, which is reached only after warm is breached, and warm
+# moved with the basis. The exact measurement — a build from an empty `target` —
+# is what this owes, and it cannot be taken from inside a lap that needs the cache
+# it would destroy. Whoever takes it moves `mb`, `worst_mb` and `measured`
+# together.
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
 count = 255
