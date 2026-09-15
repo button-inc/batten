@@ -1066,17 +1066,60 @@ pub struct Contract {
 pub fn parse(text: &str, source: &str) -> Result<Config> {
     let config = parse_ungated(text, source)?;
     check_min_version(&config, source)?;
-    // THE ONE WRITER of the forge declaration (CLOUD-1622). Every load path —
-    // `load`, `load_authority`, `load_site` — funnels through here, so recording
-    // it once at the gate is what keeps the REST tier's credential reader a single
-    // authority instead of a parameter threaded up fifteen call chains. `declare`
-    // ignores a later call, so a second parse cannot move the credential a request
-    // in flight would use; an unparsed or absent config never reaches this line,
-    // and the REST tier then reads could-not-look rather than a default.
+    // A WRITER of the forge declaration (CLOUD-1622). Every config LOAD funnels
+    // through here — `load`, `load_authority`, `load_site` — so recording it once
+    // at the gate keeps the REST tier's credential reader a single authority
+    // instead of a parameter threaded up fifteen call chains. `declare` ignores a
+    // later call, so a second parse cannot move the credential a request in flight
+    // would use.
+    //
+    // IT IS NOT THE ONLY WRITER, AND AN EARLIER REVISION SAID IT WAS. That claim
+    // was about loads and was read as if it were about forge READS, which are not
+    // the same set: `land lap` makes a forge read (its entry gates look the pull
+    // request up) and loads no config at all, so the declaration never fired, the
+    // request went out anonymous, and GitHub answered 403 — a live credential on a
+    // public repository, refused because nothing had named it. That is this seam's
+    // own failure mode wearing the fix's clothes. [`declare_for_process`] is the
+    // writer that covers a verb which reads the forge without loading policy.
     if let Some(forge) = config.forge.clone() {
         crate::rest::declare(forge);
     }
     Ok(config)
+}
+
+/// Declare this process's forge credential names from `dir`'s committed config,
+/// before any verb dispatches.
+///
+/// **The writer for a verb that reads the forge without loading policy**
+/// (CLOUD-1622). [`parse`] covers every path that loads a config, which is most
+/// of them and is not all of them: `land lap` looks its pull request up through
+/// the REST tier and never parses `batten.toml`, so on that path the declaration
+/// had no writer at all, [`crate::rest::credential`] answered `None`, and the
+/// request left unauthenticated. The forge then answers `403` and the lander
+/// reports that its pull requests could not be read — a refusal that looks
+/// exactly like a missing permission and is in fact a credential this consumer
+/// holds and nobody named. Calling it once here makes the process, not the verb,
+/// the unit the declaration is scoped to.
+///
+/// **Best-effort on purpose, and silent by design.** A tree with no config, or
+/// one that will not parse, is not this function's business to report: every verb
+/// that needs a config load reports that failure itself, with the span and the
+/// remedy, and a second complaint here would be the same finding twice through a
+/// channel that cannot carry a fix. Ungated for the same reason — a version floor
+/// or a min-version refusal is a policy verdict, and reading a credential name is
+/// not the place to reach one. Where nothing is declared, the REST tier keeps its
+/// could-not-look rather than falling back to a spelling it guessed.
+pub fn declare_for_process(dir: &Path) {
+    let path = dir.join(CONFIG_FILE);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(config) = parse_ungated(&text, &path.display().to_string()) else {
+        return;
+    };
+    if let Some(forge) = config.forge {
+        crate::rest::declare(forge);
+    }
 }
 
 /// The other direction of [`parse`]: a [`Config`] back to TOML text.
@@ -3808,6 +3851,66 @@ mod tests {
 
     use super::*;
     use crate::error::UsageError;
+
+    /// The source of [`crate::run`]'s body, from its signature to the end of the
+    /// file.
+    ///
+    /// Anchored on the signature rather than read whole, because the landmarks
+    /// the ordering gate below reads are not unique in a file this size — a
+    /// dispatch table is spelled `match command {` in a dozen helpers, and a gate
+    /// that measured against the first one in the file would be measuring against
+    /// whichever helper happened to sort earliest.
+    fn run_body() -> &'static str {
+        let entry = include_str!("lib.rs");
+        let at = entry
+            .find("pub fn run(cli: Cli")
+            .expect("the library entry point is still spelled this way");
+        &entry[at..]
+    }
+
+    /// The seam this gate holds: a verb that reads the forge without loading a
+    /// policy has no declaration, so its request goes out anonymous and the
+    /// refusal it earns is indistinguishable from a missing permission.
+    ///
+    /// Measured, not imagined — it is what `land lap`'s entry gates did, and the
+    /// 403 they reported was read as an environment fault for most of a session.
+    /// The repair is that the declaration is scoped to the PROCESS, so the gate
+    /// is over `run`'s prologue rather than over any one verb: the call must
+    /// stand before the dispatch table, where no arm added later can route around
+    /// it. Scanning the source is the only thing that can see "before" — a
+    /// behavioural test can only observe the arm it happens to call, which is
+    /// precisely the reasoning that let the hole open.
+    #[test]
+    fn the_forge_is_declared_before_the_dispatch_table_any_verb_enters() {
+        let entry = run_body();
+        let declaration = entry
+            .find("config::declare_for_process(")
+            .expect("`run` declares the forge for this process");
+        let dispatch = entry
+            .find("\n    match command {")
+            .expect("`run`'s dispatch table is still spelled the way this gate finds it");
+        assert!(
+            declaration < dispatch,
+            "the forge declaration must stand before the dispatch table, or a verb \
+             that loads no policy reads the forge with no credential named"
+        );
+    }
+
+    /// Anti-vacuity for the gate above: both landmarks it reads are real, and a
+    /// pass is a pass about an ordering rather than about two absences.
+    #[test]
+    fn the_declaration_gate_reads_two_landmarks_that_exist() {
+        let entry = run_body();
+        assert_eq!(
+            entry.matches("config::declare_for_process(").count(),
+            1,
+            "one writer, so the ordering the gate asserts is the only ordering"
+        );
+        assert!(
+            entry.contains("\n    match command {"),
+            "the dispatch table is the landmark the ordering is measured against"
+        );
+    }
 
     /// Tables whose entries are proven well formed at load, the call in
     /// [`parse_ungated`] that does it, and the class its refusal names.

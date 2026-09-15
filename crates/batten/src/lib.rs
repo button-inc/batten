@@ -220,6 +220,17 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         config_from,
         config_in,
     };
+    // THE FORGE DECLARATION IS SCOPED TO THE PROCESS, NOT TO A VERB
+    // (CLOUD-1622). `config::parse` declares on every path that loads a policy,
+    // and `land lap` is a verb that reads the forge and loads none — so its entry
+    // gates went out anonymous and the forge answered 403 about a public
+    // repository this session holds a credential for. Here, once, before the
+    // dispatch table, so no arm can be added that reads the forge and forgets.
+    // Best-effort and silent: an unreadable config is the verb's finding to
+    // report, with its span, not this line's.
+    if let Ok(here) = std::env::current_dir() {
+        config::declare_for_process(&here);
+    }
     match command {
         // Unreachable in practice: `arg_required_else_help` has clap offer the
         // subcommand listing (a usage error, exit 1) before parse returns. Kept
@@ -9891,11 +9902,23 @@ fn run_land_entry_gates(
             )?;
             return Ok(Some(ExitCode::Internal));
         }
+        // THE MESSAGE NAMES WHAT IT MEASURED AND STOPS THERE (CLOUD-1622). It used
+        // to close with "this is the environment, not the branch" — a cause it had
+        // not looked for, over a lookup that carries only a status. A reader
+        // believed it, and the actual fault was in this process: the forge
+        // credential had no declared name on a path that loads no config, so a
+        // credential the session held never reached the request. An unmeasured
+        // cause in a refusal is worse than none, because it ends the search.
         fast_forward::Lookup::Unreadable(status) => {
             writeln!(
                 err,
-                "::error:: land: {} entry gate(s) are declared and {repo}'s pull requests could not be read ({status}), so they cannot be asked — this is the environment, not the branch",
-                gates.len()
+                "::error:: land: {} entry gate(s) are declared and {repo}'s pull requests could not be read ({status}), so they cannot be asked{}",
+                gates.len(),
+                if crate::rest::declared_credential().is_some() {
+                    ""
+                } else {
+                    " — and no forge credential is declared for this process, so the read went out unauthenticated"
+                }
             )?;
             return Ok(Some(ExitCode::Internal));
         }
