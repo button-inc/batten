@@ -117,6 +117,18 @@ invisible on exactly the runs where the suite is slowest.
 - `skipped` and `cancelled` are **not** bad conclusions; they are the absence of
   an answer, and reading either as red wedges a branch with no exit. `absent` is
   different again and is tolerated only where a workflow is path-filtered.
+- **That rule has a live hole: `CI_FANIN_CHECK` holds ONE name and this repo has
+  TWO fan-ins** (`final` and `action-final`), so the superseded-run handling never
+  applies to the second (CLOUD-1663, open). A cancelled `action-final` writes a
+  real `failure` — its `if: always()` fails the `needs:` assertion — and that
+  conclusion is an ANSWER, so it outranks the later run's non-answer and is read
+  as red. Measured twice: PR #848 `38fd230c`, PR #946 `0f943701`. **A failed
+  conclusion is permanent on its sha**, so re-lapping cannot clear it — an
+  unchanged sha creates no new run and the next lap re-reads the same failure for
+  a full `verify`'s cost. Only a NEW sha clears it, which is free when `main` has
+  moved and unavailable when it has not. Only branches touching `test.yml`'s
+  `paths:` (`action.yml`, that workflow, `crates/batten/tests/fixtures/repos/**`)
+  ever see it, so it reads as intermittent while being deterministic.
 - Exit **3** is "no answer yet" and is a first-class outcome, not a failure to
   decide. Exit **2** is "could not look", and it must never be reachable from a
   path that would otherwise spend a matrix.
@@ -154,6 +166,32 @@ Two habits close it, and neither is "be careful":
 
 `verify` catches all of it, which is the design working. It catches it one lap
 later than a local re-run would, and the lap is the price.
+
+## A union is the wrong resolution when one side REMOVED
+
+The recurring conflict on this loop is `mise.toml`'s `MUTANT_GATES`: one very long
+comma-separated line both sides append to, so nearly every lap that conflicts
+conflicts here. The obvious resolution is a union of the two lists, and it is
+correct **only while both sides added**.
+
+Main also _removes_ entries, and a removal is a decision. `8b619266` dropped
+`release-trigger-independent` because `mutate sweep` answered `no-suite` — the
+gate's mutation cannot be driven, so the row became a coverage claim with nothing
+behind it and moved to `#MUTANT-EXEMPT`. A mechanical union silently resurrects
+exactly that, re-reddening `mutate census` with a name main had just retired, and
+nothing in the conflict markers says so.
+
+**Resolve to main's CURRENT list plus this branch's own additions** — diff your
+side against `origin/main`, not against the merge base, so a deliberate removal on
+main survives the resolution. Check the resulting count: main's N plus your
+additions, with no duplicates and nothing you did not intend to re-add. Measured
+2026-09-12 on #946, caught only because the entry's name looked unfamiliar.
+
+The neighbouring trap is the opposite direction: `$MUTANT_GATES` entries are
+**module names resolved against files on disk** (`mutate::sources_for` →
+`policy/{name}.rego`), never rule ids. Renaming them to follow a rule-id rename
+stands the census's subjects up against names no file carries — main keeps
+`leased-push` while that rule's id is `branch write unsafe`.
 
 ## The gates that refuse a repair
 
