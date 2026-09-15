@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.165](https://github.com/button-inc/batten/compare/v0.0.164...v0.0.165) - 2026-09-15
+
+### Added
+
+- *(tests)* a comment reporting a scan came back clean names what re-runs it
+
+### Fixed
+
+- *(land)* declare the forge for the process, not for a verb that loads policy
+- *(rest)* name the credential this consumer holds, not the one its host injects
+- *(tests)* the assertion gate stops spelling the name it exists to keep out
+- *(prune)* move the floor basis to the tree this bundle leaves behind
+- *(rest)* [**breaking**] the forge credential is the consumer's to name, not the engine's
+- *(provision)* [**breaking**] the credential mechanism stops naming one forge, and a gate says so
+- *(preset)* gate the provider declaration, and stop ci-hygiene passing a workflow it never read
+- *(preset)* [**breaking**] declare which CI provider a module reads, and refuse where it reads none
+- *(transcript)* [**breaking**] parse by a declared grammar, so an unsurveyed host abstains
+- *(landed)* the sweep refuses an undeclared board instead of reporting it clean
+- *(board)* the module owns its table, and the censuses know it
+- *(board)* [**breaking**] refuse the next column literal, not just this one
+- *(board)* the column vocabulary stops being an engine constant
+
+### Other
+
+- *(cli)* the census fixture declares the board `claim check` reads
+- *(claim)* the fixture declares the board it is judged against
+
 ## [0.0.164](https://github.com/button-inc/batten/compare/v0.0.163...v0.0.164) - 2026-09-12
 
 ### Added
