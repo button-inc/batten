@@ -3630,6 +3630,7 @@ fn default_rules() -> Vec<Rule> {
         when_absent: None,
         when_present: None,
         when_value: None,
+        while_marker: None,
         key_from: None,
         key_base: None,
         key_shape: None,

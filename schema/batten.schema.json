@@ -4124,6 +4124,13 @@
             "string",
             "null"
           ]
+        },
+        "while_marker": {
+          "description": "A branch-keyed marker whose PRESENCE is this row's firing condition\n(CLOUD-1390).\n\n**The third modifier polarity, and the one the other two cannot express.**\n[`Rule::when_absent`] and [`Rule::when_present`] condition on a projection\nof the CALL — what the harness handed over. This conditions on a fact about\nthe BRANCH that an earlier turn left behind, which no field of this call\ncarries.\n\n**It exists because a punt is the absence of an action.** A gate refuses\nactions, and at the moment a turn ends by offering work instead of doing it\nthere is no action to refuse — CLOUD-97 and CLOUD-219 each ruled out making\nthe turn's end a deny, because committing and pushing is what survives a\ncontainer reclaim and that path must stay free. So the observation is made\nwhere the evidence is and the refusal lands where a refusal is allowed: the\nnext mediated write. `ready-guard` and `claim read unread` are the same\nshape one surface over.\n\n**Presence, never validity**, and the distinction is what keeps this from\nbeing a second opinion about receipts. [`crate::receipt::validity`] decides\nwhether a receipt PROVES something; this asks only whether a marker file\nexists. A marker is not a proof and carries no conclusion to be stale.\n\n**The spend is deletion, by the sweep that already runs.** A row named here\nmust be one of [`crate::land::BRANCH_KEYED_RECEIPTS`], so landing clears it\nand nothing else has to know how it is retired — which is also what stops\nthis from becoming a state machine with its own lifecycle.\n\nAbsent on every row that predates this column, which then behaves exactly\nas before: the modifiers are additive, and absent means \"this row is about\nthe selection alone\".",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false,

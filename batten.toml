@@ -1361,6 +1361,70 @@ If the row has never been read here, nothing is stored yet: read it \
 (`get_issue <key>`) and the capture mints itself. Every route hands over \
 bytes the tracker returned, never a re-typed copy; do NOT re-type one by hand."""
 
+# CLOUD-1390's refusing half — the punt receipt.
+#
+# `record_state` mints a completion verdict at every `Stop`, and where the turn
+# ended with work off its landing target `unlanded_pointer` writes
+# `unlanded-nudged.<branch>` into the receipt store. That has been true since
+# CLOUD-1372. What it bought was a NUDGE — advisory text at the end of a turn —
+# and this session measured an agent reasoning past it twice in a row, then
+# stopping a third time with four rows built and nothing landed.
+#
+# THE REFUSAL CANNOT LIVE AT `Stop`, which is what made this a column rather than
+# a rule. CLOUD-97 and CLOUD-219 each ruled out a deny on that event, and for the
+# same reason: committed-and-pushed is the only state that survives a container
+# reclaim, so the path that ends a turn must stay free. A gate there would be a
+# gate on the one action whose cost is already paid by losing the work.
+#
+# So the observation is made where the evidence is and the refusal lands where a
+# refusal is allowed: the NEXT MEDIATED WRITE. That is the same displacement
+# `claim read unread` above makes — the precondition is due before the work is
+# touched, and no command shape can express it — one surface over.
+#
+# `while_marker` is what the other two modifier columns could not say.
+# `when_absent` and `when_present` condition on a projection of THIS call; a punt
+# is a property of the turn BEFORE it, and nothing the harness hands over carries
+# it.
+#
+# checks = ["verify"], key = "head"
+#   The toll is proving the abandoned work is green, on the bytes it was
+#   abandoned at. Not "land first": landing needs CI and a merge, which a write
+#   cannot perform, and a row whose remedy its own subject cannot run is a dead
+#   gate. Verifying is the step immediately before landing and points the same
+#   direction.
+#
+#   `key = "head"` is the expiry contract `check read unread` states: the receipt
+#   attests to THESE BYTES. Keyed to the branch instead, one verify run would pay
+#   for every subsequent punt on that branch — a one-time toll, which is not a
+#   gate. Keyed to the head, each punt costs its own.
+#
+# Spent by landing, and only by landing: `retire_branch` sweeps `unlanded-nudged`
+# with the other three branch-keyed families, and `Rule::validate_marker` refuses
+# at load any `while_marker` naming a family that sweep does not carry — so the
+# deny cannot outlive the work it was about.
+#
+# NO OVERRIDE ROUTE AND NO `bypass_env`, deliberately. CLOUD-1311 measured that a
+# prose escape hatch is the thing being fixed rather than a safety valve on it:
+# the punt this refuses is itself a well-argued sentence, so a field accepting a
+# well-argued sentence gates nothing. The honest escape is the one the remedy
+# names.
+[[rule]]
+id = "turn mint ahead"
+kind = "receipt"
+scope = "mediated_call"
+severity = "deny"
+trigger = "write"
+while_marker = "unlanded-nudged"
+checks = ["verify"]
+key = "head"
+reason = """
+The last turn ended with work committed nowhere but this container, and a \
+reclaim ends it. Before writing more: run `mise run verify` (background it), \
+then `mise run linear-check`, then `mise run land` — which drives the loop and \
+clears this. If the work is genuinely not ready to land, commit and push what \
+exists first; the receipt attests to the head you stopped at, so a push is what \
+makes stopping safe rather than what makes it final."""
+
 # The two read-shaped receipts, minted from the result that earned them
 # (CLOUD-1024). Both rows below DEMAND one of these; these two rows are what
 # writes them, and they sit here so the writer and the reader are read together.

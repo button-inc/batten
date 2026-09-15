@@ -204,6 +204,10 @@ const RECEIPT_PERMITS: &[&str] = &[
     "when_absent",
     "when_present",
     "when_value",
+    // CLOUD-1390's third polarity: a condition on the BRANCH rather than on this
+    // call, which is the one a punt needs — the turn that punted is over, and no
+    // projection of the next call carries it.
+    "while_marker",
     "trigger",
     "reason",
     "contains",
@@ -1545,6 +1549,39 @@ pub struct Rule {
     /// projection is refused at load, because it can never fire.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when_present: Option<crate::hook::Field>,
+    /// A branch-keyed marker whose PRESENCE is this row's firing condition
+    /// (CLOUD-1390).
+    ///
+    /// **The third modifier polarity, and the one the other two cannot express.**
+    /// [`Rule::when_absent`] and [`Rule::when_present`] condition on a projection
+    /// of the CALL — what the harness handed over. This conditions on a fact about
+    /// the BRANCH that an earlier turn left behind, which no field of this call
+    /// carries.
+    ///
+    /// **It exists because a punt is the absence of an action.** A gate refuses
+    /// actions, and at the moment a turn ends by offering work instead of doing it
+    /// there is no action to refuse — CLOUD-97 and CLOUD-219 each ruled out making
+    /// the turn's end a deny, because committing and pushing is what survives a
+    /// container reclaim and that path must stay free. So the observation is made
+    /// where the evidence is and the refusal lands where a refusal is allowed: the
+    /// next mediated write. `ready-guard` and `claim read unread` are the same
+    /// shape one surface over.
+    ///
+    /// **Presence, never validity**, and the distinction is what keeps this from
+    /// being a second opinion about receipts. [`crate::receipt::validity`] decides
+    /// whether a receipt PROVES something; this asks only whether a marker file
+    /// exists. A marker is not a proof and carries no conclusion to be stale.
+    ///
+    /// **The spend is deletion, by the sweep that already runs.** A row named here
+    /// must be one of [`crate::land::BRANCH_KEYED_RECEIPTS`], so landing clears it
+    /// and nothing else has to know how it is retired — which is also what stops
+    /// this from becoming a state machine with its own lifecycle.
+    ///
+    /// Absent on every row that predates this column, which then behaves exactly
+    /// as before: the modifiers are additive, and absent means "this row is about
+    /// the selection alone".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub while_marker: Option<String>,
     /// The envelope projection a [`Rule::max`] ceiling measures (CLOUD-925).
     ///
     /// A [`crate::hook::Field`], reusing the existing named allowlist rather than
@@ -3367,6 +3404,25 @@ pub const COLUMN_CENSUS: &[ColumnCensus] = &[
         declares: Declares::NotFactBearing("a condition over a fact another column declared"),
     },
     ColumnCensus {
+        field: "while_marker",
+        // NOT `Fact::Receipts`, and the distinction is the reason this column can
+        // exist at all (CLOUD-1390). That fact is the boundary RESOLVING receipt
+        // verdicts — validity, staleness, the key it was filed under — and every
+        // one of those questions costs the resolution `checks` pays for. This
+        // column asks whether one path exists. A marker carries no conclusion, so
+        // there is nothing to resolve and nothing that could come back stale.
+        //
+        // Declaring the fact anyway would not be a harmless over-statement: it
+        // would put receipt resolution on the acquisition list for every row
+        // carrying this column, which is CLOUD-460's regression — a resolution
+        // paid for by `ls` and by every file edit — and the whole economy of
+        // `modifier_admits` reaching the filesystem only for a row that asked.
+        declares: Declares::NotFactBearing(
+            "a branch-keyed marker's PRESENCE, which is a path test rather than a \
+             receipt verdict — nothing is resolved, so nothing is acquired",
+        ),
+    },
+    ColumnCensus {
         field: "measures",
         declares: Declares::NotFactBearing(
             "names a projection of the call, which the envelope carries",
@@ -4280,7 +4336,44 @@ impl Rule {
                 )));
             }
         }
-        self.validate_receipt_names()
+        self.validate_receipt_names()?;
+        self.validate_marker()
+    }
+
+    /// A `while_marker` must name a family that landing sweeps (CLOUD-1390).
+    ///
+    /// **A REFUSAL NEEDS A SPEND, and this is the only thing that supplies one.**
+    /// The column's whole contract is *fires while the marker exists*; what makes
+    /// that finite is [`crate::land::retire_branch`] deleting the file. Name a
+    /// family outside [`crate::land::BRANCH_KEYED_RECEIPTS`] and the row is a
+    /// deny nothing clears — the work lands, the marker survives the retirement,
+    /// and the next piece of work to reuse the branch name is refused for a punt
+    /// somebody else took. That is CLOUD-774's inherited-suppression defect in the
+    /// refusing direction, which is strictly worse than the advisory one.
+    ///
+    /// Asserted at load rather than documented, because the doc on
+    /// [`Rule::while_marker`] said exactly this and a sentence in a doc comment
+    /// stops nobody (non-negotiable rule 2). The pair can now only drift by
+    /// failing.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (→ exit `1`) naming the row and the marker. Pointer-only:
+    /// the two ids and the permitted list, never a path from the receipt store.
+    fn validate_marker(&self) -> anyhow::Result<()> {
+        let Some(marker) = self.while_marker.as_deref() else {
+            return Ok(());
+        };
+        if crate::land::BRANCH_KEYED_RECEIPTS.contains(&marker) {
+            return Ok(());
+        }
+        Err(UsageError::raise(format!(
+            "rule {}: `while_marker = \"{marker}\"` names no branch-keyed receipt family, so \
+             landing would not clear it and the row would deny forever — including on the next \
+             piece of work to reuse the branch name. Name one of: {}",
+            self.id,
+            crate::land::BRANCH_KEYED_RECEIPTS.join(", ")
+        )))
     }
 
     /// The three refusals over a receipt row's two name columns (CLOUD-1297).
@@ -14074,6 +14167,7 @@ mod tests {
             when_absent: None,
             when_present: None,
             when_value: None,
+            while_marker: None,
             key_from: None,
             key_base: None,
             key_shape: None,

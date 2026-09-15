@@ -1788,7 +1788,14 @@ pub struct Retired {
 /// stopped with work unlanded. Left behind, the next piece of work to reuse the
 /// name inherits it, and the one nudge that says *the work exists nowhere but
 /// here and a container reclaim ends it* is the one that does not fire.
-const BRANCH_KEYED_RECEIPTS: &[&str] = &[
+///
+/// **`pub(crate)` because a `while_marker` row is validated against it**
+/// (CLOUD-1390). A marker that landing does not sweep is a refusal with no spend:
+/// the row fires, the work lands, the file survives, and the next branch to reuse
+/// the name is denied for a punt it did not commit. `Rule::validate_marker`
+/// refuses that row at load rather than letting the pair drift, which is the same
+/// discipline this list's own header records having needed twice already.
+pub(crate) const BRANCH_KEYED_RECEIPTS: &[&str] = &[
     "board-writes",
     "filed-here-nudged",
     "filed-set-nudged",

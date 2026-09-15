@@ -5348,8 +5348,63 @@ fn modifier_admits(rule: &Rule, envelope: &Envelope) -> bool {
             return false;
         }
     }
+    // THE BRANCH-KEYED MARKER (CLOUD-1390), and it is last because it is the only
+    // arm that touches the filesystem.
+    //
+    // **PAID ONLY BY A ROW THAT DECLARES IT.** The two arms above read a
+    // projection already in hand; this resolves a git dir and a branch. Putting
+    // that cost on every row would be CLOUD-460's regression — `receipt::verdicts`
+    // ran four git subprocesses and they were being paid by `ls`, by `gh pr view`
+    // and by every file edit — so the `let Some` guard is the economy, not a
+    // style. A policy declaring no such row pays nothing and reaches no git call.
+    //
+    // **EVERY UNREADABLE ANSWER ADMITS.** No git dir, no branch, an unreadable
+    // directory: the row is selected as if unconditioned, which leaves the
+    // verdict exactly where it was before this column existed. The other
+    // direction — a could-not-look silently DROPPING the row — would turn a
+    // refusal off on precisely the checkouts least able to notice.
+    if let Some(marker) = rule.while_marker.as_deref() {
+        return marker_present(marker);
+    }
     true
 }
+
+/// Whether this branch carries `marker` in the receipt store.
+///
+/// Presence and nothing else (CLOUD-1390). [`crate::receipt::validity`] answers
+/// whether a receipt PROVES something; a marker carries no conclusion, so there is
+/// nothing here to be stale and no second opinion about receipts to drift from.
+///
+/// The slug is `branch.replace('/', "-")`, which is the spelling
+/// [`crate::land::retire_branch`] sweeps and `unlanded_pointer` writes. One
+/// spelling, three readers — a second derivation here is the drift
+/// `BRANCH_KEYED_RECEIPTS`' own header records having already been caught once.
+fn marker_present(marker: &str) -> bool {
+    let root = std::path::Path::new(".");
+    let Ok(git_dir) = crate::git::git_dir(root) else {
+        return true;
+    };
+    let Ok(Some(branch)) = crate::git::current_branch(root) else {
+        return true;
+    };
+    marker_path(&git_dir, marker, &branch).exists()
+}
+
+/// Where a branch-keyed marker lives.
+///
+/// Named rather than inlined so the `//MUTANT` rows below can anchor on one line,
+/// which is also what keeps the `.exists()` — the entire decision — from being
+/// buried inside a builder chain no row could swap without touching the path
+/// derivation too.
+fn marker_path(git_dir: &std::path::Path, marker: &str, branch: &str) -> std::path::PathBuf {
+    git_dir
+        .join("batten-receipts")
+        .join(format!("{marker}.{}", branch.replace('/', "-")))
+}
+
+//MUTANT-SUITE crates/batten/tests/it/punt_receipt.rs
+//MUTANT offer-unread|s@    marker_path(&git_dir, marker, &branch).exists()@    false@|a_write_after_a_punt_is_refused
+//MUTANT every-ending-punts|s@    marker_path(&git_dir, marker, &branch).exists()@    true@|an_ordinary_turn_leaves_the_next_write_alone
 
 /// Fold a value for [`Rule::when_value`]'s comparison.
 ///
@@ -10368,6 +10423,7 @@ mod tests {
             when_absent: None,
             when_present: None,
             when_value: None,
+            while_marker: None,
             key_from: None,
             key_base: None,
             key_shape: None,
