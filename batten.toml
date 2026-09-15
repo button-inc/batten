@@ -7763,11 +7763,6 @@ path = ".github/workflows/release-plz.yml"
 reason = "ripsecrets reads `${GH_PAT}` in a git-config URL as an embedded credential; it is a shell expansion of an Actions secret, so nothing is committed. Re-check against the pinned scanner's next version."
 expires = "2026-11-14"
 
-[[waiver]]
-rule = "test count dropped"
-reason = "CLOUD-780 retires four `git.rs` primitives, the pileup predicate and the `worktree reclaim` verb, and every deleted case named a deleted symbol (1850 -> 1834): `git.rs`'s worktree-listing and snapshot cases, `worktree.rs`'s pileup and reclaim cases, and `tests/cli.rs`'s whole pileup block. Deleting them with their subject is the Ready block's own §7 obligation — weakening them instead would leave assertions about a surface that no longer exists. What must NOT fall is the coverage beside them, and it does not: `worktree status`'s four surviving categories keep every case green with no assertion change, which is what proves the drop was surgical."
-expires = "2026-09-13"
-
 # CLOUD-1265's producer task, taken through the second of the two dispositions
 # `inline-task-bodies-not-growing`'s own `no_fix_reason` names — "migrate the
 # predicate onto a rule kind, or waive the increase deliberately with a reason and
