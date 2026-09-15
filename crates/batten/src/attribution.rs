@@ -330,12 +330,10 @@ impl Attribution {
     /// `identity_deny` is still consulted, so an identity that is both permitted
     /// and denied is refused. Config that contradicts itself is a finding, not a
     /// pass, and the deny list is the half that wins.
-    fn tagger_is_accountable(
-        &self,
-        rendered: &str,
-        permitted: &Matchers,
-        denied: &Matchers,
-    ) -> bool {
+    /// Free of `self` deliberately: the two lists are passed in already compiled,
+    /// so this is a pure predicate over them and the policy it came from is not a
+    /// second input it could disagree with.
+    fn tagger_is_accountable(rendered: &str, permitted: &Matchers, denied: &Matchers) -> bool {
         permitted.matches(rendered) && !denied.matches(rendered)
     }
 
@@ -375,11 +373,16 @@ impl Attribution {
         // with `|`. They answer the same way today, and keeping them apart costs a
         // line while buying two things: the match stays exhaustive if a fourth
         // variant lands, and each arm is independently mutatable — a `|` inside a
-        // mutated expression is split as a field separator by the sweep and the
-        // row is refused.
+        // mutated expression is split as a field separator by `mutate`'s own row
+        // parser, so the declared row would be refused as five fields.
+        //
+        // That is the whole reason for the allow. Merging them, which is what
+        // clippy suggests, would put a `|` in the one place this repository's
+        // mutation sweep cannot read.
+        #[allow(clippy::match_same_arms)]
         Ok(match tagger {
             git::Tagger::Signed(rendered) => {
-                if self.tagger_is_accountable(rendered, &permitted, &denied) {
+                if Self::tagger_is_accountable(rendered, &permitted, &denied) {
                     Vec::new()
                 } else {
                     vec![point("tagger")]

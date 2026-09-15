@@ -8964,36 +8964,24 @@ fn run_land_fast_forward(
                 // The bot names its row in the comment it posts, so this is a
                 // lookup. What it must never do is fill the gap with a cause.
                 fast_forward::Answer::Refused => {
-                    match fast_forward::ground(&ask) {
-                        // LAPPING CANNOT CLEAR THIS ONE, which is why it says so.
-                        // `land` re-drafts on a failed lap, so the remedy the
-                        // predecessor narrated — rebase, re-verify, retry —
-                        // regenerates exactly the condition being refused.
-                        fast_forward::Ground::Draft => writeln!(
+                    // THE BOT'S OWN SENTENCE, or none at all. Nothing here maps a
+                    // refusal to a remedy: the bot is the authority on its own,
+                    // which is `land::Admitted::Refused`'s rule at a second site,
+                    // and a table from its rows to advice would put one consumer's
+                    // tracker keys in this crate as matched data (rule 1).
+                    //
+                    // NO REFUSAL TO READ IS NOT NON-DESCENT. Measured this
+                    // session: `fast-forward.yml` runs `./install.sh`, v0.0.161
+                    // carried no binaries, and the run died at that step —
+                    // conclusion `failure`, no refusal posted, and the predecessor
+                    // still said "no longer a direct descendant" and recommended a
+                    // re-run. Every implied fact was false and two laps were spent
+                    // on the advice.
+                    match fast_forward::refusal(&ask) {
+                        Some(said) => writeln!(out, "land: #{} was refused — {said}", ask.pr)?,
+                        None => writeln!(
                             out,
-                            "land: #{} was refused — a draft head grades no required check (CLOUD-853). Rebasing cannot clear it; ready the pull request, let CI grade the head, then land again",
-                            ask.pr
-                        )?,
-                        fast_forward::Ground::ForkUnreviewed => writeln!(
-                            out,
-                            "land: #{} was refused — a fork head's green CI is the contributor's own harness (CLOUD-867). Read the diff and approve, then land again",
-                            ask.pr
-                        )?,
-                        fast_forward::Ground::RosterUngraded => writeln!(
-                            out,
-                            "land: #{} was refused — the required roster has not graded this head (CLOUD-1570). Wait for the matrix rather than rebasing",
-                            ask.pr
-                        )?,
-                        // EVERYTHING ELSE, INCLUDING A RUN THAT NEVER REACHED ITS
-                        // REFUSAL. Measured this session: `fast-forward.yml` runs
-                        // `./install.sh`, v0.0.161 carried no binaries, and the
-                        // run died at that step — conclusion `failure`, no
-                        // refusal posted, and the predecessor called it
-                        // non-descent and recommended a re-run. Every implied
-                        // fact was false and two laps were spent on the advice.
-                        fast_forward::Ground::Unclassified => writeln!(
-                            out,
-                            "land: #{} was refused and the bot named no ground this build recognises — read the run before rebasing; it may have failed before reaching its refusal",
+                            "land: #{} was refused and posted no reason this build could read — read the run before rebasing; it may have failed before reaching its refusal",
                             ask.pr
                         )?,
                     }
