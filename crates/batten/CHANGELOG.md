@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.166](https://github.com/button-inc/batten/compare/v0.0.165...v0.0.166) - 2026-09-16
+
+### Added
+
+- *(rules)* [**breaking**] refuse the next write after a turn stopped with work unlanded
+- *(attribution)* [**breaking**] judge who cut a tag, from the tag object rather than its commit
+
+### Fixed
+
+- *(attribution)* join the no-identity arms instead of escaping the lint
+- *(land)* report the bot's own refusal instead of mapping it to remedies
+- *(land)* sweep the fourth branch-keyed receipt family on retirement
+- *(land)* read why the bot refused instead of asserting non-descent
+- *(ci)* a release leg provisions what it needs, not every pinned tool
+
 ## [0.0.165](https://github.com/button-inc/batten/compare/v0.0.164...v0.0.165) - 2026-09-15
 
 ### Added
