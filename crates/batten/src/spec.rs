@@ -1062,6 +1062,11 @@ mod tests {
             // record rather than over a transcript it cannot re-read.
             "record plan".to_owned(),
             "record show".to_owned(),
+            // The per-suite cost corpus (CLOUD-352), whose store is a COMMITTED
+            // file rather than the out-of-tree record tree: its reader is a
+            // person deciding whether the suite they are adding a case to is
+            // expensive.
+            "record suites".to_owned(),
             "record tool".to_owned(),
             // The API-compatibility noun (CLOUD-1050), ported off
             // `mise-tasks/semver.sh` when CLOUD-1059 made editing a shell

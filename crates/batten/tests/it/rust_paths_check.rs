@@ -81,7 +81,7 @@ fn workflow_repo(name: &str, workflow: &str) -> PathBuf {
              kind = \"document\"\n\
              target = \"AGENTS.md\"\n\n\
              [[rule]]\n\
-             id = \"rust-paths-check\"\n\
+             id = \"path list partial\"\n\
              kind = \"policy\"\n\
              scope = \"tree\"\n\
              line_sources = [\".github/workflows/rust.yml\"]\n\
@@ -103,7 +103,7 @@ fn workflow_repo(name: &str, workflow: &str) -> PathBuf {
 }
 
 fn check(dir: &Path) -> Output {
-    run(dir, &["check", "--rule", "rust-paths-check"])
+    run(dir, &["check", "--rule", "path list partial"])
 }
 
 /// Every declared input, and nothing a docs-only diff touches.
@@ -229,7 +229,7 @@ fn the_committed_filter_honours_every_probe() {
     // The self-consumption case the retiring suite opened on.
     let output = common::run_at_real_root(
         &common::at_root(""),
-        &["check", "--rule", "rust-paths-check"],
+        &["check", "--rule", "path list partial"],
     );
     assert_eq!(
         output.status.code(),

@@ -34,7 +34,7 @@ package batten.license_table
 
 import rego.v1
 
-rules contains "manifest table stale"
+rules contains "tool grade unclear"
 
 doc := "CONTRIBUTING.md"
 
@@ -68,7 +68,7 @@ row contains [tool, license, compat] if {
 resolved_verdict := {"✅", "❌"}
 
 violation contains {
-	"rule": "manifest table stale",
+	"rule": "tool grade unclear",
 	"verdict": "tool grade unclear",
 	"subjects": [{"path": doc}],
 } if {
@@ -81,7 +81,7 @@ unresolved_license(license) if license == ""
 unresolved_license(license) if contains(license, "to confirm")
 
 violation contains {
-	"rule": "manifest table stale",
+	"rule": "tool grade unclear",
 	"verdict": "tool grade unclear",
 	"subjects": [{"path": doc}],
 } if {
@@ -93,7 +93,7 @@ violation contains {
 # THE ANTI-VACUITY ARM. A table that parses to zero rows satisfies every clause
 # above, which is the false green the predecessor was written to kill.
 violation contains {
-	"rule": "manifest table stale",
+	"rule": "tool grade unclear",
 	"verdict": "tool grade unclear",
 	"subjects": [{"path": doc}],
 } if {

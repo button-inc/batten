@@ -114,7 +114,7 @@ fn budget_repo(name: &str, workflows: &[(&str, &str)]) -> PathBuf {
          kind = \"document\"\n\
          target = \"AGENTS.md\"\n\n\
          [[rule]]\n\
-         id = \"timeout-budget\"\n\
+         id = \"job bind missing\"\n\
          kind = \"policy\"\n\
          scope = \"tree\"\n\
          line_sources = [\".github/workflows/*.yml\"]\n\
@@ -137,7 +137,7 @@ fn budget_repo(name: &str, workflows: &[(&str, &str)]) -> PathBuf {
 }
 
 fn check(dir: &Path) -> Output {
-    run(dir, &["check", "--rule", "timeout-budget"])
+    run(dir, &["check", "--rule", "job bind missing"])
 }
 
 /// One workflow whose `jobs:` block carries `jobs`.
@@ -382,8 +382,10 @@ fn output_is_pointer_only() {
 #[test]
 fn the_real_workflows_all_carry_a_justified_budget() {
     // The self-consumption case the retiring suite opened on.
-    let output =
-        common::run_at_real_root(&common::at_root(""), &["check", "--rule", "timeout-budget"]);
+    let output = common::run_at_real_root(
+        &common::at_root(""),
+        &["check", "--rule", "job bind missing"],
+    );
     assert_eq!(
         output.status.code(),
         Some(0),

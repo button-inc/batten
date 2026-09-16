@@ -139,7 +139,7 @@ fn a_conflicted_lap_is_refused_and_a_clean_one_is_not() {
 ///
 /// Every other case here hands a constructed [`Replay`] to `land::record`, which
 /// pins the WRITER, and `tests/it/rebase.rs` reaches a real conflict but never
-/// reads the store. So the one thing `rebase-conflict-stops-the-lap` actually
+/// reads the store. So the one thing `replay halt conflict` actually
 /// depends on — that a REAL conflict leaves a `rebase conflicted …` line the
 /// module then refuses on — was unpinned end to end, and a regression on the
 /// record call inside `land::replay` would have been invisible.
@@ -190,7 +190,7 @@ fn a_real_conflict_writes_the_record_the_module_refuses_on() {
         "a real conflict must reach the module through the record: {err}{out}"
     );
     assert!(
-        format!("{out}{err}").contains("rebase-conflict-stops-the-lap"),
+        format!("{out}{err}").contains("replay halt conflict"),
         "the finding names its own predicate, got {out}{err}"
     );
 }
@@ -566,12 +566,12 @@ fn no_pull_request_to_ask_is_could_not_look_and_never_a_refusal() {
 ///
 /// **Measured on this branch rather than imagined.** The verb's conflict line
 /// reported the commit and the FIRST path and stopped there; the
-/// `rebase-not-hand-stepped` row then told the reader the way out was
+/// `patch run loose` row then told the reader the way out was
 /// `--continue`, `--abort` or `--skip`. The replay is STATELESS — nothing is
 /// half-replayed, so no rebase is ever in progress — and none of those three can
 /// apply to it. A session followed both, concluded the landing loop was
 /// defective, and was one step from cherry-picking around it, which completes
-/// the replay while writing no lap record at all: `rebase-conflict-stops-the-lap`
+/// the replay while writing no lap record at all: `replay halt conflict`
 /// would then read clean over a conflict that happened, which is the false green
 /// this whole family exists to catch.
 ///
@@ -611,7 +611,7 @@ fn the_conflict_stop_and_its_gate_name_a_route_that_exists() {
     let config = std::fs::read_to_string(common::at_root("batten.toml"))
         .expect("the committed authority is readable");
     let row = config
-        .split_once("id = \"rebase-not-hand-stepped\"")
+        .split_once("id = \"patch run loose\"")
         .expect("the row is declared")
         .1;
     let reason = &row[..row.find("\n\n").unwrap_or(row.len())];
