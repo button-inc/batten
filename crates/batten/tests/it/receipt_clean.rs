@@ -187,7 +187,7 @@ fn the_refusal_names_the_fix_rather_than_merely_the_refusal() {
     common::write(&dir, "wip.txt", "x\n");
     let said = stderr(&clean(&dir));
     assert!(said.contains("Commit the work"), "{said}");
-    assert!(said.contains("stash it"), "{said}");
+    assert!(said.contains("set it aside"), "{said}");
     assert!(said.contains("separate worktree"), "{said}");
 }
 

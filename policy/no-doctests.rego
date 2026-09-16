@@ -41,7 +41,7 @@ package batten.no_doctests
 
 import rego.v1
 
-rules contains "test declare unused"
+rules contains "test run unseen"
 
 # A doc-comment line's text, with the marker stripped. Undefined for any line
 # that is not a doc comment, which is what keeps the fence scan inside them.
@@ -107,8 +107,8 @@ declares_non_running(info) if {
 }
 
 violation contains {
-	"rule": "test declare unused",
-	"verdict": "test place wrong",
+	"rule": "test run unseen",
+	"verdict": "test run unseen",
 	"subjects": [{"path": path, "line": index + 1}],
 } if {
 	some [path, index] in runnable
@@ -126,7 +126,7 @@ scan(ls) := {"tree": {"lines": {"crates/demo/src/lib.rs": ls}}}
 
 test_an_unattributed_fence_is_runnable if {
 	some v in violation with input as scan(["/// ```", "/// let x = 1;", "/// ```"])
-	v.verdict == "test place wrong"
+	v.verdict == "test run unseen"
 }
 
 test_a_text_fence_is_not_a_doctest if {

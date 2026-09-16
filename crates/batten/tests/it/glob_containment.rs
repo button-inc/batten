@@ -84,7 +84,7 @@ fn glob_repo(name: &str, config_body: &str, hooks_body: &str) -> PathBuf {
          id = \"md-quoted-span\"\n\
          regex = '\"[^\"]*\"'\n\n\
          [[rule]]\n\
-         id = \"glob-containment\"\n\
+         id = \"pattern reach other\"\n\
          kind = \"policy\"\n\
          scope = \"tree\"\n\
          line_sources = [\"batten.toml\", \"hk.pkl\"]\n\
@@ -111,7 +111,7 @@ fn glob_repo(name: &str, config_body: &str, hooks_body: &str) -> PathBuf {
 }
 
 fn check(dir: &Path) -> Output {
-    run(dir, &["check", "--rule", "glob-containment"])
+    run(dir, &["check", "--rule", "pattern reach other"])
 }
 
 /// A `["batten-check"]` step selecting `entries`, followed by another step so
@@ -355,7 +355,7 @@ fn the_committed_pair_covers_itself_today() {
     // than asserted.
     let output = common::run_at_real_root(
         &common::at_root(""),
-        &["check", "--rule", "glob-containment"],
+        &["check", "--rule", "pattern reach other"],
     );
     assert_eq!(
         output.status.code(),

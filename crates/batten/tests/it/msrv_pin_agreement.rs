@@ -72,7 +72,7 @@ fn msrv_repo(name: &str, manifest: &str, tools: &str, bot: &str) -> PathBuf {
              kind = \"document\"\n\
              target = \"AGENTS.md\"\n\n\
              [[rule]]\n\
-             id = \"msrv-pin-agreement\"\n\
+             id = \"version pin other\"\n\
              kind = \"policy\"\n\
              scope = \"tree\"\n\
              line_sources = [\"Cargo.toml\", \"mise.toml\", \"renovate.json5\"]\n\
@@ -96,7 +96,7 @@ fn msrv_repo(name: &str, manifest: &str, tools: &str, bot: &str) -> PathBuf {
 }
 
 fn check(dir: &Path) -> Output {
-    run(dir, &["check", "--rule", "msrv-pin-agreement"])
+    run(dir, &["check", "--rule", "version pin other"])
 }
 
 fn cargo(version: &str) -> String {
@@ -286,7 +286,7 @@ fn the_real_trees_three_numbers_agree() {
     // The self-consumption case the retiring suite ended on.
     let output = common::run_at_real_root(
         &common::at_root(""),
-        &["check", "--rule", "msrv-pin-agreement"],
+        &["check", "--rule", "version pin other"],
     );
     assert_eq!(
         output.status.code(),

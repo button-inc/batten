@@ -6124,13 +6124,19 @@ fn receipt_records_the_config_epoch_at_its_subject_commit() {
     let first = epoch_of(&repo, &home);
     assert!(!first.is_empty(), "an epoch is recorded");
 
-    // 3. A WORKING-TREE edit to a governing file does not move it: the subject
-    //    is a commit, so every byte the statement binds comes from that commit.
+    // 3. A WORKING-TREE edit to a governing file cannot move it, and since
+    //    CLOUD-1753 it cannot reach the field at all: the verb refuses to key a
+    //    receipt to a commit the tree no longer matches. The property this
+    //    bullet was written for — the epoch comes from the COMMIT, never from
+    //    the tree — is now enforced one layer earlier, by making the dirty-tree
+    //    reading unrepresentable rather than merely correct. Asserted as the
+    //    refusal rather than deleted, because the bullet is still owed an answer.
     fs::write(repo.join("pinned.lock"), "tool = \"2.0.0\"\n").expect("edit the pin");
-    let uncommitted = epoch_of(&repo, &home);
+    let dirty = receipt_cmd(&repo, &home, &["receipt", "record", "verify"]);
     assert_eq!(
-        uncommitted, first,
-        "an uncommitted pin bump must not move the recorded epoch"
+        dirty.status.code(),
+        Some(1),
+        "an uncommitted pin bump makes the record a usage error, not a receipt"
     );
 
     // 2. Committing that same bump does move it: the two are distinguishable,
@@ -6258,6 +6264,14 @@ fn transcript_fixture(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
         // missing file — so omitting it would quietly stop these cases testing
         // what they were written for.
         .config("version = 1\n[transcript]\npath = \"session.jsonl\"\nharness = \"claude-code\"\n")
+        // IGNORED, because the real one is (CLOUD-1753). Consumer #1's transcript
+        // is `.claude/.transcript.jsonl` and `.gitignore` carries it, so a turn
+        // appending to it does not make the tree differ from `HEAD`. Without this
+        // line the fixture's transcript is an untracked tracked-set member, and
+        // the tree-is-HEAD guard `receipt record` now asks refuses the very case
+        // these tests write a transcript to exercise — a fixture detail deciding
+        // the outcome rather than the property under test.
+        .file(".gitignore", "session.jsonl\n")
         .git()
         .base_commit()
         .work_commit()

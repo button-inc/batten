@@ -756,7 +756,7 @@ it rather than holding a foreground poll open."""
 # step in any spelling.
 #
 # The distinguishing fact — is a conflict outstanding — is real and RECORDED, in
-# the lap record `rebase-conflict-stops-the-lap` reads. It is not reachable from
+# the lap record `replay halt conflict` reads. It is not reachable from
 # a `mediated_call` shape row, which compares words in a command line. So this
 # row cannot tell the race it measured from the resolution it blocks, and a deny
 # that cannot tell them apart must not be the one that stops the resolution.
@@ -768,7 +768,7 @@ it rather than holding a foreground poll open."""
 # emits. Over the compiled binary, `adjudicate --harness claude-code` on
 # `git rebase origin/main`: no output, exit 0. Under `--fail-on-warning`, the
 # same call: `"permissionDecision":"deny"`, reason `call name refused
-# rebase-not-hand-stepped`.
+# patch run loose`.
 #
 # So `warn` here is silence, not advice, and the trade it offered was a refusal
 # that is wrong on ONE path for a row that decides nothing on EVERY path. The
@@ -7392,7 +7392,7 @@ module = "policy/report-only.rego"
 severity = "deny"
 
 [[rule]]
-id = "manifest table stale"
+id = "tool grade unclear"
 kind = "policy"
 scope = "tree"
 line_sources = ["CONTRIBUTING.md"]
@@ -7400,7 +7400,7 @@ module = "policy/license-table.rego"
 severity = "deny"
 
 [[rule]]
-id = "shell guard missing"
+id = "spawn read broken"
 kind = "policy"
 scope = "tree"
 line_sources = ["mise-tasks/**", "*.sh"]
@@ -7408,7 +7408,7 @@ module = "policy/pipefail-grep.rego"
 severity = "deny"
 
 [[rule]]
-id = "pattern spelling unsafe"
+id = "pattern carry unsafe"
 kind = "policy"
 scope = "tree"
 line_sources = ["mise-tasks/**", "*.sh", "mise.toml"]
@@ -7416,7 +7416,7 @@ module = "policy/awk-regex.rego"
 severity = "deny"
 
 [[rule]]
-id = "test declare unused"
+id = "test run unseen"
 kind = "policy"
 scope = "tree"
 line_sources = ["crates/**/*.rs"]
@@ -7544,7 +7544,7 @@ module = "policy/coderabbit-config.rego"
 severity = "deny"
 
 [[rule]]
-id = "version pin loose"
+id = "bound carry missing"
 kind = "policy"
 scope = "tree"
 line_sources = ["Cargo.toml", "renovate.json5"]
@@ -7600,7 +7600,7 @@ module = "policy/glob-containment.rego"
 severity = "deny"
 
 [[rule]]
-id = "module list missing"
+id = "memory cover partial"
 kind = "policy"
 scope = "tree"
 line_sources = [".serena/memories/core.md"]
@@ -14204,7 +14204,7 @@ kind = "document"
 target = "batten.toml"
 
 [[verdict]]
-id = "test place wrong"
+id = "test run unseen"
 gloss = "a runnable doctest exists in a workspace whose runner does not execute doctests"
 class = """
 The scheduler here does not run doctests, so one written as a test is a test nothing runs — an assertion that reads as coverage and can never fail. Move the assertion into a real test target, or mark the block so it is documentation rather than a test.
@@ -15680,7 +15680,7 @@ repair = ["mise", "run", "session:git-hooks"]
 # fail: it DROPS the rows it cannot resolve and reports a clean load. Measured
 # 2026-09-09 on this container — `target/release/batten` at 0.0.154 shadowing the
 # 0.0.155 release, `doctor` answering `config-rows-dropped`, and `config show`
-# naming `rebase-not-hand-stepped` unresolved, which is to say the gate that
+# naming `patch run loose` unresolved, which is to say the gate that
 # refuses a hand-stepped rebase enforced nothing for a whole session.
 #
 # THE READING ALREADY EXISTS AND NOTHING CONSULTED IT. `doctor mediator` is

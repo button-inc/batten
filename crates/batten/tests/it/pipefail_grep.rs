@@ -57,7 +57,7 @@ fn pipefail_repo(name: &str, program: &str) -> PathBuf {
              kind = \"document\"\n\
              target = \"AGENTS.md\"\n\n\
              [[rule]]\n\
-             id = \"pipefail-grep\"\n\
+             id = \"spawn read broken\"\n\
              kind = \"policy\"\n\
              scope = \"tree\"\n\
              line_sources = [\"mise-tasks/**\"]\n\
@@ -79,7 +79,7 @@ fn pipefail_repo(name: &str, program: &str) -> PathBuf {
 }
 
 fn check(dir: &Path) -> Output {
-    run(dir, &["check", "--rule", "pipefail-grep"])
+    run(dir, &["check", "--rule", "spawn read broken"])
 }
 
 const HEAD: &str = "#!/usr/bin/env bash\nset -euo pipefail\n";
@@ -170,8 +170,10 @@ fn q_after_the_separator_is_a_pattern_not_a_flag() {
 
 #[test]
 fn this_repos_own_programs_pass_today() {
-    let output =
-        common::run_at_real_root(&common::at_root(""), &["check", "--rule", "pipefail-grep"]);
+    let output = common::run_at_real_root(
+        &common::at_root(""),
+        &["check", "--rule", "spawn read broken"],
+    );
     assert_eq!(
         output.status.code(),
         Some(0),

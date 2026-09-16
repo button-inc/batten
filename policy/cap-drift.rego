@@ -57,7 +57,7 @@ package batten.cap_drift
 
 import rego.v1
 
-rules contains "version pin loose"
+rules contains "bound carry missing"
 
 manifest_path := "Cargo.toml"
 
@@ -199,7 +199,7 @@ withheld contains name if {
 # --- the two directions ------------------------------------------------------
 
 violation contains {
-	"rule": "version pin loose",
+	"rule": "bound carry missing",
 	"verdict": "bound carry missing",
 	"subjects": [{"artifact": sprintf("%s absent from %s", [name, bot_path])}],
 } if {
@@ -210,7 +210,7 @@ violation contains {
 
 # THE HALF-LIFT, and the direction with no symptom.
 violation contains {
-	"rule": "version pin loose",
+	"rule": "bound carry missing",
 	"verdict": "bound carry missing",
 	"subjects": [{"artifact": sprintf("%s absent from %s", [name, manifest_path])}],
 } if {
