@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.167](https://github.com/button-inc/batten/compare/v0.0.166...v0.0.167) - 2026-09-16
+
+### Added
+
+- *(record)* one producer door for the nine measurements, keyed by branch
+- *(cli)* retire claimed-keys and merged-pr-keys onto claim keys and claim merged
+- *(cli)* claim keys, the leaf claimed-keys retires onto
+- *(race)* the source selector and the ancestor bound claimed-keys carries
+- *(record)* two store families a task can reach, reusing the journal
+- *(forge)* one windowed forge read, where truncation is a verdict
+
+### Fixed
+
+- *(ledger)* port the drain's two gather cases, because their subject survives
+- *(tests)* restore the door tier's allow case, which asserts the door and not the rule
+- *(mise)* merge the manifest against the real base, and re-point two run-shape mirrors
+- *(lint)* clear the clippy denials this branch's new code introduced
+- *(tests)* assert the record fixtures' setup writes instead of discarding them
+- *(policy)* invert the last four cases asserting the sleep-loop exemption
+- *(policy)* withdraw the sleep-loop exemption and correct every remedy it left behind
+- *(test)* the hk fixture's fixer is portable, which Darwin just proved it wasn't
+- *(ci)* a required macOS check that never runs must be absent-ok
+- *(checks-green)* [**breaking**] order a name's runs by when they concluded
+
+### Other
+
+- *(gate)* [**breaking**] retire stop-posture-check onto the module that already decides it
+- *(fixtures)* copy the git template instead of forking, per main's ratchet
+- *(surface)* regenerate the derived artifacts for the record leaves
+- stop asserting a repository visibility that has already changed
+
 ## [0.0.166](https://github.com/button-inc/batten/compare/v0.0.165...v0.0.166) - 2026-09-16
 
 ### Added
