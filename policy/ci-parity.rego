@@ -872,7 +872,7 @@ builds_a_release_artifact(job) if {
 
 provisions_from_a_list(job) if {
 	some step in job.steps
-	startswith(object.get(step, "uses", ""), "jdx/mise-action@")
+	contains(object.get(step, "uses", ""), "mise-action@")
 	object.get(step, ["with", "install_args"], "") != ""
 }
 
@@ -1101,7 +1101,7 @@ release_leg(provisioning) := {
 	"jobs": {"dist": {
 		"runs-on": "ubuntu-latest",
 		"steps": [
-			object.union({"uses": "jdx/mise-action@3c2e0cf8"}, provisioning),
+			object.union({"uses": "owner/mise-action@3c2e0cf8"}, provisioning),
 			{"run": "mise run dist x86_64-unknown-linux-gnu"},
 		],
 	}},
@@ -1143,7 +1143,7 @@ test_a_job_that_builds_no_artifact_is_not_this_arms_business if {
 		"on": {"release": {"types": ["published"]}},
 		"jobs": {"notes": {
 			"runs-on": "ubuntu-latest",
-			"steps": [{"uses": "jdx/mise-action@3c2e0cf8"}, {"run": "mise run release-notes"}],
+			"steps": [{"uses": "owner/mise-action@3c2e0cf8"}, {"run": "mise run release-notes"}],
 		}},
 	}
 	found := violation with input as swap(".github/workflows/release-artifacts.yml", other)
