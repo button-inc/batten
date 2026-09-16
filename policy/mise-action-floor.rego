@@ -57,7 +57,7 @@ package batten.mise_action_floor
 
 import rego.v1
 
-rules contains "mise-action-floor"
+rules contains "provision pin stale"
 
 # ONE COORDINATE, and both the action name and the denylist are derived from it,
 # so the sha appears once and the name and the denylisted pin cannot drift.
@@ -111,7 +111,7 @@ pin contains {"path": path, "line": i + 1, "sha": sha} if {
 # THE ANTI-VACUITY ARM. A tree with no pin of this action is a question this
 # module could not ask, never a clean answer.
 violation contains {
-	"rule": "mise-action-floor",
+	"rule": "provision pin stale",
 	"verdict": "version pin unread",
 	"subjects": [{"count": 0}],
 } if {
@@ -120,7 +120,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "mise-action-floor",
+	"rule": "provision pin stale",
 	"verdict": "version pin stale",
 	"subjects": [{"path": sprintf("%s:%d", [row.path, row.line])}],
 } if {

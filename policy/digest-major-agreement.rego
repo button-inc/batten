@@ -58,7 +58,7 @@ package batten.digest_major_agreement
 
 import rego.v1
 
-rules contains "digest-major-agreement"
+rules contains "version read wrong"
 
 manifest_path := "Cargo.toml"
 
@@ -196,7 +196,7 @@ judged contains crate if {
 # A crate the manifest declares and the lock resolves no `digest` for is a
 # lockfile that does not describe the manifest, so nothing here can be decided.
 violation contains {
-	"rule": "digest-major-agreement",
+	"rule": "version read wrong",
 	"verdict": "lock read unclear",
 	"subjects": [{"artifact": crate}],
 } if {
@@ -208,7 +208,7 @@ violation contains {
 
 # A BARE entry beside several majors: the lock cannot say which one it meant.
 violation contains {
-	"rule": "digest-major-agreement",
+	"rule": "version read wrong",
 	"verdict": "lock read unclear",
 	"subjects": [{"artifact": crate}],
 } if {
@@ -224,7 +224,7 @@ violation contains {
 # rather than a vacuous pass: the rule is about the workspace's OWN composition,
 # and a workspace composing one crate has nothing to compose wrongly.
 violation contains {
-	"rule": "digest-major-agreement",
+	"rule": "version read wrong",
 	"verdict": "version resolve other",
 	"subjects": [{"artifact": sprintf("%s -> digest %s", [crate, resolved(crate)])}],
 } if {

@@ -49,7 +49,7 @@ package batten.report_only
 
 import rego.v1
 
-rules contains "report-only"
+rules contains "gate report silent"
 
 manifest := "mise.toml"
 
@@ -64,7 +64,7 @@ verify := task if {
 # report against, and reporting that as clean would be the false green the
 # predecessor spent an explicit exit 2 on.
 violation contains {
-	"rule": "report-only",
+	"rule": "gate report silent",
 	"verdict": "task guard missing",
 	"subjects": [{"path": manifest}],
 } if {
@@ -74,7 +74,7 @@ violation contains {
 
 # A report named in `verify`'s own `depends` list.
 violation contains {
-	"rule": "report-only",
+	"rule": "gate report silent",
 	"verdict": "task judge silent",
 	"subjects": [{"path": manifest}],
 } if {
@@ -88,7 +88,7 @@ violation contains {
 # about: the invocation is what makes it a gate, so the spelling that counts is
 # `mise run <task>` rather than the bare name.
 violation contains {
-	"rule": "report-only",
+	"rule": "gate report silent",
 	"verdict": "task judge silent",
 	"subjects": [{"path": manifest}],
 } if {
@@ -98,7 +98,7 @@ violation contains {
 
 # The other way onto the landing path, and the one `verify` cannot see.
 violation contains {
-	"rule": "report-only",
+	"rule": "gate report silent",
 	"verdict": "task judge silent",
 	"subjects": [{"path": path}],
 } if {
