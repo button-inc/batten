@@ -63,7 +63,7 @@ fn cap_repo(name: &str, manifest: &str, bot: &str) -> PathBuf {
              kind = \"document\"\n\
              target = \"AGENTS.md\"\n\n\
              [[rule]]\n\
-             id = \"cap-drift\"\n\
+             id = \"bound carry missing\"\n\
              kind = \"policy\"\n\
              scope = \"tree\"\n\
              line_sources = [\"Cargo.toml\", \"renovate.json5\"]\n\
@@ -86,7 +86,7 @@ fn cap_repo(name: &str, manifest: &str, bot: &str) -> PathBuf {
 }
 
 fn check(dir: &Path) -> Output {
-    run(dir, &["check", "--rule", "cap-drift"])
+    run(dir, &["check", "--rule", "bound carry missing"])
 }
 
 fn deps(entries: &[&str]) -> String {
@@ -278,7 +278,10 @@ fn output_is_pointer_only() {
 #[test]
 fn the_real_trees_two_sets_agree() {
     // The self-consumption case the retiring suite ended on.
-    let output = common::run_at_real_root(&common::at_root(""), &["check", "--rule", "cap-drift"]);
+    let output = common::run_at_real_root(
+        &common::at_root(""),
+        &["check", "--rule", "bound carry missing"],
+    );
     assert_eq!(
         output.status.code(),
         Some(0),

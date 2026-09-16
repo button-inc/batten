@@ -46,7 +46,7 @@ fn table_repo(name: &str, doc: &str) -> PathBuf {
              kind = \"document\"\n\
              target = \"AGENTS.md\"\n\n\
              [[rule]]\n\
-             id = \"license-table\"\n\
+             id = \"tool grade unclear\"\n\
              kind = \"policy\"\n\
              scope = \"tree\"\n\
              line_sources = [\"CONTRIBUTING.md\"]\n\
@@ -68,7 +68,7 @@ fn table_repo(name: &str, doc: &str) -> PathBuf {
 }
 
 fn check(dir: &Path) -> Output {
-    run(dir, &["check", "--rule", "license-table"])
+    run(dir, &["check", "--rule", "tool grade unclear"])
 }
 
 const HEAD: &str = "| Tool | Use | License | Apache-2.0 |\n| --- | --- | --- | --- |\n";
@@ -146,8 +146,10 @@ fn output_is_a_pointer_never_the_table_body() {
 
 #[test]
 fn the_repo_as_it_stands_passes() {
-    let output =
-        common::run_at_real_root(&common::at_root(""), &["check", "--rule", "license-table"]);
+    let output = common::run_at_real_root(
+        &common::at_root(""),
+        &["check", "--rule", "tool grade unclear"],
+    );
     assert_eq!(
         output.status.code(),
         Some(0),

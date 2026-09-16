@@ -66,7 +66,7 @@ fn digest_repo(name: &str, manifest: &str, lock: &str) -> PathBuf {
              kind = \"document\"\n\
              target = \"AGENTS.md\"\n\n\
              [[rule]]\n\
-             id = \"digest-major-agreement\"\n\
+             id = \"version read wrong\"\n\
              kind = \"policy\"\n\
              scope = \"tree\"\n\
              line_sources = [\"Cargo.toml\", \"Cargo.lock\"]\n\
@@ -89,7 +89,7 @@ fn digest_repo(name: &str, manifest: &str, lock: &str) -> PathBuf {
 }
 
 fn check(dir: &Path) -> Output {
-    run(dir, &["check", "--rule", "digest-major-agreement"])
+    run(dir, &["check", "--rule", "version read wrong"])
 }
 
 /// A `[workspace.dependencies]` table declaring `names`.
@@ -298,7 +298,7 @@ fn this_workspaces_own_crypto_crates_agree() {
     // asserted.
     let output = common::run_at_real_root(
         &common::at_root(""),
-        &["check", "--rule", "digest-major-agreement"],
+        &["check", "--rule", "version read wrong"],
     );
     assert_eq!(
         output.status.code(),

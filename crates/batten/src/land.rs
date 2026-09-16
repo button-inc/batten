@@ -332,7 +332,7 @@ pub fn replay(
 /// map, record.
 ///
 /// **Split out so the property can be tested at all** (CLOUD-1708). The store
-/// this writes is what `rebase-conflict-stops-the-lap` reads, and nothing drove a
+/// this writes is what `replay halt conflict` reads, and nothing drove a
 /// REAL conflict through the writer and then read the record — every case
 /// constructed a [`Replay`] and handed it to [`record`], which pins the writer
 /// but not the path that reaches it. The one thing keeping that test from

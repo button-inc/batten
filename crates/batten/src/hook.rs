@@ -7625,7 +7625,7 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
             // The other polarity, against THE SAME LINE for the same reason
             // (CLOUD-1477's sibling). The operand matcher drops flags before
             // comparing, so a flag is the one thing a `pattern` cannot see and
-            // this is how a row excludes one. `rebase-not-hand-stepped` is the
+            // this is how a row excludes one. `patch run loose` is the
             // measured case: `--onto` makes a rebase a range move rather than the
             // landing lap the row bans, and the row had no way to say so.
             //

@@ -73,7 +73,7 @@ fn pin_repo(
          kind = \"document\"\n\
          target = \"AGENTS.md\"\n\n\
          [[rule]]\n\
-         id = \"hook-pin-check\"\n\
+         id = \"hook pin stale\"\n\
          kind = \"policy\"\n\
          scope = \"tree\"\n\
          line_sources = [\".claude/settings.json\", \"mise.toml\", \"mise-tasks/*.sh\"]\n\
@@ -108,7 +108,7 @@ fn pin_repo(
 }
 
 fn check(dir: &Path) -> Output {
-    run(dir, &["check", "--rule", "hook-pin-check"])
+    run(dir, &["check", "--rule", "hook pin stale"])
 }
 
 const MANIFEST: &str =
@@ -287,7 +287,7 @@ fn output_is_pointer_only() {
 fn this_repositorys_own_registrations_pass() {
     // The self-consumption case the retiring suite ended on.
     let output =
-        common::run_at_real_root(&common::at_root(""), &["check", "--rule", "hook-pin-check"]);
+        common::run_at_real_root(&common::at_root(""), &["check", "--rule", "hook pin stale"]);
     assert_eq!(
         output.status.code(),
         Some(0),
