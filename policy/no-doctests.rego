@@ -41,7 +41,7 @@ package batten.no_doctests
 
 import rego.v1
 
-rules contains "no-doctests"
+rules contains "test declare unused"
 
 # A doc-comment line's text, with the marker stripped. Undefined for any line
 # that is not a doc comment, which is what keeps the fence scan inside them.
@@ -107,7 +107,7 @@ declares_non_running(info) if {
 }
 
 violation contains {
-	"rule": "no-doctests",
+	"rule": "test declare unused",
 	"verdict": "test place wrong",
 	"subjects": [{"path": path, "line": index + 1}],
 } if {

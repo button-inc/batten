@@ -60,7 +60,7 @@ package batten.glob_containment
 
 import rego.v1
 
-rules contains "glob-containment"
+rules contains "pattern reach other"
 
 config_path := "batten.toml"
 
@@ -217,7 +217,7 @@ satisfied(want) if {
 
 # THE PARSE REFUSALS, both of which fail closed rather than passing vacuously.
 violation contains {
-	"rule": "glob-containment",
+	"rule": "pattern reach other",
 	"verdict": "config parse unread",
 	"subjects": [{"path": config_path}],
 } if {
@@ -226,7 +226,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "glob-containment",
+	"rule": "pattern reach other",
 	"verdict": "step select missing",
 	"subjects": [{"path": hooks_path}],
 } if {
@@ -236,7 +236,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "glob-containment",
+	"rule": "pattern reach other",
 	"verdict": "step cover missing",
 	"subjects": [{"path": sprintf("%s:%d", [config_path, entry.line])}],
 } if {

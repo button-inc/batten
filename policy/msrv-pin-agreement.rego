@@ -59,7 +59,7 @@ package batten.msrv_pin_agreement
 
 import rego.v1
 
-rules contains "msrv-pin-agreement"
+rules contains "version pin other"
 
 manifest_path := "Cargo.toml"
 
@@ -183,7 +183,7 @@ constraint := value if {
 # Each is its own refusal, because silence on any one of the three would read as
 # agreement — which is the failure the whole family exists to prevent.
 violation contains {
-	"rule": "msrv-pin-agreement",
+	"rule": "version pin other",
 	"verdict": "version declare missing",
 	"subjects": [{"path": manifest_path}],
 } if {
@@ -192,7 +192,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "msrv-pin-agreement",
+	"rule": "version pin other",
 	"verdict": "version declare missing",
 	"subjects": [{"path": pins_path}],
 } if {
@@ -204,7 +204,7 @@ violation contains {
 # neutral omission: the updater this repository uses does not read the floor from
 # the manifest at all.
 violation contains {
-	"rule": "msrv-pin-agreement",
+	"rule": "version pin other",
 	"verdict": "version declare missing",
 	"subjects": [{"path": renovate_path}],
 } if {
@@ -219,7 +219,7 @@ violation contains {
 # a path no mutation can name is a path nothing proves is load-bearing — the
 # retiring program recorded the mutant runner refusing exactly that shape.
 violation contains {
-	"rule": "msrv-pin-agreement",
+	"rule": "version pin other",
 	"verdict": "version declare other",
 	"subjects": [{"artifact": sprintf("%s rust-version %s", [manifest_path, floor])}],
 } if {
@@ -227,7 +227,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "msrv-pin-agreement",
+	"rule": "version pin other",
 	"verdict": "version declare other",
 	"subjects": [{"artifact": sprintf("%s constraints.rust %s", [renovate_path, constraint])}],
 } if {

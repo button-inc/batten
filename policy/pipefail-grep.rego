@@ -46,7 +46,7 @@ package batten.pipefail_grep
 
 import rego.v1
 
-rules contains "pipefail-grep"
+rules contains "shell guard missing"
 
 # Files that actually turn pipefail on. Everything else is out of scope, because
 # without it a SIGPIPE never reaches the pipeline's status.
@@ -110,7 +110,7 @@ early(token) if {
 }
 
 violation contains {
-	"rule": "pipefail-grep",
+	"rule": "shell guard missing",
 	"verdict": "spawn read broken",
 	"subjects": [{"path": path, "line": index + 1}],
 } if {
