@@ -38,7 +38,7 @@ local gate = new Mapping<String, Step> {
     check = "mise run hk-version"
   }
   ["suite-bench-check"] {
-    check = "cargo run --quiet -p batten -- check --rule suite-cost-corpus"
+    check = "cargo run --quiet -p batten -- check --rule 'suite measure stale'"
   }
   // CLOUD-266's rule reaches the one budget nobody had looked at (CLOUD-668).
   // The MCP startup budget was the host's 30000ms default, never measured, and
@@ -650,7 +650,7 @@ local gate = new Mapping<String, Step> {
         "Cargo.lock",
         "mise.toml",
         ".github/workflows/*.yml",
-        // CLOUD-1709's two `workflow-shell-not-growing` rows glob
+        // CLOUD-1709's two workflow shell-step ratchet rows (`workflow add other`, `step add other`) glob
         // `.github/workflows/**`, which is BROADER than the `*.yml` entry above
         // and not redundant with it: the narrow entry misses a `.yaml` workflow
         // and misses a nested path. A step whose glob does not cover its own

@@ -74,7 +74,7 @@ manifest_path := "mise.toml"
 
 policy_path := "batten.toml"
 
-rules contains "ci-tools"
+rules contains "tool pin wrong"
 
 manifest_lines := lines if {
 	lines := input.tree.lines[manifest_path]
@@ -148,7 +148,7 @@ requested contains {"path": path, "line": i + 1, "tool": tool} if {
 # --- direction 1: every name resolves ----------------------------------------
 
 violation contains {
-	"rule": "ci-tools",
+	"rule": "tool pin wrong",
 	"verdict": "tool name unknown",
 	"subjects": [{"artifact": sprintf("%s:%d %s", [row.path, row.line, row.tool])}],
 } if {
@@ -161,7 +161,7 @@ violation contains {
 # a tree whose workflows request nothing is one where every job installs the whole
 # toolchain — the state the narrowing removed.
 violation contains {
-	"rule": "ci-tools",
+	"rule": "tool pin wrong",
 	"verdict": "tool list empty",
 	"subjects": [{"path": manifest_path}],
 } if {
@@ -190,7 +190,7 @@ list_count(path) := count([1 |
 # One list per use is the invariant, and a COUNT is decidable without tracking
 # block structure — the same constraint the scan above already works within.
 violation contains {
-	"rule": "ci-tools",
+	"rule": "tool pin wrong",
 	"verdict": "tool select missing",
 	"subjects": [{"path": path}],
 } if {
@@ -205,7 +205,7 @@ binds(path, pattern_id) if {
 }
 
 violation contains {
-	"rule": "ci-tools",
+	"rule": "tool pin wrong",
 	"verdict": "tool pin loose",
 	"subjects": [{"path": path}],
 } if {
@@ -234,7 +234,7 @@ installed_basenames contains basename(row.tool) if {
 }
 
 violation contains {
-	"rule": "ci-tools",
+	"rule": "tool pin wrong",
 	"verdict": "spawn reach absent",
 	"subjects": [{"artifact": tool}],
 } if {
