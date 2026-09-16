@@ -9332,7 +9332,7 @@ fn run_land_replay(
             // first path and stopped there — so a reader with no `--resolve` in
             // their head reached for `git rebase --continue`, which cannot
             // exist here, and then for a hand rebase, which
-            // `rebase-not-hand-stepped` denies. Measured on this very branch: a
+            // `patch run loose` denies. Measured on this very branch: a
             // session concluded the loop was defective and was one step from
             // cherry-picking around it, which would have completed the replay
             // and written no lap record at all.

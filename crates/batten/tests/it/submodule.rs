@@ -104,6 +104,67 @@ fn base_paths(dir: &Path) -> BTreeSet<String> {
         .collect()
 }
 
+/// A LINKED WORKTREE counts its OWN files, not the main checkout's
+/// (CLOUD-1753).
+///
+/// `git::repo_root` answers with the common dir's parent on purpose, so every
+/// linked worktree resolves to one store (CLOUD-164). The working-tree walk used
+/// that as the directory to read files FROM, which compares this checkout's
+/// index against the other checkout's bytes. Measured: a worktree whose branch
+/// had committed a different `batten.toml` reported that file as uncommitted on
+/// a tree `git status` called clean, and the count fell to zero the moment the
+/// main checkout's copy was made to match — which is the tell that the wrong
+/// file was being read.
+///
+/// The fixture makes the two checkouts DISAGREE on a tracked file, because a
+/// worktree whose content matches the main one cannot distinguish the two
+/// readings at all.
+#[test]
+fn a_linked_worktree_counts_its_own_files_rather_than_the_main_checkouts() {
+    let main = Fixture::new("worktree-own-files")
+        .file("shared.txt", "main's own text\n")
+        .git()
+        .build();
+    git_in(&main, &["add", "-A"]);
+    git_in(&main, &["commit", "-q", "-m", "base"]);
+    git_in(&main, &["branch", "sibling"]);
+
+    let linked = main.join("..").join("worktree-own-files-linked");
+    let _ = std::fs::remove_dir_all(&linked);
+    git_in(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            linked.to_str().expect("a utf-8 fixture path"),
+            "sibling",
+        ],
+    );
+    std::fs::write(linked.join("shared.txt"), "the branch's own text\n").unwrap();
+    git_in(&linked, &["add", "-A"]);
+    git_in(&linked, &["commit", "-q", "-m", "this branch's own text"]);
+
+    // The premise: the two checkouts must actually differ, or the walk cannot
+    // tell which one it read.
+    assert_ne!(
+        std::fs::read_to_string(main.join("shared.txt")).unwrap(),
+        std::fs::read_to_string(linked.join("shared.txt")).unwrap(),
+        "the fixture must make the two checkouts disagree"
+    );
+    assert_eq!(
+        git_in(&linked, &["status", "--porcelain"]).trim(),
+        "",
+        "and the linked worktree must be clean before the count is asked for"
+    );
+
+    assert_eq!(
+        batten::git::uncommitted(&linked).expect("count the uncommitted paths"),
+        0,
+        "a linked worktree is judged by its own files"
+    );
+}
+
 /// A clean superproject carrying a submodule has NO uncommitted paths
 /// (CLOUD-1753).
 ///

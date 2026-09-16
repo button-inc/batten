@@ -46,7 +46,7 @@ fn doctest_repo(name: &str, source: &str) -> PathBuf {
         .config(
             "version = 1\n\n\
              [[verdict]]\n\
-             id = \"test place wrong\"\n\
+             id = \"test run unseen\"\n\
              gloss = \"a test exists that nothing runs\"\n\
              class = \"An example nothing executes is dead code a reader trusts for being executable.\"\n\n\
              [[verdict.route]]\n\
@@ -54,7 +54,7 @@ fn doctest_repo(name: &str, source: &str) -> PathBuf {
              kind = \"document\"\n\
              target = \"AGENTS.md\"\n\n\
              [[rule]]\n\
-             id = \"no-doctests\"\n\
+             id = \"test run unseen\"\n\
              kind = \"policy\"\n\
              scope = \"tree\"\n\
              line_sources = [\"crates/**/*.rs\"]\n\
@@ -76,7 +76,7 @@ fn doctest_repo(name: &str, source: &str) -> PathBuf {
 }
 
 fn check(dir: &Path) -> Output {
-    run(dir, &["check", "--rule", "no-doctests"])
+    run(dir, &["check", "--rule", "test run unseen"])
 }
 
 #[test]
@@ -155,8 +155,10 @@ fn the_committed_workspace_carries_no_runnable_doctest() {
     // `cargo nextest run` executes no doctest, so an example here would be run
     // nowhere. Asserted rather than assumed, because an empty class is not a
     // stable property.
-    let output =
-        common::run_at_real_root(&common::at_root(""), &["check", "--rule", "no-doctests"]);
+    let output = common::run_at_real_root(
+        &common::at_root(""),
+        &["check", "--rule", "test run unseen"],
+    );
     assert_eq!(
         output.status.code(),
         Some(0),

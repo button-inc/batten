@@ -291,7 +291,7 @@ pub fn rebase(dir: &Path, branch: &str, onto: &str) -> Result<Rebase> {
 /// rebase in progress, where `git add` and `git rebase --continue` are the route;
 /// this engine leaves a clean tree and a refusal, and the only way back to a
 /// resolvable state is re-creating the rebase by hand — which this repository's
-/// own `rebase-not-hand-stepped` denies, with no `bypass_env` and a general hatch
+/// own `patch run loose` denies, with no `bypass_env` and a general hatch
 /// that is only readable in the adjudicating process's environment. Measured on
 /// #848 twice: the loop stopped, and no route it named was open.
 ///
@@ -474,7 +474,7 @@ fn replay_range(
     //
     // Measured on this branch: `3f308039` and `main`'s `a7935a7b` share patch
     // identity `f185159e…`, and the replay stopped on it every lap. The
-    // resolution needed a hand rebase, which `rebase-not-hand-stepped` denies —
+    // resolution needed a hand rebase, which `patch run loose` denies —
     // so the engine's missing drop presented as a policy deadlock and cost a
     // human override to get past.
     //
