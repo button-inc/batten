@@ -7949,6 +7949,41 @@ rule = "task carry other"
 reason = "CLOUD-1265's `[tasks.record-verdicts]` is a producer's EFFECT, not a predicate: the predicate it replaces migrated to `policy/validator-verdict-clean.rego`, and section 5 leaves no rule kind for a body that must spawn a validator. `mise-tasks/pkl-check.sh` and its suite leave the tree in the same commit, so the bash surface falls while this row's `mise.toml`-only count rises by one."
 expires = "2026-10-31"
 
+# THE SAME DISPOSITION, THE SAME REASON, ONE CAMPAIGN LATER (CLOUD-1717). The row
+# above is `[tasks.record-verdicts]`; this is `[tasks.branch-age-record]`, and the
+# argument transfers because the shape is identical rather than merely similar.
+#
+# THE PREDICATE DID MIGRATE. What `mise-tasks/branch-age-check.sh` decided — is a
+# remote branch older than the threshold, and is a branch NAME heading more than
+# one merged pull request — is `policy/branch-age.rego`'s now. What stays outside
+# is the part that is not a decision: two `gh` reads and a civil-calendar
+# subtraction. Neither can move in. Section 5 makes `check` `read` and structurally
+# incapable of spawning, and `Fact::Instant` projects `null` to every module —
+# `clippy.toml`'s `disallowed-methods` and `crates/batten/tests/clock_ban.rs` hold
+# the engine to calling no clock on any evaluation path. So the producer computes
+# the age and the module compares the THRESHOLD, which is CLOUD-1559's reading rule
+# from the other side: carry the decisions, not the steps. There is no rule kind
+# for that body to become.
+#
+# THE BASH SURFACE FALLS IN THIS SAME CAMPAIGN, which is the condition the row above
+# sets for taking this disposition at all. The ratchet counts one literal in
+# `mise.toml` and nothing else, so it reads 2->3 while
+# `mise-tasks/branch-age-check.sh` and `tests/branch-age-check.bats` leave the tree
+# — the shape this ratchet's own header warns about, where "a row that denies its
+# own campaign's wins is worse than the hole it closes".
+#
+# UNNARROWED, for the reason both waivers above record: a ratchet finding's path is
+# the glob PLUS THE COUNTS, so no `path =` selects it and a literal one would lapse
+# the moment either count moved.
+#
+# EXPECTED TO LAPSE UNUSED. `base = "origin/main"`, so the floor becomes 3 on its own
+# the moment this lands and the row suppresses nothing. It exists to get one commit
+# past the gate, not to stand.
+[[waiver]]
+rule = "task write other"
+reason = "CLOUD-1717's `[tasks.branch-age-record]` is a producer's EFFECT, not a predicate: the predicate migrated to `policy/branch-age.rego`, and what stays outside is a `gh` read plus calendar arithmetic that section 5 and the clock ban both make unmovable into the engine. `mise-tasks/branch-age-check.sh` and `tests/branch-age-check.bats` leave the tree in the same campaign, so the bash surface falls while this row's `mise.toml`-only count rises by one."
+expires = "2026-10-31"
+
 # `cfg-gated-test`'s own first legitimate refusal, taken through the route the
 # class declares rather than the one it declared first. The long form of why an
 # override is not that route sits on `verdict[test cover partial]` above; the
