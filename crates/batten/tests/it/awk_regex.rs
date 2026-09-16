@@ -53,7 +53,7 @@ fn awk_repo(name: &str, program: &str) -> PathBuf {
              kind = \"document\"\n\
              target = \"AGENTS.md\"\n\n\
              [[rule]]\n\
-             id = \"awk-regex\"\n\
+             id = \"pattern carry unsafe\"\n\
              kind = \"policy\"\n\
              scope = \"tree\"\n\
              line_sources = [\"mise-tasks/**\"]\n\
@@ -75,7 +75,7 @@ fn awk_repo(name: &str, program: &str) -> PathBuf {
 }
 
 fn check(dir: &Path) -> Output {
-    run(dir, &["check", "--rule", "awk-regex"])
+    run(dir, &["check", "--rule", "pattern carry unsafe"])
 }
 
 #[test]
@@ -156,7 +156,10 @@ fn a_tree_with_no_awk_at_all_passes_rather_than_erroring() {
 
 #[test]
 fn this_repos_own_programs_pass_today() {
-    let output = common::run_at_real_root(&common::at_root(""), &["check", "--rule", "awk-regex"]);
+    let output = common::run_at_real_root(
+        &common::at_root(""),
+        &["check", "--rule", "pattern carry unsafe"],
+    );
     assert_eq!(
         output.status.code(),
         Some(0),

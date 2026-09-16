@@ -65,7 +65,7 @@ fn review_repo(name: &str, config: &str) -> PathBuf {
              kind = \"document\"\n\
              target = \"AGENTS.md\"\n\n\
              [[rule]]\n\
-             id = \"coderabbit-config\"\n\
+             id = \"review declare wrong\"\n\
              kind = \"policy\"\n\
              scope = \"tree\"\n\
              line_sources = [\".coderabbit.yaml\"]\n\
@@ -87,7 +87,7 @@ fn review_repo(name: &str, config: &str) -> PathBuf {
 }
 
 fn check(dir: &Path) -> Output {
-    run(dir, &["check", "--rule", "coderabbit-config"])
+    run(dir, &["check", "--rule", "review declare wrong"])
 }
 
 const CONFORMING: &str = "reviews:\n  request_changes_workflow: true\n  auto_review:\n    drafts: true\n  tools:\n    gitleaks:\n      enabled: true\n    ruff:\n      enabled: false\n";
@@ -225,7 +225,7 @@ fn this_repositorys_own_config_holds_the_three_keys() {
     // The self-consumption case the retiring suite opened on.
     let output = common::run_at_real_root(
         &common::at_root(""),
-        &["check", "--rule", "coderabbit-config"],
+        &["check", "--rule", "review declare wrong"],
     );
     assert_eq!(
         output.status.code(),

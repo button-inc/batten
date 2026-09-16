@@ -1223,7 +1223,22 @@ enum Changes {
 /// is one whose index or `HEAD` cannot be read.
 fn working_tree_changes(dir: &Path, want: Changes) -> Result<BTreeSet<String>> {
     let repo = open(dir)?;
-    let root = repo_root(dir)?;
+    // THIS CHECKOUT'S OWN WORKDIR, never [`repo_root`]. That helper answers with
+    // the COMMON dir's parent on purpose (CLOUD-164), so every linked worktree
+    // resolves to ONE store — which is right for a store path and wrong for
+    // "which bytes are in the tree in front of me". Reading the files there
+    // compares THIS worktree's index against the MAIN checkout's working tree.
+    //
+    // MEASURED: a `git worktree add` checkout whose branch had committed a
+    // different `batten.toml` reported that file as uncommitted, on a tree `git
+    // status` called clean, and the count went to zero the moment the MAIN
+    // checkout's copy was made to match. That is the mis-rooting class this
+    // module's own header says it exists to kill, arriving through the helper
+    // written to prevent the other half of it.
+    let root = repo
+        .workdir()
+        .map(Path::to_path_buf)
+        .map_or_else(|| repo_root(dir), Ok)?;
     let refusal = || {
         UsageError::raise(
             "cannot read the changed paths; this is not a git repository, or it has no commits"
@@ -1313,6 +1328,15 @@ fn working_tree_changes(dir: &Path, want: Changes) -> Result<BTreeSet<String>> {
     // what it means to every rule that reads the tree.
     if want == Changes::All {
         for path in crate::rules::tree_files(&root)? {
+            // `.git` IS NOT TREE CONTENT, and in a LINKED WORKTREE it is a
+            // regular FILE rather than the directory every walker skips by
+            // name. Measured: a `git worktree add` checkout reported exactly one
+            // uncommitted path on a tree `git status` called clean, and it was
+            // this. No commit can contain it, so it is never a difference from
+            // `HEAD`.
+            if path == ".git" {
+                continue;
+            }
             if !tracked.contains(&path) {
                 changed.insert(path);
             }

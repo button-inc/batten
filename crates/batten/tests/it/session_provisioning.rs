@@ -626,11 +626,25 @@ fn the_reachable_set_is_not_empty() {
     // re-spells, or a `run` argv shape the parser stops recognising, returns an
     // empty set and the compiler scan then passes over nothing at all.
     let bodies = reachable_session_task_bodies();
+    // THE ROWS WITH A TASK TO READ, not every row. Since CLOUD-1753 a row may
+    // dispatch the VERB directly — `session-egress` runs `batten doctor egress`
+    // rather than a task, deliberately, because the task would read a `NO_PROXY`
+    // that `mise` has already corrected and grade an unfenced container fenced.
+    // Such a row has no task body by construction, so counting it here would
+    // make this anti-vacuity case fail on a row that is working as designed.
+    let with_a_task = session_rows()
+        .iter()
+        .filter(|row| row.run.contains("\"mise\""))
+        .count();
     assert!(
-        bodies.len() >= session_rows().len(),
-        "every session-start row's task body resolves, found {} for {} rows",
+        with_a_task > 0,
+        "the manifest must still carry task-dispatching rows, or this case guards nothing"
+    );
+    assert!(
+        bodies.len() >= with_a_task,
+        "every session-start row that names a task resolves it, found {} for {} rows",
         bodies.len(),
-        session_rows().len()
+        with_a_task
     );
     assert!(
         bodies.iter().any(|(name, _)| name == "session:batten"),

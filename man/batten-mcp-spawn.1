@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-mcp-spawn 1  batten 
+.SH NAME
+batten\-mcp\-spawn \- Record that a client actually spawned this server, then exec the launch line unchanged
+.SH SYNOPSIS
+\fBbatten mcp spawn\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIserver\fR> <\fIcommand\fR> 
+.SH DESCRIPTION
+Record that a client actually spawned this server, then exec the launch line unchanged
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIserver\fR>
+The server this launch is for, as the spawn ledger and `mcp\-attach\-check` name it
+.TP
+<\fIcommand\fR>
+The launch line, run verbatim — Batten execs it and does not supervise it

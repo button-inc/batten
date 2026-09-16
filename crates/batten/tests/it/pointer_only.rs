@@ -1941,6 +1941,17 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::PlanEntries,
         disposition: Disposition::PointerOnly,
     },
+    // Read-only without `--write`, which is the arm judged here: it renders the
+    // corpus to stdout, and the corpus is a table of suite NAMES and durations —
+    // paths this repository tracks, never a line of any suite's body. The
+    // could-not-look arms (no report, no suite, a row naming nothing tracked)
+    // are the ones a canary could reach, and each reports a count.
+    Verb {
+        path: "record suites",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The body is prose somebody wrote and the record is a COUNT and a key list,
     // so nothing this verb emits may carry a word of it — which is the same rule
     // `record plan` follows over a smaller payload.

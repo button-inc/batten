@@ -481,7 +481,7 @@ fn replay_range(
     //
     // Measured on this branch: `3f308039` and `main`'s `a7935a7b` share patch
     // identity `f185159e…`, and the replay stopped on it every lap. The
-    // resolution needed a hand rebase, which `rebase-not-hand-stepped` denies —
+    // resolution needed a hand rebase, which `patch run loose` denies —
     // so the engine's missing drop presented as a policy deadlock and cost a
     // human override to get past.
     //

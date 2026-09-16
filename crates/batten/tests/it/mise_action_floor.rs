@@ -75,7 +75,7 @@ fn floor_repo(name: &str, workflows: &[(&str, &str)]) -> PathBuf {
          kind = \"document\"\n\
          target = \"AGENTS.md\"\n\n\
          [[rule]]\n\
-         id = \"mise-action-floor\"\n\
+         id = \"provision pin stale\"\n\
          kind = \"policy\"\n\
          scope = \"tree\"\n\
          line_sources = [\".github/workflows/*.yml\"]\n\
@@ -98,7 +98,7 @@ fn floor_repo(name: &str, workflows: &[(&str, &str)]) -> PathBuf {
 }
 
 fn check(dir: &Path) -> Output {
-    run(dir, &["check", "--rule", "mise-action-floor"])
+    run(dir, &["check", "--rule", "provision pin stale"])
 }
 
 /// A workflow whose install step pins the action at `reference`.
@@ -242,7 +242,7 @@ fn this_repositorys_own_workflows_hold_the_floor() {
     // claim about this repository, checked rather than asserted.
     let output = common::run_at_real_root(
         &common::at_root(""),
-        &["check", "--rule", "mise-action-floor"],
+        &["check", "--rule", "provision pin stale"],
     );
     assert_eq!(
         output.status.code(),

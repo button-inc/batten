@@ -53,7 +53,7 @@ fn report_repo(name: &str, manifest: &str, workflow: Option<&str>) -> PathBuf {
              kind = \"document\"\n\
              target = \"AGENTS.md\"\n\n\
              [[rule]]\n\
-             id = \"report-only\"\n\
+             id = \"gate report silent\"\n\
              kind = \"policy\"\n\
              scope = \"tree\"\n\
              sources = [\"mise.toml\", \".github/workflows/*.yml\"]\n\
@@ -77,7 +77,7 @@ fn report_repo(name: &str, manifest: &str, workflow: Option<&str>) -> PathBuf {
 }
 
 fn check(dir: &Path) -> Output {
-    run(dir, &["check", "--rule", "report-only"])
+    run(dir, &["check", "--rule", "gate report silent"])
 }
 
 const CLEAN: &str = "[tasks.verify]\ndepends = [\"ci\"]\nrun = \"echo ok\"\n";
@@ -188,8 +188,10 @@ fn a_manifest_with_no_verify_task_cannot_be_judged_and_says_so() {
 
 #[test]
 fn the_repos_real_manifest_and_workflows_are_clean_today() {
-    let output =
-        common::run_at_real_root(&common::at_root(""), &["check", "--rule", "report-only"]);
+    let output = common::run_at_real_root(
+        &common::at_root(""),
+        &["check", "--rule", "gate report silent"],
+    );
     assert_eq!(
         output.status.code(),
         Some(0),
