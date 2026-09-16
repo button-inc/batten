@@ -62,7 +62,7 @@ fn map_repo(name: &str, map: Option<&str>, modules: &[(&str, &str)]) -> PathBuf 
          kind = \"document\"\n\
          target = \"AGENTS.md\"\n\n\
          [[rule]]\n\
-         id = \"module-map\"\n\
+         id = \"memory cover partial\"\n\
          kind = \"policy\"\n\
          scope = \"tree\"\n\
          line_sources = [\".serena/memories/core.md\"]\n\
@@ -90,7 +90,7 @@ fn map_repo(name: &str, map: Option<&str>, modules: &[(&str, &str)]) -> PathBuf 
 }
 
 fn check(dir: &Path) -> Output {
-    run(dir, &["check", "--rule", "module-map"])
+    run(dir, &["check", "--rule", "memory cover partial"])
 }
 
 const ROW: &str = "- `main.rs` — the binary boundary.\n";
@@ -197,7 +197,10 @@ fn output_is_pointer_only() {
 fn the_repositorys_own_map_is_complete() {
     // The self-consumption case the retiring suite ended on: the claim
     // `rules/rust.md` makes about `mem:core` is checkable rather than asserted.
-    let output = common::run_at_real_root(&common::at_root(""), &["check", "--rule", "module-map"]);
+    let output = common::run_at_real_root(
+        &common::at_root(""),
+        &["check", "--rule", "memory cover partial"],
+    );
     assert_eq!(
         output.status.code(),
         Some(0),

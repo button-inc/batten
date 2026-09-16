@@ -112,7 +112,7 @@ fn tools_repo(name: &str, manifest: &str, policy: &str, workflows: &[(&str, &str
          kind = \"document\"\n\
          target = \"AGENTS.md\"\n\n\
          [[rule]]\n\
-         id = \"ci-tools\"\n\
+         id = \"tool pin wrong\"\n\
          kind = \"policy\"\n\
          scope = \"tree\"\n\
          line_sources = [\"mise.toml\", \"batten.toml\", \".github/workflows/*.yml\"]\n\
@@ -146,7 +146,7 @@ fn tools_repo(name: &str, manifest: &str, policy: &str, workflows: &[(&str, &str
 }
 
 fn check(dir: &Path) -> Output {
-    run(dir, &["check", "--rule", "ci-tools"])
+    run(dir, &["check", "--rule", "tool pin wrong"])
 }
 
 const MANIFEST: &str = "[tools]\nrust = \"1.97\"\n\"aqua:open-policy-agent/opa\" = \"1.0\"\nzig = \"0.13\"\n\n[env]\nX = \"1\"\n";
@@ -432,7 +432,8 @@ fn output_is_pointer_only() {
 #[test]
 fn the_committed_workflows_and_manifest_agree() {
     // The two self-consumption cases the retiring suite kept, in one run.
-    let output = common::run_at_real_root(&common::at_root(""), &["check", "--rule", "ci-tools"]);
+    let output =
+        common::run_at_real_root(&common::at_root(""), &["check", "--rule", "tool pin wrong"]);
     assert_eq!(
         output.status.code(),
         Some(0),

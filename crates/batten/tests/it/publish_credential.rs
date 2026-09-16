@@ -73,7 +73,7 @@ fn publish_repo(name: &str, config: &str, workflows: &[(&str, &str)]) -> PathBuf
          kind = \"document\"\n\
          target = \"AGENTS.md\"\n\n\
          [[rule]]\n\
-         id = \"publish-credential\"\n\
+         id = \"release grant missing\"\n\
          kind = \"policy\"\n\
          scope = \"tree\"\n\
          line_sources = [\"release-plz.toml\", \".github/workflows/*.yml\"]\n\
@@ -98,7 +98,7 @@ fn publish_repo(name: &str, config: &str, workflows: &[(&str, &str)]) -> PathBuf
 }
 
 fn check(dir: &Path) -> Output {
-    run(dir, &["check", "--rule", "publish-credential"])
+    run(dir, &["check", "--rule", "release grant missing"])
 }
 
 const PLAIN: &str = "on: push\njobs:\n  release-plz:\n    permissions:\n      contents: write\n    steps:\n      - run: release-plz release\n";
@@ -288,7 +288,7 @@ fn the_tree_as_it_stands_carries_no_registry_credential() {
     // The self-consumption case the retiring suite opened on.
     let output = common::run_at_real_root(
         &common::at_root(""),
-        &["check", "--rule", "publish-credential"],
+        &["check", "--rule", "release grant missing"],
     );
     assert_eq!(
         output.status.code(),
