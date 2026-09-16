@@ -296,6 +296,14 @@ pub fn replay(
 /// unexercised. Everything after it — the rebase, the mapping of each arm, and
 /// the record — is one function a test can drive against a real conflicting
 /// tree.
+///
+/// # Errors
+///
+/// A [`UsageError`] when the fetch cannot reach the tracking ref, when the
+/// rebase cannot start, or when a `--resolve` entry names a path this replay
+/// never conflicted on — the last is a usage error rather than a no-op, because
+/// a resolution spent on the wrong path is a resolution the right one did not
+/// get. An internal error when the record cannot be written.
 pub fn replay_onto(
     root: &Path,
     tracking: &str,
