@@ -40,7 +40,7 @@ package batten.awk_regex
 
 import rego.v1
 
-rules contains "awk-regex"
+rules contains "pattern spelling unsafe"
 
 # Only lines that reach awk at all. The shell narrowed the same way with a grep
 # for `awk` before it looked for `-v`, and the narrowing is what keeps this from
@@ -88,7 +88,7 @@ in_regex_position(line, name) if {
 }
 
 violation contains {
-	"rule": "awk-regex",
+	"rule": "pattern spelling unsafe",
 	"verdict": "pattern carry unsafe",
 	"subjects": [{"path": path, "line": index + 1}],
 } if {

@@ -55,7 +55,7 @@ package batten.hook_pin_check
 
 import rego.v1
 
-rules contains "hook-pin-check"
+rules contains "hook pin stale"
 
 settings_path := ".claude/settings.json"
 
@@ -189,7 +189,7 @@ exempt(task, tool) if {
 }
 
 violation contains {
-	"rule": "hook-pin-check",
+	"rule": "hook pin stale",
 	"verdict": "tool reach absent",
 	"subjects": [{"artifact": sprintf("%s %s", [task, tool])}],
 } if {
@@ -204,7 +204,7 @@ violation contains {
 # clean answer: with the pinned set empty every by-path hook passes vacuously,
 # which is the shape of a gate that judges nothing while reporting clean.
 violation contains {
-	"rule": "hook-pin-check",
+	"rule": "hook pin stale",
 	"verdict": "tool list empty",
 	"subjects": [{"path": manifest_path}],
 } if {

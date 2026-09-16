@@ -44,7 +44,7 @@ fn census_config(admits: bool) -> String {
     format!(
         "version = 1\n\n\
          [[rule]]\n\
-         id = \"workflow-shell-not-growing\"\n\
+         id = \"workflow add other\"\n\
          kind = \"ratchet\"\n\
          glob = \".github/workflows/**\"\n\
          pattern = \"\\n        run:\"\n\
@@ -54,7 +54,7 @@ fn census_config(admits: bool) -> String {
          severity = \"deny\"\n\
          scope = \"tree\"\n\n\
          [[rule]]\n\
-         id = \"workflow-shell-not-growing-bare\"\n\
+         id = \"step add other\"\n\
          kind = \"ratchet\"\n\
          glob = \".github/workflows/**\"\n\
          pattern = \"\\n      - run:\"\n\
@@ -127,7 +127,7 @@ fn one_named_step_over_the_ceiling_fails() {
     assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
     let text = stdout(&output);
     assert!(
-        text.contains("workflow-shell-not-growing"),
+        text.contains("workflow add other"),
         "the finding names the rule: {text:?}"
     );
     assert!(
@@ -157,7 +157,7 @@ fn one_bare_step_over_the_ceiling_fails_the_other_row() {
     assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
     let text = stdout(&output);
     assert!(
-        text.contains("workflow-shell-not-growing-bare"),
+        text.contains("step add other"),
         "the bare spelling is the OTHER row's, and it must be the one that fires: {text:?}"
     );
 }

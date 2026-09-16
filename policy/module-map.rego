@@ -66,7 +66,7 @@ package batten.module_map
 
 import rego.v1
 
-rules contains "module-map"
+rules contains "module list missing"
 
 # Where this consumer keeps its map.
 map_path := ".serena/memories/core.md"
@@ -82,7 +82,7 @@ map_lines := lines if {
 
 # THE COULD-NOT-LOOK ARM. Reported once, and nothing else is reported with it.
 violation contains {
-	"rule": "module-map",
+	"rule": "module list missing",
 	"verdict": "memory resolve missing",
 	"subjects": [{"path": map_path}],
 } if {
@@ -113,7 +113,7 @@ named(base) if {
 }
 
 violation contains {
-	"rule": "module-map",
+	"rule": "module list missing",
 	"verdict": "module list missing",
 	"subjects": [{"path": path}],
 } if {

@@ -54,7 +54,7 @@ package batten.rust_paths_check
 
 import rego.v1
 
-rules contains "rust-paths-check"
+rules contains "path list partial"
 
 workflow_path := ".github/workflows/rust.yml"
 
@@ -184,7 +184,7 @@ selected(path) if {
 # ANTI-VACUITY. A workflow with no filter is safe and expensive; reading it as
 # "every probe honoured" reports on a filter that does not exist.
 violation contains {
-	"rule": "rust-paths-check",
+	"rule": "path list partial",
 	"verdict": "workflow read unclear",
 	"subjects": [{"path": workflow_path}],
 } if {
@@ -193,7 +193,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "rust-paths-check",
+	"rule": "path list partial",
 	"verdict": "workflow read unclear",
 	"subjects": [{"artifact": p}],
 } if {
@@ -202,7 +202,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "rust-paths-check",
+	"rule": "path list partial",
 	"verdict": "input select missing",
 	"subjects": [{"path": probe}],
 } if {
@@ -212,7 +212,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "rust-paths-check",
+	"rule": "path list partial",
 	"verdict": "input select loose",
 	"subjects": [{"path": probe}],
 } if {
