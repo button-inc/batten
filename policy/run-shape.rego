@@ -17,7 +17,7 @@
 #   foreground-sleep                the harness kills a foreground call at ~2
 #                                   minutes, so a patient poll FAILS rather than
 #                                   waits (CLOUD-482, exit 143 and 144 measured).
-#   background-timer                a backgrounded `sleep N; tail log` exits on
+#   timer run refused               a backgrounded `sleep N; tail log` exits on
 #                                   the clock, never on the event — and the
 #                                   event already notifies (CLOUD-821: 490 such
 #                                   calls in one session, 2 changed a decision).
@@ -77,7 +77,7 @@ rules contains "redirect write unread"
 #MUTANT background-not-consulted|s@^	input.call\["run-in-background"\] != true@	true@|a_backgrounded_bare_sleep_raises_only_the_timer
 # The mutation restores the exemption this row removed: with the partition term
 # forced false, a backgrounded `sleep` loop carrying a condition falls through
-# `background-timer` exactly as it did before, and only a case asserting THAT
+# `timer run refused` exactly as it did before, and only a case asserting THAT
 # shape is refused can see it. Every process-polling row still denies under it,
 # via the sibling arm — which is what made the hole survive its own suite.
 #MUTANT condition-is-an-exemption|s@^	count(process_probes) == 0@	false@|a_backgrounded_conditioned_sleep_loop_is_refused
@@ -173,7 +173,7 @@ violation contains {
 # `until` was the escape. AGENTS.md has carried the rule since CLOUD-821, with the
 # measurement — "490 in one session, 2 changed a decision" — and the claim that
 # the shape is "refused by `run-shape-guard`". With the exemption in place that
-# sentence was false for every conditioned wait; `background-timer` now reaches
+# sentence was false for every conditioned wait; `timer run refused` now reaches
 # them and it is true.
 #
 # MEASURED 2026-09-09, this session: `until grep -q '#' <file> && ! pgrep -f
@@ -829,7 +829,7 @@ test_a_liveness_signal_is_the_same_question if {
 # rather than a local process — was the one wait left allowed. CLOUD-1337 removed
 # that allow, so what this case now pins is narrower and still worth pinning: the
 # two arms must not BOTH fire, and the one that answers a non-process condition
-# must be `background-timer` rather than `polls-a-local-process`. A rule that
+# must be `timer run refused` rather than `task watch duplicate`. A rule that
 # refused every wait under one verdict would fail this.
 test_a_wait_on_a_condition_nobody_reports_is_a_timer_not_a_poll if {
 	count(violation) == 1 with input as {"call": {
@@ -848,7 +848,7 @@ test_a_wait_on_a_condition_nobody_reports_is_a_timer_not_a_poll if {
 			inner(["sleep", "5"], "until", "body", null),
 		],
 	}}
-	v.rule == "background-timer"
+	v.rule == "timer run refused"
 }
 
 # A PROCESS READ WITH NO LOOP IS NOT A WAIT. `mise run alive` asks once and
@@ -877,7 +877,7 @@ test_a_backgrounded_wait_on_a_condition_is_refused if {
 			inner(["sleep", "1"], "until", "body", null),
 		],
 	}}
-	v.rule == "background-timer"
+	v.rule == "timer run refused"
 }
 
 # A FOREGROUND loop spends the turn exactly as a foreground `sleep` does, and it
@@ -923,7 +923,7 @@ test_a_bare_sleep_beside_a_condition_loop_is_refused if {
 			inner([":"], "until", "body", null),
 		],
 	}}
-	v.rule == "background-timer"
+	v.rule == "timer run refused"
 }
 
 # THE DISCRIMINATING CASE for `run-in-background`: both rules deny, so only the
