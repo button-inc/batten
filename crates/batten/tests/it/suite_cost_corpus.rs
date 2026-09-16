@@ -50,6 +50,8 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::fmt::Write as _;
+
 use crate::common;
 
 use std::path::{Path, PathBuf};
@@ -106,11 +108,13 @@ fn config() -> String {
             "the cost corpus records a suite this tree does not track",
         ),
     ] {
-        out.push_str(&format!(
+        write!(
+            out,
             "\n[[verdict]]\nid = {id:?}\ngloss = {gloss:?}\nclass = \"\"\"\n{gloss}\n\"\"\"\n\n\
              [[verdict.route]]\nid = \"suite measure now\"\nkind = \"command\"\n\
              target = \"batten record suites --write\"\n"
-        ));
+        )
+        .unwrap();
     }
     out
 }
@@ -121,7 +125,7 @@ fn corpus(rows: &[(&str, &str)]) -> String {
         "# Per-suite cost of `test:bats`\n\n| seconds | share | suite |\n| ---: | ---: | --- |\n",
     );
     for (seconds, suite) in rows {
-        out.push_str(&format!("| {seconds} | 50.0% | `{suite}` |\n"));
+        writeln!(out, "| {seconds} | 50.0% | `{suite}` |").unwrap();
     }
     out
 }
@@ -298,9 +302,11 @@ fn report(dir: &Path, suites: &[(&str, &str)]) {
     std::fs::create_dir_all(dir.join("target").join("bats-report")).unwrap();
     let mut xml = String::from("<testsuites>\n");
     for (name, time) in suites {
-        xml.push_str(&format!(
+        write!(
+            xml,
             "<testsuite name=\"{name}\" tests=\"1\" time=\"{time}\">\n</testsuite>\n"
-        ));
+        )
+        .unwrap();
     }
     xml.push_str("</testsuites>\n");
     common::write(&dir.join("target").join("bats-report"), "report.xml", &xml);
