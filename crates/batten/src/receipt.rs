@@ -1462,7 +1462,7 @@ pub fn run_clean(out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
         err,
         "::error:: receipt clean: the working tree differs from HEAD {head} in {dirty} path(s), so \
          a receipt keyed to that commit would attest bytes no commit contains. Commit the work \
-         (you are pre-authorised to), stash it, or run the long task in a separate worktree — then \
+         (you are pre-authorised to), set it aside, or run the long task in a separate worktree — then \
          re-run."
     )?;
     Ok(ExitCode::Usage)
@@ -1539,8 +1539,8 @@ fn tree_is_head(facts: &RepoFacts, err: &mut dyn Write) -> Result<()> {
         err,
         "::error:: receipt record: the working tree differs from HEAD {head} in {dirty} path(s), \
          so a receipt keyed to that commit would attest bytes no commit contains. Commit the work \
-         (you are pre-authorised to), stash it, or run the long task in a separate worktree — then \
-         re-run. No receipt is written."
+         (you are pre-authorised to), set it aside, or run the long task in a separate worktree \
+         — then re-run. No receipt is written."
     )?;
     Err(UsageError::raise(format!(
         "receipt record: {dirty} uncommitted path(s), so no receipt is written"

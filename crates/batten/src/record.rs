@@ -53,7 +53,7 @@
 //! is here rather than at the report: a validator's output is the likeliest place
 //! in this family for a secret to appear.
 
-use std::io::Read as _;
+use std::io::{Read as _, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
@@ -201,7 +201,7 @@ pub fn run_forge(reference: &str, _overrides: &Overrides) -> Result<ExitCode> {
 /// names a suite this tree does not track — see [`crate::suites::derive`], where
 /// all four are could-not-look and none is an empty corpus. An internal error
 /// when the corpus cannot be written.
-pub fn run_suites(write: bool) -> Result<ExitCode> {
+pub fn run_suites(write: bool, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
     let root = git::repo_root(Path::new("."))?;
     let root = Path::new(&root);
     // THE TRACKED SET FROM GIT, never a directory walk: an untracked scratch file
@@ -209,11 +209,19 @@ pub fn run_suites(write: bool) -> Result<ExitCode> {
     // walk would put it there.
     let tracked = crate::git::tracked_paths(root)?
         .into_iter()
-        .filter(|path| path.starts_with("tests/") && path.ends_with(".bats"))
+        // `extension`, not `ends_with(".bats")`: the string comparison is
+        // case-sensitive where a file name is not everywhere, and a `FOO.BATS`
+        // the runner would run is one this corpus would then never carry.
+        .filter(|path| {
+            path.starts_with("tests/")
+                && Path::new(path)
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("bats"))
+        })
         .collect();
     let (rows, text) = crate::suites::derive(root, &tracked)?;
     if !write {
-        print!("{text}");
+        write!(out, "{text}")?;
         return Ok(ExitCode::Success);
     }
     // `store` rather than a second write path, and it is the same helper the
@@ -221,11 +229,12 @@ pub fn run_suites(write: bool) -> Result<ExitCode> {
     // which write failed. The corpus lives in the tree rather than under
     // `$GIT_DIR`, and that is the only thing this leaf does differently.
     store(&crate::suites::corpus_path(root), &text)?;
-    eprintln!(
+    writeln!(
+        err,
         "record suites: {} suite(s), written to {}",
         rows.len(),
         crate::suites::CORPUS
-    );
+    )?;
     Ok(ExitCode::Success)
 }
 
@@ -239,10 +248,11 @@ pub fn run_suites(write: bool) -> Result<ExitCode> {
 pub fn run(
     command: crate::cli::RecordCommand,
     overrides: &Overrides,
-    out: &mut dyn std::io::Write,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
 ) -> Result<ExitCode> {
     match command {
-        crate::cli::RecordCommand::Suites { write } => run_suites(write),
+        crate::cli::RecordCommand::Suites { write } => run_suites(write, out, err),
         crate::cli::RecordCommand::Tool { id } => run_tool(&id, overrides),
         crate::cli::RecordCommand::Forge { reference } => run_forge(&reference, overrides),
         crate::cli::RecordCommand::Plan => run_plan(),
