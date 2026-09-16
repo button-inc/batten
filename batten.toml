@@ -5297,8 +5297,8 @@ no_fix_reason = "migrate the predicate onto a rule kind, or declare `# stays-bas
 #                         native spelling, and there is no engine surface it
 #                         could migrate onto — so it is exempt from THIS row,
 #                         which globs `mise-tasks/**`. It is not exempt from
-#                         measurement: `workflow-shell-not-growing` and its
-#                         `-bare` sibling ratchet the step count. Allowed and
+#                         measurement: `workflow add other` and its
+#                         `step add other` sibling ratchet the step count. Allowed and
 #                         uncounted are different claims, and reading the first
 #                         as the second is what 497 duplicated lines were
 #                         written under.
@@ -5404,7 +5404,10 @@ scope = "tree"
 no_fix_reason = "a waiver is not a fix: either the delay has a bound it can exit on and needs no sleep, or it is a backoff and belongs on the async path where it can be cancelled. Adding a twelfth exemption is the thing this row refuses"
 
 # The other spelling of the same concept — see the block above for why it is a
-# second row rather than a second pattern on the first.
+# second row rather than a second pattern on the first. The two names differ only
+# in their subject because the vocabulary has no token for "the same rule, the
+# other spelling": `workflow add other` carries the keyed `run:` inside an
+# already-opened step mapping, `step add other` the bare `- run:` list item.
 [[rule]]
 id = "task write other"
 kind = "ratchet"
@@ -5476,7 +5479,7 @@ no_fix_reason = "migrate the predicate onto a rule kind, or waive the increase d
 # declares it in the workflow it added it to, and every other workflow stays
 # ratcheted.
 [[rule]]
-id = "workflow-shell-not-growing"
+id = "workflow add other"
 kind = "ratchet"
 glob = ".github/workflows/**"
 pattern = "\n        run:"
@@ -5488,9 +5491,12 @@ scope = "tree"
 no_fix_reason = "move the step's body into a composite action or a batten verb, or declare `# workflow-shell: <issue> <why>` in the workflow and own the increase; which of the two is the whole question"
 
 # The other spelling of the same concept — see the block above for why it is a
-# second row rather than a second pattern on the first.
+# second row rather than a second pattern on the first. The two names differ only
+# in their subject because the vocabulary has no token for "the same rule, the
+# other spelling": `workflow add other` carries the keyed `run:` inside an
+# already-opened step mapping, `step add other` the bare `- run:` list item.
 [[rule]]
-id = "workflow-shell-not-growing-bare"
+id = "step add other"
 kind = "ratchet"
 glob = ".github/workflows/**"
 pattern = "\n      - run:"
@@ -7222,7 +7228,7 @@ input = "target/release/batten"
 # two halves rather than an implementation detail of either: `suites.rs` spells it
 # as `CORPUS` and this row spells it here.
 [[rule]]
-id = "suite-cost-corpus"
+id = "suite measure stale"
 kind = "policy"
 scope = "tree"
 lines = ["bench/suites/RESULTS.md"]
@@ -7340,6 +7346,8 @@ kind = "policy"
 scope = "tree"
 sources = [".github/workflows/*.yml"]
 module = "policy/release-trigger-independent.rego"
+severity = "deny"
+
 # CLOUD-194, ported from `mise-tasks/module-map-check.sh` under CLOUD-843. The
 # module's own header carries the predicate and why a missing map is reported
 # once; it is not restated here.
@@ -7376,7 +7384,7 @@ module = "policy/release-trigger-independent.rego"
 # `verify`'s `depends` list, a workflow's trigger map — which is what removes the
 # span-carving and the word-boundary the shell needed.
 [[rule]]
-id = "report-only"
+id = "gate report silent"
 kind = "policy"
 scope = "tree"
 sources = ["mise.toml", ".github/workflows/*.yml", ".github/workflows/*.yaml"]
@@ -7384,7 +7392,7 @@ module = "policy/report-only.rego"
 severity = "deny"
 
 [[rule]]
-id = "license-table"
+id = "manifest table stale"
 kind = "policy"
 scope = "tree"
 line_sources = ["CONTRIBUTING.md"]
@@ -7392,7 +7400,7 @@ module = "policy/license-table.rego"
 severity = "deny"
 
 [[rule]]
-id = "pipefail-grep"
+id = "shell guard missing"
 kind = "policy"
 scope = "tree"
 line_sources = ["mise-tasks/**", "*.sh"]
@@ -7400,7 +7408,7 @@ module = "policy/pipefail-grep.rego"
 severity = "deny"
 
 [[rule]]
-id = "awk-regex"
+id = "pattern spelling unsafe"
 kind = "policy"
 scope = "tree"
 line_sources = ["mise-tasks/**", "*.sh", "mise.toml"]
@@ -7408,7 +7416,7 @@ module = "policy/awk-regex.rego"
 severity = "deny"
 
 [[rule]]
-id = "no-doctests"
+id = "test declare unused"
 kind = "policy"
 scope = "tree"
 line_sources = ["crates/**/*.rs"]
@@ -7504,7 +7512,7 @@ severity = "deny"
 # neither can see a tool a `[[rule]]` row itself spawns — which with auto-install
 # off fails CLOSED in CI while passing locally (CLOUD-480, two runs).
 [[rule]]
-id = "ci-tools"
+id = "tool pin wrong"
 kind = "policy"
 scope = "tree"
 line_sources = ["mise.toml", "batten.toml", ".github/workflows/*.yml"]
@@ -7512,7 +7520,7 @@ module = "policy/ci-tools.rego"
 severity = "deny"
 
 [[rule]]
-id = "timeout-budget"
+id = "job bind missing"
 kind = "policy"
 scope = "tree"
 line_sources = [".github/workflows/*.yml"]
@@ -7520,7 +7528,7 @@ module = "policy/timeout-budget.rego"
 severity = "deny"
 
 [[rule]]
-id = "publish-credential"
+id = "release grant missing"
 kind = "policy"
 scope = "tree"
 line_sources = ["release-plz.toml", ".github/workflows/*.yml"]
@@ -7528,7 +7536,7 @@ module = "policy/publish-credential.rego"
 severity = "deny"
 
 [[rule]]
-id = "coderabbit-config"
+id = "review declare wrong"
 kind = "policy"
 scope = "tree"
 line_sources = [".coderabbit.yaml"]
@@ -7536,7 +7544,7 @@ module = "policy/coderabbit-config.rego"
 severity = "deny"
 
 [[rule]]
-id = "cap-drift"
+id = "version pin loose"
 kind = "policy"
 scope = "tree"
 line_sources = ["Cargo.toml", "renovate.json5"]
@@ -7544,7 +7552,7 @@ module = "policy/cap-drift.rego"
 severity = "deny"
 
 [[rule]]
-id = "digest-major-agreement"
+id = "version read wrong"
 kind = "policy"
 scope = "tree"
 line_sources = ["Cargo.toml", "Cargo.lock"]
@@ -7552,7 +7560,7 @@ module = "policy/digest-major-agreement.rego"
 severity = "deny"
 
 [[rule]]
-id = "rust-paths-check"
+id = "path list partial"
 kind = "policy"
 scope = "tree"
 line_sources = [".github/workflows/rust.yml"]
@@ -7560,7 +7568,7 @@ module = "policy/rust-paths-check.rego"
 severity = "deny"
 
 [[rule]]
-id = "msrv-pin-agreement"
+id = "version pin other"
 kind = "policy"
 scope = "tree"
 line_sources = ["Cargo.toml", "mise.toml", "renovate.json5"]
@@ -7568,7 +7576,7 @@ module = "policy/msrv-pin-agreement.rego"
 severity = "deny"
 
 [[rule]]
-id = "hook-pin-check"
+id = "hook pin stale"
 kind = "policy"
 scope = "tree"
 line_sources = [".claude/settings.json", "mise.toml", "mise-tasks/*.sh"]
@@ -7576,7 +7584,7 @@ module = "policy/hook-pin-check.rego"
 severity = "deny"
 
 [[rule]]
-id = "mise-action-floor"
+id = "provision pin stale"
 kind = "policy"
 scope = "tree"
 line_sources = [".github/workflows/*.yml"]
@@ -7584,7 +7592,7 @@ module = "policy/mise-action-floor.rego"
 severity = "deny"
 
 [[rule]]
-id = "glob-containment"
+id = "pattern reach other"
 kind = "policy"
 scope = "tree"
 line_sources = ["batten.toml", "hk.pkl"]
@@ -7592,7 +7600,7 @@ module = "policy/glob-containment.rego"
 severity = "deny"
 
 [[rule]]
-id = "module-map"
+id = "module list missing"
 kind = "policy"
 scope = "tree"
 line_sources = [".serena/memories/core.md"]
@@ -9238,7 +9246,28 @@ measured = "2026-09-07"
 # COLD'S BASIS MOVES WITH WARM'S, for the 2026-09-06 entry's measured reason:
 # refreshing one and not the other made the very next lap refuse on the other arm
 # with warm never breached.
-count = 268
+#
+# THE 2026-09-16 REPLAY MOVE, 268 -> 279, BOTH BASES, AND NEITHER FLOOR MOVES.
+# Same shape as the 2026-09-08 entry above and for the same reason: replaying the
+# shell-retirement branch onto the current trunk brought main's new test modules
+# together with this branch's own `mcp_spawn.rs`, `receipt_clean.rs` and
+# `suite_cost_corpus.rs`. MEASURED rather than reconciled — the replay resolved a
+# conflict on this key by taking the larger of the two sides, which is a bet and
+# not a reading, so the number was re-taken from the tree it judges:
+# `git ls-files 'crates/batten/tests/**/*.rs' | wc -l` reads **279** against a
+# declared 268 at tolerance 10, a drift of 11 and therefore a refusal.
+# `basis_drift` (`prune.rs:526`) counts exactly this set, so the tracked count IS
+# the live figure rather than a proxy for it.
+#
+# THE FLOORS DO NOT MOVE, on the 2026-09-08 precedent verbatim: a basis refresh is
+# a trend counter, not a byte budget, and moving a floor needs the independent
+# measurement CLOUD-1158 owns. An ordinary post-prune `du -sm target` was not
+# takeable here — no prune escalated on this lap, so there is no post-prune state
+# to read — which is different from being skipped, and cold's exact measurement
+# stays owed exactly as the block below records.
+[prune.warm.basis]
+glob = "crates/batten/tests/**/*.rs"
+count = 279
 tolerance = 10
 
 # COLD'S BASIS MOVES AND COLD'S FLOOR DOES NOT, and that is the entry above
@@ -9258,7 +9287,10 @@ tolerance = 10
 # together.
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 268
+# 279, moved with warm's by the 2026-09-16 entry above and for the reason the
+# 2026-09-06 entry measured: a basis refreshed on one arm and not the other makes
+# the very next lap refuse on the arm that was left behind.
+count = 279
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops

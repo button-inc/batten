@@ -42,7 +42,7 @@ package batten.suite_cost_corpus
 
 import rego.v1
 
-rules contains "suite-cost-corpus"
+rules contains "suite measure stale"
 
 corpus_path := "bench/suites/RESULTS.md"
 
@@ -83,7 +83,7 @@ recorded contains suite if {
 # --- could not look ------------------------------------------------------------
 
 violation contains {
-	"rule": "suite-cost-corpus",
+	"rule": "suite measure stale",
 	"verdict": "suite count unread",
 	"subjects": [{"path": corpus_path}],
 } if {
@@ -91,7 +91,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "suite-cost-corpus",
+	"rule": "suite measure stale",
 	"verdict": "suite count unread",
 	"subjects": [{"path": corpus_path}],
 } if {
@@ -104,7 +104,7 @@ violation contains {
 # that carries no bats — the scoping defect CLOUD-1164 records for `tree-clean`,
 # avoided rather than survived.
 violation contains {
-	"rule": "suite-cost-corpus",
+	"rule": "suite measure stale",
 	"verdict": "suite list empty",
 	"subjects": [{"count": 0}],
 } if {
@@ -116,7 +116,7 @@ violation contains {
 # --- the two directions --------------------------------------------------------
 
 violation contains {
-	"rule": "suite-cost-corpus",
+	"rule": "suite measure stale",
 	"verdict": "suite count absent",
 	"subjects": [{"path": suite}],
 } if {
@@ -126,7 +126,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "suite-cost-corpus",
+	"rule": "suite measure stale",
 	"verdict": "suite count dead",
 	"subjects": [{"path": row}],
 } if {
