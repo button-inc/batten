@@ -400,6 +400,22 @@ fn staging_fixture(name: &str, stashing: bool) -> PathBuf {
     } else {
         ""
     };
+    // THE FIXER IS `perl -pi -e`, NOT `sed -i`, AND THAT IS PORTABILITY RATHER
+    // THAN TASTE. This fixture ran `sed -i s/^/STAMPED\ / *.txt`, which is the
+    // GNU spelling: BSD `sed` reads the next argument as the backup SUFFIX, so
+    // on a Mac it consumed `a.txt` as the suffix and then reported
+    // `command a expects \ followed by text` about the script. Two cases here
+    // failed on the first Darwin run this repository ever made (CLOUD-737's
+    // `macos` leg), and they were the only executed `sed -i` left in the tree.
+    //
+    // CLOUD-282 settled the same question for `mutate.rs` with `sed -i.bak` plus
+    // a removal of the backup. That spelling is wrong HERE for a reason specific
+    // to these cases: `a.txt.bak` would be an untracked file, and
+    // `an_all_staged_commit_is_unchanged_in_shape` asserts the SHAPE of the
+    // resulting commit — so the residue the other site deletes in Rust would
+    // change the very thing this case measures. `perl -pi -e` takes no suffix on
+    // either platform and leaves nothing behind; `config.rs` already records it
+    // as a write spelling this tree knows.
     common::write(
         &dir,
         "hk.pkl",
@@ -413,7 +429,7 @@ fn staging_fixture(name: &str, stashing: bool) -> PathBuf {
              \x20     [\"stamp\"] {{\n\
              \x20       glob = List(\"*.txt\")\n\
              \x20       check = \"! grep -L STAMPED *.txt | grep -q .\"\n\
-             \x20       fix = \"sed -i s/^/STAMPED\\\\ /  *.txt\"\n\
+             \x20       fix = \"perl -pi -e 's/^/STAMPED /' *.txt\"\n\
              \x20     }}\n\
              \x20   }}\n\
              \x20 }}\n\
