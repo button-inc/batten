@@ -1077,7 +1077,7 @@ fn record(arm: &'static str, id: &str, result: &serde_json::Value) -> Result<Rec
         .get("mean")
         .and_then(serde_json::Value::as_f64)
         .ok_or_else(|| anyhow::anyhow!("perf-pair: the {id} {arm} arm carried no mean."))?;
-    summarise(arm, id, times, Some(mean))
+    summarise(arm, id, &times, Some(mean))
 }
 
 /// A set of SECOND-valued samples reduced to one [`Record`], in milliseconds.
@@ -1091,7 +1091,10 @@ fn record(arm: &'static str, id: &str, result: &serde_json::Value) -> Result<Rec
 fn summarise(
     arm: &'static str,
     id: &str,
-    times: Vec<f64>,
+    // A SLICE since CLOUD-1714: `arm::percentile` takes the series by value
+    // because it sorts it, so both readings clone and this signature consumed
+    // nothing. Borrowing says that.
+    times: &[f64],
     reported_mean: Option<f64>,
 ) -> Result<Record> {
     if times.is_empty() {
@@ -1104,8 +1107,8 @@ fn summarise(
     // so the shape where an unsorted series reaches a quantile is not
     // representable here any more.
     let (Some(p50), Some(p95)) = (
-        crate::arm::percentile(times.clone(), 50, 100),
-        crate::arm::percentile(times.clone(), 95, 100),
+        crate::arm::percentile(times.to_vec(), 50, 100),
+        crate::arm::percentile(times.to_vec(), 95, 100),
     ) else {
         bail!("perf: the {id} {arm} arm carried no times.");
     };
@@ -1800,13 +1803,13 @@ pub fn config_load(path: &Path) -> Result<Sweep> {
     let load_arm = summarise(
         "load",
         &format!("config-load-{bytes}b"),
-        time(Box::new(|| crate::config::load(path).map(|_| ())))?,
+        &time(Box::new(|| crate::config::load(path).map(|_| ())))?,
         None,
     )?;
     let parse_arm = summarise(
         "parse",
         &format!("config-parse-{bytes}b"),
-        time(Box::new(|| {
+        &time(Box::new(|| {
             crate::config::parse(&text, &source).map(|_| ())
         }))?,
         None,
@@ -1814,7 +1817,7 @@ pub fn config_load(path: &Path) -> Result<Sweep> {
     let null_arm = summarise(
         "null",
         &format!("config-load-null-{bytes}b"),
-        time(Box::new(|| crate::config::load(path).map(|_| ())))?,
+        &time(Box::new(|| crate::config::load(path).map(|_| ())))?,
         None,
     )?;
 
