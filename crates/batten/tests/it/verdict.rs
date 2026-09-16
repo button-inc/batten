@@ -37,9 +37,9 @@ fn anywhere() -> std::path::PathBuf {
 
 fn verdict(args: &[&str]) -> Output {
     let dir = anywhere();
-    let mut argv = vec!["verdict"];
-    argv.extend_from_slice(args);
-    run(&dir, &argv)
+    let mut line = vec!["verdict"];
+    line.extend_from_slice(args);
+    run(&dir, &line)
 }
 
 #[test]

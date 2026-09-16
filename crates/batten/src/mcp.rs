@@ -1854,6 +1854,16 @@ pub fn record_spawn(root: &Path, server: &str) {
     drop(appended);
 }
 
+/// Dispatch one declared method over a mediated MCP connection and return its
+/// reduction (CLOUD-1260).
+///
+/// # Errors
+///
+/// A [`UsageError`] when the handshake is refused, when the server answers a
+/// status or an envelope the protocol does not allow, or when the declared
+/// method resolves to nothing. A transport failure is could-not-look and is
+/// raised rather than reduced to an empty result: a dispatch nobody completed
+/// must not read as a server that answered with nothing.
 pub fn dispatch(
     wiring: &Wiring,
     method: &str,
