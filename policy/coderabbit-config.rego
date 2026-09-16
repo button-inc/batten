@@ -56,7 +56,7 @@ package batten.coderabbit_config
 
 import rego.v1
 
-rules contains "coderabbit-config"
+rules contains "review declare wrong"
 
 config_path := ".coderabbit.yaml"
 
@@ -103,7 +103,7 @@ any_key_declared if {
 
 # --- the vacuity guard, and it is first --------------------------------------
 violation contains {
-	"rule": "coderabbit-config",
+	"rule": "review declare wrong",
 	"verdict": "config carry empty",
 	"subjects": [{"path": config_path}],
 } if {
@@ -113,7 +113,7 @@ violation contains {
 
 # --- the two keys whose absence leaves the default in force ------------------
 violation contains {
-	"rule": "coderabbit-config",
+	"rule": "review declare wrong",
 	"verdict": "config carry empty",
 	"subjects": [{"artifact": sprintf("%s absent", [name])}],
 } if {
@@ -123,7 +123,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "coderabbit-config",
+	"rule": "review declare wrong",
 	"verdict": "config state wrong",
 	"subjects": [{"path": sprintf("%s:%d", [config_path, key_at(name).line])}],
 } if {
@@ -180,7 +180,7 @@ scanner_enabled := {"line": j + 1, "value": value_of(config_lines[j])} if {
 }
 
 violation contains {
-	"rule": "coderabbit-config",
+	"rule": "review declare wrong",
 	"verdict": "config state wrong",
 	"subjects": [{"path": sprintf("%s:%d", [config_path, scanner_enabled.line])}],
 } if {

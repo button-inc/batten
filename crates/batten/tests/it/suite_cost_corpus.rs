@@ -1,4 +1,4 @@
-//! `suite-cost-corpus` and `batten record suites` over the compiled binary —
+//! `suite measure stale` and `batten record suites` over the compiled binary —
 //! CLOUD-352, ported off `mise-tasks/suite-bench.sh` and
 //! `mise-tasks/suite-bench-check.sh` under CLOUD-1753.
 //!
@@ -88,7 +88,7 @@ fn config() -> String {
         .to_string_lossy()
         .into_owned();
     let mut out = format!(
-        "version = 1\n\n[[rule]]\nid = \"suite-cost-corpus\"\nkind = \"policy\"\nscope = \"tree\"\n\
+        "version = 1\n\n[[rule]]\nid = \"suite measure stale\"\nkind = \"policy\"\nscope = \"tree\"\n\
          lines = [\"bench/suites/RESULTS.md\"]\nmodule = {module:?}\nseverity = \"deny\"\n"
     );
     for (id, gloss) in [
@@ -130,7 +130,7 @@ fn check(dir: &Path) -> Output {
     batten()
         .arg("check")
         .arg("--rule")
-        .arg("suite-cost-corpus")
+        .arg("suite measure stale")
         .current_dir(dir)
         .env_remove("BATTEN_STRICTNESS")
         .output()
@@ -254,7 +254,7 @@ fn no_tracked_suites_is_could_not_look_rather_than_a_clean_corpus() {
     let output = check(&dir);
     assert_eq!(output.status.code(), Some(2), "{}", said(&output));
     assert!(
-        said(&output).contains("suite-cost-corpus"),
+        said(&output).contains("suite measure stale"),
         "{}",
         said(&output)
     );

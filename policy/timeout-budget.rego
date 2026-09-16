@@ -63,7 +63,7 @@ package batten.timeout_budget
 
 import rego.v1
 
-rules contains "timeout-budget"
+rules contains "job bind missing"
 
 # The one repository-wide headroom multiplier a measured budget is derived with.
 budget_multiplier := 3
@@ -142,7 +142,7 @@ jobs_with_timeouts contains sprintf("%s:%d", [row.path, row.line]) if {
 # A workflow this cannot parse as a workflow is not a workflow with no jobs, and
 # a silent pass over it is the failure this arm exists for.
 violation contains {
-	"rule": "timeout-budget",
+	"rule": "job bind missing",
 	"verdict": "job list empty",
 	"subjects": [{"path": path}],
 } if {
@@ -151,7 +151,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "timeout-budget",
+	"rule": "job bind missing",
 	"verdict": "job list empty",
 	"subjects": [{"path": path}],
 } if {
@@ -170,7 +170,7 @@ violation contains {
 # renders its FIRST subject, so a job name in a second one is a pointer the reader
 # never sees.
 violation contains {
-	"rule": "timeout-budget",
+	"rule": "job bind missing",
 	"verdict": "timer declare missing",
 	"subjects": [{"artifact": sprintf("%s:%d %s", [k.path, k.line + 1, k.job])}],
 } if {
@@ -185,7 +185,7 @@ job_has_timeout(k) if {
 }
 
 violation contains {
-	"rule": "timeout-budget",
+	"rule": "job bind missing",
 	"verdict": "timer carry unnamed",
 	"subjects": [{"artifact": sprintf("%s:%d %s", [row.path, row.line + 1, row.job])}],
 } if {
@@ -194,7 +194,7 @@ violation contains {
 }
 
 violation contains {
-	"rule": "timeout-budget",
+	"rule": "job bind missing",
 	"verdict": "timer parse unclear",
 	"subjects": [{"artifact": sprintf("%s:%d %s", [row.path, row.line + 1, row.job])}],
 } if {
@@ -217,7 +217,7 @@ groups(row) := regex.find_all_string_submatch_n(data.batten.patterns["timeout-bu
 # The multiplier is one repository-wide constant: a per-job one is a per-job
 # argument.
 violation contains {
-	"rule": "timeout-budget",
+	"rule": "job bind missing",
 	"verdict": "timer count other",
 	"subjects": [{"artifact": sprintf("%s:%d %s", [row.path, row.line + 1, row.job])}],
 } if {
@@ -230,7 +230,7 @@ violation contains {
 expected_minutes(p95, multiplier) := floor(((p95 * multiplier) + 59) / 60)
 
 violation contains {
-	"rule": "timeout-budget",
+	"rule": "job bind missing",
 	"verdict": "timer count wrong",
 	"subjects": [{"artifact": sprintf("%s:%d %s", [row.path, row.line + 1, row.job])}],
 } if {

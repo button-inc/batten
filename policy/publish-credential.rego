@@ -45,7 +45,7 @@ package batten.publish_credential
 
 import rego.v1
 
-rules contains "publish-credential"
+rules contains "release grant missing"
 
 config_path := "release-plz.toml"
 
@@ -75,7 +75,7 @@ workflow_line contains {"path": path, "line": i + 1, "class": "registry-login"} 
 }
 
 violation contains {
-	"rule": "publish-credential",
+	"rule": "release grant missing",
 	"verdict": "grant carry unsafe",
 	"subjects": [{"path": sprintf("%s:%d", [hit.path, hit.line])}, {"artifact": hit.class}],
 } if {
@@ -110,7 +110,7 @@ carries_oidc if {
 }
 
 violation contains {
-	"rule": "publish-credential",
+	"rule": "release grant missing",
 	"verdict": "lane grant missing",
 	"subjects": [{"path": release_workflow}],
 } if {
@@ -122,7 +122,7 @@ violation contains {
 # Publishing with no release workflow at all is a question this cannot ask: there
 # is no job whose permission could carry the credential-free route.
 violation contains {
-	"rule": "publish-credential",
+	"rule": "release grant missing",
 	"verdict": "lane grant missing",
 	"subjects": [{"path": config_path}],
 } if {
