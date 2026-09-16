@@ -104,6 +104,49 @@ fn base_paths(dir: &Path) -> BTreeSet<String> {
         .collect()
 }
 
+/// A clean superproject carrying a submodule has NO uncommitted paths
+/// (CLOUD-1753).
+///
+/// The walk behind `uncommitted` compares each index entry against the bytes on
+/// disk. A gitlink's entry records a commit id in another repository and its
+/// path on disk is a DIRECTORY, so the read fails and the deletion arm claims a
+/// change that no git command reports. This asserts the superproject reads as
+/// clean, and then that the same walk still SEES an ordinary edit — because a
+/// walk that skipped too much would pass the first half by answering nothing.
+#[test]
+fn a_submodule_is_not_counted_as_an_uncommitted_path() {
+    let dir = repo_with_submodule("submodule-uncommitted", SPANNING_CONFIG);
+
+    // The premise: the gitlink must actually be an index entry, or "no
+    // uncommitted paths" is true for a fixture with no submodule in it.
+    let staged = git_in(&dir, &["ls-files", "-s", SUBMODULE]);
+    assert!(
+        staged.starts_with("160000"),
+        "{SUBMODULE} must be a gitlink for this case to mean anything; got {staged:?}"
+    );
+    // And git itself must agree the tree is clean, so the assertion below is a
+    // disagreement with git rather than a second opinion about real work.
+    assert_eq!(
+        git_in(&dir, &["status", "--porcelain"]).trim(),
+        "",
+        "the fixture must be clean before the count is asked for"
+    );
+
+    assert_eq!(
+        batten::git::uncommitted(&dir).expect("count the uncommitted paths"),
+        0,
+        "a checked-out submodule is not uncommitted work"
+    );
+
+    // The other direction, so the skip is narrow rather than a blanket silence.
+    std::fs::write(dir.join("tests/own.bats"), bats("own one edited")).unwrap();
+    assert_eq!(
+        batten::git::uncommitted(&dir).expect("count the uncommitted paths"),
+        1,
+        "an ordinary unstaged edit is still counted"
+    );
+}
+
 #[test]
 fn tree_files_stops_at_a_nested_repository_boundary() {
     // The direct assertion the acceptance list demands: whatever the walker

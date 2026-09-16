@@ -1261,6 +1261,28 @@ fn working_tree_changes(dir: &Path, want: Changes) -> Result<BTreeSet<String>> {
         if want == Changes::Staged {
             continue;
         }
+        // A SUBMODULE IS NOT A BLOB, and everything below this line assumes one.
+        // A gitlink's index entry records a COMMIT id in another repository; the
+        // path on disk is a directory, so the read below fails and its arm reads
+        // that failure as a deletion. The result is one path reported as
+        // permanently uncommitted on a tree that has no uncommitted work.
+        //
+        // MEASURED, not reasoned: consumer #1 vendors bats at `tests/bats`, and
+        // `receipt clean` refused `verify` on a tree whose `git status
+        // --porcelain`, `git diff-files` and `git diff-index HEAD` were all
+        // empty -- one path, always that one. The walk has read gitlinks this way
+        // since it was written; the defect surfaced only when CLOUD-1753 added a
+        // caller that asks whether the tree IS `HEAD`, because every earlier
+        // caller wanted the wider "is there work here" set, where one spurious
+        // entry among many changed no answer.
+        //
+        // The comparison ABOVE already answers what a submodule can be asked at
+        // this layer: whether the pointer this commit records has moved. Whether
+        // the submodule's own worktree is dirty is a question about a different
+        // repository, which this walk does not open and must not guess at.
+        if entry.mode.contains(gix::index::entry::Mode::COMMIT) {
+            continue;
+        }
         // Unstaged: the index entry against the file on disk. Compared by CONTENT
         // hash rather than by stat, because a stat match is a cache hint and this
         // is being asked whether work exists.
