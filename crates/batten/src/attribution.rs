@@ -369,17 +369,19 @@ impl Attribution {
             label: label.to_owned(),
             field: field.to_owned(),
         };
-        // The two no-identity arms are written out separately rather than joined
-        // with `|`. They answer the same way today, and keeping them apart costs a
-        // line while buying two things: the match stays exhaustive if a fourth
-        // variant lands, and each arm is independently mutatable — a `|` inside a
-        // mutated expression is split as a field separator by `mutate`'s own row
-        // parser, so the declared row would be refused as five fields.
+        // The two no-identity arms are JOINED, and the `#[allow(match_same_arms)]`
+        // that once kept them apart is gone. It was an added clippy escape, which
+        // `spawn add other` refuses with no override route — correctly, since that
+        // rule counts any escape outside the three test-module lints.
         //
-        // That is the whole reason for the allow. Merging them, which is what
-        // clippy suggests, would put a `|` in the one place this repository's
-        // mutation sweep cannot read.
-        #[allow(clippy::match_same_arms)]
+        // Neither thing the separate arms were said to buy survives inspection.
+        // Exhaustiveness is unaffected: `A | B` introduces no wildcard, so a fourth
+        // variant still fails to compile. Independent mutatability was the real
+        // reason — a `|` inside a mutated expression is split as a field separator
+        // by `mutate`'s own row parser — but it was speculative: this module
+        // declares no `#MUTANT` row, here or anywhere, so there is no row to refuse.
+        // An author who later declares one over these arms can split them again and
+        // will own the escape that costs.
         Ok(match tagger {
             git::Tagger::Signed(rendered) => {
                 if Self::tagger_is_accountable(rendered, &permitted, &denied) {
@@ -388,8 +390,9 @@ impl Attribution {
                     vec![point("tagger")]
                 }
             }
-            git::Tagger::Unsigned => vec![point("tagger:unannotated")],
-            git::Tagger::Lightweight => vec![point("tagger:unannotated")],
+            git::Tagger::Unsigned | git::Tagger::Lightweight => {
+                vec![point("tagger:unannotated")]
+            }
         })
     }
 }
