@@ -3002,6 +3002,35 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Destructive,
         flags: &[DRY_RUN, PRUNE_ROOT],
     },
+    // One rustup target made present (CLOUD-1753), retiring `target-ensure.sh`,
+    // `doctor-check.sh` and `with-lock.sh` — three files that were one capability
+    // split by the shell's limits rather than by the problem.
+    //
+    // UNDER `doctor` RATHER THAN `target`, and the noun is the decision. `target`
+    // is *this repository's build tree* — what `prune` reclaims — where a rustup
+    // target is a property of the TOOLCHAIN, which is what every other `doctor`
+    // sub-verb already answers about. Filing it under `target` would put a verb
+    // that installs a compiler component beside one that deletes build output.
+    //
+    // `write`, not `read`: it purges residue and runs `rustup target add`. It is
+    // therefore absent from §5's agent allowlist BY CONSTRUCTION, which is that
+    // derivation working rather than an omission — the allowlist is
+    // `effect == read` and this reaches the network. Not `destructive` either, on
+    // `target prune`'s own test: what it removes is a half-installed component
+    // nothing can depend on, and re-running the verb restores it, so there is no
+    // unrecoverable loss for `-y` to guard.
+    CommandDecl {
+        path: "doctor target",
+        id: "doctor.target",
+        about: "Make one rustup target installed, purging a half-installed one first, behind the toolchain's own lock",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[FlagDecl::positional(
+            "target",
+            "The target triple to install, as `rustup target list` spells it",
+        )],
+    },
     CommandDecl {
         path: "config",
         id: "config",

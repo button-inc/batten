@@ -15614,6 +15614,30 @@ gloss = "the released batten resolves by the bare name every hook registration i
 check = ["env", "batten", "--version"]
 repair = ["mise", "run", "deps-install"]
 
+# THE BATS SUBMODULE (CLOUD-1753), and this row is where `mise-tasks/doctor.sh`'s
+# first subject lands. The other three land nowhere new: its hook half is
+# `hook-surfaces-are-battens` above, its torn-install half is
+# `toolchain-is-provisioned`, and its rustup half is the `batten doctor target`
+# verb this delta adds. What had no successor was this one, which is why a
+# 241-line program reduces to five lines of declared data.
+#
+# `test -f` RATHER THAN `git submodule status`, and CLOUD-1454's dead-gate report
+# on this very table is the reason. `git submodule status -- tests/bats` prints
+# `-<sha> tests/bats` for a submodule that was never checked out and exits ZERO,
+# so a row asking it would report `ok` over the exact state it exists to catch —
+# the same shape as the `mise ls --current` row two blocks up, which reported
+# green over a container with four tools missing.
+#
+# THE PATH IS THE RUNNER, NOT THE DIRECTORY. `tests/bats` exists as an empty
+# directory the moment git clones the superproject, so a directory test passes on
+# a checkout with nothing in it. `bin/bats` is the file `test:bats` actually
+# invokes, so this asks the question the consumer asks.
+[[startup]]
+id = "bats-submodule-checked-out"
+gloss = "the vendored bats runner is checked out, so `test:bats` has something to run"
+check = ["test", "-f", "tests/bats/bin/bats"]
+repair = ["git", "submodule", "update", "--init", "--recursive", "tests/bats"]
+
 # THE COMMIT PATH IS A PRECONDITION, AND NOTHING DECLARED IT (CLOUD-1398).
 #
 # The five rows above ask whether the ENGINE can run. None of them asks whether

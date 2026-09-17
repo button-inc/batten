@@ -1609,6 +1609,22 @@ pub enum DoctorCommand {
         /// Emit the diagnosis as byte-stable JSON.
         json: bool,
     },
+    /// Make one rustup target installed (CLOUD-1753).
+    ///
+    /// APPENDED LAST, for the reason its two neighbours above record: this enum
+    /// carries no `repr`, so a variant placed beside its siblings shifts every
+    /// later discriminant and `mise run semver` reads that as a break the crate
+    /// has to declare.
+    ///
+    /// **The one `doctor` sub-verb that WRITES**, and it is here rather than
+    /// under `target` because a rustup target is a property of the toolchain —
+    /// which is what every other `doctor` sub-verb answers about — where `target`
+    /// is this repository's build tree. See [`crate::doctor::run_target`] for why
+    /// the lock is the point rather than a precaution.
+    Target {
+        /// The target triple to install, as `rustup target list` spells it.
+        target: String,
+    },
 }
 
 /// Subcommands of `generate`.
@@ -1955,6 +1971,17 @@ fn doctor_of(matches: &ArgMatches) -> DoctorCommand {
         Some(("gate", matches)) => DoctorCommand::CommitGate {
             json: flag(matches, "json"),
         },
+        // The positional is REQUIRED, so clap rejects a bare `doctor target`
+        // before this runs and the `None` arm is unreachable. It falls back to the
+        // bare report rather than panicking because the lints forbid panicking on
+        // any path — and because answering a smaller question is the safe
+        // direction for a branch that cannot be reached.
+        Some(("target", matches)) => matches
+            .get_one::<String>("target")
+            .cloned()
+            .map_or(DoctorCommand::Diagnose { json: false }, |target| {
+                DoctorCommand::Target { target }
+            }),
         // The bare verb reads `-J` from its OWN matches, which is where clap put
         // it when no subcommand was given.
         _ => DoctorCommand::Diagnose {

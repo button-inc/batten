@@ -617,7 +617,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,attestation-check,awk-regex,bats-invocation,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,closing-key-check,coderabbit-config,commit-hygiene,connector-allow-guard,connector-allow-resolve,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence-assert,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,sonar-gate,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,token-bench-check,transcript-corpus-check,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration"
+MUTANT_GATES = "agentic-experiment-record,attestation-check,awk-regex,bats-invocation,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,closing-key-check,coderabbit-config,commit-hygiene,connector-allow-guard,connector-allow-resolve,deferral-check,denials-outlive-the-turn,digest-major-agreement,done-check,done-pr-check,duplicate-close-check,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence-assert,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,sonar-gate,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,token-bench-check,transcript-corpus-check,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -2630,7 +2630,7 @@ description = "Session start: provision what mise does not own — the rustup cr
 #
 # This is not a retry: it does not make the race survivable, it empties the
 # window the race needs.
-run = "mise run doctor >/tmp/session-start-doctor.log 2>&1 || { echo '::error:: session-start: doctor failed — see /tmp/session-start-doctor.log' >&2; tail -5 /tmp/session-start-doctor.log >&2; exit 1; }"
+run = "mise run provision:startup >/tmp/session-start-doctor.log 2>&1 || { echo '::error:: session-start: provisioning failed — see /tmp/session-start-doctor.log' >&2; tail -5 /tmp/session-start-doctor.log >&2; exit 1; }"
 
 [tasks."session:batten"]
 description = "Session start: install the latest RELEASE over whatever `deps-install` provisioned — a verified download, never a compile"
@@ -3163,6 +3163,35 @@ echo "lock-check: mise.lock is complete and current"
 # `batten singleton` RATHER THAN A PROCESS PROBE: the lock is the declared
 # mechanism for "may a second copy start in this clone", and polling the process
 # table for one is the shape `polls-a-local-process` refuses.
+# The provisioning `mise-tasks/doctor.sh` owned, as the declared table that
+# replaces it (CLOUD-1753). `--repair` because that is what the program did: it
+# checked and then FIXED what it could, and a session that only reported would
+# leave the container it diagnosed exactly as broken as it found it.
+[tasks."provision:startup"]
+description = "Check every declared [[startup]] row and repair what it can — the provisioning mise does not own"
+run = "cargo run --quiet -p batten -- startup --repair"
+
+# The Darwin link (CLOUD-1753), ported off `mise-tasks/darwin-link.sh`. `cargo
+# check` stops at codegen-to-metadata and never links, so it structurally cannot
+# see a dependency pulling in a macOS framework; the release build would be the
+# first thing to notice, after a tag was cut. This links the thing, which is the
+# only reading with no false negatives.
+#
+# ONE LINE JOINED BY `;`, on the `cross-turn` precedent below:
+# `inline-task-bodies-not-growing` is `non_increasing` with no `admits_with`, so
+# a new ''' body is refused outright.
+#
+# THE TRIPLE GUARD SURVIVES AS A STEP, and that is a deliberate exception to this
+# delta's rule. Everything else here is a step and went where steps live, but
+# this one is a decision — and it has no engine home: `doctor target` installs
+# any triple legitimately, so the constraint is this task's own precondition
+# rather than a property of the toolchain. It exits `2`, not the shell's `1`:
+# CLOUD-1718 folds the corpus's inverted table onto the engine's, where a
+# refused argument is a usage error.
+[tasks."darwin-link"]
+description = "Gate: the macOS targets actually LINK from Linux, which is what proves no dependency needs an Apple SDK"
+run = "t=\"${1:-${DARWIN_TARGET:-aarch64-apple-darwin}}\"; case \"$t\" in *-apple-darwin) ;; *) echo \"::error:: darwin-link: expected an *-apple-darwin target, got '$t'\" >&2; exit 2 ;; esac; if ./mise-tasks/step-receipt.sh check darwin-link --arg \"$t\"; then exit 0; fi; batten doctor target \"$t\" || exit 1; cargo zigbuild --workspace --target \"$t\" || exit 1; ./mise-tasks/step-receipt.sh record darwin-link --arg \"$t\" || true; echo \"darwin-link: $t links with no macOS SDK\""
+
 [tasks."cross-turn"]
 description = "One turn's cross-triple type-check, detached — reports the previous run's failure and never blocks the turn"
 run = "f=target/cross-turn.fail; if [ -f $f ]; then cat $f; rm -f $f; fi; if batten singleton acquire cross-turn $$ >/dev/null 2>&1; then (mise run cross-check >target/cross-turn.log 2>&1 || { echo '::error:: cross-turn: a declared target did not type-check'; grep -E '^[^ :]+:[0-9]+:[0-9]+: .*error' target/cross-turn.log | head -3 | sed 's/^/  /'; echo '  (full output: target/cross-turn.log)'; } >$f; batten singleton release cross-turn >/dev/null 2>&1) & fi; exit 0"
@@ -3170,8 +3199,10 @@ run = "f=target/cross-turn.fail; if [ -f $f ]; then cat $f; rm -f $f; fi; if bat
 [tasks.cross-check]
 description = "Type-check for other targets from Linux (no macOS runner needed)"
 # The `rustup target add` below is not idempotent against a half-installed
-# component; `doctor` is what makes it one.
-depends = ["doctor"]
+# component; `batten doctor target` in the loop is what makes it one, and it
+# carries the toolchain lock with it (CLOUD-1753). The `doctor` dependency is
+# gone with the program: this task needed only its target half, and asking for
+# the whole of it is what put a full doctor on this task's critical path.
 # The Darwin triples are NOT here: they get a stronger check — a real link — in
 # `darwin-link`, which runs as its own parallel CI job. Checking them here too
 # would be duplicate work on the critical path.
@@ -3212,7 +3243,12 @@ for t in x86_64-pc-windows-gnu x86_64-unknown-linux-musl; do
   # later iteration's exit status and this gate would pass having checked less
   # than it claims. Routed through target-ensure so a concurrent toolchain
   # mutator queues on the lock instead of colliding inside rustup (CLOUD-220).
-  if ! mise run target-ensure "$t"; then
+  # THE BARE NAME, never `cargo run`: this gate asserts about its own body that
+  # it stays a type-check and names no `cargo build|test|run` (tests/cross-check.bats),
+  # and building batten to install a target would put one there. `doctor:mediator`
+  # invokes the engine the same way, and the `host-dependencies-present` startup
+  # row is what keeps the name resolving to a current binary.
+  if ! batten doctor target "$t"; then
     echo "::error:: could not install target $t, so its type-check did not run." >&2
     exit 1
   fi
@@ -3290,7 +3326,12 @@ description = "Run the shell test suite (tests/*.bats) — cargo test for the mi
 # inside `rustup target add` and both rolled back (CLOUD-220). The targets are
 # owned by the tasks that need them (cross-check, darwin-link), each routed
 # through the target-ensure lock.
-depends = ["doctor --no-targets"]
+# `batten startup --repair` rather than `doctor --no-targets` (CLOUD-1753): the
+# submodule half this dependency wanted is now the `bats-submodule-checked-out`
+# row, and the flag existed only to keep a full doctor — and its `rustup target
+# add` — off this path. A declared table has no such half to exclude, because the
+# rows that touch the toolchain are separate rows.
+depends = ["provision:startup"]
 # Parallel across files, never within one (CLOUD-386). Serial, this suite was
 # the pole of the `ci` job — 247.01s of 298.87s, with the cargo chain beside it
 # finishing at 166s — and `verify` pays it again on every `land` lap, so it sat
