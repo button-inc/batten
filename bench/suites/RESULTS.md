@@ -82,7 +82,6 @@ to it pays.
 | 0.3 | 0.2% | `tests/sonar-gate.bats` |
 | 0.3 | 0.2% | `tests/no-doctests.bats` |
 | 0.3 | 0.2% | `tests/report-only-check.bats` |
-| 0.3 | 0.2% | `tests/branch-age-check.bats` |
 | 0.3 | 0.2% | `tests/license-table-check.bats` |
 | 0.3 | 0.2% | `tests/board-payloads.bats` |
 | 0.3 | 0.2% | `tests/nonverdict-assert.bats` |

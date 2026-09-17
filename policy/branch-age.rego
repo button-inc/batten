@@ -39,7 +39,10 @@
 # producer looked and the remote reported no branches, which the retired program
 # refused outright as impossible of a repository with a trunk. That refusal is
 # kept, because a silent pass there is the shape where the whole gate evaporates.
-#MUTANT-EXEMPT CLOUD-1717|the compiled-binary tier this module's mutations would redden, `crates/batten/tests/it/branch_age.rs`, is not written yet: the module does not decide, because `recorder_records` projects no `record named` family and `input.tree.records["branch-age"]` never reaches it. The four mutations are drafted in this file's history and go back with the tier, in the same delta that retires `mise-tasks/branch-age-check.sh` — the program stays until then, so nothing is uncovered that was covered before.
+#MUTANT-SUITE crates/batten/tests/it/branch_age.rs
+#MUTANT age-unread|s@^\tage > threshold$@\tfalse@|a_recorded_branch_past_the_threshold_is_reported_through_the_engines_own_projection
+#MUTANT reuse-needs-no-survivor|s@^\tcount(\[name | some name in on_remote; name == reused\]) > 0$@\ttrue@|a_reused_name_still_on_the_remote_is_reported_and_one_already_deleted_is_not
+#MUTANT empty-remote-passes|s@^\tcount(refs) == 0$@\tfalse@|a_present_record_naming_no_branch_is_refused_rather_than_read_as_clean
 
 # METADATA
 # description: |

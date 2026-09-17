@@ -68,7 +68,6 @@ commit, and a named ref resolves a declared one.
 | `awk-regex-check.sh`           | git    | `tracked`                    |
 | `batten-glob-check.sh`         | git    | `location`                   |
 | `board-sweep.sh`               | forge  | `location`, `log`            |
-| `branch-age-check.sh`          | forge  | —                            |
 | `cap-drift.sh`                 | tree   | —                            |
 | `checks-green.sh`              | forge  | `head`                       |
 | `ci-drift.sh`                  | forge  | `location`                   |
