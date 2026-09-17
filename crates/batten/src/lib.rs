@@ -6200,12 +6200,22 @@ fn run_override_spend(
 /// `a_mint_for_a_mediated_rule_anchors_the_call_not_a_tree_finding` pins it,
 /// because the property lives two files away from the code that relies on it.
 ///
-/// **Falls back to [`admission::Anchor::Call`] rather than failing**, and the
-/// fallback is never weaker than what shipped before: a situation with no tree
-/// finding behind it — a mediated refusal, or a protocol-level mint — binds the
-/// HEAD exactly as every binding did, so nothing that worked stops working. What
-/// it cannot do is suppress a tree finding, because `apply_admissions` builds a
-/// `Finding` anchor and the two tokens are tagged apart.
+/// **Falls back to [`admission::Anchor::Call`] rather than failing, but ONLY
+/// where the rule produced no finding at all** (CLOUD-1551). That fallback is
+/// never weaker than what shipped before: a situation with no tree finding
+/// behind it — a mediated refusal, a protocol-level mint, a delta-scoped row
+/// whose base will not resolve — binds the HEAD exactly as every binding did, so
+/// nothing that worked stops working. What it cannot do is suppress a tree
+/// finding, because `apply_admissions` builds a `Finding` anchor and the two
+/// tokens are tagged apart.
+///
+/// **A rule that FIRED and a subject that addressed none of it refuses**, on the
+/// ambiguity arm's reasoning below and for the identical reason: the caller
+/// would answer the questions, spend the address, and suppress nothing. The
+/// refusal names the subjects the scan did see, because a mismatch here is
+/// usually a spelling — a finding's pointer is the first path-bearing subject or
+/// the first subject rendered (CLOUD-1051), while a refusal line renders all of
+/// them joined by a space.
 ///
 /// **Ambiguity REFUSES rather than falling back**, and the asymmetry with the
 /// absent case is the point. Two findings sharing `(rule, path)` mean the pair
@@ -6328,9 +6338,11 @@ fn admission_anchor(
         // answer for an engine-side rule name, which is a legitimate thing to
         // mint against — `protected-mutation` has a real override route.
         //
-        // Silent, deliberately: reporting the rule as unknown here would decide
-        // CLOUD-1551's open question about an anchor that binds `call:` when
-        // nothing matches, and this row must not settle that by accident.
+        // Silent, and CLOUD-1551 settled it that way rather than leaving it
+        // open: a rule nothing publishes produced no finding, which is the same
+        // state the zero arm below falls back on. The refusal there is reserved
+        // for a rule that FIRED and a subject that addressed none of it, and
+        // this return cannot be that.
         if publishers.is_empty() {
             return head();
         }
@@ -6383,11 +6395,59 @@ fn admission_anchor(
     matched.dedup();
     match matched.len() {
         1 => Ok(admission::Anchor::Finding(matched.remove(0))),
-        // NOTHING TO ANCHOR falls back, and the fallback is never weaker than
-        // what shipped: a situation with no tree finding behind it — a mediated
-        // refusal, or a protocol-level mint — binds the HEAD exactly as every
-        // binding did.
-        0 => head(),
+        // ZERO SPLITS IN TWO, AND THE SPLIT IS CLOUD-1551 (with CLOUD-1374 and
+        // CLOUD-1378 folded into it). One arm is the honest fallback this
+        // always was; the other is the ambiguity arm's defect wearing a smaller
+        // count, and it shipped silent.
+        //
+        // THE DISCRIMINATOR IS WHAT THE RULE PRODUCED, NEVER THE ROW'S DECLARED
+        // SCOPE. `scope` is `RuleScope::Tree` by default, so a row that omits
+        // the key reads as tree-scoped; and the widening above selects rows
+        // through `policy::publishers_of`, which reads a bundle's declared set
+        // and never consults scope at all. "A tree-scoped row was selected"
+        // therefore fires by omission, and it would refuse a delta-scoped row
+        // over an empty base — precisely when a caller needs the break-glass.
+        // What the two arms differ on is whether there was a finding to
+        // address, and this scan already holds that fact.
+        0 => {
+            let mut named: Vec<&str> = scan
+                .findings
+                .iter()
+                .filter(|finding| finding.rule == rule)
+                .map(|finding| finding.path.as_str())
+                .collect();
+            named.sort_unstable();
+            named.dedup();
+            if named.is_empty() {
+                // NOTHING THIS RULE PRODUCED, so there is no tree finding to
+                // address and the fallback is never weaker than what shipped: a
+                // situation with no tree finding behind it — a mediated
+                // refusal, a protocol-level mint, a row whose base would not
+                // resolve — binds the HEAD exactly as every binding did.
+                return head();
+            }
+            // THE RULE FIRED AND THE SUBJECT ADDRESSED NONE OF IT, which is the
+            // ambiguity arm's failure mode reached by a different count.
+            // `apply_admissions` looks up a `Finding` anchor, so a `Call` one
+            // minted for a tree finding is queried by nothing: the caller
+            // answers the questions, spends the address, and suppresses
+            // nothing. Measured 2026-09-06 on the CLOUD-1547 branch — nine
+            // admissions issued and spent, eight findings unmoved.
+            //
+            // IT NAMES WHAT THE SCAN DID SEE, because that is the fix
+            // (CLOUD-122) and the cause is a spelling more often than not: a
+            // finding's pointer is the first path-bearing subject, or the first
+            // subject RENDERED when it carries none (CLOUD-1051), while a
+            // refusal line renders every subject joined by a space. A caller
+            // copying that line mints a subject no finding carries. Pointers
+            // rather than content (rule 4) — the same strings `check` prints.
+            Err(UsageError::raise(format!(
+                "no finding for rule `{rule}` names subject `{subject}`, so an admission bound \
+                 to it would suppress nothing; that rule names {} subject(s) here: {}",
+                named.len(),
+                named.join(", ")
+            )))
+        }
         // AMBIGUITY REFUSES, because falling back here is a silent no-op. The
         // caller would be handed an address, spend it, and suppress nothing:
         // `apply_admissions` looks up a `Finding` anchor, so a `Call` one stored
@@ -6462,6 +6522,19 @@ fn run_override_request(
         )));
     };
 
+    // BEFORE THE ARTICULATION IS ASKED FOR, never after it has been written
+    // (CLOUD-1551). Resolving the anchor can now REFUSE — a rule that fired
+    // whose findings this subject addresses none of — and the answers are held
+    // in memory and never persisted, so refusing below would charge the caller
+    // three written paragraphs and throw them away. Where a harness wires this
+    // verb as a declared route and feeds the answers from a file, that is a
+    // loop an agent thrashes in rather than a one-off cost. An unbindable mint
+    // now refuses before anything is composed.
+    //
+    // The scan this pays for is the narrowed one (CLOUD-1571), so the
+    // questions-only path costs one rule over one subject rather than the tree.
+    let anchor = admission_anchor(root, &config, rule, subject)?;
+
     let mut raw = String::new();
     if std::io::stdin().read_to_string(&mut raw).is_err() {
         raw.clear();
@@ -6480,7 +6553,6 @@ fn run_override_request(
         return Ok(ExitCode::Usage);
     }
 
-    let anchor = admission_anchor(root, &config, rule, subject)?;
     // The SAME epoch `config epoch` reports, resolved through the same function,
     // so an admission cannot bind a generation the caller could not look up.
     let (epoch, _) = epoch::describe(root, None)?;

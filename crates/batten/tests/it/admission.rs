@@ -865,12 +865,59 @@ violation contains {
 }
 "#;
 
-fn admits_fixture(name: &str) -> PathBuf {
+/// Both files, so a case can spend against one finding and watch the other
+/// survive (CLOUD-1551).
+///
+/// The harvesting property needs TWO findings to be about anything. Asserting it
+/// against a subject with no finding at all measures the fallback instead, which
+/// is the arm CLOUD-1551 removed.
+const BOTH: &str = r#"
+package batten.admits
+
+import rego.v1
+
+rules contains "always-refuses"
+
+violation contains {
+	"rule": "always-refuses",
+	"verdict": "always probe probe",
+	"subjects": [{"path": path}],
+} if {
+	some path in ["a.rs", "b.rs"]
+}
+"#;
+
+/// Conditioned on the tree, so a fixture decides whether the rule fires at all.
+///
+/// That is the discriminator the zero arm splits on (CLOUD-1551): the same rule
+/// and the same subject, differing only in whether there was a finding to
+/// address. An unconditional module cannot express the fail-open half.
+const CONDITIONAL: &str = r#"
+package batten.admits
+
+import rego.v1
+
+rules contains "always-refuses"
+
+violation contains {
+	"rule": "always-refuses",
+	"verdict": "always probe probe",
+	"subjects": [{"path": "a.rs"}],
+} if {
+	"a.rs" in input.tree.tracked
+}
+"#;
+
+/// [`admits_fixture`]'s body with the module and the tracked files chosen by the
+/// caller — the two axes CLOUD-1551's cases vary, and a third near-copy of this
+/// builder is what naming them buys out.
+fn admits_fixture_of(name: &str, module: &str, files: &[&str]) -> PathBuf {
     let root = common::scratch(&format!("admits-{name}"));
     common::write(&root, "batten.toml", ADMITS);
-    common::write(&root, "policy-admits/gate.rego", ALWAYS);
-    common::write(&root, "a.rs", "fn main() {}\n");
-    common::write(&root, "b.rs", "fn other() {}\n");
+    common::write(&root, "policy-admits/gate.rego", module);
+    for file in files {
+        common::write(&root, file, "fn main() {}\n");
+    }
     common::git_in(&root, &["init", "-q", "-b", "main"]);
     common::git_in(&root, &["add", "-A"]);
     common::git_in(&root, &["commit", "-qm", "seed"]);
@@ -879,6 +926,21 @@ fn admits_fixture(name: &str) -> PathBuf {
         let _ = std::fs::remove_dir_all(&store);
     }
     root
+}
+
+fn admits_fixture(name: &str) -> PathBuf {
+    admits_fixture_of(name, ALWAYS, &["a.rs", "b.rs"])
+}
+
+/// How many records the store holds, which is `0` for a mint that refused.
+///
+/// An absent directory and an empty one are the same answer here: the fixture
+/// removes the store at setup, so either means nothing was written.
+fn records_in(root: &Path) -> usize {
+    admission::store_dir(root)
+        .ok()
+        .and_then(|store| std::fs::read_dir(store).ok())
+        .map_or(0, |entries| entries.filter_map(Result::ok).count())
 }
 
 /// Mint and spend one admission for `subject`, through the verbs a human uses.
@@ -1137,22 +1199,145 @@ fn an_admission_for_another_subject_admits_nothing() {
     // The harvesting case at the suppression surface: one legitimate override
     // must not clear every finding the same rule raises.
     //
-    // Under CLOUD-1125's anchor this holds for a second reason worth naming:
-    // `always-refuses` names `a.rs` in the module itself, so its finding is
-    // `Scope`-kind — `(rule, path)`, no span — and a mint for `b.rs` resolves no
-    // finding at all, falling back to a `Call` anchor the tree path cannot match.
-    // Editing `a.rs` is deliberately NOT expected to expire an admission over it:
-    // a scope finding's identity carries no content, which is the identity the
-    // findings store already dedups by rather than a weaker one chosen here.
-    let root = admits_fixture("other-subject");
-    spend_for(&root, "b.rs", "this case is about the subject term");
+    // REWRITTEN OVER TWO FINDINGS (CLOUD-1551). It used to mint for `b.rs`
+    // against a module that only refuses `a.rs`, and its own comment said what
+    // it was really measuring: "a mint for `b.rs` resolves no finding at all,
+    // falling back to a `Call` anchor the tree path cannot match". That is the
+    // silent arm this row removed, so the case was asserting the defect. The
+    // property it exists for needs a second finding to be about anything at
+    // all — spend against one of two, and the other must survive.
+    //
+    // Editing `a.rs` is deliberately NOT expected to expire an admission over
+    // it: a scope finding's identity carries no content, which is the identity
+    // the findings store already dedups by rather than a weaker one chosen here.
+    let root = admits_fixture_of("other-subject", BOTH, &["a.rs", "b.rs"]);
+    let address = spend_for(&root, "a.rs", "this case is about the subject term");
 
     let after = common::run(&root, &["check"]);
     assert_eq!(
         after.status.code(),
         Some(batten::exit::ExitCode::Violation.code()),
-        "the finding on a.rs is untouched by an admission for b.rs: {}",
+        "the finding on b.rs is untouched by an admission for a.rs: {}",
         common::stderr(&after)
+    );
+    // AND THE RIGHT ONE MOVED. Without this the case passes over a run that
+    // admitted nothing at all, which is the vacuous reading of "still refuses".
+    let reported = common::stderr(&after);
+    assert!(
+        reported.contains("admitted a.rs") && reported.contains(&address),
+        "the admission spent on a.rs did clear a.rs: {reported}"
+    );
+    assert!(
+        !reported.contains("admitted b.rs"),
+        "and it did not reach b.rs: {reported}"
+    );
+}
+
+#[test]
+fn a_mint_addressing_no_finding_of_a_rule_that_fired_refuses_rather_than_binding_the_call() {
+    // CLOUD-1551, and the arm the ambiguity arm was already defended against.
+    //
+    // `always-refuses` names `a.rs` and nothing else, so a mint for `b.rs`
+    // matches no finding. Binding `call:<head>` there is a silent no-op:
+    // `apply_admissions` looks up a `Finding` anchor, so the caller answers
+    // three questions, spends the address, and suppresses nothing. Measured
+    // 2026-09-06 — nine admissions issued and spent, eight findings unmoved.
+    //
+    // Fails by: against the binary as it stood, `override request` exits 0, the
+    // record is written with a `call:` anchor, and nothing says so.
+    let root = admits_fixture("addresses-nothing");
+    let refused = common::run_with_stdin(
+        &root,
+        &[
+            "override",
+            "request",
+            "--rule",
+            "always-refuses",
+            "--verdict",
+            "always probe probe",
+            "--subject",
+            "b.rs",
+        ],
+        "precondition=the refusal is the fixture's point\nlost=nothing\n\
+         rejected-route=admits fix probe has nothing to change\n",
+    );
+    assert_eq!(
+        refused.status.code(),
+        Some(batten::exit::ExitCode::Usage.code()),
+        "a subject addressing none of what the rule produced refuses: {}",
+        common::stderr(&refused)
+    );
+    // THE REFUSAL NAMES THE FIX (CLOUD-122), because the cause is a spelling
+    // more often than not and the caller cannot see the finding's own pointer
+    // from here.
+    let said = common::stderr(&refused);
+    assert!(
+        said.contains("a.rs"),
+        "it names the subject the scan did see: {said}"
+    );
+    // AND NOTHING WAS MINTED. A refusal that still wrote the record would leave
+    // a spendable address behind, which is the no-op with an extra step.
+    assert_eq!(
+        records_in(&root),
+        0,
+        "a refused mint writes no record: {said}"
+    );
+}
+
+#[test]
+fn a_mint_for_a_rule_that_produced_no_finding_still_falls_back_to_the_call() {
+    // THE FAIL-OPEN HALF, and the conjunct the case above does not reach
+    // (CLOUD-418). The refusal is keyed on the rule having FIRED, never on the
+    // row's declared scope — `scope` defaults to `Tree` when a row omits it, and
+    // `policy::publishers_of` selects rows without consulting scope at all, so a
+    // scope-keyed guard would refuse a delta-scoped row over an empty base:
+    // exactly when a caller needs the break-glass.
+    //
+    // Same rule, same subject, same authority as the case above. The only thing
+    // that differs is whether `a.rs` is in the tree for the module to name.
+    //
+    // Fails by: key the refusal on the row's scope instead and this exits 1.
+    use batten::admission::{Anchor, Record};
+
+    let root = admits_fixture_of("produced-nothing", CONDITIONAL, &["b.rs"]);
+    let clean = common::run(&root, &["check"]);
+    assert_eq!(
+        clean.status.code(),
+        Some(batten::exit::ExitCode::Success.code()),
+        "the premise: with `a.rs` absent the rule produces nothing: {}",
+        common::stderr(&clean)
+    );
+
+    let issued = common::run_with_stdin(
+        &root,
+        &[
+            "override",
+            "request",
+            "--rule",
+            "always-refuses",
+            "--verdict",
+            "always probe probe",
+            "--subject",
+            "a.rs",
+        ],
+        "precondition=the refusal is the fixture's point\nlost=nothing\n\
+         rejected-route=admits fix probe has nothing to change\n",
+    );
+    let address = String::from_utf8_lossy(&issued.stdout).trim().to_owned();
+    assert_eq!(
+        address.len(),
+        64,
+        "a rule that produced nothing still mints: {}",
+        common::stderr(&issued)
+    );
+
+    let path = batten::admission::record_path(&root, &address).expect("record path");
+    let record: Record =
+        serde_json::from_slice(&std::fs::read(&path).expect("read")).expect("parse");
+    assert!(
+        matches!(record.binding.anchor, Anchor::Call { .. }),
+        "and it binds the HEAD exactly as every binding did: {:?}",
+        record.binding.anchor
     );
 }
 
