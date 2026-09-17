@@ -663,6 +663,57 @@ fn an_absent_merged_surface_is_not_itself_a_finding() {
 }
 
 #[test]
+fn a_committed_surface_that_will_not_parse_is_reported() {
+    // THE COULD-NOT-LOOK CLAUSE, WHICH THIS TIER HAD NO CASE FOR AT ALL
+    // (CLOUD-1815). The module's own `test_` rules pin the predicate by handing
+    // it a fabricated `input.tree.missing`; nothing here showed that the ENGINE
+    // puts an unparsable committed surface into that channel with the
+    // `unparsed` cause rather than dropping it silently. That is the exact gap
+    // `rules/policy-modules.md` says a `with input as` case cannot close, and
+    // the one this family is most exposed to.
+    //
+    // The wiring is otherwise clean, so the `loose` clause has nothing to say
+    // and a finding here can only be the unread one.
+    let (repo, outside) = fixture("unparsed-committed", "{ not json", Some(&clean_merged()));
+    let output = check(&repo, Some(&outside));
+    assert!(
+        !output.status.success(),
+        "a committed surface that will not parse was read as a clean wiring: {}",
+        findings(&output)
+    );
+    assert!(
+        findings(&output).contains("hook wire missing"),
+        "wrong finding: {}",
+        findings(&output)
+    );
+}
+
+#[test]
+fn a_committed_surface_that_is_merely_absent_is_not_reported() {
+    // THE ANTI-VACUITY HALF, and without it the case above passes over a module
+    // that fires on any membership of the channel. The asymmetry is the whole
+    // point of the clause: four of the five committed files are optional, so
+    // firing on absence would redden every consumer wiring fewer hosts for a
+    // state nobody can fix.
+    //
+    // `an_absent_merged_surface_is_not_itself_a_finding` is the same property
+    // one surface class over; the committed class had no case for it, and the
+    // two causes are distinguished per class rather than globally.
+    let repo = scratch("harness-wiring-absent-committed");
+    write(&repo, "batten.toml", &config());
+    let module = std::fs::read_to_string(at_root("policy/harness-wiring.rego")).unwrap();
+    write(&repo, "harness-wiring.rego", &module);
+    git_in(&repo, &["init", "-q", "-b", "main", "."]);
+    git_in(&repo, &["add", "-A"]);
+    let output = check(&repo, None);
+    assert!(
+        output.status.success(),
+        "an absent committed surface was reported: {}",
+        findings(&output)
+    );
+}
+
+#[test]
 fn a_wrapper_that_reaches_the_mediator_is_not_a_second_decider() {
     // The predicate is a SECOND decider, not a spelling. CLOUD-824 records what
     // demanding an exact string bought last time, which was a launcher script
