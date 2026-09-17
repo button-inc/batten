@@ -663,6 +663,40 @@ fn an_absent_merged_surface_is_not_itself_a_finding() {
 }
 
 #[test]
+fn a_committed_surface_that_will_not_parse_is_reported() {
+    // THE COULD-NOT-LOOK CLAUSE, WHICH THIS TIER HAD NO CASE FOR AT ALL
+    // (CLOUD-1815). The module's own `test_` rules pin the predicate by handing
+    // it a fabricated `input.tree.missing`; nothing here showed that the ENGINE
+    // puts an unparsable committed surface into that channel with the
+    // `unparsed` cause rather than dropping it silently. That is the exact gap
+    // `rules/policy-modules.md` says a `with input as` case cannot close, and
+    // this family is where the risk is highest — every other fact in the model
+    // is repo-rooted by construction.
+    //
+    // NOT VACUOUS, and the FIXTURE is what makes it so rather than a second
+    // assertion. The wiring is otherwise clean, and a document nobody could
+    // parse yields no commands at all, so the `loose` and `duplicate` clauses
+    // are both structurally silent here: a finding can only be the unread one.
+    //
+    // The ABSENT half of the pair is `a_tree_with_no_wiring_surface_is_clean`
+    // above, which already drives a committed surface that is simply not there.
+    // Without it this case would pass over a module firing on any membership of
+    // the channel, which is the asymmetry the clause exists for.
+    let (repo, outside) = fixture("unparsed-committed", "{ not json", Some(&clean_merged()));
+    let output = check(&repo, Some(&outside));
+    assert!(
+        !output.status.success(),
+        "a committed surface that will not parse was read as a clean wiring: {}",
+        findings(&output)
+    );
+    assert!(
+        findings(&output).contains("hook wire missing"),
+        "wrong finding: {}",
+        findings(&output)
+    );
+}
+
+#[test]
 fn a_wrapper_that_reaches_the_mediator_is_not_a_second_decider() {
     // The predicate is a SECOND decider, not a spelling. CLOUD-824 records what
     // demanding an exact string bought last time, which was a launcher script
