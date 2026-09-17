@@ -2927,33 +2927,73 @@ fn hook_denies_a_truncating_redirect_against_a_protected_path() {
     }
 }
 
+/// One refusal of `rm guarded/thing`, from a fixture of its own.
+///
+/// A FIXTURE PER RUN, AND THE REASON IS `first_sighting` (CLOUD-1830). A class
+/// explains itself ONCE per session: the second firing renders the pointer line
+/// alone, dropping the `— <gloss>` clause and every remedy (`hook.rs:4832`). The
+/// store that decides it is keyed under `$GIT_DIR`, so two runs against one
+/// fixture are a first sighting and a repeat — and comparing their stderr
+/// measures which ran first, not what the caller varied.
+///
+/// Each run therefore gets its own fixture and so its own store, which makes
+/// every one of them a first sighting. `common::batten` sets
+/// `GIT_CEILING_DIRECTORIES` for the other half of the same defect: without it a
+/// fixture carrying no `.git` resolved the real repository's, and every case in
+/// the binary shared one store with the checkout.
+fn refuse_in(name: &str, extra: Option<(&str, &str)>) -> Output {
+    let dir = repo_with_protected_policy(name);
+    let payload = claude_payload("rm guarded/thing");
+    let mut command = batten();
+    command
+        .current_dir(&dir)
+        .args(["adjudicate", "--harness", "exit-code"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some((key, value)) = extra {
+        command.env(key, value);
+    }
+    let mut child = command.spawn().expect("spawn batten hook");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(payload.as_bytes())
+        .expect("write payload");
+    child.wait_with_output().expect("run batten hook")
+}
+
 #[test]
 fn the_deny_is_a_function_of_config_and_argv_not_the_ambient_environment() {
     // Acceptance (c): "a repeat attempt with the sandbox disabled is still
     // denied" — i.e. the verdict is computed from config plus argv, so nothing
     // ambient can turn it off. Asserted by varying the environment around an
     // identical payload and config and requiring byte-identical answers.
-    let dir = repo_with_protected_policy("protected-deterministic");
-    let payload = claude_payload("rm guarded/thing");
-    let baseline = run_hook_in(&dir, "exit-code", &payload, false);
-    // THE SAME BUILDER AS THE BASELINE, WHICH IS THE WHOLE ASSERTION (CLOUD-1821).
-    // `run_hook_in` spawns through `batten_at_real_root()` — `batten()` plus a
-    // state root of the suite's own — while this loop used bare `batten()`. So the
-    // varied runs read the AMBIENT state root and the baseline read an isolated
-    // one: the two sides differed in a way that has nothing to do with the
-    // variable under test, and the case compared two harnesses while claiming to
-    // compare two environments.
     //
-    // It surfaced as a missing remedy tail. A refusal already seen in the ambient
-    // root is emitted in its short form (CLOUD-1286's ceiling), so the varied
-    // `stderr` lost "— a mutating verb was aimed at a path the config protects; …"
-    // on exactly the runs that had one. Green wherever the ambient root happened
-    // to be cold, red on the musl leg, and never about `BATTEN_SANDBOX` at all —
-    // `scratch_state_root`'s own doc names this as the defect it exists to close.
-    //
-    // `HOME` stays in the list and now means something: with the state root
-    // pinned, a changed `HOME` must NOT move the verdict, which is the claim. It
-    // points at a scratch directory rather than `/tmp` so it belongs to this case
+    // WHAT THIS CASE COULD NOT SEE UNTIL CLOUD-1830. Every run used to share one
+    // sightings store, so the baseline was a first sighting and each varied run a
+    // repeat — and a repeat renders short. The comparison was therefore between
+    // two different RENDERINGS of the same verdict, which it read as the
+    // environment having changed the reason. It was green or red on scheduling:
+    // the musl leg's ordering reddened it, and that looked like a libc divergence
+    // until the same four runs, with the store cleared between them, came back
+    // byte-identical on both targets.
+    let baseline = refuse_in("protected-deterministic-baseline", None);
+    assert_eq!(
+        baseline.status.code(),
+        Some(2),
+        "the baseline must be the deny this case varies around: {}",
+        String::from_utf8_lossy(&baseline.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&baseline.stderr).contains('—'),
+        "and it must be the FIRST-SIGHTING rendering, or the comparison below is \
+         between two short lines and asserts almost nothing: {}",
+        String::from_utf8_lossy(&baseline.stderr)
+    );
+
+    // `HOME` gets a scratch directory rather than `/tmp`: it belongs to this case
     // instead of to every process on the machine.
     let scratch_home = common::scratch("protected-deterministic-home");
     let scratch_home = scratch_home.display().to_string();
@@ -2963,24 +3003,10 @@ fn the_deny_is_a_function_of_config_and_argv_not_the_ambient_environment() {
         ("NO_COLOR", "1"),
         ("HOME", scratch_home.as_str()),
     ] {
-        let mut command = common::batten_at_real_root();
-        command
-            .current_dir(&dir)
-            .args(["adjudicate", "--harness", "exit-code"])
-            .env_remove("BATTEN_HOOK_BYPASS")
-            .env_remove("BATTEN_GH_GUARD_BYPASS")
-            .env(key, value)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = command.spawn().expect("spawn batten hook");
-        child
-            .stdin
-            .take()
-            .expect("piped stdin")
-            .write_all(payload.as_bytes())
-            .expect("write payload");
-        let output = child.wait_with_output().expect("run batten hook");
+        let output = refuse_in(
+            &format!("protected-deterministic-{}", key.to_lowercase()),
+            Some((key, value)),
+        );
         assert_eq!(
             output.status.code(),
             baseline.status.code(),
@@ -2991,6 +3017,36 @@ fn the_deny_is_a_function_of_config_and_argv_not_the_ambient_environment() {
             "{key}={value} changed the reason"
         );
     }
+}
+
+// THE ARM THAT MAKES THE CEILING FIX A MECHANISM (CLOUD-1830). Two fixtures, no
+// environment varied at all, one identical refusal: their stderr must match.
+//
+// It fails on the tree that has this defect. Without
+// `GIT_CEILING_DIRECTORIES` a fixture carrying no `.git` resolves the enclosing
+// repository's, both runs share one sightings store, the second is a repeat and
+// renders short — so the assertion reds with a long line against a short one.
+// With the ceiling set each fixture answers for itself and both are first
+// sightings.
+//
+// SEPARATE FROM THE CASE ABOVE, deliberately: that one varies the environment and
+// would still pass if both of its sides were short. This one varies NOTHING, so
+// the only thing it can detect is the coupling — which is what makes it the
+// discriminating half rather than a second copy.
+#[test]
+fn two_fixtures_refusing_alike_render_alike() {
+    let first = refuse_in("protected-alike-first", None);
+    let second = refuse_in("protected-alike-second", None);
+    assert_eq!(
+        first.status.code(),
+        second.status.code(),
+        "two fixtures, one refusal, two verdicts"
+    );
+    assert_eq!(
+        first.stderr, second.stderr,
+        "two fixtures refusing alike must render alike; a difference here means \
+         they are sharing a sightings store — see CLOUD-1830"
+    );
 }
 
 #[test]
