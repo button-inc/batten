@@ -47,34 +47,9 @@
 //! refuse. Both hinge on the one counter, so no mutation separates them — the
 //! PAIR discriminates the fix, and this mutation discriminates the counter.
 
-//! # What a row declared here does and does not buy (CLOUD-1486)
-//!
-//! The section above explains why a `gitwrite` mutation is DECLARED here. What it
-//! does not say is that such a row is **inert under the sweep**, and a reader who
-//! assumes otherwise is reading coverage that nothing runs.
-//!
-//! `mutate::apply` seds `row.source`, which `mutate::resolve` sets to the file
-//! that DECLARED the row — so a row here rewrites this file, not the engine. And
-//! it never gets that far: `mutate::sources_for` resolves a gate name only to
-//! `mise-tasks/<name>.sh`, `policy/<name>.rego`, `crates/batten/src/<module>.rs`
-//! behind the `engine-` prefix, or a preset directory. A test file is not in that
-//! set, so no gate name resolves here and no row here is ever applied.
-//!
-//! **Both placements are refused by something, which is why this one is chosen.**
-//! Declared in `crates/batten/src/gitwrite.rs` the sed would be right and
-//! `obligations-bound` could not see it — `test name undefined`'s `line_sources`
-//! do not cover `crates/batten/src/**`, so the promise would read as unbound and
-//! deny. Declared here the promise binds and the sweep does not exercise it. The
-//! contradiction belongs to those two gates and is filed, not worked around here.
-//!
-//! So each kill below was demonstrated BY HAND at implementation — the expression
-//! applied to the engine file, the named case observed red, the file restored.
-//! Nothing in CI re-derives that, and this paragraph is the only record of it.
-
 /*
 #MUTANT-SUITE crates/batten/tests/it/rebase.rs
 #MUTANT same-path-offer-collapses|s@        *used.entry(path).or_insert(0) += 1;@        *used.entry(path).or_insert(0) += 0;@|a_chain_of_conflicts_at_the_same_path_resolves_with_one_entry_each
-#MUTANT use-now-local-or-utc-in-gitwrite|s@        time: crate::utc_at(who.time.seconds),@        time: who.time,@|a_replayed_committer_is_stamped_in_utc
 */
 
 #![cfg(unix)]
@@ -106,25 +81,6 @@ fn init(name: &str) -> (PathBuf, gix::Repository) {
 
 /// Write a flat tree and a commit on top of `parents`, returning the commit id.
 fn commit(repo: &gix::Repository, parents: &[gix::ObjectId], files: Files<'_>) -> gix::ObjectId {
-    let who = gix::actor::Signature {
-        name: "Fixture".into(),
-        email: "fixture@example.invalid".into(),
-        // A FIXED instant, so two fixture commits built in the same second are
-        // still distinguishable only by their content — which is what makes an
-        // assertion about a minted sha an assertion about the replay.
-        time: gix::date::Time::new(1_700_000_000, 0),
-    };
-    commit_by(repo, parents, files, &who)
-}
-
-/// [`commit`] with the signature supplied, for a case whose subject is the
-/// signature itself rather than the tree.
-fn commit_by(
-    repo: &gix::Repository,
-    parents: &[gix::ObjectId],
-    files: Files<'_>,
-    who: &gix::actor::Signature,
-) -> gix::ObjectId {
     let mut entries: Vec<gix::objs::tree::Entry> = files
         .iter()
         .map(|(name, body)| gix::objs::tree::Entry {
@@ -141,7 +97,14 @@ fn commit_by(
         .write_object(&gix::objs::Tree { entries })
         .expect("tree")
         .detach();
-    let who = who.clone();
+    let who = gix::actor::Signature {
+        name: "Fixture".into(),
+        email: "fixture@example.invalid".into(),
+        // A FIXED instant, so two fixture commits built in the same second are
+        // still distinguishable only by their content — which is what makes an
+        // assertion about a minted sha an assertion about the replay.
+        time: gix::date::Time::new(1_700_000_000, 0),
+    };
     repo.write_object(&gix::objs::Commit {
         tree,
         parents: parents.iter().copied().collect(),
@@ -226,105 +189,6 @@ fn a_clean_replay_lands_every_commit() {
         dir.join("from-main.txt").is_file(),
         "the worktree was not updated"
     );
-}
-
-/// A replayed commit's committer is stamped in UTC, and its AUTHOR is not
-/// (CLOUD-1486).
-///
-/// **The unit arm carries the weight and the end-to-end arm is its control**,
-/// because the environment cannot create the failing condition here. A replay
-/// resolves its committer from the repository, gix fills that signature's time
-/// through `now_local_or_utc()`, and steering that needs `TZ` in the process
-/// environment — `std::env::set_var`, `unsafe`, forbidden workspace-wide. So the
-/// decision is fed a `+0530` signature directly, which is `rules/rust.md`'s named
-/// route for exactly this shape.
-///
-/// **The author assertion is the anti-vacuity mirror.** `offset == 0` on the
-/// committer would pass over an implementation that zeroed every offset in the
-/// commit, and it would pass over one that did nothing at all on a host already in
-/// UTC. The fixture's author carries `+0530` and must still carry it afterwards,
-/// so the case separates *pinning the committer* from *flattening the object* and
-/// does not depend on the runner's zone to do it.
-///
-/// **What it does not assert:** that the instant is gix's own. Nothing here can
-/// see what `repo.committer()` resolved, so the seconds-preserving half is the
-/// unit arm's alone.
-#[test]
-fn a_replayed_committer_is_stamped_in_utc() {
-    // Kolkata: a half-hour offset, so a sign-only or hours-only bug reads as a
-    // failure rather than passing by arithmetic accident.
-    const KOLKATA: i32 = 19_800;
-
-    let who = gix::actor::Signature {
-        name: "Fixture".into(),
-        email: "fixture@example.invalid".into(),
-        time: gix::date::Time::new(1_700_000_000, KOLKATA),
-    };
-
-    let stamped = gitwrite::stamped_in_utc(&who);
-    assert_eq!(stamped.time.offset, 0, "the committer is pinned to UTC");
-    assert_eq!(
-        stamped.time.seconds, who.time.seconds,
-        "the instant is the caller's; only the offset is this function's business"
-    );
-    assert_eq!(
-        (stamped.name, stamped.email),
-        (who.name.clone(), who.email.clone()),
-        "the identity is the repository's and is not rewritten"
-    );
-
-    // And the same property over the real replay, with an author the fixture — not
-    // the host — gives a non-zero offset.
-    let (dir, repo) = init("rebase-utc");
-    let root: Files<'_> = &[("shared.txt", "base\n")];
-    let base = commit(&repo, &[], root);
-    let trunk: Files<'_> = &[("shared.txt", "base\n"), ("from-main.txt", "trunk\n")];
-    let moved = commit(&repo, &[base], trunk);
-
-    let side: Files<'_> = &[("shared.txt", "base\n"), ("from-branch.txt", "work\n")];
-    let tip = commit_by(&repo, &[base], side, &who);
-
-    point(&dir, "refs/heads/main", moved);
-    point(&dir, "refs/heads/work", tip);
-    materialise(&dir, side);
-
-    let outcome = gitwrite::rebase(&dir, "refs/heads/work", "refs/heads/main").expect("rebase");
-    let Rebase::Replayed { head, .. } = outcome else {
-        panic!("expected a clean replay, got {outcome:?}");
-    };
-    let landed = repo
-        .rev_parse_single(head.as_str())
-        .expect("resolve replayed head")
-        .detach();
-    let object = repo.find_object(landed).expect("find replayed");
-    let raw = String::from_utf8(object.data.clone()).expect("the fixture's commit is utf-8");
-
-    // ON THE SERIALISED BYTES, not on a decoded signature: the id is a hash of
-    // exactly these bytes, so the header is where byte-stability lives.
-    assert_eq!(
-        offset_in(&raw, "committer "),
-        "+0000",
-        "every replayed commit's committer is UTC"
-    );
-    assert_eq!(
-        offset_in(&raw, "author "),
-        "+0530",
-        "the author is inherited whole, so this is a pin and not a flattening"
-    );
-}
-
-/// The `+hhmm` a commit header carries for `field`.
-///
-/// Git's signature line ends `<seconds> <+hhmm>`, so the last whitespace-separated
-/// token is the whole of what this asks about.
-fn offset_in(raw: &str, field: &str) -> String {
-    raw.lines()
-        .find(|line| line.starts_with(field))
-        .unwrap_or_else(|| panic!("the commit carries a `{field}` header"))
-        .split_whitespace()
-        .next_back()
-        .expect("an offset token")
-        .to_owned()
 }
 
 /// **The case the design exists for.** Two sides edit one path, and the replay

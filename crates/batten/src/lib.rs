@@ -4876,26 +4876,6 @@ pub(crate) fn now_unix() -> u64 {
         .map_or(0, |since| since.as_secs())
 }
 
-/// The one UTC committer stamp (CLOUD-1486).
-///
-/// **Both git objects this binary writes carry a committer signature it builds
-/// itself, and the two used to disagree about the offset.** `lease::lease_object`
-/// pinned `offset: 0` inline; `gitwrite`'s replay took `repo.committer()` whole,
-/// whose time gix resolves through `gix_date::Time::now_local_or_utc()` — so a
-/// replayed commit's `+hhmm` was the landing host's, and the same replay from two
-/// hosts produced different bytes for identical content. The lap replays onto a
-/// moved base every time round, and both the fast-forward loop and the lease's CAS
-/// assume an object's id is a function of its content alone.
-///
-/// **It takes the instant rather than reading the clock**, which is what lets the
-/// lease keep its caller-supplied `seconds` — `lease_object`'s nonce contract
-/// depends on a mint being reproducible from its inputs, so a constructor that
-/// read the clock would be unusable at one of the two sites it exists to serve.
-/// It also keeps this off the evaluation path `ambient_authority.rs` sweeps.
-pub(crate) const fn utc_at(seconds: i64) -> gix::date::Time {
-    gix::date::Time { seconds, offset: 0 }
-}
-
 /// Standard base64, unpadded-free (RFC 4648 with `=` padding).
 ///
 /// ~20 lines rather than a dependency: `deny.toml` and

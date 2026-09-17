@@ -580,7 +580,7 @@ pub fn lease_object(message: &str, seconds: i64) -> Result<Object> {
     let who = gix::actor::Signature {
         name: LEASE_NAME.into(),
         email: LEASE_EMAIL.into(),
-        time: crate::utc_at(seconds),
+        time: gix::date::Time { seconds, offset: 0 },
     };
     let commit = gix::objs::Commit {
         tree: gix::hash::ObjectId::empty_tree(gix::hash::Kind::Sha1),
