@@ -289,11 +289,18 @@ pub fn rebase(dir: &Path, branch: &str, onto: &str) -> Result<Rebase> {
 /// no half-replayed state for the next lap to find. That is right, and it left
 /// the human nothing to resolve. The predecessor shell lander left an ordinary
 /// rebase in progress, where `git add` and `git rebase --continue` are the route;
-/// this engine leaves a clean tree and a refusal, and the only way back to a
-/// resolvable state is re-creating the rebase by hand — which this repository's
-/// own `rebase-not-hand-stepped` denies, with no `bypass_env` and a general hatch
-/// that is only readable in the adjudicating process's environment. Measured on
-/// #848 twice: the loop stopped, and no route it named was open.
+/// this engine leaves a clean tree and a refusal. For a while the only way back
+/// to a resolvable state was re-creating the rebase by hand — which this
+/// repository's own hand-stepping row denies, with no `bypass_env` and a general
+/// hatch that is only readable in the adjudicating process's environment.
+/// Measured on #848 twice: the loop stopped, and no route it named was open.
+///
+/// **This function is that route, and since CLOUD-1537 the stop names it.**
+/// The engine's conflict line and the hand-stepping row's own `reason` both spell
+/// `batten land replay <ref> --resolve <path>` now. That mattered because the
+/// route had existed since v0.0.153 while its only mention anywhere in the crate
+/// was its own flag doc, so a conflicted branch still read as a dead end — a
+/// remedy nobody can find is the same as no remedy.
 ///
 /// # Why the resolution comes from the worktree, and why that needs no state
 ///

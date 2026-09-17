@@ -737,11 +737,12 @@ it rather than holding a foreground poll open."""
 # container reclaim, so denying it outright would make the reclaim advice
 # unfollowable. Named as a known limit so the silence is not read as coverage.
 #
-# THE DENY'S REMEDY IS UNREACHABLE ON THE CONFLICT PATH, AND THAT IS A NAMED
-# LIMIT RATHER THAN A REASON TO LOWER THIS COLUMN (measured 2026-09-06, one lap
-# after this row landed). The reason below used to end "resolve it and
-# `git rebase --continue`, which this row does not touch" — and that remedy is
-# UNREACHABLE against this engine, so on a conflict the deny has no route left.
+# THE DENY'S REMEDY WAS UNREACHABLE ON THE CONFLICT PATH, AND `--resolve` CLOSED
+# IT (measured 2026-09-06, one lap after this row landed; the route landed with
+# CLOUD-1586 at v0.0.153 and is named here by CLOUD-1537). The reason below used
+# to end "resolve it and `git rebase --continue`, which this row does not touch" —
+# and that remedy is unreachable against this engine, so for a while the deny had
+# no route left on a conflict.
 #
 # `gitwrite.rs`'s header states the design it collides with, and states it as a
 # deliberate one: "**Nothing moves on a conflict.** The ref is written and the
@@ -749,11 +750,19 @@ it rather than holding a foreground poll open."""
 # refusal leaves the clone exactly as it was — no detached HEAD, no `rebase
 # --abort` to remember, no half-replayed state for the next lap to discover."
 # That is right for a loop left running unattended, and it means `land` NEVER
-# leaves a rebase to continue. So on a conflict there is nothing to resolve and
-# nothing to `--continue`, and the one command that produces the resolvable state
-# is the one this row denied. Measured on this branch: `land` reported
-# `install.sh` conflicted, the tree was clean, and the branch had no landable next
-# step in any spelling.
+# leaves a rebase to continue. So on a conflict there is nothing to `--continue`,
+# and for a while the one command that produced a resolvable state was the one
+# this row denied. Measured on this branch: `land` reported `install.sh`
+# conflicted, the tree was clean, and the branch had no landable next step in any
+# spelling.
+#
+# `batten land replay <ref> --resolve <path>` is that step now, and it fits the
+# stateless design rather than working around it: the author merges the path in
+# the worktree and the whole replay re-runs from its base, so nothing is
+# remembered and nothing is left half-done. What stayed broken until CLOUD-1537
+# was that NOTHING SAID SO — the route's only mention anywhere in the crate was
+# its own flag doc, so both the engine's conflict stop and this row's `reason`
+# read as dead ends. Both name it now.
 #
 # The distinguishing fact — is a conflict outstanding — is real and RECORDED, in
 # the lap record `rebase-conflict-stops-the-lap` reads. It is not reachable from
@@ -783,9 +792,13 @@ it rather than holding a foreground poll open."""
 # decision"). That is the `git push` paragraph's "named as a known limit so the
 # silence is not read as coverage", applied to a refusal rather than to a gap.
 #
-# Narrowing this to a predicate that can see the lap record — the fact that
-# separates the race from the resolution — is what would remove the cost, and it
-# is a follow-up rather than this branch's work.
+# PART OF THAT COST IS NOW PAID RATHER THAN NAMED, AND THE REST IS STILL A
+# FOLLOW-UP. `--resolve` gives the stop a route, so the author who reaches it is
+# no longer stuck — which was the half that hurt. What it does not do is let this
+# row tell a race from a resolution: the predicate still compares words in a
+# command line, and a hand `git rebase origin/main` looks the same either way.
+# Narrowing it to a predicate that can see the lap record is what would remove
+# the remaining cost, and that is still a follow-up rather than this row's work.
 #
 # `--onto` IS THE SECOND EXEMPTION, AND IT IS A CORRECTED FALSE DENY RATHER THAN
 # A SOFTENING. `git rebase --onto <newbase> <upstream> <branch>` names
