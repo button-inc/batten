@@ -113,6 +113,7 @@ mod derived_facts;
 mod design_audit;
 mod dev_profile;
 mod doctor;
+mod doctor_session;
 mod document_facts;
 mod document_read_count;
 mod done_not_landed;

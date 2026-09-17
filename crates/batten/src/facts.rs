@@ -1609,6 +1609,90 @@ impl Fact {
         }
     }
 
+    /// The fact named by a stable token, or `None` for a token no fact carries.
+    ///
+    /// Derived from [`Fact::ALL`] and [`Fact::as_str`], so the accepted spellings
+    /// are exactly the emitted ones by construction — [`crate::output::Verbosity`]'s
+    /// idiom, for its reason. A second table mapping tokens back to facts is a
+    /// second thing to drift, and this one cannot.
+    #[must_use]
+    pub fn from_token(token: &str) -> Option<Fact> {
+        Fact::ALL
+            .iter()
+            .copied()
+            .find(|fact| fact.as_str() == token)
+    }
+
+    /// Whether the **session-start chain** is what mints this fact (CLOUD-1760).
+    ///
+    /// # Why this is a property of the fact and not of a rule
+    ///
+    /// A mediated-call module reading a fact nothing minted sees `null`, treats it
+    /// as could-not-look, and stays silent — correctly, on its own terms: *"a
+    /// refusal on a failure to look would refuse the project."* Every such module
+    /// is right, and the COMPOSITION is what fails, because nothing asks whether
+    /// the thing they all depend on was ever produced. Answering that needs one
+    /// bit per fact, and it belongs here for [`Fact::class`]'s reason: the
+    /// vocabulary lives beside the fact, and every consumer reads it rather than
+    /// keeping a list.
+    ///
+    /// **Not derivable from [`Fact::class`], which is why it is its own row.**
+    /// `Class` is [`Cost`] x [`Surface`], and both session-start facts are
+    /// `Read` x `Hook` — the same pair as facts the boundary resolves per call
+    /// from the tree in front of it. The distinguishing property is WHO PRODUCES
+    /// the record and WHEN, which neither axis carries.
+    ///
+    /// Exhaustive with no wildcard arm, so a new fact must decide here rather than
+    /// defaulting to `false` — and `false` is the answer that makes this gate
+    /// silently stop covering it, which is the defect one layer up.
+    #[must_use]
+    pub const fn minted_at_session_start(self) -> bool {
+        match self {
+            // The two the chain produces by SPAWNING: resolving either asks the
+            // pin, which is an effect and may not sit on the mediated path, so the
+            // spawn happens once at session start and every call reads the record.
+            // That displacement is exactly what makes their absence invisible.
+            Fact::Tasks | Fact::Pinned => true,
+            Fact::Bypass
+            | Fact::Receipts
+            | Fact::Keys
+            | Fact::Stop
+            | Fact::Waived
+            | Fact::Document
+            | Fact::Tracked
+            | Fact::Lines
+            | Fact::External
+            | Fact::AgentSourced
+            | Fact::Prospective
+            | Fact::Produced
+            | Fact::GitHead
+            | Fact::GitStatus
+            | Fact::GitRemote
+            | Fact::GitWorktrees
+            | Fact::GitRef
+            | Fact::GitRange
+            | Fact::CommitMeta
+            | Fact::Landing
+            | Fact::GitHistory
+            | Fact::Staged
+            | Fact::State
+            | Fact::Forge
+            | Fact::ToolVerdict
+            | Fact::Plan
+            | Fact::Minted
+            | Fact::Captured
+            | Fact::Extracted
+            | Fact::Invocations
+            | Fact::Uses
+            | Fact::Symbols
+            | Fact::Review
+            | Fact::BaseDelta
+            | Fact::Records
+            | Fact::RecordsBlocked
+            | Fact::Instant => false,
+        }
+    }
+
     /// The key this fact is projected under in the **tree** input document, or
     /// `None` for a fact the tree surface does not carry (CLOUD-845).
     ///

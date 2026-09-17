@@ -1950,6 +1950,142 @@ pub struct SessionReport {
     pub ids: Vec<String>,
     /// Whether the session has nothing open. False for could-not-look.
     pub ok: bool,
+    /// Session-start facts a registered mediated-call rule reads and nothing
+    /// minted, as `(rule, fact)` pairs sorted by rule then fact (CLOUD-1760).
+    ///
+    /// **Empty is the clean answer and the only one.** A rule reading a fact the
+    /// session-start chain never produced evaluates against `null`, treats it as
+    /// could-not-look, and refuses nothing — correctly, per module. What no module
+    /// can see is that the fact was never produced at all, so the composition
+    /// fails open with every part behaving. This field is that composition's
+    /// verdict.
+    ///
+    /// A POINTER PAIR, never the fact's value (rule 4): the rule id sends a reader
+    /// to the row that went silent and the token names what it wanted, and neither
+    /// carries a program name, a task body or a path out of the store.
+    pub unminted: Vec<Unminted>,
+}
+
+/// One registered rule, and one session-start fact it reads that nothing minted.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[non_exhaustive]
+pub struct Unminted {
+    /// The enabling rule's id — the pointer to the row that went silent.
+    pub rule: String,
+    /// The fact's stable token ([`crate::facts::Fact::as_str`]).
+    pub fact: &'static str,
+}
+
+/// Whether the session-start chain's record for this fact can be read.
+///
+/// **Each fact is asked through its own module's reader**, never through a path
+/// this function knows: `pinned` and `taskset` each own one derivation of where
+/// their record lives and what makes it stale, and a second spelling here would be
+/// a second authority over both. It also inherits the property that matters —
+/// a record keyed to a different toolchain answers [`Look::CouldNotLook`], and a
+/// stale fact and an absent one disarm a rule identically.
+///
+/// `None` is a fact [`crate::facts::Fact::minted_at_session_start`] admits and
+/// this has no reader for. It is reported as unminted rather than skipped: the
+/// pairing between the two is the thing that can drift, and the safe direction is
+/// to speak. `every_session_start_fact_has_a_reader` is the gate that keeps the
+/// arm unreachable.
+fn minted(fact: crate::facts::Fact, root: &Path) -> Option<bool> {
+    use crate::facts::{Fact, Look};
+
+    match fact {
+        Fact::Pinned => Some(!matches!(crate::pinned::cached(root), Look::CouldNotLook)),
+        Fact::Tasks => Some(!matches!(crate::taskset::cached(root), Look::CouldNotLook)),
+        _ => None,
+    }
+}
+
+/// Whether [`minted`] knows how to ask about this fact.
+///
+/// Exposed so the suite can hold the two halves of the pairing in step:
+/// [`crate::facts::Fact::minted_at_session_start`] says which facts the chain
+/// produces, and [`minted`] says how to ask whether one was. A fact admitted by
+/// the first with no arm in the second is reported unminted forever — safe, and
+/// useless.
+///
+/// Probed against a path that cannot exist, so what this measures is the READER's
+/// presence and never any record's.
+#[must_use]
+pub fn has_session_start_reader(fact: crate::facts::Fact) -> bool {
+    minted(
+        fact,
+        Path::new("/nonexistent/batten-session-start-reader-probe"),
+    )
+    .is_some()
+}
+
+/// Every `(rule, fact)` a registered mediated-call rule depends on and nothing
+/// minted this session (CLOUD-1760).
+///
+/// # Only the mediated surface, and only registered rows
+///
+/// A tree-scoped rule cannot read `input.facts` at all — `check_tree_paths_are_emittable`
+/// refuses one at load — so judging it here would be asking a question its surface
+/// cannot answer. And a rule the consumer never enabled has no bundle, so it
+/// contributes nothing by construction rather than by exemption: the gate cannot
+/// become "every rule must read a fact".
+///
+/// Could-not-look on the CONFIG is an empty answer rather than a finding. A
+/// repository whose policy will not resolve has a louder problem, `doctor`'s
+/// `config` check is what says so, and reporting every rule as unminted over an
+/// unreadable config would bury that.
+fn unminted_facts(dir: &Path) -> Vec<Unminted> {
+    let Ok(resolved) = resolve::resolve(dir, &crate::Overrides::default()) else {
+        return Vec::new();
+    };
+    // THE FILTER IS THE LOAD'S, not a pass over its output: handing `load` only
+    // the mediated rows is what `hook.rs` does to build the very bundle set this
+    // question is about, so asking the same way keeps one answer to "which rules
+    // decide a call" rather than two that can disagree.
+    let mediated: Vec<crate::rules::Rule> = resolved
+        .rules
+        .iter()
+        .filter(|rule| rule.scope == crate::rules::RuleScope::MediatedCall)
+        .cloned()
+        .collect();
+    if mediated.is_empty() {
+        return Vec::new();
+    }
+    let Ok(bundles) = crate::policy::load(
+        dir,
+        &mediated,
+        crate::policy::Vocabulary {
+            patterns: &resolved.patterns,
+            verdicts: &resolved.verdicts,
+            // An authoring property, and this is a diagnosis of the container.
+            words: None,
+            recorders: &resolved.recorders,
+        },
+        crate::policy::ModuleChecks::SkipOnHotPath,
+        None,
+    ) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    //MUTANT-SUITE crates/batten/tests/it/doctor_session.rs
+    //MUTANT factless-rule-demands-a-fact|s@        for token in bundle.session_start_facts() {@        for token in ["pinned-programs", "tasks"] {@|a_rule_reading_no_session_start_fact_is_not_judged
+    //MUTANT every-session-is-could-not-look|s@            if reads.and_then(|fact| minted(fact, dir)) != Some(true) {@            if true {@|a_session_with_every_fact_minted_is_clean
+    for bundle in &bundles {
+        for token in bundle.session_start_facts() {
+            let reads = crate::facts::Fact::from_token(token);
+            if reads.and_then(|fact| minted(fact, dir)) != Some(true) {
+                found.push(Unminted {
+                    rule: bundle.id().to_owned(),
+                    fact: token,
+                });
+            }
+        }
+    }
+    // Sorted so §6 byte-stability reaches this list: two runs over one container
+    // must render the same bytes, and bundle order is the config's.
+    found.sort();
+    found.dedup();
+    found
 }
 
 /// Whether an unreadable store is one the host has simply not written yet.
@@ -1997,12 +2133,19 @@ fn store_is_merely_unwritten(link: &Path) -> bool {
 /// "safe".
 #[must_use]
 pub fn diagnose_session(dir: &Path) -> SessionReport {
+    // RESOLVED ONCE, AND BEFORE THE TASK STORE, because it is the answer to a
+    // different question and must survive the store's could-not-look. A session
+    // whose start chain never ran typically has no readable store EITHER, so
+    // computing this only on the readable path would hide it in exactly the
+    // container it exists to report.
+    let unminted = unminted_facts(dir);
     let unreadable = SessionReport {
         version: config::VERSION,
         open: None,
         total: None,
         ids: Vec::new(),
         ok: false,
+        unminted: unminted.clone(),
     };
     let Some(link) = resolve::resolve(dir, &crate::Overrides::default())
         .ok()
@@ -2044,7 +2187,8 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
                 open: Some(0),
                 total: Some(0),
                 ids: Vec::new(),
-                ok: true,
+                ok: unminted.is_empty(),
+                unminted,
             };
         }
         Err(_) => return unreadable,
@@ -2086,8 +2230,9 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
         version: config::VERSION,
         open: Some(ids.len()),
         total: Some(total),
-        ok: ids.is_empty(),
+        ok: ids.is_empty() && unminted.is_empty(),
         ids,
+        unminted,
     }
 }
 

@@ -19947,6 +19947,17 @@ fn run_doctor_session(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
         writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
         return Ok(session_code(&report));
     }
+    // FIRST, AND ON ITS OWN LINE PER PAIR. A session-start fact nothing minted
+    // disarmed a registered rule for the whole session, which is a louder finding
+    // than a task left open — and it is the one a reader cannot get anywhere else,
+    // because every module involved is behaving correctly and saying nothing.
+    for gap in &report.unminted {
+        writeln!(
+            out,
+            "doctor session: {} reads {} and nothing minted it — this is could-not-look, never a clean",
+            gap.rule, gap.fact
+        )?;
+    }
     match (report.open, report.total) {
         (Some(open), Some(total)) if open > 0 => {
             writeln!(
@@ -19971,6 +19982,17 @@ fn run_doctor_session(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
 }
 
 fn session_code(report: &doctor::SessionReport) -> ExitCode {
+    // AN UNMINTED FACT OUTRANKS THE TASK COUNT, and it is could-not-look rather
+    // than unfinished work (CLOUD-1760). The two arms answer different questions —
+    // "is there work left" against "was this session ever mediated" — and the
+    // second is the one that invalidates the first: a store read under a session
+    // whose guards were disarmed is not a clean bill, it is an unexamined one.
+    // `3` rather than `1` because nothing was DECIDED here; a reading is missing.
+    //MUTANT-SUITE crates/batten/tests/it/doctor_session.rs
+    //MUTANT unminted-fact-reads-clean|s@    if !report.unminted.is_empty() {@    if false {@|a_session_whose_start_chain_did_not_run_is_could_not_look
+    if !report.unminted.is_empty() {
+        return ExitCode::Internal;
+    }
     match report.open {
         None => ExitCode::Internal,
         Some(0) => ExitCode::Success,

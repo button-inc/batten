@@ -412,6 +412,54 @@ impl Bundle {
         &self.declared
     }
 
+    /// Every session-start fact this bundle's modules dereference (CLOUD-1760).
+    ///
+    /// # Derived, never restated
+    ///
+    /// The edge from a rule to the facts it depends on is read off the compiled
+    /// AST — the same [`describe`] reading `check_tree_paths_are_emittable`
+    /// already trusts — and filtered through
+    /// [`crate::facts::Fact::minted_at_session_start`]. A hand-maintained second
+    /// list is what the row this closes forbids, and it would drift in the one
+    /// direction that matters: a module gaining a dependency nobody added to the
+    /// list goes back to failing silently.
+    ///
+    /// A bracket index is handled by [`reference_path`], so
+    /// `input.facts["pinned-programs"]` and `input.facts.tasks` are read the same
+    /// way. A VARIABLE index resolves to no name and is not read at all — that is
+    /// could-not-look about one reference rather than a claim the module depends
+    /// on nothing, and it fails toward under-reporting, which is stated here
+    /// because it is the bound on what this can promise.
+    ///
+    /// An AST this reader does not recognise yields nothing, for [`describe`]'s
+    /// own reason: the bundle has already compiled and smoke-queried, so an
+    /// unfamiliar shape is this reader's limitation and not the module's fault.
+    #[must_use]
+    pub fn session_start_facts(&self) -> BTreeSet<&'static str> {
+        let mut found = BTreeSet::new();
+        let Some(described) = describe(&self.engine) else {
+            return found;
+        };
+        for module in &described {
+            for rule in &module.rules {
+                for path in &rule.input_paths {
+                    let Some(key) = path.strip_prefix("facts.") else {
+                        continue;
+                    };
+                    // The first segment is the fact; anything after it is the
+                    // module's own business (`facts.receipts.verify`).
+                    let token = key.split('.').next().unwrap_or(key);
+                    if let Some(fact) = crate::facts::Fact::from_token(token)
+                        && fact.minted_at_session_start()
+                    {
+                        found.insert(fact.as_str());
+                    }
+                }
+            }
+        }
+        found
+    }
+
     /// The pointer a bundle-level diagnostic is reported against: its first
     /// module's path, or the enabling row's id when it holds none.
     ///
