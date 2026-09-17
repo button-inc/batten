@@ -45,6 +45,26 @@ use crate::error::UsageError;
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Ci {
+    /// Paths proven INERT to the hk slow tier, as prefixes (CLOUD-398).
+    ///
+    /// **A deny-list, and the inversion is the design.** `rust-paths-check`
+    /// judges an allow-list because its four jobs decide a pure function of the
+    /// Rust tree. The slow tier is not enumerable that way — `cargo-clippy`
+    /// declares no glob at all and `batten-check` declares `**` — so any list of
+    /// "what the slow tier reads" is wrong the moment somebody adds a step. This
+    /// inverts the default: the tier runs unless EVERY changed path is on a short
+    /// list proven inert to it, so a wrong entry is the only way to lose a
+    /// verdict, and the list is the whole review surface.
+    ///
+    /// CONSUMER DATA, which is why it is config and not a constant (rule 1): the
+    /// paths a given repository can prove inert are that repository's, and the
+    /// engine knows only the RELATIONSHIP — an entry ending `/` covers a
+    /// directory, anything else is an exact path.
+    ///
+    /// Empty means nothing is inert, so the tier always runs. That is the safe
+    /// direction and the honest reading of an undeclared list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slow_inert: Vec<String>,
     /// Exact check-run names the host requires, sorted and unique.
     ///
     /// Required when the table is present: a `[ci]` declaring no checks is the
@@ -461,9 +481,97 @@ fn difference_tokens(mine: &BTreeSet<String>, host: &BTreeSet<String>) -> Vec<St
     tokens
 }
 
+/// Whether `path` is covered by one of the declared inert prefixes.
+///
+/// An entry ending `/` covers everything beneath it; anything else must match the
+/// path exactly. That is the shell's own rule, and the exactness matters: a bare
+/// `.coderabbit` entry must not cover `.coderabbit.yaml.bak`, which is a file
+/// nobody proved inert.
+#[must_use]
+pub fn inert(inert_prefixes: &[String], path: &str) -> bool {
+    inert_prefixes.iter().any(|entry| {
+        entry
+            .strip_suffix('/')
+            .map_or_else(|| path == entry, |_| path.starts_with(entry.as_str()))
+    })
+}
+
+/// The first changed path that can move the slow tier, if any.
+///
+/// **Returns the path rather than a boolean**, because a caller reporting *why*
+/// the tier is needed is reporting a pointer, and a boolean would make the answer
+/// unexplainable — which is how a deny-list quietly stops being reviewed.
+///
+/// An EMPTY `changed` is `None` here and could-not-look at the call site, never
+/// "nothing to do": an empty diff means the comparison did not look — a wrong
+/// base, a shallow clone — and answering "skip the tier" there is the
+/// false-absent this decision exists to avoid.
+#[must_use]
+pub fn first_live_path<'a>(inert_prefixes: &[String], changed: &'a [String]) -> Option<&'a str> {
+    changed
+        .iter()
+        .map(String::as_str)
+        .find(|path| !inert(inert_prefixes, path))
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+
+    /// The declared inert list, as `batten.toml` carries it.
+    fn inert_list() -> Vec<String> {
+        vec![
+            String::from(".serena/memories/"),
+            String::from(".coderabbit.yaml"),
+        ]
+    }
+
+    #[test]
+    fn a_directory_entry_covers_what_is_beneath_it() {
+        assert!(inert(&inert_list(), ".serena/memories/core.md"));
+        assert!(inert(&inert_list(), ".serena/memories/deep/nested.md"));
+    }
+
+    #[test]
+    fn an_exact_entry_does_not_cover_a_longer_name() {
+        // THE NARROWING THAT MATTERS: `.coderabbit.yaml.bak` is a file nobody
+        // proved inert, and a bare prefix test would have swallowed it — losing a
+        // verdict, which is the only way this list can be wrong.
+        assert!(inert(&inert_list(), ".coderabbit.yaml"));
+        assert!(!inert(&inert_list(), ".coderabbit.yaml.bak"));
+    }
+
+    #[test]
+    fn the_first_live_path_is_named_rather_than_counted() {
+        let changed = vec![
+            String::from(".serena/memories/core.md"),
+            String::from("crates/batten/src/lib.rs"),
+        ];
+        assert_eq!(
+            first_live_path(&inert_list(), &changed),
+            Some("crates/batten/src/lib.rs")
+        );
+    }
+
+    #[test]
+    fn an_all_inert_diff_names_nothing() {
+        let changed = vec![
+            String::from(".serena/memories/core.md"),
+            String::from(".coderabbit.yaml"),
+        ];
+        assert_eq!(first_live_path(&inert_list(), &changed), None);
+    }
+
+    #[test]
+    fn an_empty_list_makes_every_path_live() {
+        // The safe direction for an undeclared list: nothing is inert, so the
+        // tier always runs rather than never running.
+        let changed = vec![String::from(".serena/memories/core.md")];
+        assert_eq!(
+            first_live_path(&[], &changed),
+            Some(".serena/memories/core.md")
+        );
+    }
     use super::*;
 
     /// The shape this repository's own host returns: one required check, and no
@@ -478,6 +586,7 @@ mod tests {
 
     fn ci(checks: &[&str], methods: Option<&[&str]>) -> Ci {
         Ci {
+            slow_inert: Vec::new(),
             required_checks: checks.iter().map(|check| (*check).to_owned()).collect(),
             allowed_merge_methods: methods
                 .map(|methods| methods.iter().map(|m| (*m).to_owned()).collect()),

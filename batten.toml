@@ -7235,6 +7235,67 @@ lines = ["bench/suites/RESULTS.md"]
 module = "policy/suite-cost-corpus.rego"
 severity = "deny"
 
+# THE INERT LIST IS THE WHOLE REVIEW SURFACE (CLOUD-398), so it gets a gate.
+# `[ci] slow_inert` inverts the default — the slow tier runs unless EVERY changed
+# path is covered — which makes a wrong entry the only way to lose a verdict.
+# `mise-tasks/ci-slow-needed.sh` answered that with a `--probe` mode inside
+# itself, arguing that a second program asserting things about its list would be
+# the second authority non-negotiable 6 condemns. The list is config now, so that
+# argument reverses: this module READS the list rather than owning one, there is
+# exactly one authority, and a self-test becomes a gate over declared data.
+[[rule]]
+id = "path list loose"
+kind = "policy"
+scope = "tree"
+documents = ["batten.toml"]
+module = "policy/ci-slow-inert.rego"
+severity = "deny"
+
+[[verdict]]
+id = "path admit unsafe"
+gloss = "a path a change to which can move the slow tier is declared inert, so the verdict would be silently not taken"
+class = """
+The inert list decides what CI may skip. An entry covering a path the slow tier \
+reads does not make the tier fail — it makes it NOT RUN, and every required check \
+goes green over a verdict nobody took. That is the false-absent the deny-list \
+shape exists to avoid, and it is why each entry needs its argument made before it \
+is added rather than after somebody notices.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "path list dropped"
+gloss = "a path proven inert is no longer covered, so a diff that cannot move the slow tier pays for it"
+class = """
+The half that pays for the split, and the half that erodes silently: a narrowing \
+here is invisible except as minutes on every lap. It is not a correctness fault — \
+running a tier that cannot move is safe — which is exactly why nothing else would \
+ever report it.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "config read unread"
+gloss = "the declared authority carries no inert list, so what CI may skip was never read"
+class = """
+Could-not-look, and it is not clean. A list this gate cannot see is a list nobody \
+reviewed, and reporting a tree with no list as though its list were sound is the \
+vacuous green refused everywhere else here.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
 [[verdict]]
 id = "suite count unread"
 gloss = "the per-suite cost corpus is absent or carries no row, so nothing records what a suite costs"
@@ -8706,6 +8767,25 @@ expires = "2026-10-04"
 
 [ci]
 required_checks = ["final"]
+# PATHS PROVEN INERT TO THE hk SLOW TIER (CLOUD-398), ported out of
+# `mise-tasks/ci-slow-needed.sh`. Every entry needs its own argument made before
+# it is added, because a wrong entry is the ONLY way to lose a verdict here — the
+# tier runs unless every changed path is covered, so the list is the whole review
+# surface rather than a derivation nobody can check.
+#
+# The six slow steps and the hk globs that select them, measured 2026-08-21:
+# `token-bench-check` regenerates from COMMITTED fixtures and never reads the live
+# tree; `sbom-check` reads `Cargo.lock` and the workflows; `test:bats` reads
+# `mise-tasks/**` and `tests/*.bats`; `test` reads the Rust tree, the manifests
+# and `batten.toml`; `cargo-clippy` declares no glob but is a pure-Rust verdict;
+# and `batten-check` declares `**`, which is why the `ci` job runs it
+# unconditionally rather than behind this list — `no-secrets` is the repository's
+# only secrets scan, and skipping it on a memories-only diff would let a
+# credential land with every required check green.
+#
+# A trailing `/` covers a directory; anything else must match the path exactly, so
+# a `.coderabbit.yaml` entry cannot quietly cover `.coderabbit.yaml.bak`.
+slow_inert = [".serena/memories/", ".coderabbit.yaml"]
 
 # The repository settings this tree projects (CLOUD-380). `[ci]` above projects
 # the BRANCH ruleset; this projects the repository object, and the two are the

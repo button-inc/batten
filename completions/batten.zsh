@@ -606,6 +606,101 @@ esac
     ;;
 esac
 ;;
+(ci)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+":: :_batten__subcmd__ci_commands" \
+"*::: :->ci" \
+&& ret=0
+
+    case $state in
+    (ci)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-ci-command-$line[1]:"
+        case $line[1] in
+            (slow-needed)
+_arguments "${_arguments_options[@]}" : \
+'--base=[The revision this checkout is diffed against]: :_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__ci__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-ci-help-command-$line[1]:"
+        case $line[1] in
+            (slow-needed)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (config)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -976,7 +1071,37 @@ trace\:"Add everything"))' \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:batten-doctor-command-$line[1]:"
         case $line[1] in
-            (mediator)
+            (target)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':target -- The target triple to install, as `rustup target list` spells it:_default' \
+&& ret=0
+;;
+(mediator)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
@@ -1143,7 +1268,11 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:batten-doctor-help-command-$line[1]:"
         case $line[1] in
-            (mediator)
+            (target)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(mediator)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -6300,6 +6429,26 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(ci)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__help__subcmd__ci_commands" \
+"*::: :->ci" \
+&& ret=0
+
+    case $state in
+    (ci)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-help-ci-command-$line[1]:"
+        case $line[1] in
+            (slow-needed)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (config)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__help__subcmd__config_commands" \
@@ -6368,7 +6517,11 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:batten-help-doctor-command-$line[1]:"
         case $line[1] in
-            (mediator)
+            (target)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(mediator)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -7242,6 +7395,7 @@ _batten_commands() {
 'capture:Captured command output\: navigate what \`exec\` already ran, without running it again' \
 'mcp:Dispatch a declared MCP call and hand back a reduction instead of the payload' \
 'target:Inspect and reclaim this repository'\''s build tree' \
+'ci:Answer what this repository'\''s continuous integration needs of a change' \
 'config:Inspect configuration' \
 'lint:Lint an artifact against a declared schema' \
 'spec:Print the tool'\''s own command spec' \
@@ -7450,6 +7604,37 @@ _batten__subcmd__checks__subcmd__help__subcmd__green_commands() {
 _batten__subcmd__checks__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'batten checks help help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__ci_commands] )) ||
+_batten__subcmd__ci_commands() {
+    local commands; commands=(
+'slow-needed:Decide whether a diff can move the slow tier, so a diff that cannot does not pay for it' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten ci commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__ci__subcmd__help_commands] )) ||
+_batten__subcmd__ci__subcmd__help_commands() {
+    local commands; commands=(
+'slow-needed:Decide whether a diff can move the slow tier, so a diff that cannot does not pay for it' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten ci help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__ci__subcmd__help__subcmd__help_commands] )) ||
+_batten__subcmd__ci__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten ci help help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__ci__subcmd__help__subcmd__slow-needed_commands] )) ||
+_batten__subcmd__ci__subcmd__help__subcmd__slow-needed_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten ci help slow-needed commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__ci__subcmd__slow-needed_commands] )) ||
+_batten__subcmd__ci__subcmd__slow-needed_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten ci slow-needed commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__claim_commands] )) ||
 _batten__subcmd__claim_commands() {
@@ -7693,6 +7878,7 @@ _batten__subcmd__design__subcmd__help__subcmd__help_commands() {
 (( $+functions[_batten__subcmd__doctor_commands] )) ||
 _batten__subcmd__doctor_commands() {
     local commands; commands=(
+'target:Make one rustup target installed, purging a half-installed one first, behind the toolchain'\''s own lock' \
 'mediator:Diagnose whether the engine the registrations reach was built from this tree' \
 'egress:Diagnose whether the agent proxy would carry this container'\''s requests' \
 'gate:Diagnose whether this checkout'\''s commit path runs the gate' \
@@ -7715,6 +7901,7 @@ _batten__subcmd__doctor__subcmd__gate_commands() {
 (( $+functions[_batten__subcmd__doctor__subcmd__help_commands] )) ||
 _batten__subcmd__doctor__subcmd__help_commands() {
     local commands; commands=(
+'target:Make one rustup target installed, purging a half-installed one first, behind the toolchain'\''s own lock' \
 'mediator:Diagnose whether the engine the registrations reach was built from this tree' \
 'egress:Diagnose whether the agent proxy would carry this container'\''s requests' \
 'gate:Diagnose whether this checkout'\''s commit path runs the gate' \
@@ -7754,6 +7941,11 @@ _batten__subcmd__doctor__subcmd__help__subcmd__session_commands() {
     local commands; commands=()
     _describe -t commands 'batten doctor help session commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__doctor__subcmd__help__subcmd__target_commands] )) ||
+_batten__subcmd__doctor__subcmd__help__subcmd__target_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten doctor help target commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__doctor__subcmd__hooks_commands] )) ||
 _batten__subcmd__doctor__subcmd__hooks_commands() {
     local commands; commands=()
@@ -7768,6 +7960,11 @@ _batten__subcmd__doctor__subcmd__mediator_commands() {
 _batten__subcmd__doctor__subcmd__session_commands() {
     local commands; commands=()
     _describe -t commands 'batten doctor session commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__doctor__subcmd__target_commands] )) ||
+_batten__subcmd__doctor__subcmd__target_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten doctor target commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__enforce_commands] )) ||
 _batten__subcmd__enforce_commands() {
@@ -7867,6 +8064,7 @@ _batten__subcmd__help_commands() {
 'capture:Captured command output\: navigate what \`exec\` already ran, without running it again' \
 'mcp:Dispatch a declared MCP call and hand back a reduction instead of the payload' \
 'target:Inspect and reclaim this repository'\''s build tree' \
+'ci:Answer what this repository'\''s continuous integration needs of a change' \
 'config:Inspect configuration' \
 'lint:Lint an artifact against a declared schema' \
 'spec:Print the tool'\''s own command spec' \
@@ -7989,6 +8187,18 @@ _batten__subcmd__help__subcmd__checks__subcmd__green_commands() {
     local commands; commands=()
     _describe -t commands 'batten help checks green commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__help__subcmd__ci_commands] )) ||
+_batten__subcmd__help__subcmd__ci_commands() {
+    local commands; commands=(
+'slow-needed:Decide whether a diff can move the slow tier, so a diff that cannot does not pay for it' \
+    )
+    _describe -t commands 'batten help ci commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__ci__subcmd__slow-needed_commands] )) ||
+_batten__subcmd__help__subcmd__ci__subcmd__slow-needed_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help ci slow-needed commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__help__subcmd__claim_commands] )) ||
 _batten__subcmd__help__subcmd__claim_commands() {
     local commands; commands=(
@@ -8094,6 +8304,7 @@ _batten__subcmd__help__subcmd__design__subcmd__audit_commands() {
 (( $+functions[_batten__subcmd__help__subcmd__doctor_commands] )) ||
 _batten__subcmd__help__subcmd__doctor_commands() {
     local commands; commands=(
+'target:Make one rustup target installed, purging a half-installed one first, behind the toolchain'\''s own lock' \
 'mediator:Diagnose whether the engine the registrations reach was built from this tree' \
 'egress:Diagnose whether the agent proxy would carry this container'\''s requests' \
 'gate:Diagnose whether this checkout'\''s commit path runs the gate' \
@@ -8126,6 +8337,11 @@ _batten__subcmd__help__subcmd__doctor__subcmd__mediator_commands() {
 _batten__subcmd__help__subcmd__doctor__subcmd__session_commands() {
     local commands; commands=()
     _describe -t commands 'batten help doctor session commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__doctor__subcmd__target_commands] )) ||
+_batten__subcmd__help__subcmd__doctor__subcmd__target_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help doctor target commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__enforce_commands] )) ||
 _batten__subcmd__help__subcmd__enforce_commands() {

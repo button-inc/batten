@@ -617,7 +617,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,attestation-check,awk-regex,bats-invocation,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,closing-key-check,coderabbit-config,commit-hygiene,connector-allow-guard,connector-allow-resolve,deferral-check,denials-outlive-the-turn,digest-major-agreement,done-check,done-pr-check,duplicate-close-check,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence-assert,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,sonar-gate,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,token-bench-check,transcript-corpus-check,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration"
+MUTANT_GATES = "agentic-experiment-record,attestation-check,awk-regex,bats-invocation,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,closing-key-check,coderabbit-config,commit-hygiene,connector-allow-guard,connector-allow-resolve,deferral-check,denials-outlive-the-turn,digest-major-agreement,done-check,done-pr-check,duplicate-close-check,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence-assert,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,sonar-gate,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,token-bench-check,transcript-corpus-check,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -3167,6 +3167,23 @@ echo "lock-check: mise.lock is complete and current"
 # replaces it (CLOUD-1753). `--repair` because that is what the program did: it
 # checked and then FIXED what it could, and a session that only reported would
 # leave the container it diagnosed exactly as broken as it found it.
+# `ci-slow-needed`'s task name, kept so `ci.yml` needs no edit (CLOUD-1716). What
+# it wraps is `batten ci slow-needed`, and what is left here is the exit
+# TRANSLATION: the workflow reads this as a boolean — `if mise run ci-slow-needed
+# ...; then` — where the verb answers on the engine's table, `0` the tier is
+# needed and `Violation` it is not (CLOUD-1718). The fold lives in an ungoverned
+# task rather than putting an inverted table in the engine.
+#
+# THE HEAD ARGUMENT IS ASSERTED, NOT IGNORED. The retired program took
+# `<base> <head>` and diffed them; the verb diffs the base against the CHECKOUT,
+# which is the same thing in CI and not the same thing anywhere else. Rather than
+# drop the second argument silently, this refuses when it names something other
+# than the checkout — a caller asking about a head it is not standing on is asking
+# a question this cannot answer.
+[tasks."ci-slow-needed"]
+description = "Decide whether a diff can move the hk slow tier, so a diff that cannot does not pay for it"
+run = "base=\"${1:-}\"; if [ -z \"$base\" ]; then echo '::error:: ci-slow-needed: no base revision given, so there is no diff to judge.' >&2; exit 2; fi; if [ -n \"${2:-}\" ] && [ \"$(git rev-parse \"$2\")\" != \"$(git rev-parse HEAD)\" ]; then echo \"::error:: ci-slow-needed: '$2' is not this checkout, and the diff is taken against the checkout.\" >&2; exit 2; fi; cargo run --quiet -p batten -- ci slow-needed --base \"$base\"; case $? in 0) exit 0 ;; 2) exit 1 ;; *) exit 2 ;; esac"
+
 [tasks."provision:startup"]
 description = "Check every declared [[startup]] row and repair what it can — the provisioning mise does not own"
 run = "cargo run --quiet -p batten -- startup --repair"
@@ -4006,15 +4023,12 @@ run = '''
 # THE SLOW-TIER DECISION, PROVED LOCALLY RATHER THAN IN CI. The `ci` job asks
 # `ci-slow-needed` whether a diff can move the hk slow tier and pays for it only
 # when the answer is yes, so a wrong answer is a verdict silently not taken. The
-# `--probe` mode is that program's own gate: it fixes the claims its inert list
-# makes, both directions, and refuses if the list stops honouring them. Run here
-# because `verify` cannot know a pull request's base, so the probe is the half of
-# it that IS decidable locally (`ci-local-parity` property 3 is satisfied by the
-# name appearing in this block).
-if ! mise run ci-slow-needed --probe; then
-	echo "::error:: verify: ci-slow-needed's inert list no longer honours its own probes, so the \`ci\` job would skip a slow-tier verdict a diff can move. No receipt written." >&2
-	exit 1
-fi
+# retired program carried a `--probe` mode as its own gate; the list is
+# `[ci] slow_inert` now and the probes are `path list loose`
+# (`policy/ci-slow-inert.rego`), so `batten check` runs them with every other row
+# and NO separate invocation belongs here — one added below was answered by this
+# task's own `cargo` stub in `tests/verify.bats` and would have passed vacuously.
+# (`ci-local-parity` property 3 is satisfied by the name appearing in this block.)
 
 # THIS IS THE LAP-OPEN BOUNDARY. Its twin at the end of `verify:gated` closes
 # the lap this admits, which is what makes the floor an invariant rather than a

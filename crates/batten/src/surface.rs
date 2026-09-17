@@ -1994,6 +1994,26 @@ const LANDED_BY: FlagDecl = FlagDecl {
 /// claim-only reading trades over-reporting for a SILENT UNDER-REPORT, which is
 /// "strictly worse for a drain", and shipping without the arm is that same
 /// error pointed the other way.
+/// `--base <rev>` on `ci slow-needed` (CLOUD-398).
+///
+/// REQUIRED, because there is no safe default. A missing base is not "diff
+/// against the parent" — it is a caller that has not said what the change is
+/// relative to, and answering from a guess is how a tier gets skipped over a
+/// comparison nobody made.
+const SLOW_BASE: FlagDecl = FlagDecl {
+    id: "base",
+    long: Some("base"),
+    short: None,
+    help: "The revision this checkout is diffed against",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: true,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const CLAIMED: FlagDecl = FlagDecl {
     id: "claimed",
     long: Some("claimed"),
@@ -3030,6 +3050,35 @@ pub const SURFACE: &[CommandDecl] = &[
             "target",
             "The target triple to install, as `rustup target list` spells it",
         )],
+    },
+    // Whether a diff can move the hk slow tier (CLOUD-398), ported out of
+    // `mise-tasks/ci-slow-needed.sh` under CLOUD-1716.
+    //
+    // A NOUN THAT ONLY DISPATCHES, on `target`'s reading: the noun itself decides
+    // nothing, so it is `Unclassified` rather than `Read` — a `read` noun over a
+    // subtree leaks onto §5's derived allowlist for any consumer treating an
+    // entry as a prefix.
+    CommandDecl {
+        path: "ci",
+        id: "ci",
+        about: "Answer what this repository's continuous integration needs of a change",
+        data_channel: false,
+        exits: EXITS_DISPATCHES,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // `checks green`'s SHAPE, deliberately: the answer is yes or no, so `0` is
+    // "the tier is needed" and `Violation` is "it is not". Could-not-look is
+    // `Internal`, which is the reading an empty diff gets — a wrong base or a
+    // shallow clone, never a clean diff.
+    CommandDecl {
+        path: "ci slow-needed",
+        id: "ci.slow-needed",
+        about: "Decide whether a diff can move the slow tier, so a diff that cannot does not pay for it",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Read,
+        flags: &[SLOW_BASE],
     },
     CommandDecl {
         path: "config",
