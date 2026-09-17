@@ -1566,6 +1566,26 @@ pub enum DoctorCommand {
         /// Emit the diagnosis as byte-stable JSON.
         json: bool,
     },
+    /// Whether every tool the manifest declares is actually installed (CLOUD-1683).
+    ///
+    /// APPENDED LAST, for the reason [`DoctorCommand::Egress`] records: this enum
+    /// carries no `repr`, so a variant placed beside its neighbours shifts every
+    /// later discriminant and `mise run semver` reads that as a break the crate
+    /// has to declare.
+    ///
+    /// A sub-verb rather than a row in the bare report, because whether a tool is
+    /// installed on this machine is a property of the world and bare `doctor`
+    /// answers a property of the commit — see [`crate::doctor::Toolchain`].
+    Toolchain {
+        /// The manifest whose declared tool table to read.
+        ///
+        /// An operand rather than a constant in the engine: the manifest's path
+        /// is a consumer artifact, and naming it in `crates/batten/src` is
+        /// non-negotiable rule 1's plainest violation.
+        manifest: String,
+        /// Emit the classification as byte-stable JSON.
+        json: bool,
+    },
 }
 
 /// Subcommands of `generate`.
@@ -1910,6 +1930,13 @@ fn doctor_of(matches: &ArgMatches) -> DoctorCommand {
             json: flag(matches, "json"),
         },
         Some(("gate", matches)) => DoctorCommand::CommitGate {
+            json: flag(matches, "json"),
+        },
+        Some(("toolchain", matches)) => DoctorCommand::Toolchain {
+            manifest: matches
+                .get_one::<String>("manifest")
+                .cloned()
+                .unwrap_or_default(),
             json: flag(matches, "json"),
         },
         // The bare verb reads `-J` from its OWN matches, which is where clap put

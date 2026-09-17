@@ -551,6 +551,237 @@ pub fn diagnose_egress() -> Egress {
     Egress::Unfenced
 }
 
+/// Whether every tool the manifest DECLARES is actually installed (CLOUD-1683).
+///
+/// # The hole this fills, which is not the one the neighbouring gates fill
+///
+/// Three gates already read the declared tool table and none of them asks this.
+/// One compares it against the lockfile, one runs the other way from a client's
+/// wiring, and one refuses a source-built backend — all static questions about
+/// the COMMIT. The provisioning self-check that ships with this repository looks
+/// for broken bin symlinks under the installs directory, which is a question
+/// about RESIDUE: a tool declared and never installed leaves no symlink at all
+/// and passes it.
+///
+/// So the state where the manifest names a tool that was never fetched was
+/// unobservable, and that is exactly the state a failed install leaves behind.
+/// Measured three times in one container: the installer wrote an error, exited
+/// **0**, and the gate that would have caught it did not exist.
+///
+/// # Why this is a sub-verb and not a row in the bare report
+///
+/// [`Egress`]' reason, unchanged: whether a tool is installed on this machine is
+/// a property of the WORLD, and bare `doctor` answers properties of the commit.
+/// A `[[startup]]` row also needs to ask this one ALONE, so that a failure here
+/// is not reported as an unrelated unreachable program.
+///
+/// # Fail closed, because "could not look" IS unprovisioned here
+///
+/// [`Toolchain::Unreadable`] is a FAILURE and not a pass. Every other could-not-
+/// look in this file resolves to ok, and that is right for them: they are asking
+/// whether something the repository declared is wired, and an unreadable answer
+/// is not evidence of a defect. This one is asking whether the toolchain exists,
+/// and an unreadable answer is produced by a container where it does not — a
+/// probe that cannot be run is the symptom, not a gap in the sensor. Reading it
+/// as a pass would restore the property the whole row exists to remove: the
+/// broken path and the working path answering identically.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case", tag = "state")]
+pub enum Toolchain {
+    /// Every declared tool has an installed entry.
+    Provisioned,
+    /// The manifest declares tools the probe reports no install for.
+    ///
+    /// Carries the declared KEYS, for [`Check::subjects`]' reason: a reader who
+    /// learns only that something is missing has to re-derive which. They are
+    /// identifiers out of the consumer's own committed manifest, so naming them
+    /// republishes a value the reader already has.
+    ///
+    /// A STRUCT VARIANT RATHER THAN A NEWTYPE, and that is `serde`'s constraint
+    /// rather than a taste: this enum is internally tagged, and an internal tag
+    /// cannot be written into a sequence, so a newtype variant holding one fails
+    /// at serialization time. It failed on the REFUSING arm only — the healthy
+    /// path carries no payload and serialized fine — so `-J` was broken in
+    /// exactly the state the verb exists to report. `pointer_only`'s census is
+    /// what caught it, by running every data-channel verb and refusing to read
+    /// an internal failure as evidence of a clean document.
+    Unprovisioned {
+        /// The declared keys the probe reported no install for.
+        missing: Vec<String>,
+    },
+    /// The manifest could not be read, or the probe could not be run or parsed.
+    Unreadable,
+}
+
+impl Toolchain {
+    /// The pointer line this renders as, without a trailing newline.
+    #[must_use]
+    pub fn line(&self) -> String {
+        match self {
+            Toolchain::Provisioned => "toolchain ok".to_owned(),
+            Toolchain::Unprovisioned { missing } => {
+                format!(
+                    "toolchain failed toolchain-unprovisioned {}",
+                    missing.join(" ")
+                )
+            }
+            Toolchain::Unreadable => "toolchain failed toolchain-unreadable".to_owned(),
+        }
+    }
+
+    /// The exit code this maps to.
+    ///
+    /// [`ExitCode::Violation`] is unreachable, inheriting the parent's promise:
+    /// a mediating harness reads `2` as a deny, and "this checkout was never
+    /// provisioned" is not "policy says no". `1` rather than `3` for
+    /// [`Egress::code`]'s reason — the invocation was well formed and the
+    /// environment is not.
+    #[must_use]
+    pub const fn code(&self) -> ExitCode {
+        match self {
+            Toolchain::Provisioned => ExitCode::Success,
+            Toolchain::Unprovisioned { .. } | Toolchain::Unreadable => ExitCode::Usage,
+        }
+    }
+}
+
+/// `doctor toolchain`'s one line, on [`Egress`]'s reasoning and for its reason.
+impl crate::output::Line for Toolchain {
+    fn line(&self) -> String {
+        Toolchain::line(self)
+    }
+}
+
+/// The table whose keys are the declared tools.
+const TOOLCHAIN_TABLE: &str = "[tools]";
+
+/// The declared tool keys, read out of the manifest's own table.
+///
+/// Text rather than a TOML parse, for [`crate::wiring`]'s reason and this
+/// repository's own: the committed manifest does not round-trip through the
+/// `toml` crate in scope. Only the KEYS are wanted, and a key is everything left
+/// of the first `=` on a line inside the table, unquoted — which reads a plain
+/// string pin (`hk = "1.56.1"`), an inline table (`rust = { version = … }`) and a
+/// backend-prefixed quoted key (`"aqua:cli/cli" = …`) identically, because the
+/// difference between them is entirely on the right-hand side.
+///
+/// Sorted and deduplicated, so §6 byte-stability does not depend on file order.
+#[must_use]
+pub fn declared_tools(manifest: &str) -> Vec<String> {
+    let mut keys: Vec<String> = Vec::new();
+    let mut inside = false;
+    for line in manifest.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            // A nested table (`[tools.foo]`) ends the flat key list too: its
+            // own keys are that tool's settings, not tool names.
+            inside = line == TOOLCHAIN_TABLE;
+            continue;
+        }
+        if !inside || line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, _)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim().trim_matches('"');
+        if !key.is_empty() {
+            keys.push(key.to_owned());
+        }
+    }
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+/// One install the probe reports. Only whether it landed is read.
+#[derive(serde::Deserialize)]
+struct ProbedInstall {
+    /// Whether the payload is actually on disk, as opposed to merely requested.
+    #[serde(default)]
+    installed: bool,
+}
+
+/// The tools the probe reports at least one landed install for.
+///
+/// `None` is "the probe could not be read", which [`diagnose_toolchain`] maps to
+/// [`Toolchain::Unreadable`] rather than to an empty set — an empty set would say
+/// every declared tool is missing, which is a different and much louder claim
+/// than "nobody looked".
+#[must_use]
+pub fn installed_tools(probe: &str) -> Option<Vec<String>> {
+    let reported: std::collections::BTreeMap<String, Vec<ProbedInstall>> =
+        serde_json::from_str(probe).ok()?;
+    Some(
+        reported
+            .into_iter()
+            .filter(|(_, installs)| installs.iter().any(|install| install.installed))
+            .map(|(tool, _)| tool)
+            .collect(),
+    )
+}
+
+/// The declared tools the probe reports no install for.
+///
+/// A pure set difference over two sorted lists, extracted so the decision is
+/// testable without a manifest or a probe — `rules/rust.md`'s rule for a
+/// condition the environment cannot be made to produce.
+#[must_use]
+pub fn unprovisioned(declared: &[String], installed: &[String]) -> Vec<String> {
+    declared
+        .iter()
+        .filter(|tool| !installed.contains(tool))
+        .cloned()
+        .collect()
+}
+
+/// Decide over the manifest's declared table and a probe reading the caller
+/// supplied.
+///
+/// # The caller fetches; this decides
+///
+/// The board gates already work this way — a pure function of stdin, with the
+/// caller performing the fetch — and the reason is stronger here than
+/// convenience. Spawning the tool runner would put a program resolved off `PATH`
+/// behind a row on the read-only allowlist, which is CLOUD-170's invariant and
+/// exactly the line [`diagnose_mediator`] draws when it resolves a program name
+/// and deliberately does not run it. Reading the probe instead keeps this verb
+/// `read` in the structural sense rather than the promised one.
+///
+/// It also keeps the derivation honest: the installs directory mangles a
+/// backend-prefixed key into a directory name, and re-deriving that mangling here
+/// would be a second authority for something the runner already reports.
+///
+/// `manifest` is the consumer's own path and arrives as an operand rather than as
+/// a constant here: non-negotiable rule 1, with `document_facts.rs`'s
+/// `no_artifact_name_reaches_the_core` as the gate that enforces it.
+#[must_use]
+pub fn diagnose_toolchain(manifest: &Path, probe: &str) -> Toolchain {
+    let Ok(text) = std::fs::read_to_string(manifest) else {
+        return Toolchain::Unreadable;
+    };
+    let declared = declared_tools(&text);
+    if declared.is_empty() {
+        // A manifest declaring nothing cannot be unprovisioned. This is NOT the
+        // vacuous pass the module doc warns about — it is a reading, and the
+        // suite pins that a manifest declaring one missing tool refuses.
+        return Toolchain::Provisioned;
+    }
+    // An empty or unparseable probe is the could-not-look arm, and here that IS
+    // unprovisioned: the probe is produced by the toolchain being checked for, so
+    // a caller whose runner could not answer is a caller with no runner. Reading
+    // it as a pass restores the property this exists to remove.
+    let Some(installed) = installed_tools(probe) else {
+        return Toolchain::Unreadable;
+    };
+    let missing = unprovisioned(&declared, &installed);
+    if missing.is_empty() {
+        Toolchain::Provisioned
+    } else {
+        Toolchain::Unprovisioned { missing }
+    }
+}
+
 /// Compare the mediator on `PATH` against the artifact `dir` builds.
 ///
 /// Reads both files and hashes them; spawns nothing. Length is compared first
@@ -2236,12 +2467,72 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
     }
 }
 
+//MUTANT unprovisioned-verify-green|s@^        .filter(|tool| !installed.contains(tool))$@        .filter(|tool| installed.contains(tool))@|a_declared_tool_the_probe_does_not_report_is_unprovisioned
+//MUTANT toolchain-probe-blind|s@^        return Toolchain::Unreadable;\n    };\n    let missing@        return Toolchain::Provisioned;\n    };\n    let missing@|a_toolchain_whose_runner_cannot_be_run_at_all_is_unprovisioned_rather_than_a_pass
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use std::fs;
 
     use super::*;
+
+    /// CLOUD-1683. The declared table is read in every spelling it really uses —
+    /// a plain string pin, an inline table, and a backend-prefixed quoted key —
+    /// because the difference between them is entirely on the right-hand side.
+    #[test]
+    fn every_key_spelling_in_the_declared_table_is_read() {
+        let manifest = "[tools]\n\
+                        rust = { version = \"1.98.0\", components = \"clippy\" }\n\
+                        hk = \"1.56.1\"\n\
+                        \"aqua:cli/cli\" = \"2.98.0\"\n";
+        assert_eq!(
+            declared_tools(manifest),
+            vec!["aqua:cli/cli", "hk", "rust"],
+            "sorted, so byte-stability does not depend on file order"
+        );
+    }
+
+    /// CLOUD-1683. Only the flat table's own keys are tool names: a nested table
+    /// holds one tool's settings, and an unrelated table holds none.
+    #[test]
+    fn a_key_outside_the_declared_table_is_not_a_tool() {
+        let manifest = "[env]\nNOT_A_TOOL = \"1\"\n\n\
+                        [tools]\nhk = \"1.56.1\"\n\n\
+                        [tools.rust]\nversion = \"1.98.0\"\n\n\
+                        [tasks.verify]\nrun = \"true\"\n";
+        assert_eq!(declared_tools(manifest), vec!["hk"]);
+    }
+
+    /// CLOUD-1683. THE DECISION, extracted so it is testable without a manifest
+    /// or a probe, and the arm the declared mutation inverts.
+    #[test]
+    fn a_declared_tool_the_probe_does_not_report_is_unprovisioned() {
+        let declared = vec!["hk".to_owned(), "rust".to_owned()];
+        let installed = vec!["rust".to_owned()];
+        assert_eq!(unprovisioned(&declared, &installed), vec!["hk"]);
+        // The anti-vacuity half: a fully reported set leaves nothing.
+        assert!(unprovisioned(&declared, &declared).is_empty());
+    }
+
+    /// CLOUD-1683. A tool the probe REQUESTED and never fetched is missing. This
+    /// is the whole defect: a failed install leaves exactly this record, and
+    /// reading presence rather than `installed` would call it provisioned.
+    #[test]
+    fn a_requested_but_unfetched_tool_does_not_count_as_installed() {
+        let probe = r#"{"hk": [{"version": "1.56.1", "installed": false}],
+                        "rust": [{"version": "1.98.0", "installed": true}]}"#;
+        assert_eq!(installed_tools(probe), Some(vec!["rust".to_owned()]));
+    }
+
+    /// CLOUD-1683. An unreadable probe is `None` rather than an empty set, and
+    /// the difference is load-bearing: an empty set says every declared tool is
+    /// missing, which is a much louder claim than "nobody looked".
+    #[test]
+    fn an_unreadable_probe_is_not_an_empty_set() {
+        assert_eq!(installed_tools("not json at all"), None);
+        assert_eq!(installed_tools("{}"), Some(Vec::new()));
+    }
 
     fn scratch(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join("batten-doctor-tests").join(name);

@@ -1053,6 +1053,32 @@ expression: stdout_of(&output)
             }
           ],
           "subcommands": []
+        },
+        {
+          "path": "doctor toolchain",
+          "id": "doctor.toolchain",
+          "about": "Diagnose whether every tool the manifest declares is installed",
+          "effect": "read",
+          "data_channel": true,
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "positional": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            },
+            {
+              "name": "manifest",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The manifest whose declared tool table to read"
+            }
+          ],
+          "subcommands": []
         }
       ]
     },
@@ -3302,6 +3328,10 @@ expression: stdout_of(&output)
     {
       "id": "doctor.session",
       "path": "doctor session"
+    },
+    {
+      "id": "doctor.toolchain",
+      "path": "doctor toolchain"
     },
     {
       "id": "generate",

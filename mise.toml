@@ -2610,7 +2610,50 @@ description = "Session start: provision the mise toolchain, purely — the step 
 # with a dirty tree and a red gate no branch had caused. `[settings] lockfile =
 # false` is the authority; this is the belt to that suspenders, and it keeps the
 # install pure even under an ambient `MISE_LOCKFILE`.
-run = "env MISE_LOCKFILE=false mise install >/tmp/session-start-install.log 2>&1 || { echo '::error:: session-start: install failed — see /tmp/session-start-install.log' >&2; tail -5 /tmp/session-start-install.log >&2; exit 1; }"
+#
+# THE `||` ARM CANNOT FIRE ON A ZERO, WHICH IS WHAT THE INSTALLER RETURNS WHEN IT
+# FAILS (CLOUD-1683). Measured three times in one container: the install wrote
+# `mise ERROR` as its last line and exited **0**, twice on a credential failure
+# the fetch could not recover from. Provisioning reported success, the toolchain
+# was absent, and `mise run verify` then returned 0 without running a gate — a
+# branch with no claim receipt reported green.
+#
+# So the guard below is no longer the only one. It is KEPT rather than replaced —
+# it is still the right answer for a genuine non-zero — and `toolchain-check`
+# follows it to decide the question the exit status could not: is every tool the
+# manifest declares actually installed. That catches the lying zero AND the
+# install that fails silently, writing no error at all, because it reads the
+# outcome rather than the report.
+run = "env MISE_LOCKFILE=false mise install >/tmp/session-start-install.log 2>&1 || { echo '::error:: session-start: install failed — see /tmp/session-start-install.log' >&2; tail -5 /tmp/session-start-install.log >&2; exit 1; }\nif ! mise run toolchain-check; then echo '::error:: session-start: install reported success over an unprovisioned tree — the refusal above names every declared tool that is not installed' >&2; exit 1; fi"
+
+[tasks."toolchain-check"]
+description = "Gate: every tool [tools] declares is actually installed — the question doctor.sh structurally cannot ask"
+# `mise-tasks/doctor.sh` looks for broken bin SYMLINKS under the installs dir,
+# which is a question about RESIDUE. A tool declared and never fetched leaves no
+# symlink at all and passes it — which is exactly the state a failed install
+# leaves, and the state that made CLOUD-1683's false green possible. This asks
+# the complementary question, over the DECLARATION.
+#
+# The manifest is an operand because the engine may not name it: the path is a
+# consumer artifact, and `document_facts.rs` refuses that literal inside
+# `crates/batten/src`. So this repository's own fact stays in this repository's
+# own file, which is where every other one already lives.
+#
+# `batten`, never `cargo run -p batten`: this is reachable from `session:install`,
+# and `session_provisioning.rs`'s `no_session_start_step_compiles_the_engine`
+# bans a compile entry point from a session step.
+#
+# THE CALLER FETCHES AND THE GATE DECIDES, which is the board gates' own shape
+# and load-bearing rather than stylistic: a verb that spawned the runner itself
+# would put a program resolved off PATH behind a row on the read-only allowlist,
+# which is CLOUD-170's invariant. So the probe is piped, and the verb is `read`
+# structurally rather than only by promise.
+#
+# A probe that fails writes nothing, and empty stdin is the could-not-look arm —
+# which this gate reads as UNPROVISIONED, not as a pass, because a runner that
+# cannot answer is what an unprovisioned container has. Fail-closed through the
+# pipe, so the lost exit status costs nothing.
+run = "mise ls --json | batten doctor toolchain mise.toml"
 
 [tasks."session:submodules"]
 description = "Session start: check out the vendored submodules — bats lives in tests/bats"
@@ -3969,6 +4012,36 @@ fi
 # smuggled through a governed file.
 if ! mise run target-prune; then
   echo "::error:: verify: not enough disk to run the gate, and pruning did not recover it — the refusal above names free space and the floor. No receipt written." >&2
+  exit 1
+fi
+# THE TOOLCHAIN, BEFORE ANYTHING IS DECIDED OR WRITTEN (CLOUD-1683). Measured:
+# `mise install` wrote `mise ERROR` and exited 0 on a credential failure,
+# provisioning reported success, and this task then returned 0 without running a
+# single gate — a branch carrying no claim receipt at all reported green, which
+# is rule 5 defeated at the one place it cannot be observed.
+#
+# Fixing the install alone is not enough and that is the load-bearing half: ANY
+# absent dependency reproduces it, so the invariant is asserted HERE, over the
+# declaration, rather than trusted from upstream of it.
+#
+# AFTER the reclaim and BEFORE the receipt. After, because a run needs disk
+# before it needs tools, and the reclaim's precedence over the receipt is pinned
+# textually in `tests/verify.bats`. Before, because the receipt question is
+# `cargo run -p batten -- …`: on an unprovisioned tree that fails for the wrong
+# reason and gets reported as "no VALID claim receipt", which is the
+# misattribution one layer up from the one this row closes.
+#
+# `mise run`, never `batten doctor toolchain` directly. `tests/verify.bats` stubs
+# the task runner and nothing else, answering 0 for any task it was not told
+# about; a direct invocation has no stub, would escape to the real PATH inside
+# that sandbox, and would redden a suite `shell edit refused` forbids editing —
+# retire it whole or leave it alone, and there is no third shape.
+#
+# Exit 1, never 2: `linear-check`'s behind-verdict is the only 2 this mapper
+# mints, `land` reads 2 as "main moved, lap", and nothing about an unprovisioned
+# container improves by rebasing.
+if ! mise run toolchain-check; then
+  echo "::error:: verify: this checkout's toolchain is not provisioned — the refusal above names every declared tool that is not installed, so the gates below would not run at all rather than run and pass. Run \`mise run session:install\`, then verify again. No receipt written." >&2
   exit 1
 fi
 claim_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"

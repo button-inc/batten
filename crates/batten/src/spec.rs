@@ -508,6 +508,16 @@ mod tests {
                 // writes nothing, and reaches no network — the store is a
                 // directory of small JSON files (CLOUD-1376).
                 "doctor session".to_owned(),
+                // Whether every tool the manifest declares is installed
+                // (CLOUD-1683). `read`, and STRUCTURALLY so for the reason its
+                // two siblings above are: the probe reading arrives on stdin
+                // rather than being fetched here, so this opens the manifest,
+                // parses a document the caller handed it, and spawns nothing.
+                // Fetching it in-process would resolve the runner off `PATH` and
+                // run it, which is precisely what a row on this allowlist may not
+                // do — the caller-fetches-gate-decides split is what keeps the
+                // row honest rather than merely promised.
+                "doctor toolchain".to_owned(),
                 "generate".to_owned(),
                 "generate completions".to_owned(),
                 // §11's third derivation (CLOUD-62): the hook wiring a host
@@ -812,6 +822,7 @@ mod tests {
             "doctor hooks".to_owned(),
             "doctor mediator".to_owned(),
             "doctor session".to_owned(),
+            "doctor toolchain".to_owned(),
             "enforce".to_owned(),
             "exec".to_owned(),
             // The schema is emitted by `generate`, not `config`: it is a

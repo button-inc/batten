@@ -289,6 +289,7 @@ mod turn_cross_check;
 mod use_graph;
 mod verdict_registry;
 mod verdict_vocabulary;
+mod verify_unprovisioned;
 mod waivers;
 mod walker;
 mod wiring_disarm;

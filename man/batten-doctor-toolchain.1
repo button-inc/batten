@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-doctor-toolchain 1  batten 
+.SH NAME
+batten\-doctor\-toolchain \- Diagnose whether every tool the manifest declares is installed
+.SH SYNOPSIS
+\fBbatten doctor toolchain\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fImanifest\fR> 
+.SH DESCRIPTION
+Diagnose whether every tool the manifest declares is installed
+.SH OPTIONS
+.TP
+\fB\-J\fR, \fB\-\-json\fR
+Emit byte\-stable JSON instead of pointer lines
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fImanifest\fR>
+The manifest whose declared tool table to read

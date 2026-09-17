@@ -19810,7 +19810,42 @@ fn run_doctor(command: &cli::DoctorCommand, out: &mut dyn Write) -> Result<ExitC
         cli::DoctorCommand::Session { json } => run_doctor_session(json, out),
         cli::DoctorCommand::Egress { json } => run_doctor_egress(json, out),
         cli::DoctorCommand::CommitGate { json } => run_doctor_commit_gate(json, out),
+        cli::DoctorCommand::Toolchain { ref manifest, json } => {
+            run_doctor_toolchain(manifest, json, out)
+        }
     }
+}
+
+/// Is every tool this manifest declares actually installed (CLOUD-1683)?
+///
+/// **The question the provisioning self-check structurally could not ask.** That
+/// one looks for broken bin symlinks under the installs directory, so a tool
+/// declared and never fetched leaves nothing for it to find and passes — which is
+/// the state a failed install leaves, and the state that let `verify` report green
+/// over a tree whose gates never ran.
+///
+/// `verify` calls this through a task of its own so it can stop on THIS exit
+/// status: bare `doctor` would fail it for an unrelated unreachable program, which
+/// is [`run_doctor_commit_gate`]'s reason one row over.
+///
+/// One pointer line — the verdict, and on a failure the declared KEYS that are
+/// missing. Never an install path: those are absolute and per-machine, which would
+/// defeat §6 byte-stability and put the layout of somebody's disk into a diagnostic
+/// that promises not to carry one (rule 4).
+fn run_doctor_toolchain(manifest: &str, json: bool, out: &mut dyn Write) -> Result<ExitCode> {
+    // The caller performs the fetch and this decides, which is the board gates'
+    // shape and what keeps the verb spawn-free — see `doctor::diagnose_toolchain`.
+    let mut probe = String::new();
+    std::io::Read::read_to_string(&mut std::io::stdin(), &mut probe)?;
+    let verdict = doctor::diagnose_toolchain(std::path::Path::new(manifest), &probe);
+    if json {
+        // A data channel emits its document unconditionally, including on the
+        // healthy path: JSON that is sometimes absent is unparseable.
+        writeln!(out, "{}", serde_json::to_string_pretty(&verdict)?)?;
+    } else {
+        output::line(out, &verdict)?;
+    }
+    Ok(verdict.code())
 }
 
 /// Does a commit in this clone run the gate (CLOUD-1398)?

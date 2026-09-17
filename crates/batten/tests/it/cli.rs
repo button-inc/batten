@@ -5434,6 +5434,13 @@ fn census_repo(root: &Path) -> PathBuf {
         // `CENSUS_POSITIONALS` rather than by this call site, so the argv and the
         // file it points at cannot drift apart.
         .file("census-brief.md", &census_brief())
+        // `doctor toolchain`'s minimum input (CLOUD-1683). A declared table with
+        // no entries, so the census asserts about the CLEAN arm: a manifest that
+        // declares nothing cannot be unprovisioned, and one naming a real tool
+        // would make the verdict depend on what this container happens to have
+        // installed. Named by `CENSUS_MANIFEST` rather than by this call site,
+        // so the argv and the file it points at cannot drift apart.
+        .file(CENSUS_MANIFEST, "[tools]\n")
         // The session `policy hooks` measures (CLOUD-417).
         .file(".session.jsonl", CENSUS_SESSION)
         // A published schema for `config deprecations` to use as its baseline.
@@ -5473,6 +5480,10 @@ fn census_repo(root: &Path) -> PathBuf {
 /// The release tag the census fixture cuts, named once so
 /// [`CENSUS_POSITIONALS`] and [`census_repo`] cannot disagree about it.
 const CENSUS_TAG: &str = "v0.0.1";
+
+/// The manifest the census fixture writes for `doctor toolchain`, named once so
+/// [`CENSUS_POSITIONALS`] and [`census_repo`] cannot disagree about it.
+const CENSUS_MANIFEST: &str = "census-manifest.toml";
 
 /// A git repo with a committed authority, isolated state dir, and a work commit —
 /// enough for every `data_channel` verb to have something real to answer about.
@@ -5642,6 +5653,15 @@ const CENSUS_POSITIONALS: &[(&str, &[&str])] = &[
     // — which is what `no_progress_reaches_stderr_when_it_is_not_a_terminal`
     // needs, and what makes the empty `-J` document the interesting case.
     ("lint brief", &["census-brief.md"]),
+    // The manifest `census_repo` writes, declaring no tools at all (CLOUD-1683).
+    // A manifest declaring nothing cannot be unprovisioned, so the census
+    // asserts about the CLEAN arm — where a manifest naming a tool would make it
+    // assert about a refusal whose content depends on what this container has
+    // installed, which is not a property of the output contract. The verb reads
+    // its probe on stdin, and the census gives it none: that is the
+    // could-not-look arm, which the empty declaration short-circuits before it
+    // is reached.
+    ("doctor toolchain", &[CENSUS_MANIFEST]),
     // Substituted at argv time — see `CENSUS_SEEDED_HANDLE`.
     ("capture show", &[CENSUS_SEEDED_HANDLE]),
     // A class this BINARY vendors (CLOUD-1050), so the census resolves it in a

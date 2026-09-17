@@ -918,6 +918,13 @@ const REFS_FIRST_ONLY: FlagDecl = FlagDecl {
     value: ValueDecl::Bool,
 };
 
+/// The manifest `doctor toolchain` reads its declared tool table out of.
+///
+/// Required and positional: the path is the consumer's, and a default would put
+/// a consumer artifact's name in the engine (non-negotiable rule 1).
+const MANIFEST: FlagDecl =
+    FlagDecl::positional("manifest", "The manifest whose declared tool table to read");
+
 const JSON: FlagDecl = FlagDecl {
     id: "json",
     long: Some("json"),
@@ -3047,6 +3054,38 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[JSON],
+    },
+    // WHETHER THE TOOLCHAIN THIS MANIFEST DECLARES ACTUALLY EXISTS (CLOUD-1683).
+    //
+    // Outside the bare report, on `doctor mediator`'s and `doctor egress`' reason
+    // rather than `doctor gate`'s: whether a tool is installed on this machine is
+    // a property of the WORLD. It exists as a verb for the narrow-caller reason
+    // the row above records — `verify` needs to ask THIS question alone and stop
+    // on its exit status, and bare `doctor` would fail it for an unrelated
+    // unreachable program.
+    //
+    // `read`, and structurally so: it reads the manifest and asks the tool runner
+    // what it has installed. Nothing user-supplied is executed and nothing is
+    // written.
+    //
+    // THE MANIFEST ARRIVES AS AN OPERAND, which is non-negotiable rule 1 rather
+    // than a taste in ergonomics. The path is a CONSUMER ARTIFACT, and
+    // `document_facts.rs`'s `no_artifact_name_reaches_the_core` refuses that
+    // literal anywhere in `crates/batten/src` outside a three-file allowlist this
+    // module is not on. A default would put it here; requiring it keeps the
+    // consumer's own fact in the consumer's own task body, where every other one
+    // already lives.
+    CommandDecl {
+        path: "doctor toolchain",
+        id: "doctor.toolchain",
+        about: "Diagnose whether every tool the manifest declares is installed",
+        data_channel: true,
+        // `doctor *`'s set, and for the same reason every sibling takes it: a
+        // diagnosis reports what it found and renders no policy verdict, so it
+        // cannot mint a `2`.
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[MANIFEST, JSON],
     },
     CommandDecl {
         path: "doctor hooks",

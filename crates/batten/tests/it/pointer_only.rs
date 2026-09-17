@@ -337,6 +337,19 @@ impl Corpus {
                 ),
             )
             .file("counted.txt", &format!("{}\n", canary("counted")))
+            // `doctor toolchain`'s manifest (CLOUD-1683). The declared key is a
+            // PLAIN name, deliberately: the verdict names a missing declared key
+            // as its subject, which `Check::subjects` licenses — an identifier
+            // out of the consumer's own committed manifest is a value the reader
+            // already has. A canary here would fail this census for doing the one
+            // thing the verb is supposed to do.
+            //
+            // What the canary rides instead is the PROBE (see `tool_probe`), which
+            // is somebody else's document arriving on stdin — the half with no
+            // licence at all. Declaring one tool rather than none is what makes
+            // the reading LIVE: an empty table short-circuits before the probe is
+            // consulted, and would assert nothing.
+            .file("toolchain.toml", "[tools]\nabsent-tool = \"1.0\"\n")
             // The session's own task store, where the engine parks its link
             // (CLOUD-1376). A real directory rather than a symlink: `read_dir`
             // follows either, so the reading under test is identical, and this
@@ -481,6 +494,22 @@ fn tool_verdict() -> String {
     format!("status error\n{} hk.pkl:12\n", canary("validated"))
 }
 
+/// The installed-tool probe `doctor toolchain` reads (CLOUD-1683).
+///
+/// Somebody else's document arriving on stdin, and the half of this verb's input
+/// with no licence to be echoed at all. Two canaries, because the probe carries
+/// two different kinds of thing the verdict must not lift: a tool NAME the
+/// manifest does not declare (so the gate must ignore it rather than report it),
+/// and an INSTALL PATH, which is absolute and per-machine — the exact shape §6
+/// byte-stability and rule 4 both refuse.
+fn tool_probe() -> String {
+    format!(
+        "{{\"{}\": [{{\"version\": \"1.0\", \"installed\": true, \"install_path\": \"{}\"}}]}}\n",
+        canary("undeclared"),
+        canary("installpath"),
+    )
+}
+
 /// The verdict `record forge` reads.
 ///
 /// A check NAME and a conclusion, both tokens — but the name comes from the
@@ -577,6 +606,7 @@ enum Stdin {
     DelegationBrief,
     DesignClaims,
     ToolVerdict,
+    ToolProbe,
     ForgeVerdict,
     PlanEntries,
     PrBody,
@@ -1230,6 +1260,16 @@ const CENSUS: &[Verb] = &[
         path: "doctor egress",
         args: &[],
         stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // CLOUD-1683. The manifest declares one tool the probe does not report, so
+    // this exercises the REFUSING arm — where the verdict names its subject and
+    // therefore has the most to leak. The probe's own canaries must not survive
+    // into either channel.
+    Verb {
+        path: "doctor toolchain",
+        args: &["toolchain.toml"],
+        stdin: Stdin::ToolProbe,
         disposition: Disposition::PointerOnly,
     },
     Verb {
@@ -2105,6 +2145,7 @@ fn run_in(corpus: &Corpus, args: &[&str], stdin: Stdin) -> Run {
         Stdin::DelegationBrief => delegation_brief(),
         Stdin::DesignClaims => design_claims(),
         Stdin::ToolVerdict => tool_verdict(),
+        Stdin::ToolProbe => tool_probe(),
         Stdin::ForgeVerdict => forge_verdict(),
         Stdin::PlanEntries => plan_entries(),
         Stdin::PrBody => pr_body(),
