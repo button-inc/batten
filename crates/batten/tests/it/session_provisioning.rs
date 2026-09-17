@@ -96,7 +96,7 @@
 //!
 // changed: "the hook runs green on this checkout" crates/batten/tests/it/session_provisioning.rs the exit-0-and-silent half survives as `a_step_that_passes_says_nothing`, against stubs; the END-TO-END half is withdrawn, because dispatching the real rows provisions a container inside `test:cargo` — 141s measured cold — which is the cost CLOUD-1268 exists to stop moving between lanes. What covers it instead is the session itself: a failed step reports on the advisory channel at the moment it fails
 // changed: "running the hook leaves the tracked lockfile untouched" crates/batten/tests/it/session_provisioning.rs narrowed from the EFFECT to the DECLARATION: `the_install_step_is_declared_lockfile_free` asserts `session:install` carries MISE_LOCKFILE=false, where the retired case ran the hook and diffed `git status -- mise.lock`. `[settings] lockfile = false` in mise.toml is the standing authority and `lock cover partial` the standing gate; what is lost is the observation that this particular path honours it
-// changed: "the session-start hook calls it — the whole point is WHEN it runs" crates/batten/tests/it/session_provisioning.rs from `tests/container-preflight.bats`. The case grepped the retired script for `container-preflight`; the property — that a preflight nothing runs at startup is worthless — is now a declared row, and its POSITION is asserted too, which the grep could not say. CLOUD-1753 retired the subject as well and split that row into `session-egress` and `session-credential`, so the property is now carried by both and the position clause covers their order
+// changed: "the session-start hook calls it — the whole point is WHEN it runs" crates/batten/tests/it/session_provisioning.rs from `tests/container-preflight.bats`. The case grepped the retired script for `container-preflight`; the property — that a preflight nothing runs at startup is worthless — is now a declared row, and its POSITION is asserted too, which the grep could not say. CLOUD-1753 retired the subject as well and split that row into `session-container-preflight` and `session-credential`, so the property is now carried by both and the position clause covers their order
 // changed: "the hook passes --degraded when provisioning failed" batten.toml the capability is gone rather than moved, and this is the one real loss in this retirement. `--degraded` told the preflight not to trust toolchain-dependent probes when an earlier step had failed, and it worked because the script carried a `fail` variable across its steps. Handlers share no state — each is its own process with its own outcome — so nothing can compute the flag. The consequence is bounded: a container whose install failed now gets the full probe set, so it may report a second symptom of one cause, and both refusals arrive in the same reply. Recovering it needs a fact the door does not carry; filed rather than papered over
 // changed: "the fixer is wired: session-start runs it, so a clone is compliant before it commits" crates/batten/tests/it/session_provisioning.rs from `tests/commit-attribution.bats`, whose own subject (hk.pkl, mise.toml) survives. The case grepped the retired script for its `step attribution-identity` line; the property — that the identity fixer runs before a clone commits — is now the `session-attribution-identity` row, asserted by `the_committed_provisioning_declares_every_step_in_order`. It is CHANGED rather than CARRIED because the retired case pinned the invocation's exact spelling inside a program and this pins a row's presence and position in a list
 // changed: "the git hooks are installed — the per-clone step that was absent" mise-tasks/doctor.sh narrowed from perform-and-assert in one case to assert-only: `doctor` decides that same state on every later run, which the retired case's own comment already named as its backstop, and `tests/git-hook.bats` owns what the installed body does. What is lost is the pairing of the step with its effect inside one case
@@ -151,7 +151,11 @@ const DECLARED: [&str; 12] = [
     // claim, as it is for `session-wiring` above: egress before credential,
     // because a container that cannot reach the API fails both and the reader
     // wants the cause ahead of the symptom.
-    "session-egress",
+    // THE FIRST HALF KEEPS THE ID. A split is one row into two, not a removal,
+    // and `config-lint`'s weakening check compares handler ids — renaming both
+    // halves reads as `handler-removed` against `main`, which is the honest
+    // reading of a diff that shows the name gone.
+    "session-container-preflight",
     "session-credential",
     "session-census",
 ];
@@ -646,7 +650,7 @@ fn the_reachable_set_is_not_empty() {
     // empty set and the compiler scan then passes over nothing at all.
     let bodies = reachable_session_task_bodies();
     // THE ROWS WITH A TASK TO READ, not every row. Since CLOUD-1753 a row may
-    // dispatch the VERB directly — `session-egress` runs `batten doctor egress`
+    // dispatch the VERB directly — `session-container-preflight` runs `batten doctor egress`
     // rather than a task, deliberately, because the task would read a `NO_PROXY`
     // that `mise` has already corrected and grade an unfenced container fenced.
     // Such a row has no task body by construction, so counting it here would
