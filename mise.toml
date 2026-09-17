@@ -2081,8 +2081,26 @@ if [ -n "$forge_sha" ] && [ -n "$forge_fanin" ]; then
 	# last would win by listing order rather than by recency. `checks-green` draws
 	# the same distinction with `started_at` and `id`; this is that reduction,
 	# spelled once, at the producer.
+	# A `skipped` CONCLUSION IS NOT A GRADING, and admitting one is how this
+	# producer reintroduced the defect it exists to remove (CLOUD-1717). The
+	# filter read `.conclusion != null`, which was written for the PENDING case
+	# — and `skipped` is non-null. Every pull request starts as a draft by this
+	# repository's own contract, CI does not run on one, and a draft's twelve
+	# check-runs all conclude `skipped`. So the fan-in read as GRADED, the record
+	# spelled `final skipped`, and `forge-verdict-required` read that as the
+	# forge having looked and refused.
+	#
+	# Measured 2026-09-17 on PR #962: twelve checks skipped, the record written,
+	# `verify` refusing `forge check red` and `head grade twice`, and the branch
+	# unable to take its first lap — from the state the contract says every PR
+	# begins in. A could-not-look recorded as a verdict, which is precisely what
+	# CLOUD-1707 was about, one layer in.
+	#
+	# Filtered here rather than at the fan-in test alone, because a skipped job in
+	# a real run rendered no verdict either: recording `<job> skipped` would say
+	# that job refused.
 	if forge_runs=$(gh api "repos/$forge_repo/commits/$forge_sha/check-runs?per_page=100" \
-		--jq '.check_runs | map(select(.conclusion != null)) | group_by(.name) | map(max_by([(.started_at // ""), (.id // 0)])) | .[] | "\(.name)\t\(.conclusion)"' 2>/dev/null); then
+		--jq '.check_runs | map(select(.conclusion != null and .conclusion != "skipped")) | group_by(.name) | map(max_by([(.started_at // ""), (.id // 0)])) | .[] | "\(.name)\t\(.conclusion)"' 2>/dev/null); then
 		# The fan-in decides whether ANY record is written; the name filter then
 		# decides what the record may spell.
 		forge_graded=$(printf '%s\n' "$forge_runs" |
