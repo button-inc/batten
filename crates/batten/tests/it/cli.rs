@@ -2850,10 +2850,11 @@ fn hook_honours_a_shape_rule_a_local_override_added() {
 }
 
 /// A fixture repo declaring the CLOUD-96 cross product: two verbs, one path.
-fn repo_with_protected_policy(name: &str) -> PathBuf {
-    repo_with_config(
-        name,
-        r#"version = 1
+/// The protected-path policy these cases refuse against.
+///
+/// Hoisted to a constant so `refuse_in` can build a fixture that owns its `.git`
+/// without duplicating the rows — see that helper for why the repository matters.
+const PROTECTED_POLICY: &str = r#"version = 1
 protected = ["guarded/**"]
 
 [[verb]]
@@ -2865,8 +2866,10 @@ redirect = "restore it with git"
 verb = ">"
 effect = "destructive"
 redirect = "append instead"
-"#,
-    )
+"#;
+
+fn repo_with_protected_policy(name: &str) -> PathBuf {
+    repo_with_config(name, PROTECTED_POLICY)
 }
 
 #[test]
@@ -2927,22 +2930,33 @@ fn hook_denies_a_truncating_redirect_against_a_protected_path() {
     }
 }
 
-/// One refusal of `rm guarded/thing`, from a fixture of its own.
+/// One refusal of `rm guarded/thing`, from a fixture that owns its own `.git`.
 ///
-/// A FIXTURE PER RUN, AND THE REASON IS `first_sighting` (CLOUD-1830). A class
+/// A REPOSITORY PER RUN, AND `first_sighting` IS THE REASON (CLOUD-1830). A class
 /// explains itself ONCE per session: the second firing renders the pointer line
 /// alone, dropping the `— <gloss>` clause and every remedy (`hook.rs:4832`). The
-/// store that decides it is keyed under `$GIT_DIR`, so two runs against one
-/// fixture are a first sighting and a repeat — and comparing their stderr
-/// measures which ran first, not what the caller varied.
+/// store that decides it is keyed under `$GIT_DIR` (`refusal.rs:367`).
 ///
-/// Each run therefore gets its own fixture and so its own store, which makes
-/// every one of them a first sighting. `common::batten` sets
-/// `GIT_CEILING_DIRECTORIES` for the other half of the same defect: without it a
-/// fixture carrying no `.git` resolved the real repository's, and every case in
-/// the binary shared one store with the checkout.
+/// `repo_with_config` builds a fixture with a config and NO `.git`, so
+/// `git::git_dir` walked up out of `target/tmp/` and answered with this
+/// checkout's own — measured, `.git/batten-sightings/` in the real repository
+/// held entries the suite wrote. Every fixture therefore shared one store, so two
+/// runs of one refusal were a first sighting and a repeat, and comparing their
+/// stderr measured which ran first rather than what the caller varied. It was
+/// green or red on nextest's scheduling, and read as a musl divergence for a
+/// while because the musl leg simply scheduled differently.
+///
+/// Giving the fixture its own repository is the narrow fix and the right one. A
+/// tree-wide `GIT_CEILING_DIRECTORIES` was tried and is WRONG: fixtures like
+/// `acceptance_corpus`'s run `enforce`, which needs a repository, and they
+/// legitimately inherit the enclosing one — cutting that off reds them with
+/// "is not a git repository".
 fn refuse_in(name: &str, extra: Option<(&str, &str)>) -> Output {
-    let dir = repo_with_protected_policy(name);
+    let dir = Fixture::new(name)
+        .config(PROTECTED_POLICY)
+        .git()
+        .base_commit()
+        .build();
     let payload = claude_payload("rm guarded/thing");
     let mut command = batten();
     command
@@ -3047,6 +3061,23 @@ fn two_fixtures_refusing_alike_render_alike() {
         "two fixtures refusing alike must render alike; a difference here means \
          they are sharing a sightings store — see CLOUD-1830"
     );
+    // AND BOTH MUST BE THE FIRST-SIGHTING RENDERING. Equality alone is not the
+    // property: two fixtures sharing a warm store are both REPEATS, both short,
+    // and equal — so the assertion above passes while the coupling it exists to
+    // catch is fully present. Measured: without this line the case stayed green
+    // against a tree with no per-fixture repository at all.
+    //
+    // A fixture that owns its `.git` owns its store, so its refusal is always a
+    // first sighting and always carries the class clause. That is the observable
+    // difference between owning one and borrowing the repository's.
+    for (which, output) in [("first", &first), ("second", &second)] {
+        let rendered = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            rendered.contains('—'),
+            "the {which} fixture rendered a REPEAT, so it is reading a store some \
+             other run already warmed — see CLOUD-1830: {rendered}"
+        );
+    }
 }
 
 #[test]

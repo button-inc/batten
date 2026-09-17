@@ -272,35 +272,6 @@ pub(crate) fn batten() -> Command {
         command.env_remove(name);
     }
     command.env("BATTEN_BIN", env!("CARGO_BIN_EXE_batten"));
-    // A FIXTURE MUST NOT RESOLVE THE REPOSITORY IT IS RUNNING INSIDE (CLOUD-1830).
-    //
-    // Fixtures live under `target/tmp/`, which is INSIDE this checkout, and most
-    // of them carry no `.git` of their own — `repo_with_config` (cli.rs) builds
-    // one with a config and nothing else. `git::git_dir` therefore walked up and
-    // answered with the real repository's `.git`, so anything the engine files
-    // per-worktree went there: measured, `/home/user/batten/.git/batten-sightings`
-    // held entries written by the suite.
-    //
-    // THE COUPLING THAT BUYS, stated because a shared directory sounds harmless.
-    // `refusal::first_sighting` keys a per-session store under `$GIT_DIR` and a
-    // repeat renders SHORT — the class explanation and every remedy are dropped
-    // (`hook.rs:4832`). With one store behind every fixture, whether a case sees
-    // the long form or the short one is decided by which spawn in the binary
-    // reached that class first: across sibling cases, across targets sharing the
-    // checkout, and across whatever the developer's own session already did.
-    // `the_deny_is_a_function_of_config_and_argv_not_the_ambient_environment` was
-    // green or red on that ordering alone, and read as a musl divergence for a
-    // while because the musl leg simply scheduled differently.
-    //
-    // HERE RATHER THAN AT EACH SPAWN SITE, which is CLOUD-619's rule for exactly
-    // these variables: `advisory_drain.rs` set this by hand at three call sites
-    // and every suite that did not think of it inherited the defect. One place,
-    // so no suite has to remember.
-    //
-    // The real-root suites are unaffected: `batten_at_real_root` runs with the
-    // repository root as the working directory, which resolves without traversing
-    // past this ceiling.
-    command.env("GIT_CEILING_DIRECTORIES", target_tmp());
     command
 }
 
