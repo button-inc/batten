@@ -689,9 +689,43 @@ fn a_committed_surface_that_will_not_parse_is_reported() {
         "a committed surface that will not parse was read as a clean wiring: {}",
         findings(&output)
     );
+    // THE POINTER IS THE SURFACE (CLOUD-1815). This used to assert only that a
+    // finding fired, because the clause emitted `count(unreadable)` and there
+    // was no name to assert on — a count rendered into the pointer field, which
+    // cost a session that could not learn which file the host could not read.
     assert!(
-        findings(&output).contains("hook wire missing"),
-        "wrong finding: {}",
+        findings(&output).contains(".claude/settings.json hook wire missing"),
+        "the finding does not name the unreadable surface: {}",
+        findings(&output)
+    );
+}
+
+#[test]
+fn an_unparsed_merged_surface_is_named_by_its_declared_id() {
+    // THE MERGED HALF OF CLOUD-1815, and the asymmetry with
+    // `the_merged_finding_carries_no_path_at_all` is the point rather than an
+    // inconsistency. That case guards a merged COMMAND, which lives under
+    // somebody's home directory and must never travel. This subject is the
+    // declared `[[rule.external]]` id — a literal this repository's own config
+    // states — so it is byte-stable and machine-independent, and naming it
+    // costs §6 and rule 4 nothing while a count costs the reader everything.
+    let (repo, outside) = fixture("unparsed-merged", &clean_committed(), Some("{ not json"));
+    let output = check(&repo, Some(&outside));
+    assert!(
+        !output.status.success(),
+        "a merged surface that will not parse was read as a clean wiring: {}",
+        findings(&output)
+    );
+    assert!(
+        findings(&output).contains("harness-launcher-settings"),
+        "the finding does not name the declared id: {}",
+        findings(&output)
+    );
+    // AND STILL NO RESOLVED PATH: the id is what travels, never the location it
+    // resolved to on this machine.
+    assert!(
+        !findings(&output).contains(outside.to_string_lossy().as_ref()),
+        "the resolved merged path travelled into the finding: {}",
         findings(&output)
     );
 }

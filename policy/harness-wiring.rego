@@ -234,12 +234,41 @@ merged_strays contains command if {
 # can fix, which is the measured failure the deleted shell's `merged_read` guard
 # existed to prevent. A surface that EXISTS and will not parse is a host reading
 # nothing at all, and nobody can tell that from a clean wiring without this.
+# ONE FINDING PER SURFACE, NAMING IT, and the count this replaced was not the two
+# clauses above wearing a third hat (CLOUD-1815). `hook wire duplicate` counts
+# because its subject is a merged COMMAND, which carries somebody's home
+# directory; nothing in `unreadable` is a command. A committed member is a
+# tracked repo-relative path and a merged member is the declared
+# `[[rule.external]]` id -- both config literals, both byte-stable, neither
+# machine-specific -- so rule 4 and §6 permit naming either.
+#
+# The aggregate rendered `1` into the pointer field with the name already in
+# scope. Measured 2026-09-16: a session met it on an otherwise clean tree, could
+# not learn which surface would not parse, and eliminated the other two clauses
+# by hand instead of reading the answer off the finding.
 violation contains {
 	"rule": "hook wire missing",
 	"verdict": "hook wire unread",
-	"subjects": [{"count": count(unreadable)}],
+	"subjects": [{"path": path}],
 } if {
-	count(unreadable) > 0
+	some path in unreadable
+	path in committed
+}
+
+# AN `artifact` RATHER THAN A `path`, and the key is the honest one: a declared
+# id is a name this config states, not a location in this tree, so emitting it
+# under `path` would hand a reader a file that does not exist here. `Subject`
+# already has the shape -- "a named thing that is not a path -- a task, a rule
+# id, a token" -- and the id is what `[[rule.external]]` is looked up by. It is
+# a config literal, so unlike a merged COMMAND it carries no home directory and
+# §5's reduction does not apply to it.
+violation contains {
+	"rule": "hook wire missing",
+	"verdict": "hook wire unread",
+	"subjects": [{"artifact": id}],
+} if {
+	some id in unreadable
+	id in merged_ids
 }
 
 unreadable contains name if {
@@ -392,6 +421,42 @@ test_a_merged_surface_that_will_not_parse_is_reported_too if {
 	v.verdict == "hook wire unread"
 }
 
+# THE POINTER IS THE SURFACE, which is the whole of CLOUD-1815. A count here is
+# unactionable: the remedy is "repair the file or remove it" and the reader
+# cannot tell which file.
+test_an_unread_committed_surface_is_named_by_its_path if {
+	some v in violation with input as {"tree": {"missing": {".claude/settings.json": "unparsed"}}}
+	v.verdict == "hook wire unread"
+	v.subjects[0] == {"path": ".claude/settings.json"}
+}
+
+# AND THE MERGED HALF IS NAMED BY ITS DECLARED ID, never a path. The id is a
+# config literal this repository states, so it travels where a merged COMMAND
+# may not -- and emitting it under `path` would name a file that does not exist
+# in this tree.
+test_an_unread_merged_surface_is_named_by_its_declared_id if {
+	some v in violation with input as {"tree": {"missing": {"harness-launcher-settings": "unparsed"}}}
+	v.verdict == "hook wire unread"
+	v.subjects[0] == {"artifact": "harness-launcher-settings"}
+	every subject in v.subjects {
+		not subject.path
+	}
+}
+
+# ONE FINDING PER SURFACE rather than one aggregate, so two unreadable surfaces
+# name both. The old clause emitted a single `count`, which this case refutes
+# directly.
+test_two_unread_surfaces_produce_two_findings if {
+	vs := {v |
+		some v in violation with input as {"tree": {"missing": {
+			".claude/settings.json": "unparsed",
+			".codex/hooks.json": "unparsed",
+		}}}
+		v.verdict == "hook wire unread"
+	}
+	count(vs) == 2
+}
+
 # A path this module does not judge is not its business, whatever its cause.
 test_an_undeclared_name_in_the_channel_is_not_this_modules_business if {
 	vs := verdicts with input as {"tree": {"missing": {"some/other/file.json": "unparsed"}}}
@@ -406,3 +471,9 @@ test_a_tree_with_no_wiring_surface_is_clean if {
 
 #MUTANT-SUITE crates/batten/tests/it/harness_wiring.rs
 #MUTANT stray-unread|s@^\tnot contains(command, mediator)$@\tfalse@|a_committed_sibling_beside_the_mediator_is_refused
+# CLOUD-1815's own falsifier, and it reinstates exactly the defect that shipped:
+# the surface name is in scope and the finding emits a bare count instead. The
+# case it names asserts the PATH, so it reddens; a case asserting only that a
+# finding fired would survive this, which is why that assertion was tightened
+# rather than added to.
+#MUTANT unread-unnamed|s@^\t"subjects": \[{"path": path}\],$@\t"subjects": [{"count": count(unreadable)}],@|a_committed_surface_that_will_not_parse_is_reported
