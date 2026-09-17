@@ -10533,10 +10533,15 @@ owner = "CLOUD-1079"
 expires = "2027-02-28"
 
 [[hook.handler]]
-id = "session-egress"
+id = "session-container-preflight"
 on = "session-start"
 run = ["batten", "doctor", "egress"]
-# THE FIRST OF THE TWO ROWS `session-container-preflight` ALWAYS WAS (CLOUD-1753).
+# THE FIRST OF THE TWO ROWS `session-container-preflight` ALWAYS WAS (CLOUD-1753),
+# AND IT KEEPS THE ID. The split is one row into two, not a removal, so the id
+# stays on the half that inherits the question — `config-lint`'s weakening check
+# compares handler ids and cannot see through a rename, so dropping the name
+# would read as `handler-removed` and would be right to: a reader diffing this
+# file against `main` has no other way to tell a split from a deletion.
 #
 # LAST OF THE STEPS THAT CAN HALT, and that position is the whole point
 # (CLOUD-261). "The toolchain installed" and "this container can do the work" are
@@ -10607,7 +10612,7 @@ run = ["mise", "run", "session:census"]
 # running when the container we replaced went down (CLOUD-451) — so its stdout is
 # deliberately left to become advisory text.
 #
-# THE OTHER IS `session-egress`, and the count was wrong here until it was
+# THE OTHER IS `session-container-preflight`, and the count was wrong here until it was
 # measured: dispatching these rows for real on 2026-09-01 returned
 # `signing-posture: …` and the preflight's own all-clear line in the advisory,
 # where this comment claimed one line. Both were the retired script's behaviour
@@ -10619,7 +10624,7 @@ run = ["mise", "run", "session:census"]
 # it so.
 #
 # THE SPEAKING ROW MOVED WITH CLOUD-1753 AND THE COUNT DID NOT. The preflight
-# split into `session-egress` and `session-credential`, and only the first is
+# split into `session-container-preflight` and `session-credential`, and only the first is
 # unconditionally chatty: `doctor egress` prints `egress ok` on the clean path
 # where `gh-preflight` is silent unless a claim is missing. That is a claim about
 # what a row prints, so it is owed the same measurement the paragraph above

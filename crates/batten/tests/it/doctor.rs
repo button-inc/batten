@@ -31,7 +31,7 @@
 //! carry.
 //!
 //! `container-preflight` is the shell's one caller, and it retires with it. Its
-//! egress half becomes the `session-egress` handler running this verb; its
+//! egress half becomes the `session-container-preflight` handler running this verb; its
 //! credential half becomes `session-credential` running `gh-preflight`, which is
 //! not this campaign's to retire and is invoked directly rather than through a
 //! wrapper that only forwarded it. Splitting the row is what the port BUYS: the
