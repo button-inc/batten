@@ -224,6 +224,65 @@ fn an_option_value_is_not_mistaken_for_the_task() {
     }
 }
 
+/// AN OPTION BEFORE `run` DOES NOT HIDE THE SUBCOMMAND, which is the sibling
+/// position of the case above and was the live half of it (CLOUD-1555).
+///
+/// The scan recognised the subcommand with `arguments.first() != Some("run")`, so
+/// it saw `mise run land` and nothing else. `mise` takes its own options BEFORE
+/// the subcommand, and every one of them moves `run` off index 0: the segment was
+/// then skipped entirely, no lock was looked up, and a second `land` started
+/// beside the first — an under-deny on precisely the collision CLOUD-438 exists
+/// to stop.
+///
+/// The third measurement of one class. CLOUD-857 found it as
+/// `split(command, " ")[0]`, CLOUD-1382 as `segment.words[0]`, and this is the
+/// same anchor one layer in — a program's own argv. `destructive_reset_target`
+/// two functions down had already been fixed for it and reached its verb through
+/// a scan that skips options; the two sat side by side answering one question
+/// differently, which is why the resolver is now shared rather than copied.
+///
+/// SHOWN ABLE TO FAIL: against the version this case was written for, every
+/// command below exited `0` while the bare `mise run land` exited 2.
+#[test]
+fn an_option_before_the_subcommand_does_not_hide_the_task() {
+    let dir = fixture("singleton-gate-global-options");
+    hold(&dir, "land", Some("1"));
+    for denied in [
+        "mise -C /home/user/batten run land",
+        "mise --cd /home/user/batten run land",
+        "mise -E dev run land",
+        "mise --env dev run land",
+        "mise -j 4 run land",
+        // A valueless global, which consumes nothing and still moves the verb.
+        "mise --quiet run land",
+        // Both positions at once: a global before `run` and an option after it.
+        "mise -C /home/user/batten run -E dev land",
+    ] {
+        let (code, cause) = adjudicate(&dir, denied);
+        assert_eq!(code, Some(2), "must refuse: {denied}\n{cause}");
+        assert!(cause.contains(CLASS), "under its own class\n{cause}");
+    }
+    // THE ANTI-VACUITY HALF, and it is not the one above: skipping mise's own
+    // globals must not turn every `mise` call into the held task. A global in
+    // front of ANOTHER subcommand is that subcommand, a global in front of
+    // another task is that task, and an argv that is all options names nothing.
+    for allowed in [
+        "mise -C /home/user/batten run verify",
+        "mise -E dev run test",
+        "mise -C /home/user/batten x -- cargo build",
+        "mise --version",
+        // `run` with no task at all: there is no word to look a lock up by.
+        "mise -C /home/user/batten run",
+    ] {
+        let (code, cause) = adjudicate(&dir, allowed);
+        assert_eq!(
+            code,
+            Some(0),
+            "this names no held task and must run: {allowed}\n{cause}"
+        );
+    }
+}
+
 /// The refusal is a pointer (rule 4): a task name and a holder, and the reader
 /// that answers what the holder is doing. Never the holder's command line.
 #[test]

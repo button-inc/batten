@@ -9311,33 +9311,44 @@ const GIT_VALUE_OPTIONS: [&str; 6] = [
     "--config-env",
 ];
 
-/// The index of git's SUBCOMMAND in the argv git itself was handed, skipping the
-/// global options that precede it.
+/// The index of the first BARE WORD in an argv, skipping the options that
+/// precede it and the values those options consume.
 ///
-/// `None` where the argv is all options — `git --version`, or a value-taking
-/// global whose value never arrived — because there is no verb to judge.
+/// `None` where the argv is all options — `git --version`, `mise run` with no
+/// task, or a value-taking option whose value never arrived — because there is
+/// no word to judge.
 ///
 /// A `--foo=bar` spelling carries its value inline, so it consumes nothing; only
-/// the separated form does, which is why the set above is matched on equality
+/// the separated form does, which is why `value_options` is matched on equality
 /// rather than as a prefix.
-fn git_subcommand(arguments: &[&str]) -> Option<usize> {
+///
+/// **ONE RESOLVER, PARAMETERISED BY THE OPTION SET** (CLOUD-1555). It was
+/// `git_subcommand`, and `singleton_task_started` two functions up answered the
+/// same question with `arguments.first()` instead — the first-token anchor this
+/// repository has now measured three times (CLOUD-857, CLOUD-1382, and this).
+/// Writing a second scan beside this one would be the second-authority defect
+/// `destructive_reset_target`'s own comment refuses to grow, and it is what let
+/// the two drift in the first place: a later fix to option handling has to reach
+/// every caller, which it can only do if there is one.
+fn subcommand_index(arguments: &[&str], value_options: &[&str]) -> Option<usize> {
     let mut index = 0;
     while index < arguments.len() {
         let word = arguments[index];
         if !word.starts_with('-') {
             return Some(index);
         }
-        index += if GIT_VALUE_OPTIONS.contains(&word) {
-            2
-        } else {
-            1
-        };
+        index += if value_options.contains(&word) { 2 } else { 1 };
     }
     None
 }
 
-/// `mise run`'s own options that CONSUME the next word, so a task scan does not
-/// mistake an option's value for the task.
+/// `mise`'s options that CONSUME the next word, so a scan does not mistake an
+/// option's value for the subcommand or for the task.
+///
+/// **BOTH POSITIONS, because `mise` takes these before `run` as well as after**
+/// (CLOUD-1555) — `mise -C /repo run land` and `mise run -C /repo land` are the
+/// same call spelled two ways, and a set that only covered the second left the
+/// first unseen.
 ///
 /// **A DECLARED STOPGAP, exactly as [`GIT_VALUE_OPTIONS`] and [`SHELL_GRAMMAR`]
 /// are, and behind the same row.** The miss direction is the same too and is
@@ -9371,7 +9382,20 @@ pub(crate) fn singleton_task_started(envelope: &Envelope) -> Option<String> {
             .and_then(serde_json::Value::as_array)
             .map(|list| list.iter().filter_map(serde_json::Value::as_str).collect())
             .unwrap_or_default();
-        if arguments.first() != Some(&"run") {
+        // `mise`'S OWN OPTIONS COME BEFORE THE SUBCOMMAND, so `arguments[0]` is
+        // not the verb (CLOUD-1555). This read `arguments.first() != Some("run")`
+        // and so saw `mise run land` and nothing else: `mise -C /repo run land`
+        // and `mise -E dev run land` both START `land` and both put an option
+        // first, so the scan skipped the segment and a second `land` ran with no
+        // singleton — an under-deny on exactly the collision CLOUD-438 exists to
+        // stop. `destructive_reset_target` below was already fixed for the
+        // identical mistake; the two sat side by side taking opposite approaches
+        // to one question, which is why the resolver is now shared rather than
+        // copied.
+        let Some(verb) = subcommand_index(&arguments, &MISE_VALUE_OPTIONS) else {
+            continue;
+        };
+        if arguments[verb] != "run" {
             continue;
         }
         // NO LIST OF GUARDED TASK NAMES, and that is non-negotiable rule 1
@@ -9383,17 +9407,13 @@ pub(crate) fn singleton_task_started(envelope: &Envelope) -> Option<String> {
         // THE TASK IS THE FIRST BARE WORD PAST `run`'S OWN OPTIONS, not the first
         // bare word (review). `-E dev` puts `dev` where this scan looked, and the
         // gate then asked about a task nothing holds.
-        let mut index = 1;
-        while index < arguments.len() {
-            let word = arguments[index];
-            if !word.starts_with('-') {
-                return Some(word.to_owned());
-            }
-            index += if MISE_VALUE_OPTIONS.contains(&word) {
-                2
-            } else {
-                1
-            };
+        //
+        // The SAME resolver as the verb above, one position along: the question
+        // "first bare word, skipping options and what they consume" is identical
+        // here, and answering it twice is how the two scans in this file drifted.
+        let rest = &arguments[verb + 1..];
+        if let Some(task) = subcommand_index(rest, &MISE_VALUE_OPTIONS) {
+            return Some(rest[task].to_owned());
         }
     }
     None
@@ -9434,7 +9454,7 @@ pub(crate) fn destructive_reset_target(envelope: &Envelope) -> Option<String> {
         // every such spelling exited 0 while the bare one exited 2. That is the
         // same under-deny `SHELL_GRAMMAR` records one layer out, reached by the
         // same mistake: taking the first token for the thing.
-        let Some(verb) = git_subcommand(&arguments) else {
+        let Some(verb) = subcommand_index(&arguments, &GIT_VALUE_OPTIONS) else {
             continue;
         };
         if arguments[verb] != "reset" || !arguments.contains(&"--hard") {
