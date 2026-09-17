@@ -393,7 +393,7 @@ _.path = ["tests/bats/bin", "target/release"]
 # alone — the fan-in. This roster is what `ci-wait` WAITS ON before landing, and
 # waiting only on `final` would strand every landing on a check that fans in from
 # eighteen. Two sets, two purposes; neither derives the other.
-CI_REQUIRED_CHECKS = "ci,batten-check,bats,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),semver,perf,windows,macos,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
+CI_REQUIRED_CHECKS = "ci,batten-check,bats,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),darwin-link (x86_64-apple-darwin),semver,perf,windows,macos,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
 
 # ─── THE LAP'S READY PHASE (CLOUD-1148) ───────────────────────────────────────
 #
@@ -519,7 +519,7 @@ LEASE_STOP_NOTE = "mise-tasks/reclaim-census.sh note x land-stopped"
 # that one success as the whole roster, and `land` posted /fast-forward into a
 # branch protection still listing the other six as expected. The bot was
 # rejected. A stall is recoverable; a false green is not (CLOUD-337).
-CI_ABSENT_OK_CHECKS = "zizmor,cross,darwin-link (aarch64-apple-darwin),semver,windows,macos,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
+CI_ABSENT_OK_CHECKS = "zizmor,cross,darwin-link (aarch64-apple-darwin),darwin-link (x86_64-apple-darwin),semver,windows,macos,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
 # The conclusions that CONSTITUTE AN ANSWER about a required check, written once
 # and read by `checks-green` and by `land`'s `graded_runs` — for exactly the
 # reason CI_REQUIRED_CHECKS is written once (CLOUD-327), and against exactly the
@@ -3175,11 +3175,38 @@ depends = ["doctor"]
 # The Darwin triples are NOT here: they get a stronger check — a real link — in
 # `darwin-link`, which runs as its own parallel CI job. Checking them here too
 # would be duplicate work on the critical path.
+#
+# EVERY OTHER SHIPPED TRIPLE IS, AND THAT IS THE WHOLE LIST'S JOB. `release-artifacts.yml`
+# builds seven targets and every one of them is cross-compiled on a Linux runner,
+# so nothing CI executes is ever the artifact a consumer downloads. Until this
+# loop carried them, four of those seven had NO verification of any kind — not a
+# type-check, not a link, not a run — and one of the four is
+# `x86_64-unknown-linux-musl`, which is what `install.sh` resolves for every Linux
+# consumer: 113 downloads of it against 4 of the glibc build on v0.0.159. The
+# binary almost everyone runs was covered by nothing but the fact that it
+# compiled.
+#
+# THE TWO aarch64 TRIPLES ARE A DECLARED GAP, NOT AN OVERSIGHT, and the reason is
+# measured rather than assumed. `cargo check` needs no target LINKER — that is why
+# this gate works at all — but it does run build scripts, and `blake3` shells out
+# to `cc` to compile its NEON path for any aarch64 target:
+#
+#   error occurred in cc-rs: failed to find tool "aarch64-linux-gnu-gcc"
+#   error occurred in cc-rs: failed to find tool "aarch64-linux-musl-gcc"
+#
+# Both triples fail identically, so the constraint is the ARCHITECTURE and not the
+# libc; `x86_64-unknown-linux-musl` checks clean here because the host compiler
+# already serves that arch. Covering the pair needs an aarch64 cross C toolchain
+# this repository pins nowhere — `release-artifacts.yml` builds them under
+# `build-tool: cross`, which supplies one inside a container, so the release path
+# solved this and the verification path never inherited the solution. Pinning one
+# is its own change (CLOUD-364); what must not happen is this list quietly
+# claiming a coverage it does not have.
 run = '''
 # Receipt-gated (CLOUD-424): a hit skips the target install too — the verdict
 # is about the sources, and the toolchain half lives in the key.
 if ./mise-tasks/step-receipt.sh check cross-check; then exit 0; fi
-for t in x86_64-pc-windows-gnu; do
+for t in x86_64-pc-windows-gnu x86_64-unknown-linux-musl; do
   # Guarded because task bodies do not run under `set -e`: with more than one
   # triple in the list, a failed target install would otherwise be masked by a
   # later iteration's exit status and this gate would pass having checked less

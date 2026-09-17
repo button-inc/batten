@@ -211,7 +211,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [aarch64-apple-darwin]
+        # BOTH SHIPPED DARWIN TRIPLES. `release-artifacts.yml` zigbuilds
+        # `x86_64-apple-darwin` into every release and nothing verified it —
+        # `cross-check` skips the Darwin triples on the grounds that this job
+        # gives them a stronger check, which was true of the arm64 one and an
+        # accident for the Intel one. A leg here costs a link on a Linux runner
+        # and closes it; the release already proves zigbuild can produce this
+        # target, so the capability is not in question, only the coverage.
+        #
+        # `fail-fast: false` above is what keeps the two legs independent: an
+        # arm64 link failure must not hide an Intel one, which is the whole
+        # reason to run them as a matrix rather than a loop.
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
     # `actions: write` is here for one call and one only: cancelling THIS run
     # when the landing lease does not authorise this branch (CLOUD-420). A job
     # that could not cancel itself would have to fail instead, and a failed job
