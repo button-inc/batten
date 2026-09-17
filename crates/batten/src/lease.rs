@@ -5153,6 +5153,28 @@ mod tests {
     fn the_base_is_subtracted_rather_than_resent() {
         // The whole economy of the push. Without the subtraction a lap would
         // re-send the repository's entire history every time.
+        //
+        // AGAINST `None`, NEVER AGAINST A WIDER BASE (CLOUD-1825). This compared
+        // `HEAD~3` with `HEAD~1` and asserted the wider range enumerated at least
+        // as much — monotonicity in the base, which `objects_to_send` does not
+        // have and never claimed. Its subtraction is against the base's OWN TREE,
+        // so a base whose tree carries MORE subtracts more: one commit that
+        // deletes a path and a later one that restores it makes the WIDER base
+        // strictly smaller, because it still holds the blobs and the narrow one
+        // does not.
+        //
+        // Measured rather than imagined: it fired on this repository's own
+        // history when a commit deleted 105 generated `man/*.1` pages and the
+        // next restored them, and what it reported was a defect in this assertion
+        // rather than in the function. It reds `verify`, which is what mints the
+        // receipt `turn mint ahead` demands before any further write — and that
+        // row declares no override route — so a false failure here locks a
+        // session out of editing the very assertion that is wrong.
+        //
+        // `None` is the honest comparand. It is the state the first comment
+        // describes and the one `objects_to_send` documents as "a ref the remote
+        // does not have yet … nothing is hidden, nothing is subtracted", so no
+        // base can ever enumerate more than it, for any history shape.
         let repo = std::path::Path::new(".");
         let Ok(head) = crate::git::head_commit(repo) else {
             return;
@@ -5160,14 +5182,95 @@ mod tests {
         let Ok(narrow) = crate::git::objects_to_send(repo, Some("HEAD~1"), &head) else {
             return;
         };
-        let Ok(wide) = crate::git::objects_to_send(repo, Some("HEAD~3"), &head) else {
+        let Ok(whole) = crate::git::objects_to_send(repo, None, &head) else {
             return;
         };
         assert!(
-            wide.len() >= narrow.len(),
-            "a wider range cannot enumerate fewer objects: {} vs {}",
+            whole.len() >= narrow.len(),
+            "subtracting a base cannot enumerate more than sending everything: {} vs {}",
+            whole.len(),
+            narrow.len()
+        );
+    }
+
+    /// The history shape that refuted the old assertion, built rather than waited
+    /// for (CLOUD-1825).
+    ///
+    /// The case above runs against THIS repository, so what it covers is whatever
+    /// history happens to be checked out — which is how a false assertion survived
+    /// until a delete-then-restore pair drifted into its window, and how it would
+    /// quietly stop being covered once the pair drifted back out. A one-line
+    /// comparand change with nothing holding it in place invites the next author to
+    /// restore the wider-base comparison, because that one reads as the more
+    /// thorough of the two.
+    ///
+    /// So the shape is constructed: `HEAD~1` deletes a path `HEAD` brings back.
+    /// The wider base still carries the blob and subtracts it; the narrow one does
+    /// not and must re-send it. That is the inversion, and asserting it directly is
+    /// what makes the property above a claim about the FUNCTION rather than about
+    /// the checkout.
+    #[test]
+    fn a_wider_base_may_enumerate_fewer_objects_than_a_narrower_one() {
+        let dir = scratch("delete-then-restore");
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@example.com")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@example.com")
+                .output()
+                .expect("git runs");
+            assert!(out.status.success(), "git {args:?} failed");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        // Big enough that the inversion cannot be an artefact of one small blob
+        // rounding the other way, and distinct per file so none of them dedupe.
+        for n in 0..24 {
+            std::fs::write(dir.join(format!("page-{n}.txt")), format!("page {n}\n"))
+                .expect("write a page");
+        }
+        std::fs::write(dir.join("keep.txt"), "keep\n").expect("write the survivor");
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "the pages exist"]);
+
+        for n in 0..24 {
+            std::fs::remove_file(dir.join(format!("page-{n}.txt"))).expect("delete a page");
+        }
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "a partial regeneration deletes them"]);
+
+        for n in 0..24 {
+            std::fs::write(dir.join(format!("page-{n}.txt")), format!("page {n}\n"))
+                .expect("restore a page");
+        }
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "and the remedy restores them"]);
+
+        let head = crate::git::head_commit(&dir).expect("resolve the fixture head");
+        let narrow =
+            crate::git::objects_to_send(&dir, Some("HEAD~1"), &head).expect("the narrow base");
+        let wide =
+            crate::git::objects_to_send(&dir, Some("HEAD~2"), &head).expect("the wider base");
+
+        assert!(
+            wide.len() < narrow.len(),
+            "the wider base still holds the deleted blobs and subtracts them, so it must \
+             enumerate FEWER than the narrow one: wide {} vs narrow {}",
             wide.len(),
             narrow.len()
+        );
+
+        // And the bound the case above asserts still holds over the same history,
+        // which is the point: `None` is sound where a wider base is not.
+        let whole = crate::git::objects_to_send(&dir, None, &head).expect("no base at all");
+        assert!(
+            whole.len() >= narrow.len() && whole.len() >= wide.len(),
+            "no base can enumerate more than sending everything: whole {} vs narrow {} / wide {}",
+            whole.len(),
+            narrow.len(),
+            wide.len()
         );
     }
 

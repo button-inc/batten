@@ -2150,6 +2150,14 @@ writer = "mise run attestation-record"
 record = "timeout-drift"
 writer = "mise run timeout-drift-record"
 
+# CLOUD-484's measuring half, ported off `nonverdict-scan.sh` under CLOUD-1717.
+# The decider half is `policy/nonverdict.rego`; the split is the retired pair's
+# own, kept for its own reason — a measurement needs the network and a token, a
+# decision needs neither.
+[[record]]
+record = "nonverdict"
+writer = "mise run nonverdict-record"
+
 [[pattern]]
 id = "closed-issue-status"
 regex = '^(done|canceled|duplicate)$'
@@ -6294,6 +6302,28 @@ id = "bound grade other"
 kind = "policy"
 scope = "tree"
 module = "policy/timeout-drift.rego"
+severity = "warn"
+
+# CLOUD-484, ported off `mise-tasks/nonverdict-assert.sh` under CLOUD-1717.
+#
+# `warn` HOLDS TWO CLAIMS THAT LOOK OPPOSED, and both are the retired pair's own.
+# The decider argued that a rate which rises has to FAIL something or it becomes
+# an artifact nobody opens (non-negotiable rule 2) — it was filed against twice,
+# both times by someone deciding the number was not worth collecting.
+# `nonverdict-rate.yml` argued just as plainly that its failure is informational:
+# a job dying in provisioning is the platform having a bad afternoon, no branch
+# is at fault, and nothing in the tree is broken.
+#
+# A warn finding is reported without failing the run, so an ordinary `check` and
+# every `verify` stay green — which is what stops a branch going red for a reason
+# it did not cause — while the scheduled job runs `--fail-on-warning` and reds on
+# the rate. The gate is preserved and its blast radius is the clock, not the
+# landing path.
+[[rule]]
+id = "job grade other"
+kind = "policy"
+scope = "tree"
+module = "policy/nonverdict.rego"
 severity = "warn"
 
 [[rule]]
@@ -13178,6 +13208,39 @@ samples and propose tightening a release job on it.
 id = "task run first"
 kind = "command"
 target = "mise run timeout-drift-record"
+
+# CLOUD-484's two readings, ported off `nonverdict-assert.sh` under CLOUD-1717.
+[[verdict]]
+id = "job read partial"
+gloss = "the scan could not read part of its window, so a green verdict would cover less than it claims"
+class = """
+`bench-assert`'s partial-coverage rule: a run that measured two of three paths \
+and reported green over the two is exactly the partial-coverage false green. It \
+fires whatever the count is, because a budget met over part of a window is a \
+budget met over nothing in particular. A persistent read failure is a token or \
+rate-limit problem, not a clean window.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run nonverdict-record"
+
+[[verdict]]
+id = "job answer missing"
+gloss = "a required job failed before reaching any verdict-bearing step"
+class = """
+The run spent its minutes, redded the branch, and answered nothing. Every \
+occurrence then costs a human or an agent the time to discover it was never a \
+verdict at all — CLOUD-404 has five, and the one on #376 sent an agent to \
+reproduce a `commit-lint` failure that passes locally because `commit-lint` \
+never linted anything.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run nonverdict-record"
 
 # CLOUD-349's two readings, ported off `branch-age-check.sh` under CLOUD-1717.
 [[verdict]]
