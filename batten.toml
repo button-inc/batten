@@ -8301,11 +8301,27 @@ keep = 2
 # $GIT_DIR/batten-prune/laps.json and already governs — so the declared number is
 # not raised to meet it. A declared floor that chases the worst observed lap is the
 # floor-nobody-can-satisfy this file warns about, two blocks down.
+# THE 2026-09-17 WARM RESCALE (CLOUD-1717's corpus campaign). The campaign owes a
+# `crates/batten/tests/it/*.rs` per retired gate and had landed eleven of them,
+# taking the live count to 266 against a basis of 255 with a tolerance of 10 —
+# this gate working, exactly as the 2026-09-12 entry above describes it working.
+#
+# WARM SCALES BY THE STEM MODEL, as every move above it did: 11642 at 255 is 45.65
+# per stem, and 45.65 x 266 is 12144. Derived rather than independently measured,
+# and said so for the reason the basis block insists on: an honest warm number
+# needs a minimal post-prune tree, and a reader who needs it exact should take it
+# rather than trust this line.
+#
+# THE LIVE COUNT IS 266 AND `git ls-files` SAYS 265, which is not a discrepancy to
+# reconcile away. The engine's `Selector` sets `literal_separator(true)`, so its
+# `**` matches zero directories as well as many and the glob reaches
+# `crates/batten/tests/policy_modules.rs` at the top level; git's pathspec `**`
+# does not. `count` is the number the GATE compares against, so it is the engine's.
 [prune.warm]
-mb = 11642
-worst_mb = 11642
+mb = 12144
+worst_mb = 12144
 multiplier = 1
-measured = "2026-09-12"
+measured = "2026-09-17"
 
 [prune.cold]
 mb = 21455
@@ -8760,7 +8776,7 @@ measured = "2026-09-07"
 # makes the very next lap refuse on the other arm with warm never breached.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 255
+count = 266
 tolerance = 10
 
 # COLD'S BASIS MOVES AND COLD'S FLOOR DOES NOT, and that is the entry above
@@ -8780,7 +8796,7 @@ tolerance = 10
 # together.
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 255
+count = 266
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
@@ -9293,6 +9309,28 @@ id = "disk-full"
 pattern = "No space left on device"
 stream = "both"
 reason = "the disk filled, so this is the environment rather than your branch. Run `mise run target-prune`, and consider building with CARGO_INCREMENTAL=0."
+
+# THE ROW THE PRUNE BLOCK HAS OWED SINCE ITS SIXTH MISREPORT (CLOUD-1717). Seven
+# times now `verify` has rendered a STEM-COUNT refusal as "not enough disk to run
+# the gate, and pruning did not recover it", every time over ample free space, and
+# twice with the callee printing the margin two lines above the caller's claim
+# there was none. The measurements are in the `[prune]` block; this is the remedy
+# they justify.
+#
+# IT MATCHES THE CALLEE, NOT THE CALLER. `target-prune` prints this sentence and
+# `verify` wraps it, so keying on the wrapper would match every environment
+# refusal the task emits and carry a specific remedy for all of them — the opposite
+# of the point. The callee's line reaches both streams through the wrapper.
+#
+# `Environment` RATHER THAN A FAILING GATE is the classification that matters: the
+# tree is fine, the branch is fine, and "reproduce and fix locally" sends a reader
+# after a defect that is not there. What is stale is a number in the committed
+# authority, and the remedy is to move it.
+[[verify_environment_pattern]]
+id = "prune-basis-stale"
+pattern = "was measured against a tree that no longer exists"
+stream = "both"
+reason = "the prune floor's basis is stale, not the disk. Nothing is wrong with this branch: the declared stem count has drifted past its tolerance, which is what a campaign adding test files does. Re-measure `[prune.warm]` by the stem model the block documents, and move `mb`, `worst_mb`, `measured` and BOTH `basis.count` values together."
 
 [lease]
 landing_paths = [
