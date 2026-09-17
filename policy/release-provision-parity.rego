@@ -15,6 +15,8 @@
 # intent correctly ("deleting the musl row from the map"); only the triple was
 # wrong, which is why this is a one-token repair and not a new case.
 #MUTANT musl-may-not-map|s@"x86_64-unknown-linux-musl": "linux-x86_64",@@|a_musl_triple_maps_to_the_same_platform_key_as_gnu
+#MUTANT unverified-may-pass|s@\tnot verified\[target\]@\tfalse@|a_published_target_no_rung_reaches_is_refused
+#MUTANT verify-gap-may-be-silent|s@\tnot verify_gap\[target\]@\ttrue@|a_declared_verify_gap_is_silent
 
 # METADATA
 # description: |
@@ -127,6 +129,90 @@ violation contains {
 	not platform_of[target]
 }
 
+# --- every published target reaches a verification rung ------------------------
+#
+# CLOUD-364. The sibling property above asks whether a published target can be
+# SERVED; this asks whether anything ever LOOKED at it. They are different
+# failures with the same subject, which is why they share a module and not an id:
+# a finding has to say which coverage is missing.
+#
+# MEASURED 2026-09-17, and it is the reason this rule exists rather than a
+# reading of the workflows: four of the seven published targets had no rung at
+# all — not a type-check, not a link, not a run — and one of the four was
+# `x86_64-unknown-linux-musl`, which `install.sh` resolves for every Linux
+# consumer (113 downloads against 4 for the glibc build on v0.0.159). Every
+# artifact is cross-compiled on `ubuntu-latest`, so nothing CI executes is ever
+# what ships; the rungs below are what stands between a target and shipping
+# unlooked-at.
+#
+# READ INLINE for the reason the header gives: `mise.toml` declares `[tasks.deny]`,
+# and a top-level rule whose value carries a `deny` key at any depth silences the
+# whole module.
+
+# The triples `cross-check` type-checks, read from the task body rather than
+# restated. A substring test and not a parse: the body is a shell loop, and a
+# second parser for it would be a second authority on a list mise owns.
+checked contains target if {
+	some target, _ in platform_of
+	contains(object.get(input.tree.documents["mise.toml"].tasks, ["cross-check", "run"], ""), target)
+}
+
+# The triples `darwin-link` links. A real link is strictly stronger than a check,
+# which is why the Darwin pair lives there and not in the loop above.
+linked contains target if {
+	some target in input.tree.documents[".github/workflows/rust.yml"].jobs["darwin-link"].strategy.matrix.target
+}
+
+# The host triple every ubuntu job executes natively. Declared rather than
+# derived: `runs-on: ubuntu-latest` names an image, not a target triple, and
+# inferring one from it would be this file guessing at GitHub's fleet.
+native := {"x86_64-unknown-linux-gnu"}
+
+# THE aarch64 PAIR, AND THE GAP IS DECLARED BECAUSE IT IS REAL. `cargo check`
+# needs no target linker, but it does run build scripts, and `blake3` shells out
+# to `cc` for its NEON path on any aarch64 target — `failed to find tool
+# "aarch64-linux-gnu-gcc"`, and the musl twin identically. So the constraint is
+# the architecture rather than the libc. `release-artifacts.yml` builds both under
+# `build-tool: cross`, which supplies a toolchain in a container; the verification
+# path has no equivalent and pinning one is its own change.
+#
+# A DECLARED GAP IS NOT COVERAGE, the same way the platform gap above is not: the
+# target still ships unverified. What the declaration buys is that it ships
+# KNOWN-unverified, which is the whole of CLOUD-364's no-silent-caps rule.
+verify_gap := {
+	"aarch64-unknown-linux-gnu",
+	"aarch64-unknown-linux-musl",
+}
+
+verified contains target if checked[target]
+
+verified contains target if linked[target]
+
+verified contains target if native[target]
+
+# GUARDED ON THE RUNG SURFACE, and the guard is the difference between a verdict
+# and a guess. A tree with no `cross-check` task is not running this gate at all,
+# so "which targets does it cover" is a question this rule cannot answer — and
+# answering it as *uncovered* would report a could-not-look as a decision, which
+# is the class this repository exists to refuse and which the sibling rule's own
+# `workflow read unread` arm keeps separate.
+#
+# Measured here rather than reasoned: without it this clause fired over the
+# provision fixtures above, which declare no task surface at all, and reported
+# every target in them as unverified.
+governed if input.tree.documents["mise.toml"].tasks["cross-check"]
+
+violation contains {
+	"rule": "release cover missing",
+	"verdict": "release check absent",
+	"subjects": [{"artifact": target}],
+} if {
+	governed
+	some target in published
+	not verified[target]
+	not verify_gap[target]
+}
+
 # --- the predicate's own tests -------------------------------------------------
 #
 # The SILENT cases are the load-bearing half, as they are in every module here:
@@ -189,4 +275,89 @@ test_an_unparsed_source_is_reported if {
 	found := violation with input as blind
 	some f in found
 	f.verdict == "workflow read unread"
+}
+
+# --- the verification-rung predicate's own tests -------------------------------
+
+# A tree carrying the three rung surfaces. Separate from `tree()` above because
+# that fixture answers the provision question and this one answers coverage; one
+# fixture serving both would make each case's subject ambiguous.
+rungs(targets, cross_run, darwin_targets) := {"tree": {
+	"documents": {
+		".github/workflows/release-artifacts.yml": {"jobs": {"dist": {"strategy": {"matrix": {"include": [{"target": t} | some t in targets]}}}}},
+		".github/workflows/rust.yml": {"jobs": {"darwin-link": {"strategy": {"matrix": {"target": darwin_targets}}}}},
+		"mise.toml": {"tasks": {"cross-check": {"run": cross_run}}},
+		"batten.toml": {"provision": [{"name": "scanner", "platforms": {
+			"linux-x86_64": {"url": "u"},
+			"linux-aarch64": {"url": "u"},
+			"macos-x86_64": {"url": "u"},
+			"macos-aarch64": {"url": "u"},
+			"windows-x86_64": {"url": "u"},
+		}}]},
+	},
+	"missing": {},
+}}
+
+# THE CASE THE RULE EXISTS FOR: a target published with no rung anywhere.
+test_a_published_target_no_rung_reaches_is_refused if {
+	found := violation with input as rungs(["x86_64-pc-windows-gnu"], "for t in nothing; do", [])
+	some f in found
+	f.verdict == "release check absent"
+	some sub in f.subjects
+	sub.artifact == "x86_64-pc-windows-gnu"
+}
+
+# Each rung satisfies on its own, which is what keeps the rule from demanding all
+# three of every target.
+test_a_type_checked_target_is_clean if {
+	found := violation with input as rungs(["x86_64-pc-windows-gnu"], "for t in x86_64-pc-windows-gnu; do", [])
+	every f in found {
+		f.verdict != "release check absent"
+	}
+}
+
+test_a_linked_target_is_clean if {
+	found := violation with input as rungs(["x86_64-apple-darwin"], "for t in nothing; do", ["x86_64-apple-darwin"])
+	every f in found {
+		f.verdict != "release check absent"
+	}
+}
+
+# The host triple needs no workflow to name it: every ubuntu job runs it.
+test_the_native_target_is_clean if {
+	found := violation with input as rungs(["x86_64-unknown-linux-gnu"], "for t in nothing; do", [])
+	every f in found {
+		f.verdict != "release check absent"
+	}
+}
+
+# A DECLARED GAP IS SILENT, and this is the case that says so — without it the
+# `verify_gap` set would be unreachable and the aarch64 pair would red forever.
+test_a_declared_verify_gap_is_silent if {
+	found := violation with input as rungs(["aarch64-unknown-linux-musl"], "for t in nothing; do", [])
+	every f in found {
+		f.verdict != "release check absent"
+	}
+}
+
+# THE ANTI-VACUITY TERM. Every case above is about one target; none of them
+# notices a rung surface that has gone missing entirely. A `cross-check` whose
+# body no longer names the triple it used to must red rather than read as covered
+# by some other rung.
+test_a_rung_that_stops_naming_its_target_is_refused if {
+	found := violation with input as rungs(["x86_64-unknown-linux-musl"], "for t in x86_64-pc-windows-gnu; do", [])
+	some f in found
+	f.verdict == "release check absent"
+	some sub in f.subjects
+	sub.artifact == "x86_64-unknown-linux-musl"
+}
+
+# NOT-APPLICABLE IS NOT A VERDICT, and this is the case that keeps the guard from
+# being a way to switch the rule off: a tree that declares no `cross-check` task
+# is not answering this question, which is what the provision fixtures above are.
+test_a_tree_with_no_cross_check_task_is_not_this_rules_business if {
+	found := violation with input as tree(["x86_64-pc-windows-gnu"], covered)
+	every f in found {
+		f.verdict != "release check absent"
+	}
 }

@@ -12117,6 +12117,27 @@ kind = "document"
 target = "batten.toml"
 
 [[verdict]]
+id = "release check absent"
+gloss = "a published target reaches no verification rung, so it ships unlooked-at"
+class = """
+Every release artifact is cross-compiled on one Linux runner, so nothing CI \
+executes is ever the binary a consumer downloads. A published target therefore \
+has to reach a rung deliberately -- a type-check, a real link, or a native run \
+-- and this refuses one that reaches none. Measured 2026-09-17: four of seven \
+published targets had no rung at all, and the sharpest was \
+`x86_64-unknown-linux-musl`, which `install.sh` resolves for every Linux \
+consumer at 113 downloads against 4 for the glibc build. A gap that cannot be \
+closed yet is DECLARED instead, which is not coverage and does not pretend to \
+be: the target still ships unverified, but it ships known-unverified, which is \
+the whole of CLOUD-364's rule that a cap is never silent.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run cross-check"
+
+[[verdict]]
 id = "release watch late"
 gloss = "the release gate is reachable only through the event that silences it, or a clock slower than the releases"
 class = """
