@@ -294,6 +294,37 @@ pub struct Entry {
     ///
     /// Authoritative only from [`Origin::Drain`] — see that arm.
     pub presentation: Presentation,
+    /// When [`append`] wrote this entry: nanoseconds since the Unix epoch.
+    ///
+    /// # The merged log had no order, and a reader was already assuming one
+    ///
+    /// [`crate::emission::assess`] scopes an identity's emission budget by
+    /// POSITION in the merged log — an emission counts when its index is at or
+    /// above the window's first evaluation. That reading is sound only if the log
+    /// is chronological, and until this field existed it was not:
+    /// [`read_shards`] concatenates whole shards in path-sort order, so the log
+    /// was grouped by WRITER, and which writer came first was decided by whether
+    /// a checkout's path fingerprint sorted above the drain shard's constant
+    /// name. On the losing draw every emission sat below the window, the count
+    /// was always zero, and flap suppression silently never fired — for that
+    /// checkout, permanently, while the engine reported a working drain
+    /// (CLOUD-1252, measured at 1 store in 13).
+    ///
+    /// NANOSECONDS, NOT THE MILLISECONDS THE ROW PROPOSED, and the resolution is
+    /// the whole correctness of the tie-break rather than precision for its own
+    /// sake. Ordering falls back to shard order for entries that compare equal,
+    /// so any tie restores exactly the defect this field removes — and the
+    /// evaluations a flap window is computed over are a handful of spawns inside
+    /// one second, which is where millisecond ties live. One clock read either
+    /// way.
+    ///
+    /// `Option` with a `serde` default, which is the store's write-old/read-both
+    /// rule applied at the field level exactly as `context` and `observation`
+    /// above apply it: an entry written by a binary predating this field reads
+    /// back as "did not say". `None` sorts FIRST, so those entries keep their
+    /// shard order ahead of every stamped one rather than being guessed a time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<u64>,
 }
 
 /// Which surface journalled an entry.
@@ -361,7 +392,38 @@ impl Origin {
 ///
 /// Returns an error when the shard cannot be created, written, or synced.
 pub fn append(store_dir: &Path, shard: &str, entry: &Entry) -> Result<()> {
-    append_line(store_dir, shard, &serde_json::to_string(entry)?)
+    // STAMPED HERE, WHICH IS THE ONE PLACE THAT KNOWS WHEN (CLOUD-1252). Every
+    // caller constructs its entry as a statement about a finding, and none of
+    // them is the authority on the log's order; stamping at the append means no
+    // caller can forget, and `read_shards` gets a chronology instead of a
+    // filename comparison. See [`Entry::at`] for what that comparison decided.
+    //
+    // A stamp the caller already set is KEPT rather than overwritten: a replay of
+    // recorded bytes must land the time the original append saw, or a re-merge
+    // would reorder history into the order it was replayed in.
+    let stamped = match entry.at {
+        Some(_) => entry.clone(),
+        None => Entry {
+            at: Some(now_nanos()),
+            ..entry.clone()
+        },
+    };
+    append_line(store_dir, shard, &serde_json::to_string(&stamped)?)
+}
+
+/// Nanoseconds since the Unix epoch, saturating at `u64::MAX`.
+///
+/// A clock that will not answer reads as `0`, which sorts with the unstamped
+/// entries — the honest position for a writer that could not say when, and the
+/// same fail-to-the-front reading [`Entry::at`] gives a binary that predates the
+/// field. It is never an error: a journal append must not fail because the clock
+/// did.
+fn now_nanos() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| {
+            u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)
+        })
 }
 
 /// Append one already-encoded line to a shard, durably.
@@ -532,6 +594,23 @@ fn read_shards(store_dir: &Path) -> Result<Vec<Entry>> {
                 .filter_map(|line| serde_json::from_str::<Entry>(line).ok()),
         );
     }
+    // CHRONOLOGICAL, NOT ALPHABETICAL, and the sort is what makes the position
+    // `emission::assess` reads mean what it reads it as (CLOUD-1252). Path order
+    // groups the log by writer, so whether evaluations preceded presentations was
+    // decided by a filename hash and flap suppression stopped firing entirely for
+    // any checkout that drew the losing side.
+    //
+    // STABLE, and `None` first: `Option<u64>` orders `None` below every `Some`,
+    // so entries from a binary predating the stamp keep their shard order ahead
+    // of stamped ones — write-old/read-both, applied to the ordering rather than
+    // only to the parse. A stable sort is also what keeps two entries sharing a
+    // stamp in shard order rather than in an order the sort invented.
+    //
+    // The merge stays a pure function of shard CONTENTS — the stamp is a field in
+    // those bytes — so §6 byte-stability holds and the sort is not a second
+    // authority on anything: path order still decides ties, and now decides only
+    // ties.
+    all.sort_by_key(|entry| entry.at);
     Ok(all)
 }
 
@@ -944,6 +1023,7 @@ mod tests {
             observation: None,
             disposition: Some(disposition),
             presentation: Presentation::Shown,
+            at: None,
         }
     }
 
@@ -1153,6 +1233,7 @@ mod tests {
             observation: None,
             disposition: None,
             presentation: Presentation::NotShown(NotShown::OverCardinalityCap),
+            at: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert_eq!(serde_json::from_str::<Entry>(&json).unwrap(), entry);
@@ -1189,6 +1270,7 @@ mod tests {
             observation: None,
             disposition: None,
             presentation: Presentation::Shown,
+            at: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert!(!json.contains("origin"), "{json}");
@@ -1220,6 +1302,7 @@ mod tests {
                 observation: Some(Observation::Observed(1)),
                 disposition: None,
                 presentation: Presentation::Shown,
+                at: None,
             },
         )
         .unwrap();
@@ -1247,6 +1330,7 @@ mod tests {
                 observation: None,
                 disposition: None,
                 presentation: Presentation::Shown,
+                at: None,
             },
         )
         .unwrap();
@@ -1283,6 +1367,7 @@ mod tests {
                 observation: Some(Observation::Observed(99)),
                 disposition: None,
                 presentation: Presentation::Shown,
+                at: None,
             },
         )
         .unwrap();

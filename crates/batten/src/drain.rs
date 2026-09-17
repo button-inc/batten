@@ -1097,6 +1097,10 @@ pub fn record_suppressions(
                 observation: None,
                 disposition: None,
                 presentation: Presentation::NotShown(why),
+                // STAMPED BY `append`, NOT HERE (CLOUD-1252). The order the merged log is
+                // read in is the append's to know; a construction site that guessed one
+                // would be a second authority on the log's chronology.
+                at: None,
             },
         )?;
         appended += 1;
@@ -1192,6 +1196,10 @@ pub fn record_emissions(
                 observation: None,
                 disposition: None,
                 presentation: Presentation::Shown,
+                // STAMPED BY `append`, NOT HERE (CLOUD-1252). The order the merged log is
+                // read in is the append's to know; a construction site that guessed one
+                // would be a second authority on the log's chronology.
+                at: None,
             },
         )?;
         appended += 1;

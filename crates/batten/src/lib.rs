@@ -1654,6 +1654,10 @@ fn run_state_settle(identity: &str, disposition: &str, err: &mut dyn Write) -> R
             observation: None,
             disposition: Some(decided),
             presentation: findings::Presentation::Shown,
+            // STAMPED BY `append`, NOT HERE (CLOUD-1252). The order the merged log is
+            // read in is the append's to know; a construction site that guessed one
+            // would be a second authority on the log's chronology.
+            at: None,
         },
     )?;
     // POINTER-ONLY (rule 4): the identity and the token. These findings are
@@ -17621,6 +17625,10 @@ fn journal_evaluations(
                 // (`journal::Origin::Scan`), which is why `merge` ignores this one.
                 disposition: None,
                 presentation: findings::Presentation::Shown,
+                // STAMPED BY `append`, NOT HERE (CLOUD-1252). The order the merged log is
+                // read in is the append's to know; a construction site that guessed one
+                // would be a second authority on the log's chronology.
+                at: None,
             },
         )?;
         appended += 1;

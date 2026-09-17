@@ -298,6 +298,7 @@ mod tests {
             observation: Some(Observation::Observed(u64::from(raised))),
             disposition: None,
             presentation: Presentation::Shown,
+            at: None,
         }
     }
 
@@ -319,6 +320,7 @@ mod tests {
             observation: None,
             disposition: None,
             presentation: Presentation::Shown,
+            at: None,
         }
     }
 
