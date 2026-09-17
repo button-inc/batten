@@ -750,6 +750,30 @@ pub enum ModuleChecks {
     SkipOnHotPath,
 }
 
+/// Which source a policy row names: its `module`, `bundle` or `preset`.
+///
+/// Extracted from [`load`] rather than inlined, and the reason is the same one
+/// that keeps it a refusal at all: `validate` already refuses a policy row naming
+/// none of the three and one naming more than one, so this is the LOCATED
+/// restatement — a caller reaching `load` directly cannot get a silent skip
+/// instead of a refusal.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) for a policy row naming none of the three.
+fn source_key(rule: &Rule) -> Result<&str> {
+    rule.module
+        .as_deref()
+        .or(rule.bundle.as_deref())
+        .or(rule.preset.as_deref())
+        .ok_or_else(|| {
+            UsageError::raise(format!(
+                "rule `{}` is a policy row naming neither `module`, `bundle` nor `preset`",
+                rule.id
+            ))
+        })
+}
+
 /// Load, compile and smoke-test every module the rule set registers.
 ///
 /// Boundary I/O, called once per process from the config resolution path — never
@@ -810,21 +834,7 @@ pub fn load(
     // difference between a pointer and a complaint.
     let mut ids: BTreeMap<String, String> = BTreeMap::new();
     for rule in rules.iter().filter(|r| r.kind == RuleKind::Policy) {
-        // `validate` already refuses a policy row naming none of the three
-        // sources, and one naming more than one; this is the located
-        // restatement, so a caller reaching `load` directly cannot get a silent
-        // skip instead of a refusal.
-        let source_key = rule
-            .module
-            .as_deref()
-            .or(rule.bundle.as_deref())
-            .or(rule.preset.as_deref())
-            .ok_or_else(|| {
-                UsageError::raise(format!(
-                    "rule `{}` is a policy row naming neither `module`, `bundle` nor `preset`",
-                    rule.id
-                ))
-            })?;
+        let source_key = source_key(rule)?;
         // Two rows naming one source AT ONE SCOPE is dead config: the second
         // enablement decides nothing the first did not, and "which one denied
         // me" is not a question a reviewer should have to answer.

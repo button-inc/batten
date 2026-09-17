@@ -1991,12 +1991,6 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
                 .collect(),
         ),
     )?;
-    // The verb-written families, beside the recorder table because the two are
-    // halves of one question: which record names a module may read (CLOUD-1810).
-    under(
-        Native::RecordTableRefused,
-        crate::record::validate(&config.records),
-    )?;
     validate_sections(config)
 }
 
@@ -2018,6 +2012,17 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
 ///
 /// As [`validate_tables`].
 fn validate_sections(config: &Config) -> Result<()> {
+    // The verb-written record families (CLOUD-1810). HERE rather than beside the
+    // recorder table one function up, and the placement is forced rather than
+    // chosen: `validate_tables` sits exactly at its hundred-line cap, so the call
+    // had to land in the other half of the loader. `config.rs`'s own census scans
+    // both bodies, so the call site is still found and the table is still
+    // classified — which is the property that matters, since a table nothing
+    // validates is a refusal that cannot fire (CLOUD-253).
+    under(
+        Native::RecordTableRefused,
+        crate::record::validate(&config.records),
+    )?;
     // `[budget]` is a table rather than a list, so the census below (which scans
     // `Vec<T>` fields) does not reach it — but the failure it guards against is
     // the same one: a table that parses and gates nothing. A `[budget]` header
