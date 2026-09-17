@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.168](https://github.com/button-inc/batten/compare/v0.0.167...v0.0.168) - 2026-09-17
+
+### Fixed
+
+- *(admission)* a mint addressing no finding of a rule that fired refuses
+- *(harness-wiring)* name the surface a could-not-look could not read
+- *(ci)* a provisioning run that failed must not report 0
+- *(store)* [**breaking**] give the merged journal the order `assess` already assumes
+- *(admission)* read a spent block from HEAD so CI honours an override
+- *(doctor)* report a session-start fact a registered rule reads and nothing minted
+
+### Other
+
+- *(store)* the journal's order is asserted on both sides of the draw
+- *(harness-wiring)* the could-not-look clause gets a compiled-binary tier
+
 ## [0.0.167](https://github.com/button-inc/batten/compare/v0.0.166...v0.0.167) - 2026-09-16
 
 ### Added
