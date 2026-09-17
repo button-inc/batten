@@ -2653,7 +2653,29 @@ description = "Gate: every tool [tools] declares is actually installed — the q
 # which this gate reads as UNPROVISIONED, not as a pass, because a runner that
 # cannot answer is what an unprovisioned container has. Fail-closed through the
 # pipe, so the lost exit status costs nothing.
-run = "mise ls --json | batten doctor toolchain mise.toml"
+#
+# INSTALLED BINARY FIRST, WORKING TREE SECOND — `target-prune`'s shape, and here
+# for a reason that bit immediately. This task has two callers with opposite
+# needs: `session:install` must NOT compile the engine
+# (`no_session_start_step_compiles_the_engine`), and `verify` must judge the
+# WORKING TREE's engine rather than whatever binary was installed last. A body
+# that only ran `batten` satisfied the first and failed the second — measured on
+# this very branch, where the installed release predates the verb and answered
+# `unrecognized subcommand 'toolchain'`, which the guard above then reported as
+# an unprovisioned toolchain. That is the misattribution this row exists to
+# close, reproduced one layer up by the row's own fix.
+#
+# So the fallback is not a convenience: it is what makes the two callers agree.
+# The probe is captured ONCE and replayed, because a pipe cannot be consumed
+# twice, and `command -v batten` is the guard `a_cargo_fallback_in_a_session_task_is_guarded`
+# requires around any `cargo` reachable from a session step.
+run = """
+probe="$(mise ls --json)"
+if command -v batten >/dev/null 2>&1 && printf '%s' "$probe" | batten doctor toolchain mise.toml; then
+  exit 0
+fi
+printf '%s' "$probe" | cargo run --quiet -p batten -- doctor toolchain mise.toml
+"""
 
 [tasks."session:submodules"]
 description = "Session start: check out the vendored submodules — bats lives in tests/bats"
