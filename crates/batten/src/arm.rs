@@ -232,6 +232,133 @@ impl Outcome {
     }
 }
 
+/// One completed run of one arm — what a caller's runner hands back.
+///
+/// Three fields because the four observables need exactly three facts between
+/// them, and a runner that returned only the one its caller happened to reduce
+/// would make the table's `Observable` a lie: every arm is run the same way, and
+/// which fact is READ is the table's decision rather than the runner's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Run {
+    /// The arm's own wall clock for this run, in the caller's units.
+    ///
+    /// `u128` nanoseconds rather than `f64` seconds: a duration is a count, the
+    /// conversion to a float belongs at the reduction where the unit is chosen,
+    /// and a runner that rounded first would hand this module a series it could
+    /// not have reproduced.
+    pub nanos: u128,
+    /// Everything the arm wrote, the streams already merged by the runner.
+    pub output: Vec<u8>,
+    /// The status the arm exited with.
+    pub exit: i32,
+}
+
+/// Run every arm `runs` times and reduce each to `observable`.
+///
+/// # The spawn is INJECTED, and that is a placement rather than a convenience
+///
+/// `policy/spawn-adapters.rego` decides which modules may hold a child-process
+/// boundary, by name resolution over the compiled crate. `perf` is on that table
+/// and this module is not — and it should not be, because the two own different
+/// subjects. A declared-arm harness owns *the loop, the reduction, and the rule
+/// that a failed arm is could-not-look*; **what it costs to start a process is
+/// somebody else's fact.** Taking `once` as a parameter is what lets both stay
+/// true: the placed adapter supplies the spawn, this module never names
+/// `Command`, and the table above needs no new row to admit a module that spawns
+/// nothing.
+///
+/// It also makes the harness testable without a process at all, which is how the
+/// cases below drive an arm that fails on its third run.
+///
+/// # A FAILING ARM DOES NOT ABORT THE TABLE
+///
+/// `once` returning `Err` retires THAT arm to [`Outcome::NotObserved`] carrying
+/// the runner's own reason, and the loop moves to the next one. The alternative —
+/// a `Result` over the whole table — would throw away every arm that worked
+/// because one did not, which is the shape that makes a comparison unavailable
+/// exactly when it is most wanted. A partial table with one honest
+/// `not-observed` row is more use than no table.
+///
+/// Arms are reduced in the order declared, and each arm's runs are consecutive,
+/// so a caller reading the records back gets the table it wrote.
+pub fn run(
+    arms: &[Arm],
+    runs: usize,
+    observable: Observable,
+    mut once: impl FnMut(&Arm) -> Result<Run, String>,
+) -> Vec<(String, Outcome)> {
+    arms.iter()
+        .map(|arm| (arm.id.clone(), run_one(arm, runs, observable, &mut once)))
+        .collect()
+}
+
+/// One arm's `runs` runs, reduced — the body of [`run`]'s loop.
+fn run_one(
+    arm: &Arm,
+    runs: usize,
+    observable: Observable,
+    once: &mut impl FnMut(&Arm) -> Result<Run, String>,
+) -> Outcome {
+    // ZERO RUNS IS COULD-NOT-LOOK, not an empty series. Every reduction below
+    // would otherwise answer from nothing: `wall_clock` already says so, but
+    // `stability` over no runs would have to invent an answer, and "no runs were
+    // asked for" is a different fault from "the arm produced none".
+    if runs == 0 {
+        return Outcome::NotObserved(String::from("no runs were asked for"));
+    }
+    let mut series = Vec::with_capacity(runs);
+    let mut outputs = Vec::with_capacity(runs);
+    let mut exits = Vec::with_capacity(runs);
+    for _ in 0..runs {
+        match once(arm) {
+            Ok(run) => {
+                // THE CAST IS HERE AND NOWHERE ELSE, at the one point where a
+                // count of nanoseconds becomes the float a percentile needs.
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "a run's nanosecond count is far below 2^53, where f64 is still exact; the alternative is a percentile over integers, which is a different reduction"
+                )]
+                series.push(run.nanos as f64);
+                outputs.push(run.output);
+                exits.push(run.exit);
+            }
+            Err(why) => return Outcome::NotObserved(why),
+        }
+    }
+    match observable {
+        Observable::WallClock => wall_clock(series),
+        Observable::Bytes => bytes(&outputs),
+        Observable::Stability => stability(&outputs),
+        Observable::ExitStatus => exit_status(&exits),
+    }
+}
+
+/// The status every run agreed on, or a refusal to name one.
+///
+/// **Disagreement is could-not-look rather than a pick.** An arm that exits `0`
+/// twice and `1` once has no exit status, and reporting either of them would be
+/// reporting a run rather than the arm. This is [`stability`]'s rule over the
+/// status instead of over the bytes, and it exists for the same reason: the
+/// reduction that hides a disagreement is the one that makes a flaky arm look
+/// decided.
+fn exit_status(exits: &[i32]) -> Outcome {
+    let Some(first) = exits.first() else {
+        return Outcome::NotObserved(String::from("the arm produced no runs"));
+    };
+    let distinct = exits
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    if distinct == 1 {
+        Outcome::Observed(Reading::ExitStatus(*first))
+    } else {
+        Outcome::NotObserved(format!(
+            "the arm's exit status varied across {} run(s): {distinct} distinct",
+            exits.len()
+        ))
+    }
+}
+
 /// A percentile over a series, by the nearest-rank convention this repository
 /// already used.
 ///
@@ -329,6 +456,148 @@ pub fn stability(runs: &[Vec<u8>]) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An arm, ready to hand to [`run`].
+    fn arm(id: &str) -> Arm {
+        Arm::new(id, ".", vec![String::from("true")])
+    }
+
+    /// A run with a chosen duration and output, which is every fact [`run`] reads.
+    fn run_of(nanos: u128, output: &str, exit: i32) -> Run {
+        Run {
+            nanos,
+            output: output.as_bytes().to_vec(),
+            exit,
+        }
+    }
+
+    #[test]
+    fn every_arm_is_run_the_asked_number_of_times_and_reduced_in_order() {
+        let arms = [arm("first"), arm("second")];
+        let mut seen: Vec<String> = Vec::new();
+        let out = run(&arms, 3, Observable::WallClock, |arm| {
+            seen.push(arm.id.clone());
+            Ok(run_of(1_000, "same", 0))
+        });
+
+        // CONSECUTIVE, and asserted as the whole sequence rather than as a
+        // count: a harness that interleaved arms would pass a count check and
+        // still make each arm's series a measurement of both.
+        assert_eq!(
+            seen,
+            ["first", "first", "first", "second", "second", "second"]
+        );
+        assert_eq!(
+            out.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            ["first", "second"]
+        );
+        assert!(out.iter().all(|(_, outcome)| outcome.observed()));
+    }
+
+    #[test]
+    fn a_failing_arm_is_not_observed_and_the_others_still_reduce() {
+        // THE CASE THE MODULE EXISTS FOR. The failing arm must not become a
+        // zero, and it must not take the working arm down with it.
+        let arms = [arm("broken"), arm("fine")];
+        let out = run(&arms, 2, Observable::WallClock, |arm| {
+            if arm.id == "broken" {
+                Err(String::from("could not start"))
+            } else {
+                Ok(run_of(2_000, "out", 0))
+            }
+        });
+
+        assert_eq!(
+            out[0].1,
+            Outcome::NotObserved(String::from("could not start"))
+        );
+        assert!(out[1].1.observed(), "a sibling's failure is not this arm's");
+        // And the reason travels, so a reader learns what happened rather than
+        // that something did.
+        assert!(
+            out[0]
+                .1
+                .line("broken", Observable::WallClock)
+                .contains("could not start")
+        );
+    }
+
+    #[test]
+    fn a_failure_on_a_later_run_retires_the_whole_arm_rather_than_reducing_a_short_series() {
+        // A series of one, from an arm that was asked for three, describes an
+        // arm that did not finish. Reducing it would report the one run that
+        // worked as though it were the measurement.
+        let arms = [arm("flaky")];
+        let mut calls = 0;
+        let out = run(&arms, 3, Observable::WallClock, |_| {
+            calls += 1;
+            if calls < 3 {
+                Ok(run_of(10, "x", 0))
+            } else {
+                Err(String::from("died on the third run"))
+            }
+        });
+
+        assert_eq!(calls, 3, "the arm is not abandoned before the failing run");
+        assert_eq!(
+            out[0].1,
+            Outcome::NotObserved(String::from("died on the third run"))
+        );
+    }
+
+    #[test]
+    fn zero_runs_is_could_not_look_rather_than_an_empty_reduction() {
+        let arms = [arm("unrun")];
+        let mut called = false;
+        let out = run(&arms, 0, Observable::Stability, |_| {
+            called = true;
+            Ok(run_of(1, "", 0))
+        });
+
+        assert!(!called, "an arm asked for no runs is not run");
+        assert_eq!(
+            out[0].1,
+            Outcome::NotObserved(String::from("no runs were asked for"))
+        );
+    }
+
+    #[test]
+    fn an_arm_whose_runs_disagree_is_unstable_rather_than_counted() {
+        let arms = [arm("noisy")];
+        let mut calls = 0;
+        let out = run(&arms, 2, Observable::Bytes, |_| {
+            calls += 1;
+            Ok(run_of(1, if calls == 1 { "short" } else { "longer" }, 0))
+        });
+
+        // BYTES, not stability, and still UNSTABLE: `bytes` checks agreement
+        // first, because a count over runs that disagree describes none of them.
+        assert_eq!(
+            out[0].1,
+            Outcome::Observed(Reading::Unstable {
+                distinct: 2,
+                runs: 2
+            })
+        );
+    }
+
+    #[test]
+    fn an_exit_status_is_read_only_when_every_run_agreed() {
+        let arms = [arm("steady"), arm("varying")];
+        let mut calls = 0;
+        let out = run(&arms, 2, Observable::ExitStatus, |arm| {
+            calls += 1;
+            let exit = if arm.id == "steady" { 3 } else { calls % 2 };
+            Ok(run_of(1, "", exit))
+        });
+
+        assert_eq!(out[0].1, Outcome::Observed(Reading::ExitStatus(3)));
+        assert!(
+            !out[1].1.observed(),
+            "a status that varied names no run: {:?}",
+            out[1].1
+        );
+    }
 
     #[test]
     fn a_percentile_over_a_known_series_matches_a_hand_computation() {
