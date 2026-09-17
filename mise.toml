@@ -617,7 +617,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "mise,attestation-check,engine-checks-green,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence-assert,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules"
+MUTANT_GATES = "mise,attestation,timeout-drift,engine-checks-green,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence-assert,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -1866,6 +1866,205 @@ counts=$(jq -r --argjson authored "$authored" '
 # undefined and it says nothing; a record that IS written and names no branch is
 # the different, refused state. Collapsing those two is the silent pass this
 # campaign keeps finding.
+# CLOUD-583's probe and verifier, ported off `attestation-check.sh` under
+# CLOUD-1717.
+#
+# THE SPAWN STAYS OUT HERE AND ONLY THE ADJUDICATION MOVED IN (house-style §5).
+# `policy/attestation.rego` decides what an unverified archive is; this fetches
+# what it decides over, and every step of the fetching is a process `check` may
+# not start: the endpoint probe, the release download, the unpack, and
+# `gh attestation verify` itself.
+#
+# EVERY COULD-NOT-LOOK WRITES NOTHING, which is the half that makes the module's
+# silence honest. No credential, no github.com remote, a posture that is neither
+# 200 nor 404, an unreadable status line, a tag that will not resolve, a download
+# that fails — each refuses here, loudly, while its author is watching, and leaves
+# the record absent. The retired program spelled these as exit 2; on the engine's
+# contract 2 means a finding, so carrying that over would have made could-not-look
+# a violation.
+#
+# THE ZERO DIGEST IS THE PROBE, and it is a question about the REPOSITORY rather
+# than about any file: where attestation is available an unknown digest answers
+# 200 with an empty array, and where it is not the resource itself answers 404.
+[tasks.attestation-record]
+description = "Record the platform's attestation posture and each release archive's verdict, for `release grade unsafe`"
+shell = "bash -c"
+run = '''
+set -euo pipefail
+
+gh_bin="${ATTESTATION_GH:-gh}"
+zero=0000000000000000000000000000000000000000000000000000000000000000
+
+# THE OFFLINE HALF, and the narrowness is the design. It asserts that the
+# verifier resolves and NOTHING about the repository, the credential or the
+# platform, because this is what the `release check unread` row runs at `deny` on
+# every gate invocation — and a gate that blocks on ambient environment blocks
+# everything the moment an environment differs. Measured on the retired program:
+# an earlier version also required GH_TOKEN and a github.com remote, and it
+# reported a violation inside `tests/prebuilt-lint.bats`' fixture repositories,
+# which carry neither. A credential is could-not-look, and could-not-look is the
+# world half's to report rather than this one's to enforce.
+if ! command -v "$gh_bin" >/dev/null 2>&1; then
+	echo "::error:: attestation-record: no verifier at '$gh_bin', so no attestation could ever be checked. Run: mise install aqua:cli/cli" >&2
+	exit 2
+fi
+if [ "${1:-}" = "--precondition" ]; then
+	echo "attestation-record: precondition holds — the verifier resolves"
+	exit 0
+fi
+if [ -z "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]; then
+	echo "::error:: attestation-record: no GH_TOKEN/GITHUB_TOKEN, so a 404 could not be told from a denial. Nothing recorded." >&2
+	exit 2
+fi
+
+remote=$(git remote get-url origin)
+slug=${remote#*github.com[:/]}
+slug=${slug%.git}
+if [ -z "$slug" ]; then
+	echo "::error:: attestation-record: no github.com origin remote, so there is no repository to ask about." >&2
+	exit 2
+fi
+
+status=$("$gh_bin" api "repos/$slug/attestations/sha256:$zero" -i 2>/dev/null |
+	awk 'NR==1 { for (i = 1; i <= NF; i++) if ($i ~ /^[0-9][0-9][0-9]$/) { print $i; exit } }' || true)
+case "$status" in
+404) printf 'posture\t404\n' | cargo run --quiet -p batten -- record named attestation; exit 0 ;;
+200) ;;
+*)
+	echo "::error:: attestation-record: the attestations endpoint answered '${status:-nothing readable}' — neither 200 nor 404, so the platform's posture is unknown and nothing was recorded." >&2
+	exit 2
+	;;
+esac
+
+tag="${1:-}"
+if [ -z "$tag" ]; then
+	if ! tag=$("$gh_bin" release view --json tagName --jq '.tagName' 2>/dev/null) || [ -z "$tag" ]; then
+		echo "::error:: attestation-record: no tag given and no latest release to read, so there is nothing to verify." >&2
+		exit 2
+	fi
+fi
+
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+if ! "$gh_bin" release download "$tag" --dir "$scratch" --pattern '*.tar.gz' --pattern '*.zip' >/dev/null 2>&1; then
+	echo "::error:: attestation-record: could not download $tag's archives, so their provenance is unread. Nothing recorded." >&2
+	exit 2
+fi
+
+{
+	printf 'posture\t200\n'
+	for archive in "$scratch"/*.tar.gz "$scratch"/*.zip; do
+		[ -f "$archive" ] || continue
+		name=${archive##*/}
+		into="$scratch/x-$name"
+		mkdir -p "$into"
+		case "$name" in
+		*.zip) unzip -q -o "$archive" -d "$into" || true ;;
+		*) tar -xzf "$archive" -C "$into" || true ;;
+		esac
+		binary=$(find "$into" -type f \( -name batten -o -name batten.exe \) | head -n1)
+		if [ -z "$binary" ]; then
+			printf 'archive\t%s\tno-binary\n' "$name"
+		elif "$gh_bin" attestation verify "$binary" --repo "$slug" >/dev/null 2>&1; then
+			printf 'archive\t%s\tverified\n' "$name"
+		else
+			printf 'archive\t%s\tunverified\n' "$name"
+		fi
+	done
+} | cargo run --quiet -p batten -- record named attestation
+'''
+
+# CLOUD-266's measurement half, ported off `timeout-drift.sh` under CLOUD-1717.
+#
+# THE ARITHMETIC CANNOT MOVE IN. A p95 over run durations is arithmetic over
+# instants, and the engine calls no clock on any evaluation path — `clippy.toml`'s
+# `disallowed-methods` and `crates/batten/tests/clock_ban.rs` hold it there. So the
+# durations are subtracted here and the classification is
+# `policy/timeout-drift.rego`'s: CLOUD-1559's rule, carry the decisions.
+#
+# MATRIX LEGS POOL. One `timeout-minutes` covers seven `dist` targets and the API
+# reports each leg as `dist (<target>)`, so every leg feeds one distribution —
+# matched on the job key, or the key followed by " (".
+[tasks.timeout-drift-record]
+description = "Record each job's declared budget against its measured p95, for `bound grade other`"
+shell = "bash -c"
+run = '''
+set -euo pipefail
+
+window="${BATTEN_BUDGET_WINDOW:-25}"
+workflows=".github/workflows"
+
+if ! command -v gh >/dev/null 2>&1; then
+	echo "::error:: timeout-drift-record: gh is not on PATH — cannot read the Actions API. Nothing recorded." >&2
+	exit 2
+fi
+if [ ! -d "$workflows" ]; then
+	echo "::error:: timeout-drift-record: $workflows is not a directory, so no budget could be read. Nothing recorded." >&2
+	exit 2
+fi
+
+emit() {
+	for wf in "$workflows"/*.yml; do
+		[ -e "$wf" ] || continue
+		file="$(basename "$wf")"
+		if ! runs=$(gh api "repos/{owner}/{repo}/actions/workflows/$file/runs?status=success&per_page=$window" --jq '.workflow_runs[].id' 2>/dev/null); then
+			echo "::error:: timeout-drift-record: cannot read runs for $file. Nothing recorded." >&2
+			return 2
+		fi
+		durations=""
+		for run in $runs; do
+			[ -n "$run" ] || continue
+			if ! legs=$(gh api "repos/{owner}/{repo}/actions/runs/$run/jobs" --jq '.jobs[] | select(.conclusion == "success") | [.name, .started_at, .completed_at] | @tsv' 2>/dev/null); then
+				echo "::error:: timeout-drift-record: cannot read jobs for run $run. Nothing recorded." >&2
+				return 2
+			fi
+			durations="$durations$(printf '%s\n' "$legs" | awk -F'\t' '
+				NF == 3 {
+					"date -d \"" $2 "\" +%s" | getline from
+					"date -d \"" $3 "\" +%s" | getline to
+					if (from != "" && to != "" && to >= from) printf "%s\t%d\n", $1, to - from
+				}')
+"
+		done
+		awk -v file="$file" -v durations="$durations" '
+			function flush(   samples, n, i, sorted, idx, p95) {
+				if (job == "" || declared == "") return
+				n = 0
+				split(durations, rows, "\n")
+				for (i in rows) {
+					split(rows[i], f, "\t")
+					if (f[1] == job || index(f[1], job " (") == 1) samples[++n] = f[2] + 0
+				}
+				p95 = 0
+				if (n > 0) {
+					asort(samples)
+					idx = int(((95 * n) + 99) / 100)
+					if (idx < 1) idx = 1
+					p95 = samples[idx]
+				}
+				printf "job\t%s\t%s\t%s\t%d\t%d\t%s\n", file, job, declared, p95, n, basis
+			}
+			/^jobs:/ { injobs = 1; next }
+			injobs && /^[a-z]/ { injobs = 0 }
+			injobs && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ {
+				flush()
+				job = $1; sub(":", "", job); declared = ""; basis = "measured"
+			}
+			injobs && job != "" && /^    timeout-minutes:[[:space:]]*[0-9]+/ {
+				value = $0
+				sub(/^[[:space:]]*timeout-minutes:[[:space:]]*/, "", value)
+				sub(/[^0-9].*$/, "", value)
+				declared = value
+				basis = ($0 ~ /grandfathered/) ? "grandfathered" : "measured"
+			}
+			END { flush() }
+		' "$wf"
+	done
+}
+
+emit | cargo run --quiet -p batten -- record named timeout-drift
+'''
+
 [tasks.branch-age-record]
 description = "Effect: record every remote branch's age in days and which names head more than one merged PR (CLOUD-349)"
 shell = "bash -c"

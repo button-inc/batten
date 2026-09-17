@@ -64,7 +64,6 @@ commit, and a named ref resolves a declared one.
 
 | task                           | bucket | git variants                 |
 | ------------------------------ | ------ | ---------------------------- |
-| `attestation-check.sh`         | git    | `location`, `remote`         |
 | `awk-regex-check.sh`           | git    | `tracked`                    |
 | `batten-glob-check.sh`         | git    | `location`                   |
 | `board-sweep.sh`               | forge  | `location`, `log`            |

@@ -2134,6 +2134,22 @@ regex = '^[0-9]+$'
 record = "branch-age"
 writer = "mise run branch-age-record"
 
+# CLOUD-583's probe and verifier, ported off `attestation-check.sh` under
+# CLOUD-1717. The producer makes the posture probe, downloads the release's
+# archives, unpacks each one and runs `gh attestation verify` over the BINARY
+# inside — every step of which section 5 keeps outside `check`.
+[[record]]
+record = "attestation"
+writer = "mise run attestation-record"
+
+# CLOUD-266's other half, ported off `timeout-drift.sh` under CLOUD-1717. The
+# producer reads successful runs from the Actions API, subtracts their instants
+# and computes a p95 per job; the engine calls no clock, so the arithmetic cannot
+# move in and only the classification does.
+[[record]]
+record = "timeout-drift"
+writer = "mise run timeout-drift-record"
+
 [[pattern]]
 id = "closed-issue-status"
 regex = '^(done|canceled|duplicate)$'
@@ -5537,8 +5553,8 @@ no_fix_reason = "the missing fields do not exist in a cargo lockfile, so no comm
 
 # Release provenance, adopted as `gh attestation verify` (CLOUD-583, CLOUD-279
 # verdict 1 — `slsa-verifier` is redundant against the same absent provenance and
-# `cosign` has no signing identity here). `mise-tasks/attestation-check.sh` carries
-# the design; what belongs here is why this is ONE row and which half it runs.
+# `cosign` has no signing identity here). `policy/attestation.rego` carries the
+# design; what belongs here is why this is ONE row and which half it runs.
 #
 # THE OFFLINE HALF, and that is the whole of the wiring decision. Whether a
 # published release is attested changes with no diff, so it is a property of the
@@ -5569,11 +5585,23 @@ no_fix_reason = "the missing fields do not exist in a cargo lockfile, so no comm
 # had anything to do with attestation. CLOUD-614 carries the general defect; naming
 # the file the row exists to run is what makes the trigger and the mechanism the
 # same object rather than a coincidence.
+# REPOINTED, NOT REMOVED (CLOUD-1717). `mise-tasks/attestation-check.sh` is
+# retired, and its precondition mode survives as `[tasks.attestation-record]
+# --precondition`: the same one fact, decided from the same local reading, still
+# at `deny` on every gate invocation. Retiring the row instead would have removed
+# a gate and owed a weakening; this changes only which program carries it.
+#
+# THE GLOB FOLLOWS THE CHECK, which is this row's own discipline one paragraph
+# down: it must name a path `batten-glob-check` can prove covered, and it must not
+# match inside a fixture tree, because a `mise run` check resolves only where a
+# mise.toml is findable. `mise.toml` is both — it is in hk's `batten-check` list,
+# and it is where the task body now lives, so the trigger and the mechanism stay
+# the same object.
 [[rule]]
 id = "release check unread"
 kind = "command"
-glob = "mise-tasks/attestation-check.sh"
-check = "mise run attestation-check --precondition"
+glob = "mise.toml"
+check = "mise run attestation-record --precondition"
 severity = "deny"
 scope = "tree"
 no_fix_reason = "install the pinned `gh` (`mise install aqua:cli/cli`) or supply GH_TOKEN; neither is a change to this tree's content"
@@ -5607,7 +5635,7 @@ no_fix_reason = "install the pinned `gh` (`mise install aqua:cli/cli`) or supply
 #
 # `deny` is safe because the check is offline and local: it reads one tracked
 # file, makes no network call, and needs no credential — so it cannot block on
-# ambient environment the way an earlier `attestation-check` did inside fixture
+# ambient environment the way an earlier attestation precondition did inside fixture
 # repositories. The only way it reds is the workflow actually losing its wiring.
 [[rule]]
 id = "release wire missing"
@@ -6238,6 +6266,34 @@ id = "branch watch loose"
 kind = "policy"
 scope = "tree"
 module = "policy/branch-age.rego"
+severity = "warn"
+
+# CLOUD-583, ported off `mise-tasks/attestation-check.sh` under CLOUD-1717.
+#
+# `deny` BECAUSE THE GAP IS NOT A VERDICT. The module fires nothing while the
+# platform offers no attestation — a 404 posture judges no artifact — so the only
+# way this reds is a release whose binaries the verifier actually refused where
+# attestation IS available. That is a release to fix, which is what `deny` means.
+[[rule]]
+id = "release grade unsafe"
+kind = "policy"
+scope = "tree"
+module = "policy/attestation.rego"
+severity = "deny"
+
+# CLOUD-266's world half, ported off `mise-tasks/timeout-drift.sh` under
+# CLOUD-1717.
+#
+# `warn` IS THE PORTED POSTURE, not a hedge. The retired program reported and
+# never blocked: it failed only its own scheduled run, filed no issue and posted
+# no comment, because a budget that no longer matches reality means nothing is
+# broken and no branch is at fault. A warn finding is reported without failing the
+# run, which is that posture on the engine's contract.
+[[rule]]
+id = "bound grade other"
+kind = "policy"
+scope = "tree"
+module = "policy/timeout-drift.rego"
 severity = "warn"
 
 [[rule]]
@@ -13013,6 +13069,115 @@ and killing it took `kill -9` on the process group. A heredoc, `< msg.txt` or \
 id = "patch run first"
 kind = "command"
 target = "git commit -F <path>"
+
+# CLOUD-583's three readings, ported off `attestation-check.sh` under CLOUD-1717.
+[[verdict]]
+id = "release ship unsafe"
+gloss = "a release archive's binary carries no verifiable provenance"
+class = """
+`gh attestation verify` refused the executable inside a published archive while \
+the platform DOES offer attestation for this repository. That is a release to \
+fix rather than a gap to report, and the two are told apart by the attestations \
+endpoint's own status code: 200 with an empty array where the feature exists, \
+404 on the resource where it does not. The subject is the BINARY and not the \
+archive, because `release-artifacts.yml` attests the executable deliberately so \
+that repackaging cannot launder the claim.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run attestation-record"
+
+[[verdict]]
+id = "release carry missing"
+gloss = "a release archive carries no executable to verify"
+class = """
+The archive unpacked and held no `batten` binary, so there was nothing for the \
+verifier to judge. A packaging problem rather than a provenance one, and its own \
+class for that reason: collapsing it into the unverified finding would send a \
+reader after a signing identity when the dist matrix dropped a file.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run attestation-record"
+
+[[verdict]]
+id = "release list empty"
+gloss = "the producer looked at a tag and found no archive on it"
+class = """
+A green verdict over a release carrying nothing would be about nothing. \
+Present-and-empty and absent are different readings and must not collapse: an \
+absent record is the producer unable to look, where this is the producer having \
+looked and found a tag with no archives.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run attestation-record"
+
+# CLOUD-266's four readings, ported off `timeout-drift.sh` under CLOUD-1717.
+[[verdict]]
+id = "bound pin loose"
+gloss = "a job's declared timeout sits well above what its measurement justifies"
+class = """
+A budget is a ceiling rather than a target, so headroom is correct and a slack \
+allowance keeps this off a job that merely got a little faster. Past that \
+allowance the number has gone slack, which is the direction a report that only \
+complained about tightness would let rot upward forever. Nothing is broken and no \
+branch is at fault: re-derive the number and commit the new comment.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run timeout-drift-record"
+
+[[verdict]]
+id = "bound pin wrong"
+gloss = "a job's measurement has outgrown its declared timeout"
+class = """
+The p95 of recent successful runs, times the repo-wide headroom multiplier, is \
+already above the committed budget. Raise it before it starts failing healthy \
+runs — this is the direction that turns into a red job nobody caused.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run timeout-drift-record"
+
+[[verdict]]
+id = "bound pin stale"
+gloss = "a dated debt entry now has a usable sample and can become a measured budget"
+class = """
+The prompt, never the conversion. A bot re-baselining the number it is supposed \
+to defend is the move section 4 forbids outright, so this reports that the debt \
+is now convertible and a deliberate commit does the converting.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run timeout-drift-record"
+
+[[verdict]]
+id = "bound measure partial"
+gloss = "too few successful runs to characterise a job, so no budget is proposed"
+class = """
+Below the declared minimum a job is uncharacterised rather than fast, and saying \
+so is itself the useful signal. Most jobs here run weekly or on release, so a \
+naive percentile over a short window would compute a confident value from two \
+samples and propose tightening a release job on it.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run timeout-drift-record"
 
 # CLOUD-349's two readings, ported off `branch-age-check.sh` under CLOUD-1717.
 [[verdict]]
