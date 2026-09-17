@@ -962,6 +962,140 @@ fn a_spent_admission_admits_the_finding_it_was_issued_for() {
     );
 }
 
+/// [`spend_for`], keeping the `Admits:` block `override spend` printed — the
+/// copy that rides in a commit message, which CLOUD-1674's cases are about.
+fn spend_block_for(root: &Path, subject: &str, reason: &str) -> (String, String) {
+    let address = spend_for(root, subject, reason);
+    // The block `spend` printed, rendered from the record it left rather than
+    // scraped off stdout: same bytes, one renderer.
+    let record = admission::load(root, &address).expect("the spent record is in the store");
+    (address, admission::block(&record))
+}
+
+/// Delete the store, so anything admitted afterwards was read from the tree.
+fn forget_store(root: &Path) {
+    let store = admission::store_dir(root).expect("the store resolves");
+    let _ = std::fs::remove_dir_all(&store);
+    assert!(!store.exists(), "the store is gone: {}", store.display());
+}
+
+#[test]
+fn a_spent_block_in_the_head_commit_admits_with_no_store() {
+    // CLOUD-1674. The store is the spending host's and nowhere else, so a runner
+    // reading the same commit found no record and raised the finding the author
+    // had already overridden — measured on PR #892: `verify` admitted locally,
+    // CI's `batten-check` refused the same finding on the same commit. The block
+    // `override spend` prints was already self-verifying (CLOUD-1278) and had no
+    // reader on the tree surface. This is that reader.
+    let root = admits_fixture("block-head");
+    let (address, block) = spend_block_for(&root, "a.rs", "the block must travel");
+    forget_store(&root);
+
+    // With the store gone and the block nowhere, the finding is back: this is
+    // the runner's situation before the change, and the arm that proves the
+    // admission below comes from the message rather than from residue.
+    let bare = common::run(&root, &["check"]);
+    assert_eq!(
+        bare.status.code(),
+        Some(batten::exit::ExitCode::Violation.code()),
+        "no store and no block refuses: {}",
+        common::stderr(&bare)
+    );
+
+    common::git_in(
+        &root,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            &format!("carry\n\n{block}"),
+        ],
+    );
+    let admitted = common::run(&root, &["check"]);
+    assert_eq!(
+        admitted.status.code(),
+        Some(batten::exit::ExitCode::Success.code()),
+        "the block in HEAD's message admits with no store: {}",
+        common::stderr(&admitted)
+    );
+    let reported = common::stderr(&admitted);
+    assert!(
+        reported.contains("admitted a.rs") && reported.contains(&address),
+        "the run names what it admitted and which record did it: {reported}"
+    );
+}
+
+#[test]
+fn a_tampered_block_in_the_head_commit_admits_nothing() {
+    // THE TAMPER CHECK the store arm gets for free by owning its records, paid
+    // here by recomputation: an answer edited after the spend no longer hashes
+    // to the address the block claims, and a block that does not recompute is
+    // not evidence of anything.
+    let root = admits_fixture("block-tampered");
+    let (_, block) = spend_block_for(&root, "a.rs", "the words that were spent");
+    forget_store(&root);
+    let tampered = block.replace(
+        "the words that were spent",
+        "different words nobody articulated",
+    );
+    assert_ne!(tampered, block, "the edit reached an answer");
+
+    common::git_in(
+        &root,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            &format!("carry\n\n{tampered}"),
+        ],
+    );
+    let refused = common::run(&root, &["check"]);
+    assert_eq!(
+        refused.status.code(),
+        Some(batten::exit::ExitCode::Violation.code()),
+        "a block whose address no longer recomputes admits nothing: {}",
+        common::stderr(&refused)
+    );
+    assert!(
+        !common::stderr(&refused).contains("admitted"),
+        "nothing was admitted: {}",
+        common::stderr(&refused)
+    );
+}
+
+#[test]
+fn a_block_on_the_parent_commit_admits_nothing() {
+    // HEAD ONLY. An admission rides the commit that carries the admitted change
+    // and `land` replays exactly that commit; a walk over a range would let an
+    // old block admit a later finding that happens to share its fingerprint.
+    let root = admits_fixture("block-parent");
+    let (_, block) = spend_block_for(&root, "a.rs", "this block is one commit too old");
+    forget_store(&root);
+    common::git_in(
+        &root,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            &format!("carry\n\n{block}"),
+        ],
+    );
+    common::git_in(
+        &root,
+        &["commit", "-q", "--allow-empty", "-m", "a later commit"],
+    );
+    let refused = common::run(&root, &["check"]);
+    assert_eq!(
+        refused.status.code(),
+        Some(batten::exit::ExitCode::Violation.code()),
+        "a block on the parent is not HEAD's: {}",
+        common::stderr(&refused)
+    );
+}
+
 #[test]
 fn an_issued_admission_that_was_never_spent_admits_nothing() {
     // THE ECONOMY. Articulating costs thinking; spending is the act. A mint that

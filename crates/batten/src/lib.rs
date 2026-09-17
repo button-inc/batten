@@ -18276,6 +18276,15 @@ fn apply_admissions(
     let Ok((epoch, _)) = epoch::describe(root, config_from) else {
         return Ok(findings);
     };
+    // THE COMMIT'S OWN COPY (CLOUD-1674). The store is the spending host's and
+    // nowhere else, so a runner reading the same commit found no record and
+    // raised the finding the author had already overridden — exit 0 here, exit
+    // 2 in CI, one commit. The block `override spend` writes into the message
+    // is self-verifying by address, so it is read here as the second source.
+    // HEAD only: an admission rides the commit that carries the admitted change,
+    // and `land` replays exactly that commit. Resolved lazily — one read per
+    // run, and none on a run the store answers or that has nothing to admit.
+    let mut head_message: Option<Option<String>> = None;
 
     let mut kept = Vec::with_capacity(findings.len());
     for finding in findings {
@@ -18285,8 +18294,27 @@ fn apply_admissions(
             continue;
         };
         let anchor = admission::Anchor::Finding(fingerprint.clone()).token();
-        let admitted =
+        let mut admitted =
             admission::admitted(root, &finding.rule, class, &finding.path, &anchor, &epoch)?;
+        //MUTANT-SUITE crates/batten/tests/it/admission.rs
+        //MUTANT block-arm-removed|s@^        if admitted.is_none() {$@        if false {@|a_spent_block_in_the_head_commit_admits_with_no_store
+        if admitted.is_none() {
+            let message = head_message.get_or_insert_with(|| {
+                git::commit_record(root, "HEAD")
+                    .ok()
+                    .map(|record| record.body)
+            });
+            admitted = message.as_deref().and_then(|body| {
+                admission::admitted_by_block(
+                    body,
+                    &finding.rule,
+                    class,
+                    &finding.path,
+                    &anchor,
+                    &epoch,
+                )
+            });
+        }
         match admitted {
             Some(address) => output::message(
                 mode,

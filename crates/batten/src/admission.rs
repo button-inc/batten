@@ -970,6 +970,62 @@ pub fn admitted(
     Ok(None)
 }
 
+/// The admission a commit MESSAGE carries for this situation, or `None`.
+///
+/// The offline half of [`admitted`] (CLOUD-1674). A spent record lives in
+/// [`store_dir`] on the host that spent it and nowhere else, so a gate that also
+/// runs on a runner read exit `0` locally and raised the same finding in CI on
+/// the same commit — the override was spent and suppressed only where nobody
+/// needed it to. The block [`block`] renders into the commit message was already
+/// self-verifying by address, for exactly this reason (see the module's
+/// "verifiable with the store deleted"), and nothing on the tree surface read it.
+///
+/// # What admits, and what does not
+///
+/// A block admits only when its address RECOMPUTES over its own fields
+/// ([`Articulation::recomputes`]) and its five binding terms equal the
+/// situation's — the same five [`admitted`] compares, for the same five
+/// reasons. A block whose answers were edited after the spend no longer hashes to
+/// the address it claims and admits nothing; that is the tamper check the store
+/// arm gets for free by owning its records, paid here by recomputation.
+///
+/// `message` is HEAD's and only HEAD's, by the caller's choice rather than this
+/// function's: an admission rides the commit that carries the admitted change,
+/// and `land` replays exactly that commit. A walk over a range would let an old
+/// block admit a later finding that happens to share its fingerprint.
+///
+/// No `State` check, because a block exists only once [`consume`] has run —
+/// [`block`] is what `override spend` prints — and a block forged from an
+/// ISSUED record still binds the same terms, which is the economy [`admitted`]
+/// enforces with `State::Spent`. That gap is closed one field over: the address
+/// binds `answers`, so a block with no articulation cannot recompute at all.
+#[must_use]
+pub fn admitted_by_block(
+    message: &str,
+    rule: &str,
+    verdict: &str,
+    subject: &str,
+    anchor: &str,
+    epoch: &str,
+) -> Option<String> {
+    blocks(message).into_iter().find_map(|articulation| {
+        // TAMPER FIRST. A block that does not recompute is not evidence of
+        // anything, whatever its fields say.
+        //MUTANT-SUITE crates/batten/tests/it/admission.rs
+        //MUTANT recomputes-unchecked|s@^        if !articulation.recomputes() {$@        if false {@|a_tampered_block_in_the_head_commit_admits_nothing
+        if !articulation.recomputes() {
+            return None;
+        }
+        let binding = &articulation.binding;
+        (binding.rule == rule
+            && binding.verdict == verdict
+            && binding.subject == subject
+            && binding.anchor.token() == anchor
+            && binding.epoch == epoch)
+            .then_some(articulation.claimed)
+    })
+}
+
 /// One question the requester must answer.
 ///
 /// **Falsifiable to the writer, or a fluent agent performs the ritual and
