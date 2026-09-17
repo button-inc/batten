@@ -2158,6 +2158,13 @@ writer = "mise run timeout-drift-record"
 record = "nonverdict"
 writer = "mise run nonverdict-record"
 
+# CLOUD-492's measuring half, ported off `land-divergence.sh` under CLOUD-1717.
+# The decider half is `policy/land-divergence.rego`; the split is the retired
+# pair's own, for the reason the `nonverdict` pair's is.
+[[record]]
+record = "land-divergence"
+writer = "mise run land-divergence-record"
+
 [[pattern]]
 id = "closed-issue-status"
 regex = '^(done|canceled|duplicate)$'
@@ -6324,6 +6331,23 @@ id = "job grade other"
 kind = "policy"
 scope = "tree"
 module = "policy/nonverdict.rego"
+severity = "warn"
+
+# CLOUD-492, ported off `mise-tasks/land-divergence-assert.sh` under CLOUD-1717.
+#
+# `warn` FOR THE REASON `job grade other` ABOVE CARRIES, one surface over. Every
+# metric here is a property of the FLEET and the loop over a window — cancel
+# latency, queue delay, peak concurrency, the fast-forward bot's refusal ratio —
+# and no branch causes any of them. Failing a branch's `verify` over yesterday's
+# runner saturation is how a gate gets switched off. The scheduled job runs
+# `--fail-on-warning` and reds on the divergence, which is the retired decider's
+# posture exactly: a number that rises has to fail something or it becomes another
+# artifact nobody opens.
+[[rule]]
+id = "lane grade other"
+kind = "policy"
+scope = "tree"
+module = "policy/land-divergence.rego"
 severity = "warn"
 
 [[rule]]
@@ -13241,6 +13265,118 @@ never linted anything.
 id = "task run first"
 kind = "command"
 target = "mise run nonverdict-record"
+
+# CLOUD-492's eight readings, ported off `land-divergence-assert.sh` under
+# CLOUD-1717.
+[[verdict]]
+id = "lane read partial"
+gloss = "the measurement could not read part of its window, so a green verdict would cover less than it claims"
+class = """
+The Actions runs endpoint caps pagination at 1000 items while still \
+reporting the true total, so a walk that stops on a short page reads a PREFIX \
+and looks like a clean finish. Measured: 1000 of 1446 runs collected, reporting \
+zero fast-forward refusals over a window carrying 598. Narrow the window.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run land-divergence-record"
+
+[[verdict]]
+id = "lane count spent"
+gloss = "the landing loop bought more CI matrices per landing than its budget"
+class = """
+The ideal is 1.00 — one matrix, run to green, landed. The budget is 2.00 \
+because the second run is the lease precondition cancelling an unauthorised \
+matrix, which is the mechanism working.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run land-divergence-record"
+
+[[verdict]]
+id = "lane grade red"
+gloss = "red CI runs per landing are over budget"
+class = """
+A red run means `verify` was skipped or disagreed with CI, and each one \
+spent a full matrix to say so.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run land-divergence-record"
+
+[[verdict]]
+id = "lane reach late"
+gloss = "cancelled runs have a median lifetime past the budget"
+class = """
+LATENCY, NEVER COUNT. An early cancellation is `ci-lease-precondition` \
+stopping an unauthorised matrix for ~20 runner-seconds instead of billing ~500; \
+a late one is a matrix billed for a verdict nobody reads.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run land-divergence-record"
+
+[[verdict]]
+id = "lease guard dropped"
+gloss = "more CI matrices ran concurrently than the lease admits"
+class = """
+Landing is serialised behind a lease, so concurrency above the \
+admitted-successor bound means something is spending CI without holding it.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run land-divergence-record"
+
+[[verdict]]
+id = "lane measure late"
+gloss = "runs waited past the budget at p90 before starting"
+class = """
+The runner pool saturating, which is a different defect from contention \
+and must not be read as one.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run land-divergence-record"
+
+[[verdict]]
+id = "job measure late"
+gloss = "individual matrix legs waited past the budget at p90 before starting"
+class = """
+A run's own figure is its FIRST job's start, so this is the one that sees \
+a leg queueing behind its siblings — the two disagreeing is what tells a wide \
+matrix apart from a saturated pool (CLOUD-501).
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run land-divergence-record"
+
+[[verdict]]
+id = "branch reach stale"
+gloss = "the fast-forward bot refused a branch that had gone behind"
+class = """
+A refusal means the branch went behind before the bot answered — the \
+thundering herd the landing lease exists to remove (243:5 before, 0:5 after). \
+Any refusal at all is a divergence, so the budget is zero.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run land-divergence-record"
 
 # CLOUD-349's two readings, ported off `branch-age-check.sh` under CLOUD-1717.
 [[verdict]]

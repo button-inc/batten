@@ -97,7 +97,6 @@ commit, and a named ref resolves a declared one.
 | `install-check.sh`             | git    | `tracked`                    |
 | `issue-read-check.sh`          | git    | `location`, `log`            |
 | `issue-search-check.sh`        | git    | `head`, `location`           |
-| `land-divergence-assert.sh`    | tree   | —                            |
 | `land-lock-check.sh`           | git    | `log`, `remote`              |
 | `landed-check.sh`              | git    | `head`, `log`                |
 | `license-table-check.sh`       | tree   | —                            |
