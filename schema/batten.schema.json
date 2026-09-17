@@ -1005,6 +1005,13 @@
           "items": {
             "type": "string"
           }
+        },
+        "slow_inert": {
+          "description": "Paths proven INERT to the hk slow tier, as prefixes (CLOUD-398).\n\n**A deny-list, and the inversion is the design.** `rust-paths-check`\njudges an allow-list because its four jobs decide a pure function of the\nRust tree. The slow tier is not enumerable that way — `cargo-clippy`\ndeclares no glob at all and `batten-check` declares `**` — so any list of\n\"what the slow tier reads\" is wrong the moment somebody adds a step. This\ninverts the default: the tier runs unless EVERY changed path is on a short\nlist proven inert to it, so a wrong entry is the only way to lose a\nverdict, and the list is the whole review surface.\n\nCONSUMER DATA, which is why it is config and not a constant (rule 1): the\npaths a given repository can prove inert are that repository's, and the\nengine knows only the RELATIONSHIP — an entry ending `/` covers a\ndirectory, anything else is an exact path.\n\nEmpty means nothing is inert, so the tier always runs. That is the safe\ndirection and the honest reading of an undeclared list.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "additionalProperties": false,

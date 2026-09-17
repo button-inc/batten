@@ -76,6 +76,7 @@ mod checks_green;
 mod ci_cache_declared;
 mod ci_hygiene;
 mod ci_parity;
+mod ci_slow_needed;
 mod ci_suite_lane;
 mod ci_tools;
 mod claim;

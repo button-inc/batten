@@ -1,0 +1,20 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-ci 1  batten 
+.SH NAME
+batten\-ci \- Answer what this repository\*(Aqs continuous integration needs of a change
+.SH SYNOPSIS
+\fBbatten ci\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Answer what this repository\*(Aqs continuous integration needs of a change
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SUBCOMMANDS
+.TP
+batten\-ci\-slow\-needed(1)
+Decide whether a diff can move the slow tier, so a diff that cannot does not pay for it
+.TP
+batten\-ci\-help(1)
+Print this message or the help of the given subcommand(s)

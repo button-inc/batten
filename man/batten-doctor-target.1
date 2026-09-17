@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-doctor-target 1  batten 
+.SH NAME
+batten\-doctor\-target \- Make one rustup target installed, purging a half\-installed one first, behind the toolchain\*(Aqs own lock
+.SH SYNOPSIS
+\fBbatten doctor target\fR [\fB\-h\fR|\fB\-\-help\fR] <\fItarget\fR> 
+.SH DESCRIPTION
+Make one rustup target installed, purging a half\-installed one first, behind the toolchain\*(Aqs own lock
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fItarget\fR>
+The target triple to install, as `rustup target list` spells it

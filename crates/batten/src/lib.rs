@@ -423,6 +423,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // meant to pin. That is also what stops a caller keying a record to
         // anything the config does not already declare (CLOUD-1265).
         Some(Command::Record { command }) => record::run(command, &overrides, out, err),
+        Some(Command::Ci { command }) => run_ci(&command, &overrides, out, err),
     }
 }
 
@@ -19903,6 +19904,81 @@ fn run_doctor(
         cli::DoctorCommand::Egress { json } => run_doctor_egress(json, out),
         cli::DoctorCommand::CommitGate { json } => run_doctor_commit_gate(json, out),
         cli::DoctorCommand::Target { ref target } => doctor::run_target(target, out, err),
+    }
+}
+
+/// `batten ci slow-needed` (CLOUD-398), ported off `mise-tasks/ci-slow-needed.sh`.
+///
+/// # The answer is yes or no, so the exit table is `checks green`'s
+///
+/// `Success` is *the slow tier is needed*; `Violation` is *it is not*. That
+/// reads oddly only until the alternative is written down: a verb that exited `0`
+/// for both and printed the answer would make every caller parse prose to decide
+/// whether to run a tier, which is the payload-as-verdict shape §6 refuses.
+///
+/// # An empty diff is COULD-NOT-LOOK, never a clean one
+///
+/// The retired program says why, and it is the whole reason this is not a
+/// one-line predicate: *"an empty diff means the comparison did not look — a
+/// wrong base, a shallow clone — and answering 'skip the slow tier' there would
+/// be the false-absent this program exists to avoid."*
+///
+/// # Errors
+///
+/// Propagates a write failure on either channel.
+fn run_ci(
+    command: &cli::CiCommand,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let cli::CiCommand::SlowNeeded { ref base } = *command;
+    let resolved = resolve::resolve(Path::new("."), overrides)?;
+    let inert = resolved
+        .ci
+        .as_ref()
+        .map(|ci| ci.slow_inert.clone())
+        .unwrap_or_default();
+
+    let root = git::repo_root(Path::new("."))?;
+    let Some(delta) = git::base_delta(Path::new(&root), base, &[String::from("**")], false)? else {
+        writeln!(
+            err,
+            "::error:: ci slow-needed: {base} does not resolve, so there is no diff to judge."
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    let mut changed: Vec<String> = delta
+        .added
+        .iter()
+        .chain(delta.edited.iter())
+        .chain(delta.deleted.iter())
+        .cloned()
+        .collect();
+    changed.sort_unstable();
+    changed.dedup();
+
+    if changed.is_empty() {
+        writeln!(
+            err,
+            "::error:: ci slow-needed: {base} reports no changed paths, which is could-not-look \
+             rather than a clean diff."
+        )?;
+        return Ok(ExitCode::Internal);
+    }
+
+    // A POINTER TO THE PATH THAT DECIDED IT, never the list and never a count of
+    // the diff: the one thing a reader needs is which path is not inert, because
+    // that is what they would add to the list if they disagreed.
+    if let Some(live) = crate::ci::first_live_path(&inert, &changed) {
+        writeln!(out, "ci slow-needed: {live} can move the slow tier")?;
+        Ok(ExitCode::Success)
+    } else {
+        writeln!(
+            out,
+            "ci slow-needed: every changed path is inert to the slow tier"
+        )?;
+        Ok(ExitCode::Violation)
     }
 }
 
