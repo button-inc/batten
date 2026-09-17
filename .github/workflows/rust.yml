@@ -189,6 +189,142 @@ jobs:
           # additionally pull the Darwin std, which darwin-link's own job owns.
           DOCTOR_TARGETS: x86_64-pc-windows-gnu
 
+  # THE RUNG ABOVE `cross`, AND THE ONLY ONE THAT COSTS NOTHING TO REACH
+  # (CLOUD-1821). `cross` type-checks `x86_64-unknown-linux-musl` and this
+  # EXECUTES it: a statically linked musl binary runs on a glibc host, so the
+  # suite runs on the ubuntu runner already paid for — no container, no emulator,
+  # no foreign runner. A type-check cannot see a linker problem and neither can
+  # see a behavioural one, which is exactly the gap between the two jobs.
+  #
+  # IT IS THE TRIPLE THAT MATTERS MOST. `install.sh` resolves this one for every
+  # Linux consumer — 113 downloads against 4 of the glibc build on v0.0.159 — so
+  # until this job existed the binary almost everyone runs was covered by the fact
+  # that it compiled, and the one almost nobody runs was the only one whose suite
+  # had ever executed.
+  #
+  # ITS OWN JOB, NOT A SECOND STEP IN `ci`. A musl failure folded into `ci` reads
+  # as a workspace failure; a distinct check-run name is what makes the libc the
+  # identified variable. Same reason `darwin-link` runs its legs under
+  # `fail-fast: false` rather than as a loop.
+  #
+  # `mise run test:musl`, NOT `mise exec -- cargo …`. This runner is
+  # `ubuntu-latest`, which `ci-local-parity` does not class as foreign, so
+  # property 3 applies in full and the task must be one `verify` runs by name. The
+  # `mise exec` spelling `windows` and `macos` use exists BECAUSE they are exempt;
+  # borrowing it here would give up a parity that is available.
+  musl:
+    name: musl
+    if: ${{ github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    # GRANDFATHERED, AND HONESTLY SO: no run of this job exists, so there is no
+    # quantile to derive from and any number here would be invented. `mise run
+    # timeout-drift` re-derives it once the series is long enough to have a p95.
+    # `windows`'s comment below records what a ceiling taken from n=0 — or, worse,
+    # from n=1 — costs.
+    timeout-minutes: 30 # budget: grandfathered measured=2026-09-17
+    # `actions: write` for one call only: cancelling THIS run when the landing
+    # lease does not authorise the branch (CLOUD-420). A job that could not cancel
+    # itself would have to fail, and a failed job concludes the run `failure`
+    # rather than `cancelled` — which reds `final` and makes `land` re-draft a
+    # healthy PR.
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      # CLOUD-420: THE LANDING LEASE, ENFORCED WHERE THE MONEY IS SPENT. First
+      # step, before any checkout or toolchain install, so a run this branch is
+      # not authorised to make costs the rounding rather than a suite. Body
+      # fetched from `main`, never from this head, and `|| exit 0` on every line
+      # so a body that will not parse cannot red the first step of every job.
+      # Every justification lives on `run_lease_guard` and on the `cross` job
+      # above, which is the copy this one follows rather than re-argues.
+      - name: Landing lease precondition
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          LEASE_HEAD_REF: ${{ github.head_ref }}
+          # The HEAD sha, never `github.sha`: on a pull_request event that is the
+          # merge commit, whose tree is trunk's wherever this head did not touch
+          # it — and the staleness read asks about the head's own landing paths.
+          LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LEASE_RUN_ID: ${{ github.run_id }}
+        run: |
+          installer=$(gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/install.sh?ref=main") || exit 0
+          printf '%s\n' "$installer" | \
+            BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" \
+            BATTEN_ALLOW_OFF_PATH=1 BATTEN_REQUIRE="lease guard" sh || exit 0
+          # THE POLICY IS TRUNK'S TOO. This step runs BEFORE any checkout, so the
+          # directory the guard stands in is empty and `config::load` would find
+          # nothing — `[lease] landing_paths` reading as *no paths declared* is
+          # the silence the row was written to end. Fetched from `main` for the
+          # installer's own reason: a head must not pin the policy it is judged
+          # by.
+          mkdir -p "$RUNNER_TEMP/batten-config" || exit 0
+          gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/batten.toml?ref=main" \
+            >"$RUNNER_TEMP/batten-config/batten.toml" || exit 0
+          "$RUNNER_TEMP/batten-bin/batten" --config-in "$RUNNER_TEMP/batten-config" \
+            lease guard \
+            "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The LIBC must be the only variable, which is this job's entire value.
+          # A missing `tests/bats` would be a second one — `crates/batten/tests`
+          # carries a suite about that path — and it would read as a musl finding,
+          # which is the misattribution this job exists to avoid. The same
+          # sentence, for the same reason, sits on `windows` and `macos`.
+          submodules: true
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
+        with:
+          # Pinned to `batten.toml`'s `[[provision]]` version (CLOUD-1672). The
+          # digest above pins the ACTION; this pins the MISE it installs, which
+          # is a separate resolution the digest does not reach.
+          version: 2026.9.1
+          # THE LIST EVERY LEG THAT RUNS THE SUITE INSTALLS, for the reason
+          # `windows` records rather than by copying: `tests/cli.rs` materializes
+          # fixtures carrying this repository's `batten.toml`, whose
+          # `no-conflict-markers` rule is `hk util check-merge-conflict`, so a
+          # fixture that loads that config cannot evaluate ANY rule without hk.
+          # `jq` is read at runtime by the mise tasks three more command rules
+          # invoke. Neither is about the libc, which is why both belong here.
+          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # A DISTINCT FAMILY, because this target dir holds musl artifacts the
+          # `ci` family's glibc entry does not — sharing one would thrash rather
+          # than warm, which is `cross`'s and `semver`'s reason rather than an
+          # analogy. SHARED rather than keyed so a job in another workflow can
+          # fill it (CLOUD-840): without `shared-key` the job id enters the key
+          # and a warm job under any other name computes a different one.
+          shared-key: musl-
+          # READ-ONLY: `cache-warm-musl` on `main` is this family's one writer. A
+          # write from a `pull_request` run lands under `refs/pull/N/merge` where
+          # no other pull request can read it — CLOUD-1453 measured 81% of a
+          # 10.77 GiB store as exactly that.
+          save-if: false
+      # A JOB THAT DECLARES A TOOL MUST BE ABLE TO REACH IT, asserted before the
+      # suite rather than discovered inside it — `ci-tools-check` holds these
+      # names against `mise.toml`, which cannot know whether a runner resolves
+      # one. The alternative is measured on `windows`: three `tests/cli.rs` cases
+      # reporting an exit code about a missing tool while naming the rule they
+      # meant to test, each costing a round trip to attribute.
+      - name: Assert the declared tools resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "PATH=$PATH"
+          for tool in hk jq cargo cargo-nextest; do
+            if ! resolved=$(command -v "$tool"); then
+              echo "::error::$tool is declared in install_args but does not resolve on PATH" >&2
+              exit 1
+            fi
+            echo "$tool -> $resolved"
+          done
+          hk --version
+      - run: mise run test:musl
+
   # The macOS gate. `cargo check` never links, so it cannot see a dependency that
   # needs an Apple SDK; this LINKS a Darwin target, which is the only check with
   # no false negatives. It runs concurrently with ci/cross, and the Darwin

@@ -393,7 +393,7 @@ _.path = ["tests/bats/bin", "target/release"]
 # alone — the fan-in. This roster is what `ci-wait` WAITS ON before landing, and
 # waiting only on `final` would strand every landing on a check that fans in from
 # eighteen. Two sets, two purposes; neither derives the other.
-CI_REQUIRED_CHECKS = "ci,batten-check,bats,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),darwin-link (x86_64-apple-darwin),semver,perf,windows,macos,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
+CI_REQUIRED_CHECKS = "ci,batten-check,bats,cross,musl,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),darwin-link (x86_64-apple-darwin),semver,perf,windows,macos,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
 
 # ─── THE LAP'S READY PHASE (CLOUD-1148) ───────────────────────────────────────
 #
@@ -519,7 +519,7 @@ LEASE_STOP_NOTE = "mise-tasks/reclaim-census.sh note x land-stopped"
 # that one success as the whole roster, and `land` posted /fast-forward into a
 # branch protection still listing the other six as expected. The bot was
 # rejected. A stall is recoverable; a false green is not (CLOUD-337).
-CI_ABSENT_OK_CHECKS = "zizmor,cross,darwin-link (aarch64-apple-darwin),darwin-link (x86_64-apple-darwin),semver,windows,macos,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
+CI_ABSENT_OK_CHECKS = "zizmor,cross,musl,darwin-link (aarch64-apple-darwin),darwin-link (x86_64-apple-darwin),semver,windows,macos,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
 # The conclusions that CONSTITUTE AN ANSWER about a required check, written once
 # and read by `checks-green` and by `land`'s `graded_runs` — for exactly the
 # reason CI_REQUIRED_CHECKS is written once (CLOUD-327), and against exactly the
@@ -3318,6 +3318,48 @@ done
 ./mise-tasks/step-receipt.sh record cross-check || true
 '''
 
+[tasks."test:musl"]
+description = "Run the workspace suite against x86_64-unknown-linux-musl — the triple install.sh resolves for every Linux consumer (CLOUD-1821)"
+# The `rustup target add` below is not idempotent against a half-installed
+# component; `doctor` is what makes it one — `cross-check`'s reason, one row up.
+depends = ["doctor"]
+# THE RUNG ABOVE `cross-check`, FOR THE ONE TARGET THAT REACHES IT FOR FREE.
+# `cross-check` type-checks this triple and `darwin-link` links two more, but a
+# type-check cannot see a linker problem and a link cannot see a behavioural one.
+# EXECUTION closes both, and a statically linked musl binary runs on a glibc
+# host — so this triple reaches the top rung on the runner and the laptop already
+# paid for, with no container, no emulator and no foreign runner.
+#
+# IT IS ALSO THE TRIPLE THAT MATTERS MOST. `install.sh` resolves
+# `x86_64-unknown-linux-musl` for every Linux consumer: 113 downloads of it
+# against 4 of the glibc build on v0.0.159. Until this task existed, the binary
+# almost everyone runs was covered by the fact that it compiled, and the one
+# almost nobody runs was the only one whose suite had ever executed.
+#
+# WHY NOT A `--target` ON `test:cargo`. That task's single cargo statement is read
+# by `ci-local-parity` property 16, which requires a foreign leg to spell
+# `mise exec -- ` plus exactly it — so a target added there would make `windows`
+# and `macos` run the LINUX musl suite. Two separable questions, two tasks: does
+# the suite pass on this OS, and does it pass against this libc.
+#
+# NOT receipt-routed, unlike `test:cargo`, and the distinction is the KEY rather
+# than the cost: a receipt keyed on the same sources, command and toolchain would
+# be minted by whichever suite ran first and then answer for the other. Same
+# reason `test:filter` and the four `hk` tiers above decline one.
+run = '''
+# Guarded by hand because a task body does not run under `set -e`
+# (rules/toolchain.md). Routed through target-ensure so a concurrent toolchain
+# mutator queues on the lock instead of colliding inside rustup (CLOUD-220).
+if ! mise run target-ensure x86_64-unknown-linux-musl; then
+  echo "::error:: test:musl: could not install the musl target, so its suite did not run." >&2
+  exit 1
+fi
+if ! cargo nextest run --workspace --target x86_64-unknown-linux-musl; then
+  echo "::error:: test:musl: the suite fails against x86_64-unknown-linux-musl — the triple install.sh resolves for every Linux consumer." >&2
+  exit 1
+fi
+'''
+
 [tasks.hk-version]
 description = "Gate: hk's version is pinned identically in mise.toml and hk.pkl (amends URL). A bump to one without the other is the moment to revisit the hook config."
 shell = "bash -c" # uses grep -oE + cut; keep off /bin/sh for consistency
@@ -4162,6 +4204,14 @@ shell = "bash -c"
 # completeness question it was named for is now `lock-complete`, a pure gate in
 # hk.pkl; currency runs on a schedule (.github/workflows/lock-currency.yml).
 #
+# `test:musl` IS HERE BECAUSE ITS CI LEG IS NOT FOREIGN (CLOUD-1821). The job runs
+# on `ubuntu-latest`, so `ci-local-parity` property 3 applies in full — every task
+# CI runs is one `verify` runs — and the exemption `windows` and `macos` take does
+# not reach it. That is the property working rather than a cost: this suite CAN be
+# run locally, so a failure in it is one a free local run catches before a runner
+# does. It costs no wall clock that `ci` does not already cost, since `depends`
+# runs its entries in parallel.
+#
 # `tree-clean` is here AND in the body, and the duplication is the design
 # (CLOUD-277). Here it fails a dirty tree in seconds rather than after the ~170s
 # the rest of this list costs. In the body it is load-bearing: `depends` runs
@@ -4171,7 +4221,7 @@ shell = "bash -c"
 # window, the same shape `linear-check` already has in `verify` and
 # `ready-guard`. It is deliberately NOT an hk step: `pre-commit` runs over a
 # tree that is dirty by definition.
-depends = ["tree-clean", "ci", "cross-check", "darwin-link", "zizmor", "semver"]
+depends = ["tree-clean", "ci", "cross-check", "darwin-link", "test:musl", "zizmor", "semver"]
 run = '''
 # A task body does not run under `set -e` (see rules/toolchain.md), so
 # every step whose failure changes the verdict is guarded by hand.
