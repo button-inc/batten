@@ -679,6 +679,33 @@ fn next_offer(
     offered
 }
 
+/// A committer signature stamped in UTC (CLOUD-1486).
+///
+/// **The offset is the whole of the defect and the instant is left alone.**
+/// `repo.committer()` resolves its time through gix's `now_local_or_utc()`, so the
+/// `+hhmm` a replayed commit carried was the landing host's `TZ` — the one non-UTC
+/// value this binary emitted, against `lease.rs`'s deliberately pinned `offset: 0`.
+/// Two hosts replaying the same range therefore minted different ids for identical
+/// content, which the lap's fast-forward and the lease's CAS both assume cannot
+/// happen. Pinning only the offset keeps whatever instant the caller's environment
+/// resolved, so this cannot silently become a second clock.
+///
+/// **The author is not this function's business**, and a replay leaves it alone:
+/// the original author and their time are what the rewritten commit inherits.
+///
+/// Public because it is the unit under test. A replay resolves its committer from
+/// the repository, so no in-process case can hand the end-to-end path a non-UTC
+/// signature without setting `TZ` — which needs `std::env::set_var`, `unsafe`, and
+/// forbidden workspace-wide. `rules/rust.md` names extracting the decision as the
+/// route for exactly that.
+#[must_use]
+pub fn stamped_in_utc(who: &gix::actor::Signature) -> gix::actor::Signature {
+    gix::actor::Signature {
+        time: crate::utc_at(who.time.seconds),
+        ..who.clone()
+    }
+}
+
 /// What every commit in one replay shares.
 ///
 /// A struct rather than six parameters because the walk computes all of it once
@@ -799,7 +826,7 @@ fn replay(
         .map_err(|err| anyhow::anyhow!("gitwrite: {original} will not decode: {err}"))?;
     replayed.tree = tree;
     replayed.parents = std::iter::once(cursor).collect();
-    replayed.committer.clone_from(committer);
+    replayed.committer = stamped_in_utc(committer);
     replayed
         .extra_headers
         .retain(|(name, _)| name.as_slice() != b"gpgsig");
