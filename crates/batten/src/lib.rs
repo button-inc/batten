@@ -259,7 +259,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             unjudgeable,
         }) => Ok(exit::ExitCode::combine(findings, unjudgeable)),
         Some(Command::ShowAgent { json }) => run_show_agent(json, &overrides, out),
-        Some(Command::Doctor { command }) => run_doctor(&command, out),
+        Some(Command::Doctor { command }) => run_doctor(&command, out, err),
         // `init` reads no config — it is the verb that exists because there is
         // none — so the §8 chain is deliberately not threaded through it.
         Some(Command::Init { dry_run }) => run_init(dry_run, mode, out, err),
@@ -19890,7 +19890,11 @@ fn run_config(
 /// [`ExitCode::Violation`] by construction: a diagnostic never renders a policy
 /// verdict, so a mediating harness can never read "this checkout is
 /// misconfigured" as a deny (§7).
-fn run_doctor(command: &cli::DoctorCommand, out: &mut dyn Write) -> Result<ExitCode> {
+fn run_doctor(
+    command: &cli::DoctorCommand,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
     match *command {
         cli::DoctorCommand::Diagnose { json } => run_diagnose(json, out),
         cli::DoctorCommand::Hooks { json } => run_doctor_hooks(json, out),
@@ -19898,6 +19902,7 @@ fn run_doctor(command: &cli::DoctorCommand, out: &mut dyn Write) -> Result<ExitC
         cli::DoctorCommand::Session { json } => run_doctor_session(json, out),
         cli::DoctorCommand::Egress { json } => run_doctor_egress(json, out),
         cli::DoctorCommand::CommitGate { json } => run_doctor_commit_gate(json, out),
+        cli::DoctorCommand::Target { ref target } => doctor::run_target(target, out, err),
     }
 }
 

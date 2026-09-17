@@ -118,6 +118,7 @@ mod design_audit;
 mod dev_profile;
 mod digest_major_agreement;
 mod doctor;
+mod doctor_target;
 mod document_facts;
 mod document_read_count;
 mod done_not_landed;
