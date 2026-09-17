@@ -140,7 +140,18 @@
       "mcp__serena__replace_symbol_body",
       "mcp__serena__safe_delete_symbol",
       "mcp__serena__write_memory",
-      "mcp__github__pull_request_read"
+      "mcp__github__pull_request_read",
+      "Bash(./target/debug/batten:*)",
+      "mcp__Claude_Code_Remote__unsubscribe_pr_activity",
+      "mcp__github__unsubscribe_pr_activity",
+      "mcp__Claude_Code_Remote__get_session",
+      "mcp__github__create_pull_request",
+      "mcp__github__update_pull_request",
+      "mcp__github__add_issue_comment",
+      "mcp__github__add_reply_to_pull_request_comment",
+      "mcp__github__list_pull_requests",
+      "mcp__github__get_check_run",
+      "mcp__github__get_job_logs"
     ],
     "deny": [
       "mcp__Claude_Code_Remote__send_later",
