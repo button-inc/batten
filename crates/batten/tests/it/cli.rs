@@ -2936,13 +2936,34 @@ fn the_deny_is_a_function_of_config_and_argv_not_the_ambient_environment() {
     let dir = repo_with_protected_policy("protected-deterministic");
     let payload = claude_payload("rm guarded/thing");
     let baseline = run_hook_in(&dir, "exit-code", &payload, false);
+    // THE SAME BUILDER AS THE BASELINE, WHICH IS THE WHOLE ASSERTION (CLOUD-1821).
+    // `run_hook_in` spawns through `batten_at_real_root()` — `batten()` plus a
+    // state root of the suite's own — while this loop used bare `batten()`. So the
+    // varied runs read the AMBIENT state root and the baseline read an isolated
+    // one: the two sides differed in a way that has nothing to do with the
+    // variable under test, and the case compared two harnesses while claiming to
+    // compare two environments.
+    //
+    // It surfaced as a missing remedy tail. A refusal already seen in the ambient
+    // root is emitted in its short form (CLOUD-1286's ceiling), so the varied
+    // `stderr` lost "— a mutating verb was aimed at a path the config protects; …"
+    // on exactly the runs that had one. Green wherever the ambient root happened
+    // to be cold, red on the musl leg, and never about `BATTEN_SANDBOX` at all —
+    // `scratch_state_root`'s own doc names this as the defect it exists to close.
+    //
+    // `HOME` stays in the list and now means something: with the state root
+    // pinned, a changed `HOME` must NOT move the verdict, which is the claim. It
+    // points at a scratch directory rather than `/tmp` so it belongs to this case
+    // instead of to every process on the machine.
+    let scratch_home = common::scratch("protected-deterministic-home");
+    let scratch_home = scratch_home.display().to_string();
     for (key, value) in [
         ("BATTEN_SANDBOX", "0"),
         ("CI", "1"),
         ("NO_COLOR", "1"),
-        ("HOME", "/tmp"),
+        ("HOME", scratch_home.as_str()),
     ] {
-        let mut command = batten();
+        let mut command = common::batten_at_real_root();
         command
             .current_dir(&dir)
             .args(["adjudicate", "--harness", "exit-code"])

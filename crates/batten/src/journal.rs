@@ -1215,6 +1215,46 @@ mod tests {
     }
 
     #[test]
+    fn an_unstamped_entry_still_merges_and_sorts_ahead_of_every_stamped_one() {
+        // WRITE-OLD/READ-BOTH, ASSERTED ON THE ORDERING AND NOT ONLY ON THE PARSE
+        // (CLOUD-1252). A binary predating `Entry::at` writes lines with no stamp,
+        // and a store can hold both kinds at once for as long as a fleet is mixed.
+        // Those lines say nothing about when they were written, so they must not
+        // be guessed a time: `None` sorts below every `Some`, which puts them at
+        // the FRONT of the merged log in their own shard order — the only position
+        // that claims nothing.
+        let dir = store("unstamped-order");
+        // Written by hand rather than through `append`, because `append` is
+        // exactly what stamps: this is the older binary's bytes, and there is no
+        // other way to produce them from this one.
+        let old = serde_json::to_string(&Entry {
+            identity: identity_for("TODO").fingerprint.to_hex(),
+            rule: "old".to_owned(),
+            origin: Origin::Scan,
+            context: None,
+            observation: Some(Observation::Observed(1)),
+            disposition: None,
+            presentation: Presentation::Shown,
+            at: None,
+        })
+        .unwrap();
+        // `zzz` sorts ABOVE `aaa`, so path order alone would put the stamped entry
+        // second. The stamp is what has to decide, in the other direction.
+        append_line(&dir, "zzz", &old).unwrap();
+        append(&dir, "aaa", &entry_for("TODO", Disposition::Acted)).unwrap();
+
+        let merged = read_shards(&dir).unwrap();
+        assert_eq!(merged.len(), 2, "no entry is dropped by the sort");
+        assert_eq!(
+            merged[0].rule, "old",
+            "the unstamped entry leads: {merged:?}"
+        );
+        assert!(merged[0].at.is_none());
+        assert!(merged[1].at.is_some(), "and `append` stamped the other");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_shard_id_is_stable_per_worktree() {
         // Per worktree, not per process: a per-process id would mint a shard
         // file per invocation and GC none of them.

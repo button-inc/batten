@@ -925,7 +925,20 @@ fn a_directory_that_is_not_a_batten_repository_drains_nothing() {
 /// (CLOUD-529), which is why these two issues land together. A `forbid` rule runs
 /// on both surfaces, so nothing here needs a spawning kind.
 fn flapping_fixture(name: &str, drain_table: &str) -> (PathBuf, PathBuf) {
-    let root = scratch(name);
+    flapping_fixture_under(&scratch(name), "repo", drain_table)
+}
+
+/// [`flapping_fixture`] with the checkout's directory NAME as a parameter, which
+/// is the only lever this suite has on the merged journal's order (CLOUD-1252).
+///
+/// The scan shard is `journal::shard_id(worktree)` — a fingerprint of the
+/// checkout's absolute path — and the drain writes a different one. `read_shards`
+/// concatenates shards in path order, so which writer's entries came FIRST was
+/// decided by a hex comparison between those two names, and `emission::assess`
+/// reads log position as a chronology. Choosing the directory name is choosing
+/// that draw, which is what lets a case assert one behaviour on BOTH sides of it
+/// rather than on whichever side this checkout happens to sit.
+fn flapping_fixture_under(root: &Path, repo_dir: &str, drain_table: &str) -> (PathBuf, PathBuf) {
     let config = format!(
         "version = 1\n\n\
          [[rule]]\n\
@@ -937,7 +950,7 @@ fn flapping_fixture(name: &str, drain_table: &str) -> (PathBuf, PathBuf) {
          no_fix_reason = \"delete the marker once the work behind it is done\"\n\
          {drain_table}"
     );
-    let repo = Fixture::at(root.join("repo"))
+    let repo = Fixture::at(root.join(repo_dir))
         .config(&config)
         .file("src/a.rs", "fn main() {}\n// TODO fix me\n")
         .git()
@@ -1061,6 +1074,149 @@ fn an_alternating_rule_tracks_state_truthfully_while_its_emissions_stop_at_the_c
     // cleared, and the finding cleared with it, cap or no cap.
     evaluate(&repo, &home, false);
     assert_eq!(occurrences(&stored(&repo, &home)), Some(0));
+}
+
+/// The drain shard's name in this store, discovered rather than hardcoded.
+///
+/// A store that has taken one evaluation and one drain boundary holds exactly two
+/// shards: the scan's, which is `journal::shard_id(worktree)`, and the drain's,
+/// which is neither derived from nor predictable off the worktree path. Reading
+/// it back is what keeps the cases below honest if that derivation ever changes;
+/// a literal `c0cc…` would pass for the wrong reason the day it did.
+fn drain_shard_of(repo: &Path, home: &Path) -> String {
+    let store = shards_dir(home);
+    let scan = batten::journal::shard_id(repo);
+    let mut names: Vec<String> = std::fs::read_dir(&store)
+        .unwrap_or_else(|why| panic!("read {}: {why}", store.display()))
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "jsonl") {
+                path.file_stem()
+                    .map(|stem| stem.to_string_lossy().into_owned())
+            } else {
+                None
+            }
+        })
+        .filter(|name| *name != scan)
+        .collect();
+    names.sort();
+    assert_eq!(
+        names.len(),
+        1,
+        "one drain shard beside the scan's: {names:?}"
+    );
+    names.into_iter().next().expect("the drain shard")
+}
+
+/// The one bound store's shard directory under `home`.
+fn shards_dir(home: &Path) -> PathBuf {
+    let bound = home.join("data/batten");
+    let mut stores: Vec<PathBuf> = std::fs::read_dir(&bound)
+        .unwrap_or_else(|why| panic!("read {}: {why}", bound.display()))
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect();
+    stores.sort();
+    assert_eq!(stores.len(), 1, "one bound store: {stores:?}");
+    stores
+        .into_iter()
+        .next()
+        .expect("the store")
+        .join("journal/shards")
+}
+
+/// Drive the alternating fixture under `repo_dir` and report whether the drain
+/// ever annotated the identity as withheld by the emission policy.
+///
+/// The six-round shape is acceptance (a)'s, deliberately: this is the SAME run
+/// that case makes, asked under a chosen shard order rather than the ambient one.
+fn suppression_fires_under(root: &Path, repo_dir: &str) -> bool {
+    let (repo, home) = flapping_fixture_under(
+        root,
+        repo_dir,
+        "\n[drain]\ninterval_ms = 0\nflap_window = 6\nflap_percent = 50\nemit_cap = 1\n",
+    );
+    let mut suppressed = false;
+    for round in 0..6 {
+        evaluate(&repo, &home, round % 2 == 0);
+        let woken = hook(&repo, &home, &post_tool_batch("flap-order"));
+        assert_eq!(woken.status.code(), Some(0), "the drain never denies");
+        if stored(&repo, &home)["presentation"]["not-shown"] == "flap-suppressed" {
+            suppressed = true;
+        }
+    }
+    suppressed
+}
+
+// CLOUD-1252. THE ORDER THE LOG IS READ IN IS NOT THE ORDER THE SHARDS ARE NAMED
+// IN, and until `journal::Entry` carried an append stamp it was exactly that.
+//
+// `emission::assess` scopes an identity's emission budget by POSITION in the
+// merged log — an emission counts when its index is at or above the window's
+// first evaluation — which is sound only if the log is chronological.
+// `read_shards` concatenates whole shards in path order, so the log was grouped
+// by WRITER and which writer led was decided by whether the checkout's path
+// fingerprint sorted above the drain shard's name. On the losing draw every
+// emission sat below the window, the count was always zero, and flap suppression
+// never fired AT ALL — for that checkout, permanently, with the engine reporting
+// a healthy drain the whole time. Measured at 1 store in 13, and drawn every time
+// by the musl target directory, which is how it surfaced.
+//
+// BOTH DRAWS, CONSTRUCTED RATHER THAN AWAITED, and that is the whole case. One
+// run proves only which side this machine sits on; acceptance (a) has been
+// passing for months on the winning one. The directory name is searched until its
+// shard id lands either side of the drain's, so each assertion names the order it
+// is making.
+//
+// SHOWN ABLE TO FAIL (CLOUD-418): revert `read_shards` to `paths.sort()` alone
+// and the `above` half reds while the `below` half stays green. A case that fires
+// in one order only is a case that cannot tell the fix from the draw.
+#[test]
+fn flap_suppression_fires_whichever_shard_sorts_first() {
+    let root = scratch("drain-flap-order");
+    // One boundary, purely to learn this store's drain shard. The probe's own
+    // verdict is not asserted — it is a read, and the cases below are the claim.
+    let (probe, probe_home) = flapping_fixture_under(
+        &root,
+        "probe",
+        "\n[drain]\ninterval_ms = 0\nflap_window = 6\nflap_percent = 50\nemit_cap = 1\n",
+    );
+    evaluate(&probe, &probe_home, true);
+    hook(&probe, &probe_home, &post_tool_batch("flap-probe"));
+    let drain = drain_shard_of(&probe, &probe_home);
+
+    // A directory name per side. The search is bounded and deterministic: the
+    // drain shard is a 64-char hex string, so roughly one name in two lands on
+    // each side and forty candidates is far past certainty.
+    let mut below = None;
+    let mut above = None;
+    for n in 0..40 {
+        let candidate = format!("repo{n}");
+        let shard = batten::journal::shard_id(&root.join(&candidate));
+        if shard < drain && below.is_none() {
+            below = Some(candidate);
+        } else if shard > drain && above.is_none() {
+            above = Some(candidate);
+        }
+        if below.is_some() && above.is_some() {
+            break;
+        }
+    }
+    let below = below.expect("a checkout whose scan shard sorts below the drain's");
+    let above = above.expect("a checkout whose scan shard sorts above the drain's");
+
+    assert!(
+        suppression_fires_under(&root, &below),
+        "scan shard below the drain's ({below}): this is the draw that always \
+         worked, so a failure here is the policy, not the order"
+    );
+    assert!(
+        suppression_fires_under(&root, &above),
+        "scan shard ABOVE the drain's ({above}): the losing draw. Flap \
+         suppression must not depend on a filename comparison — see CLOUD-1252"
+    );
 }
 
 // Acceptance (b). The load-bearing case for the (identity × context) key: two
