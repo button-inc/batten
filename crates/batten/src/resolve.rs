@@ -602,6 +602,15 @@ pub struct Resolved {
     /// rather than a rule someone has to remember.
     #[serde(rename = "recorder")]
     pub recorders: Vec<crate::recorder::Declared>,
+    /// The verb-written record families (CLOUD-1810), from the **committed
+    /// authority alone**.
+    ///
+    /// A local layer cannot add one, and that is the safe direction rather than a
+    /// restriction: declaring a family only ever makes a gate LIVE, so nothing is
+    /// lost by refusing an override here — while a layer that could REMOVE one
+    /// would disarm every rule reading that store, which is the weakening §8
+    /// admits no route for. `board`'s structural guarantee, for `epoch`'s reason.
+    pub records: Vec<crate::record::Declared>,
     /// The programs a recorder may run, authority-only for the same reason and
     /// separately, because the indirection is the sharper half: repointing an id
     /// here changes what every column reading it records while the recorder rows
@@ -1709,6 +1718,7 @@ fn assemble(
         // own note for why the local layer may not reach this one.
         mints: repo.mints.clone(),
         recorders: repo.recorders.clone(),
+        records: repo.records.clone(),
         programs: repo.programs.clone(),
         markers: repo.markers.clone(),
         exec: repo.exec,
@@ -1792,6 +1802,10 @@ fn attribution(
         // weakening dressed as a setting, and §8 admits only raises.
         ("ready", authority_set(repo.ready.is_some())),
         ("board", authority_set(repo.board.is_some())),
+        // AUTHORITY-ONLY, and the direction is why: a declared family arms a gate,
+        // so the dangerous edit is the REMOVAL a local layer must not be able to
+        // make (CLOUD-1810).
+        ("records", authority_set(!repo.records.is_empty())),
         // AUTHORITY-ONLY for the same reason, one table over: every row RAISES a
         // path's threshold, so a local layer that could add one would be the
         // weakening §8 refuses.

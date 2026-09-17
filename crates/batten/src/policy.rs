@@ -659,6 +659,14 @@ pub struct Vocabulary<'a> {
     /// has the recorders too. The alternative was a fifth positional on four
     /// public entry points, which is the shape this parameter exists to prevent.
     pub recorders: &'a [crate::recorder::Declared],
+    /// The `[[record]]` table (CLOUD-1810).
+    ///
+    /// Here for the same reason `recorders` is, and it is the same question: a
+    /// module reads a record projected from a DECLARATION, so a caller holding
+    /// the recorders needs the verb-written families too or half the store is
+    /// invisible to it. Carrying it on this struct is what keeps the arity of the
+    /// four public entry points from growing again.
+    pub records: &'a [crate::record::Declared],
 }
 
 impl Vocabulary<'_> {
@@ -672,6 +680,7 @@ impl Vocabulary<'_> {
         verdicts: &[],
         words: None,
         recorders: &[],
+        records: &[],
     };
 }
 
@@ -682,6 +691,7 @@ impl<'a> From<&'a crate::config::Config> for Vocabulary<'a> {
             verdicts: &config.verdicts,
             words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
             recorders: &config.recorders,
+            records: &config.records,
         }
     }
 }
@@ -698,6 +708,7 @@ impl<'a> From<&'a crate::resolve::Resolved> for Vocabulary<'a> {
             verdicts: &resolved.verdicts,
             words: (!resolved.vocabulary.is_empty()).then_some(&resolved.vocabulary),
             recorders: &resolved.recorders,
+            records: &resolved.records,
         }
     }
 }
@@ -767,6 +778,7 @@ pub fn load(
         verdicts,
         words,
         recorders: _,
+        records: _,
     } = vocabulary;
     // The table is validated at PARSE, beside `verbs` and `redirects` and for
     // their reason (`config.rs`'s `VALIDATED_AT_LOAD` census asserts the call

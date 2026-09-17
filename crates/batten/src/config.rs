@@ -357,6 +357,27 @@ pub struct Config {
     /// [`Config::mints`]' — same false claim, same reason.)
     #[serde(default, rename = "recorder", skip_serializing_if = "Vec::is_empty")]
     pub recorders: Vec<crate::recorder::Declared>,
+    /// The verb-written record families this repository's producers fill
+    /// (CLOUD-1810).
+    ///
+    /// The sibling of [`Self::recorders`] on the other side of one split: a
+    /// `[[recorder]]` row is filled from a mediated tool call, and one of these
+    /// is filled by a producer calling `batten record named <family>`. Both
+    /// project into `input.tree.records`, and until this table existed only the
+    /// first could — so a store a `mise` task wrote was invisible to every
+    /// module, and the row reading it reported clean over a record that said
+    /// otherwise.
+    ///
+    /// **Declared rather than swept**, which is what keeps could-not-look
+    /// readable: an absent record under a declared family is "the producer did
+    /// not run", where the same absence with nothing declared is not a reading at
+    /// all. [`crate::record::Declared`] carries the whole argument.
+    ///
+    /// Consumer-owned, like the two tables above it: which measurements a
+    /// repository records, and what fills each, are facts about that repository
+    /// and never about the engine (non-negotiable rule 1).
+    #[serde(default, rename = "record", skip_serializing_if = "Vec::is_empty")]
+    pub records: Vec<crate::record::Declared>,
     /// The programs a `[[recorder]]` may run, by id.
     ///
     /// Named rather than inline so one program has one spelling, which is
@@ -1970,6 +1991,12 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
                 .collect(),
         ),
     )?;
+    // The verb-written families, beside the recorder table because the two are
+    // halves of one question: which record names a module may read (CLOUD-1810).
+    under(
+        Native::RecordTableRefused,
+        crate::record::validate(&config.records),
+    )?;
     validate_sections(config)
 }
 
@@ -3414,6 +3441,7 @@ impl Config {
             credential: None,
             forge: None,
             unresolvable: Vec::new(),
+            records: Vec::new(),
             version: SUPPORTED_VERSION,
             deferrals: Vec::new(),
             host: None,
@@ -3999,6 +4027,11 @@ mod tests {
             "recorders",
             "crate::recorder::validate(",
             Native::RecorderTableRefused,
+        ),
+        (
+            "records",
+            "crate::record::validate(",
+            Native::RecordTableRefused,
         ),
     ];
 

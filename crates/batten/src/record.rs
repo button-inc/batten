@@ -322,6 +322,103 @@ fn claim_of(git_dir: &Path, branch: &str) -> Option<String> {
 /// not express.
 pub const VERB_WRITTEN: &[&str] = &["claim", "plan", crate::land::LAP_RECORD];
 
+/// One family a producer writes through [`run_named`], declared by the consumer
+/// (CLOUD-1810).
+///
+/// # The gap this closes, and why neither existing surface could
+///
+/// [`run_named`] writes a branch-keyed store, and until this existed nothing
+/// could read one. [`crate::rules`]' projection builds the set of families it
+/// hands a module as the declared [`crate::recorder::Declared`] rows unioned with
+/// [`VERB_WRITTEN`], and a caller-named family is in neither:
+///
+/// - [`VERB_WRITTEN`] is a fixed list because the ENGINE owns both halves of
+///   those three stores. A consumer's family cannot join it without this crate
+///   knowing a consumer's name, which non-negotiable rule 1 forbids outright.
+/// - A `[[recorder]]` cannot express one either: [`crate::recorder::Declared`]
+///   requires `tool`, because that table selects on a mediated tool call. A
+///   family a `mise` task writes answers to no tool call at all.
+///
+/// So the store was written, the row was registered, the module read
+/// `input.tree.records["<family>"]` — and the key was absent, every rule beneath
+/// it undefined, and the gate green. Measured over `branch-age`: a record naming
+/// a 36-day branch against a two-day threshold, `batten check` exit `0`. That is
+/// CLOUD-1707's dead gate one surface over.
+///
+/// # Declared rather than swept, which is the whole design
+///
+/// The projection could have read whatever files happen to sit in the store
+/// directory. It must not, for the reason [`crate::rules`] already gives about a
+/// sibling fact: a family set cannot become an ambient sweep of whatever records
+/// happen to be on disk, because then a leftover file from a retired producer
+/// answers as a live measurement and nothing names what SHOULD be there.
+///
+/// A declaration is also what makes could-not-look readable. An absent record
+/// under a DECLARED family is "the producer did not run"; the same absence under
+/// no declaration is not a reading at all, and collapsing the two is the error in
+/// the fact model this whole store exists to avoid.
+///
+/// # Config rather than a column on the rule that reads it
+///
+/// [`crate::rules`] settles this at its own call site: the fact is what THIS
+/// repository's producers accumulated, so a per-rule declaration would be a
+/// second place for the same answer to live. Two rules reading one family is
+/// ordinary; two rules disagreeing about what writes it is not expressible.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Declared {
+    /// The family name, which is also its file name under the store.
+    ///
+    /// Held to [`safe_component`]'s grammar at validation rather than at write
+    /// time alone, so a family that could never be written is refused while its
+    /// author is watching instead of on the first producer run.
+    pub record: String,
+    /// What writes it, as a runnable command.
+    ///
+    /// **Never executed, and that is not a gap.** House style §5 keeps the spawn
+    /// outside `check`, so this is a pointer — the job `[[verdict.route]]`'s
+    /// `target` already does. What it buys is that a declared family always says
+    /// who fills it: a store with no producer is a row that can only ever read
+    /// could-not-look, and the moment to catch that is at config load rather than
+    /// after a green run nobody questions.
+    pub writer: String,
+}
+
+/// Prove every declared family well formed (CLOUD-253's obligation).
+///
+/// # Errors
+///
+/// A [`UsageError`] (→ exit `1`) for a family whose name is not a single path
+/// component, for an empty `writer`, and for two rows naming one family — the
+/// last because a second row is a second answer to "who writes this", which is
+/// the one question the table exists to settle.
+pub fn validate(declared: &[Declared]) -> Result<()> {
+    let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    for family in declared {
+        // The same grammar the writer enforces, checked here so the refusal lands
+        // at load. A name that escapes its store is why `safe_component` exists;
+        // reaching it only from `run_named` would let a config sit green until a
+        // producer ran.
+        safe_component("record", &family.record)?;
+        if family.writer.trim().is_empty() {
+            return Err(UsageError::raise(format!(
+                "record `{}`: `writer` names what fills this store and is empty, so the \
+                 family could only ever read could-not-look",
+                family.record
+            )));
+        }
+        if !seen.insert(family.record.as_str()) {
+            return Err(UsageError::raise(format!(
+                "record `{}` is declared twice; one family has one writer",
+                family.record
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// The statuses a plan entry may carry.
 ///
 /// The vocabulary four harnesses already converged on, which is what makes a

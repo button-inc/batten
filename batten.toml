@@ -2109,6 +2109,31 @@ regex = '(?i)(^|[^0-9A-Za-z-])(clos(e|es|ed)|fix(|es|ed)|resolv(e|es|ed))[[:blan
 id = "whole-number"
 regex = '^[0-9]+$'
 
+# THE VERB-WRITTEN RECORD FAMILIES THIS REPOSITORY FILLS (CLOUD-1810).
+#
+# The sibling of `[[recorder]]` across one split: a recorder row is filled from a
+# mediated tool call, and one of these is filled by a producer calling `batten
+# record named <family>`. Both project into `input.tree.records`; until this table
+# existed only the first could, so a store a `mise` task wrote was invisible to
+# every module and the row reading it reported clean over a record that said
+# otherwise.
+#
+# DECLARED RATHER THAN SWEPT. The engine could have projected whatever files sit
+# in the store directory and does not, because then a leftover file from a retired
+# producer answers as a live measurement and nothing names what SHOULD be there.
+# The declaration is also what keeps could-not-look readable: an absent record
+# under a declared family is "the producer did not run", where the same absence
+# with nothing declared is not a reading at all.
+#
+# `writer` IS NEVER EXECUTED, and that is not a gap. Section 5 keeps the spawn
+# outside `check`, so this is a pointer — the job `[[verdict.route]]`'s `target`
+# already does. What it buys is that a declared family always says who fills it,
+# because a store with no producer is a row that can only ever read
+# could-not-look.
+[[record]]
+record = "branch-age"
+writer = "mise run branch-age-record"
+
 [[pattern]]
 id = "closed-issue-status"
 regex = '^(done|canceled|duplicate)$'

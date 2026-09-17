@@ -102,6 +102,7 @@ fn findings(root: &Path) -> Vec<(String, Option<usize>)> {
             verdicts: &[],
             words: None,
             recorders: &[],
+            records: &[],
         },
         root,
     )

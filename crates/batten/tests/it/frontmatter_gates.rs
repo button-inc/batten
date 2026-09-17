@@ -95,6 +95,7 @@ fn findings_for(root: &Path, row: Rule, vocabulary_root: &Path) -> Vec<String> {
             // the exemption the field documents rather than a gap in the setup.
             words: None,
             recorders: &[],
+            records: &[],
         },
         root,
     )

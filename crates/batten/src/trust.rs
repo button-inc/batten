@@ -1281,6 +1281,20 @@ pub const CENSUS: &[FieldCoverage] = &[
         ]),
     },
     FieldCoverage {
+        field: "records",
+        coverage: Coverage::NotPolicyBearing(
+            "the verb-written record families this repository's producers fill (CLOUD-1810). \
+             It IS read by gates — a module reading `input.tree.records.<family>` decides \
+             nothing at all until the family is declared — so the reason is not that it lacks \
+             policy weight. It is that an override cannot speak to it: the key is absent from \
+             `OverrideConfig` and `resolve` reads the table from the committed authority \
+             alone, `board`'s structural guarantee for `epoch`'s reason. The direction is \
+             what makes that sufficient rather than merely convenient — DECLARING a family \
+             only ever arms a gate, and the REMOVAL that would disarm one is unwritable in \
+             the layer an author controls at PR time",
+        ),
+    },
+    FieldCoverage {
         field: "programs",
         coverage: Coverage::Compared(&[WeakeningKind::ProgramChanged]),
     },
