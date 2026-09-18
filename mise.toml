@@ -2183,6 +2183,41 @@ if ! cargo deny check; then exit 1; fi
 
 [tasks."build:release"]
 description = "Build the release binary the hook registrations execute"
+# THE DISK PRECONDITION EVERY OTHER BUILD ALREADY HAS (CLOUD-1329). Measured
+# 2026-09-02: the session's first `install:local` died inside `cargo build
+# --release` on `ENOSPC` with 0MB free, over a `target/debug` a previous session
+# had left at ~24GB. `target-prune` exists for exactly that input — its own
+# header says it "runs when the disk is SHORT" — and `verify` and every `land`
+# lap call it. This entry point, which runs before any of them, did not. The
+# failure surfaced as a cargo IO error naming neither the disk nor the floor.
+#
+# A `depends` RATHER THAN A GUARDED CALL IN THE BODY, and §5 is the reason: the
+# refusal a reader should see is `target-prune`'s own pointer-only line, naming
+# free space and the floor. A body guard would print a second message over the
+# first — a second authority for a verdict the prune already rendered. `depends`
+# runs it before the body and propagates its exit verbatim, which is the whole
+# of what the row asks. `install:local` resolves it transitively, so it gains
+# the precondition without naming it.
+#
+# NO CYCLE, checked rather than assumed: `target-prune` declares no `depends` of
+# its own, and its body tries the INSTALLED binary before falling back to `cargo
+# run` — the property its own header calls load-bearing, precisely so the
+# reclaim needs no build in order to run.
+#
+# IT DOES NOT REACH INSIDE `verify`'S LAP, which is the pairing that would break
+# if it did: this task's callers are `install:local` and the two benches, while
+# `verify`, `verify:gated` and `land` reach the engine through `cargo run -p
+# batten` directly. So the two prune calls that bracket a lap keep their order.
+#
+# WHAT IT DOES COST, stated so a reviewer need not derive it. `prune::Phase` is
+# DERIVED from the lap journal rather than declared — a run that finds an open
+# lap closes it — so a build outside a `verify` toggles a boundary `verify`
+# would otherwise have owned. It cannot corrupt the floor, which is a high-water
+# mark and only ratchets up, so a short spurious lap records a smaller number
+# and changes nothing. What it can produce is one `lap-close` whose consumption
+# figure describes no real lap. CLOUD-1218 is the adjacent row on journal
+# poisoning if that ever proves to matter.
+depends = ["target-prune"]
 # The one place the hook's binary is produced, so `install:local`,
 # `session-start.sh` and `mise-tasks/perf.sh` name a task rather than three copies
 # of a cargo line that could drift in their flags.

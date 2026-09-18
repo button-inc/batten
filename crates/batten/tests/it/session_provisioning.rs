@@ -499,45 +499,57 @@ const COMPILE_ENTRY_POINTS: [&str; 2] = ["install:local", "build:release"];
 /// hop (`session:doctor` → `doctor`, `session:identity` → `attribution-identity`)
 /// and a fixed depth cannot loop on a manifest that gains a cycle. Depth is
 /// asserted to have found something by `the_reachable_set_is_not_empty`.
-fn reachable_session_task_bodies() -> Vec<(String, String)> {
+/// The executable surface of one declared task: its `run` and its `depends`.
+///
+/// THE EXECUTABLE SURFACE, NEVER THE WHOLE BLOCK, and the distinction is not
+/// pedantry — it is what makes the scan below a gate rather than a prose scanner.
+/// The first draft returned everything under the header, and both cases went red
+/// against a manifest that was already correct: `session:batten`'s comment NAMES
+/// `install:local` while explaining why it no longer runs it, and
+/// `session:install`'s names `cargo-zigbuild`. A comment is the one place a
+/// retired mechanism is supposed to still be written down.
+///
+/// So this reads `run` and `depends` — what mise will actually execute —
+/// discarding the commentary around them. `depends` is here because
+/// `install:local` carries `depends = ["build:release"]`: a task can compile
+/// without its own body naming a compiler, and since CLOUD-1329 `build:release`
+/// carries `depends = ["target-prune"]` for the same reason one layer down.
+///
+/// `[tasks."name"]` and `[tasks.name]` are both spelled in this file, and both
+/// are anchored to their own line: `[tasks.verify]` appears inside two comments
+/// hundreds of lines above the table it names, so a bare substring match reads
+/// the wrong block and every `contains` over it still passes.
+///
+/// MODULE-LEVEL rather than a closure inside the scan (CLOUD-1329): the cases
+/// this row adds ask the same question of tasks that are not session steps, and
+/// a second copy of this extraction is a second authority that drifts from the
+/// first.
+fn task_surface(name: &str) -> Option<String> {
     let manifest =
         std::fs::read_to_string(at_root("mise.toml")).expect("the task manifest is readable");
+    let headers = [
+        format!("\n[tasks.\"{name}\"]\n"),
+        format!("\n[tasks.{name}]\n"),
+    ];
+    let block = headers
+        .iter()
+        .find_map(|header| manifest.split(header.as_str()).nth(1))?;
+    let block = block.split("\n[").next().unwrap_or(block).to_owned();
 
-    // THE EXECUTABLE SURFACE, NEVER THE WHOLE BLOCK, and the distinction is not
-    // pedantry — it is what makes this a gate rather than a prose scanner. The
-    // first draft returned everything under the header, and both cases below went
-    // red against a manifest that was already correct: `session:batten`'s comment
-    // NAMES `install:local` while explaining why it no longer runs it, and
-    // `session:install`'s names `cargo-zigbuild`. A comment is the one place a
-    // retired mechanism is supposed to still be written down.
-    //
-    // So this reads `run` and `depends` — what mise will actually execute —
-    // discarding the commentary around them. `depends` is here because
-    // `install:local` carries `depends = ["build:release"]`: a task can compile
-    // without its own body naming a compiler.
-    //
-    // `[tasks."name"]` and `[tasks.name]` are both spelled in this file.
-    let body_of = |name: &str| -> Option<String> {
-        let headers = [
-            format!("\n[tasks.\"{name}\"]\n"),
-            format!("\n[tasks.{name}]\n"),
-        ];
-        let block = headers
-            .iter()
-            .find_map(|header| manifest.split(header.as_str()).nth(1))?;
-        let block = block.split("\n[").next().unwrap_or(block);
-
-        let value = |key: &str| -> String {
-            let Some(rest) = block.split(&format!("\n{key} = ")).nth(1) else {
-                return String::new();
-            };
-            rest.strip_prefix("\"\"\"").map_or_else(
-                || rest.lines().next().unwrap_or_default().to_owned(),
-                |triple| triple.split("\"\"\"").next().unwrap_or(triple).to_owned(),
-            )
+    let value = |key: &str| -> String {
+        let Some(rest) = block.split(&format!("\n{key} = ")).nth(1) else {
+            return String::new();
         };
-        Some(format!("{}\n{}", value("run"), value("depends")))
+        rest.strip_prefix("\"\"\"").map_or_else(
+            || rest.lines().next().unwrap_or_default().to_owned(),
+            |triple| triple.split("\"\"\"").next().unwrap_or(triple).to_owned(),
+        )
     };
+    Some(format!("{}\n{}", value("run"), value("depends")))
+}
+
+fn reachable_session_task_bodies() -> Vec<(String, String)> {
+    let body_of = task_surface;
 
     let mut queue: Vec<String> = session_rows()
         .iter()
@@ -746,6 +758,84 @@ fn the_install_step_is_declared_lockfile_free() {
     assert!(
         body.contains("mise install"),
         "the step whose absence was CLOUD-196 is the one this task performs"
+    );
+}
+
+/// CLOUD-1329. Every build the repository owns sat behind the disk precondition
+/// except the one that runs FIRST.
+///
+/// Measured 2026-09-02: the session's first `install:local` died inside `cargo
+/// build --release` on `ENOSPC` over a `target/debug` a previous session left at
+/// ~24GB, and the failure named neither the disk nor the floor. `target-prune`
+/// exists for exactly that input and `verify` and every `land` lap call it.
+///
+/// # Shown able to fail by hand, because no sweep can carry it (CLOUD-418)
+///
+/// The row's §7 asks for a `build-skips-prune` mutation, and `mutate` cannot
+/// apply one: `mutate::sources_for` resolves a gate name to `mise-tasks/<n>.sh`,
+/// `policy/<n>.rego`, `crates/batten/src/<n>.rs` or a preset directory, and the
+/// subject here is `mise.toml`, which is none of them. A `//MUTANT` row in this
+/// file would never be scanned — it would read as coverage while applying
+/// nothing, which is the false signal the mutation machinery exists to refuse.
+///
+/// So the demonstration is recorded rather than automated. Measured on this
+/// branch: with `depends = ["target-prune"]` deleted from `build:release` and
+/// nothing else changed, `test:cargo` reported **2 failed** — this case and
+/// `every_build_entry_point_reaches_the_same_precondition` — while the
+/// anti-vacuity mirror below stayed green, which is what says the pair
+/// discriminates rather than merely being present. Restoring the line returned
+/// the suite to green.
+#[test]
+fn the_release_build_runs_the_disk_precondition_before_cargo() {
+    let surface = task_surface("build:release").expect("the release build is a declared task");
+    assert!(
+        surface.contains("target-prune"),
+        "the build that runs before any gate asks the same disk question they do: {surface}"
+    );
+}
+
+/// CLOUD-1329, §2's actual claim: *every* build entry point the repository owns
+/// runs the precondition, not merely the one that declares it.
+///
+/// `install:local` names `build:release` and never names the prune, so this is
+/// the transitive half — and it is the half a reader would otherwise have to
+/// take on trust from a `depends` line in another table.
+#[test]
+fn every_build_entry_point_reaches_the_same_precondition() {
+    let install = task_surface("install:local").expect("the local install is a declared task");
+    assert!(
+        install.contains("build:release"),
+        "the install reaches the build, so it inherits what the build declares: {install}"
+    );
+    let build = task_surface("build:release").expect("the release build is a declared task");
+    assert!(
+        build.contains("target-prune"),
+        "and what the build declares is the precondition: {build}"
+    );
+}
+
+/// CLOUD-1329's ANTI-VACUITY MIRROR, which the row asks for by name: without it
+/// the case above is satisfied by making every build refuse, and the reclaim
+/// `verify` performs would be free to drift underneath it.
+///
+/// Two halves. `target-prune` declares no `depends` of its own — the property
+/// that makes the new edge acyclic, since the reclaim must be able to run
+/// without a build. And the extraction is reading real bodies rather than
+/// returning empty, which every `contains` above would otherwise pass over.
+#[test]
+fn the_reclaim_itself_stays_dependency_free_and_the_surfaces_are_not_empty() {
+    let prune = task_surface("target-prune").expect("the reclaim is a declared task");
+    assert!(
+        !prune.contains("depends"),
+        "the reclaim declares no dependency, so the edge this row adds cannot cycle: {prune}"
+    );
+    assert!(
+        prune.contains("target prune"),
+        "and the surface read is the reclaim's own, not an empty string: {prune}"
+    );
+    assert!(
+        task_surface("a-task-no-manifest-declares").is_none(),
+        "a name the manifest does not declare reads as absent rather than as empty"
     );
 }
 
