@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.171](https://github.com/button-inc/batten/compare/v0.0.170...v0.0.171) - 2026-09-18
+
+### Fixed
+
+- *(tests)* a template is what git opens, not the two files an archiver keeps
+- *(hook)* a read is not a mutation, and our own subcommand is not a path
+
 ## [0.0.170](https://github.com/button-inc/batten/compare/v0.0.169...v0.0.170) - 2026-09-18
 
 ### Fixed
