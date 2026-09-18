@@ -6132,6 +6132,61 @@ delta_sources = ["**"]
 module = "policy/filed-here.rego"
 severity = "deny"
 
+# CLOUD-1423's ratchet: a verb this branch ADDS that nothing reaches.
+#
+# `delta_sources` is `crates/batten/src/surface.rs` alone, and that is the whole
+# subject rather than a narrowing for speed — the module's first conjunct is
+# `SURFACE in touched`, so a delta naming anything else answers the same question
+# with more paths in it.
+#
+# `line_sources` IS THE CONSUMER'S SURFACE LIST, and it lives here rather than in
+# the module under non-negotiable rule 1: which directories of THIS repository a
+# production caller may live in is a fact about this repository. The module knows
+# only "a caller lives outside the crate" and reads whatever this list filled.
+#
+# `.claude/**` IS LOAD-BEARING AND THE ISSUE'S OWN LIST OMITTED IT. Measured
+# 2026-09-18: the harness hook registrations there are the only caller of
+# `adjudicate`, so the four-surface list the row specified would have refused the
+# single verb this engine exists to serve. A gate that refuses `adjudicate` is one
+# an author disables the first time they meet it.
+#
+# The crate's own tests are deliberately NOT a source. The row asked for a
+# test-case arm and grooming removed it: an integration test over the compiled
+# binary is the tier this repository invests in hardest, and a gate reading that
+# coverage as evidence of deadness would push an author to wire a fake production
+# caller instead of writing one. It is also unwritable as text — `record_closes.rs`
+# builds argv as `.arg("record").arg("closes")` and `task_registry.rs` passes only
+# the tail to a helper that prepends the verb, so the tokens are never adjacent.
+# A ratchet needs no such arm, which is why it is the shape that landed.
+[[rule]]
+id = "verb reach other"
+kind = "policy"
+scope = "tree"
+base = "origin/main"
+delta_sources = ["crates/batten/src/surface.rs"]
+#
+# `batten.toml` IS DELIBERATELY NOT A SURFACE, and dropping it is a measured
+# decision rather than an omission. This file is ~14,000 lines ABOUT verbs, and
+# its prose lives in `reason`, `gloss` and `class` STRING VALUES rather than in
+# comments, so the module's comment-stripping cannot reach it. Measured
+# 2026-09-18: seven verbs read as reached through this file alone — `capture
+# find`, `mcp`, `mcp call`, `ready lint`, `design`, `record keyed` and `lease
+# authorises` — and every one of them is a remedy sentence, not a caller. A verb
+# whose only mention is a remedy string is dead code with documentation.
+#
+# That is the UNDER-deny direction, and it is the one this gate must not fail in:
+# it is precisely how PR #812 would have passed. Declare a verb, name it in a
+# rule's `reason`, and a gate reading this file calls it reached.
+line_sources = [
+  "crates/batten/src/surface.rs",
+  "mise-tasks/**",
+  ".github/workflows/*.yml",
+  ".claude/**",
+  "mise.toml",
+]
+module = "policy/dead-capability.rego"
+severity = "deny"
+
 # CLOUD-1210's ratchet on the cargo test-target count.
 #
 # `delta_sources` is the whole tree rather than `crates/batten/tests/**`, because
@@ -13791,6 +13846,49 @@ repository exists to refuse. Fetch the base ref and run it again.
 id = "patch run first"
 kind = "command"
 target = "git fetch origin main, so the declared base rev resolves and the change can be read"
+
+# CLOUD-1423's two classes. A verb a branch ADDS that nothing reaches, and a
+# declaration that has outlived the state it declared.
+[[verdict]]
+id = "verb reach missing"
+gloss = "this branch declares a verb and nothing in the tree reaches it"
+class = """
+A capability that ships without a caller is indistinguishable from one that \
+works: it gets a man page, completions, a module row and a layer, and every gate \
+in the set reads clean over it. Measured once at roughly 4,000 lines across two \
+pull requests. Wire it, or declare that nothing reaches it yet and name the row \
+that owns the wiring.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "wire it: invoke it from a mise task, a workflow step or a hook registration"
+
+[[verdict.route]]
+id = "source read first"
+kind = "document"
+target = "crates/batten/src/surface.rs"
+
+[[verdict.route]]
+id = "prose write now"
+kind = "document"
+target = "declare `# unreached: <issue> <why>` above the CommandDecl, naming the row that owns the wiring"
+
+[[verdict]]
+id = "verb reach stale"
+gloss = "a verb is wired and still carries the declaration that says nothing reaches it"
+class = """
+A declaration that has outlived its reason reads as coverage: the caller exists, \
+the line still says it does not, and the next reader believes the line. This is \
+the direction that rots quietly, which is why it is refused rather than reported. \
+Drop the declaration.
+"""
+
+[[verdict.route]]
+id = "prose write now"
+kind = "document"
+target = "drop the `# unreached:` line above the CommandDecl; the verb has a caller now"
 
 [[verdict]]
 id = "source parse dead"

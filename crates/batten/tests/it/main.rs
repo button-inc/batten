@@ -107,6 +107,7 @@ mod connector_verbs;
 mod container_health;
 mod content_address;
 mod contract_drift;
+mod dead_capability;
 mod decision_record;
 mod defects;
 mod derived_facts;

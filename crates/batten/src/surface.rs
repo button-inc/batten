@@ -5122,6 +5122,8 @@ pub const SURFACE: &[CommandDecl] = &[
     // that cannot be read is `3`, which is what every other verb here already
     // means by those codes — and a CI caller keying on the old numbers reads a
     // refusal as an error, which is why the workflow moves in the same change.
+    // unreached: "lease authorises" CLOUD-1338 `land lap` asks the lease in process; this arm is the hand-stepping surface;
+    // nothing in the tree invokes it yet.
     CommandDecl {
         path: "lease authorises",
         id: "lease.authorises",
@@ -5155,6 +5157,8 @@ pub const SURFACE: &[CommandDecl] = &[
     // QUIETLY: the read fails, the script takes its own fail-open path, and every
     // stale head passes. The path set it asks about is `[lease] landing_paths`,
     // which a retirement edits rather than invalidates.
+    // unreached: "lease carries" CLOUD-1338 `land lap` reads the carried lease in process, not through the CLI;
+    // nothing in the tree invokes it yet.
     CommandDecl {
         path: "lease carries",
         id: "lease.carries",
@@ -5186,6 +5190,8 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_VERDICT,
         flags: &[LEASE_HEAD, LEASE_BRANCH, LEASE_RUN],
     },
+    // unreached: "lease check" CLOUD-1338 the workflow-side precondition runs `lease guard`; this arm is the local mirror;
+    // nothing in the tree invokes it yet.
     CommandDecl {
         path: "lease check",
         id: "lease.check",
@@ -5198,6 +5204,8 @@ pub const SURFACE: &[CommandDecl] = &[
     // `read`. Prose for a human, and `-J` for everyone else — which is what stops
     // a caller parsing the sentence and turning a message into an interface, where
     // the next edit to the wording would be a silent breakage.
+    // unreached: "lease status" CLOUD-1338 an operator read of the lease; nothing in the tree invokes it;
+    // nothing in the tree invokes it yet.
     CommandDecl {
         path: "lease status",
         id: "lease.status",
@@ -5212,6 +5220,8 @@ pub const SURFACE: &[CommandDecl] = &[
     // Silent and `0` when the lease is absent, released or expired: "no lease
     // names a head" is a legitimate reading a waiter handles by staying on trunk,
     // not an error it should report.
+    // unreached: "lease peek" CLOUD-1338 an operator read of the lease; nothing in the tree invokes it;
+    // nothing in the tree invokes it yet.
     CommandDecl {
         path: "lease peek",
         id: "lease.peek",
@@ -5228,6 +5238,8 @@ pub const SURFACE: &[CommandDecl] = &[
     // for a bot, so a lease with one second left passes and is gone before the
     // action it authorised takes effect. One beat is the right margin because it
     // is the interval at which the holder proves it is alive.
+    // unreached: "lease held" CLOUD-1338 an operator read of the lease; nothing in the tree invokes it;
+    // nothing in the tree invokes it yet.
     CommandDecl {
         path: "lease held",
         id: "lease.held",
@@ -5238,6 +5250,8 @@ pub const SURFACE: &[CommandDecl] = &[
         flags: &[],
     },
     // `write`: a compare-and-swap over a remote ref.
+    // unreached: "lease acquire" CLOUD-1338 `land lap` acquires in process; this arm is the hand-stepping surface;
+    // nothing in the tree invokes it yet.
     CommandDecl {
         path: "lease acquire",
         id: "lease.acquire",
@@ -5248,6 +5262,8 @@ pub const SURFACE: &[CommandDecl] = &[
         flags: &[LEASE_BRANCH],
     },
     // `write`. One-shot, as against `hold`'s loop.
+    // unreached: "lease renew" CLOUD-1338 `land lap` renews in process; this arm is the hand-stepping surface;
+    // nothing in the tree invokes it yet.
     CommandDecl {
         path: "lease renew",
         id: "lease.renew",
@@ -5259,6 +5275,8 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     // `write`. The heartbeat, which a caller backgrounds for the length of a hold
     // and kills from the same trap that releases.
+    // unreached: "lease hold" CLOUD-1338 `land lap` holds in process; this arm is the hand-stepping surface;
+    // nothing in the tree invokes it yet.
     CommandDecl {
         path: "lease hold",
         id: "lease.hold",
@@ -5273,6 +5291,8 @@ pub const SURFACE: &[CommandDecl] = &[
     // ref to recover and nothing a `-y` would be protecting. Releasing a lease
     // this clone does not hold is not an error either — the trap that calls it
     // fires on every exit path, including ones that never acquired.
+    // unreached: "lease release" CLOUD-1338 `land lap` releases in process; this arm is the hand-stepping surface;
+    // nothing in the tree invokes it yet.
     CommandDecl {
         path: "lease release",
         id: "lease.release",
@@ -5285,6 +5305,8 @@ pub const SURFACE: &[CommandDecl] = &[
     // `write`. The second matrix, and the only one: admitting one successor while
     // the holder is still merging is what overlaps the window in which the queue
     // would otherwise be cold.
+    // unreached: "lease reserve" CLOUD-1338 `land lap`'s speculation reserves in process, not through the CLI;
+    // nothing in the tree invokes it yet.
     CommandDecl {
         path: "lease reserve",
         id: "lease.reserve",
@@ -5313,6 +5335,8 @@ pub const SURFACE: &[CommandDecl] = &[
     // that cannot complete refuses and moves nothing, so there is no half-applied
     // state for a `--dry-run` to protect against, and declaring one would offer a
     // rehearsal this verb cannot perform.
+    // unreached: "land replay" CLOUD-1338 `land lap` drives replay in process; this
+    // arm is the hand-stepping surface and nothing in the tree invokes it yet.
     CommandDecl {
         path: "land replay",
         id: "land.replay",
@@ -5327,6 +5351,8 @@ pub const SURFACE: &[CommandDecl] = &[
     // a module to decide over. It is `write` rather than `read` for that reason
     // alone, which is the effect model working — the allowlist is derived from
     // the declaration, so a verb that writes anywhere may not sit under `read`.
+    // unreached: "land wait" CLOUD-1338 `land lap` drives the CI wait in process; this arm is the hand-stepping surface;
+    // nothing in the tree invokes it yet.
     CommandDecl {
         path: "land wait",
         id: "land.wait",
@@ -5345,6 +5371,8 @@ pub const SURFACE: &[CommandDecl] = &[
     // Not `destructive`: receive-pack's compare-and-swap refuses outright when
     // the ref has moved, so the losing case writes nothing and there is no
     // half-applied state a rehearsal would protect against.
+    // unreached: "land push" CLOUD-1338 `land lap` drives the push in process; this arm is the hand-stepping surface;
+    // nothing in the tree invokes it yet.
     CommandDecl {
         path: "land push",
         id: "land.push",
@@ -5364,6 +5392,8 @@ pub const SURFACE: &[CommandDecl] = &[
     // for the reason `land wait` reads its roster there: a lap is always asking
     // about THIS repository, and a flag would be a second spelling of a name the
     // consumer already declares once.
+    // unreached: "land verify" CLOUD-1338 `land lap` drives verify in process; this arm is the hand-stepping surface;
+    // nothing in the tree invokes it yet.
     CommandDecl {
         path: "land verify",
         id: "land.verify",
@@ -5384,6 +5414,8 @@ pub const SURFACE: &[CommandDecl] = &[
     // the environment. A number on argv would let a lap ask one pull request to
     // land while every other step of the same lap is looking at another — which is
     // exactly the binding defect CLOUD-465 records for a reused branch.
+    // unreached: "land fast-forward" CLOUD-1338 `land lap` asks for the fast-forward in process; this arm is the hand-stepping surface;
+    // nothing in the tree invokes it yet.
     CommandDecl {
         path: "land fast-forward",
         id: "land.fast-forward",
