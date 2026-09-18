@@ -830,7 +830,7 @@ fn git_init_template() -> &'static Path {
     static TEMPLATE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     TEMPLATE.get_or_init(|| {
         let published = target_tmp().join(format!("git-init-template-{}", git_stamp()));
-        if published.join("HEAD").is_file() && published.join("config").is_file() {
+        if is_template(&published) {
             return published;
         }
         let staging = target_tmp().join(format!(
@@ -847,14 +847,46 @@ fn git_init_template() -> &'static Path {
         // fixture copies is a repository directory, and lifting it here keeps
         // `init_repo` from having to know the template's internal layout.
         if fs::rename(staging.join(".git"), &published).is_err() {
-            // Another process published first, which is the whole point of the
-            // rename. Its copy is complete; ours is not needed.
+            // A FAILED RENAME IS NOT A REPORT THAT SOMEBODY ELSE WON (CLOUD-1832).
+            // That is the LIKELY reading — `rename(2)` onto a non-empty directory
+            // is `ENOTEMPTY` and the winner's copy is complete — but it is not the
+            // only one. A `staging/.git` that was never created, a cross-device
+            // error, a publish interrupted mid-flight: every one of them arrives
+            // here, and returning the path unasked turns "I could not establish a
+            // template" into "here is a template". `init_repo` then copies
+            // whatever is at that path into a fixture, and the first thing to
+            // notice is a `git add -A` three calls later reporting a directory
+            // that is not a repository — a could-not-look wearing a result's
+            // clothes, which is the one thing this repository refuses.
+            //
+            // So the loser's branch asserts what it assumed.
             let _ = fs::remove_dir_all(&staging);
+            assert!(
+                is_template(&published),
+                "the template publish at {} failed and {} is not a complete \
+                 template, so this process could not establish one — see \
+                 CLOUD-1832. Every fixture under CARGO_TARGET_TMPDIR copies this \
+                 path, so continuing would hand them a `.git` git does not \
+                 recognise",
+                staging.display(),
+                published.display(),
+            );
             return published;
         }
         let _ = fs::remove_dir_all(&staging);
         published
     })
+}
+
+/// Whether `dir` is a published template this module may copy from.
+///
+/// The same two files [`git_init_template`] checks before it stages, named once
+/// so the pre-check and the post-check cannot drift into disagreeing about what
+/// "published" means. Deliberately cheap and structural rather than a `git`
+/// fork: the question is whether the directory is a repository at all, and a
+/// fork per fixture is the cost this template exists to remove.
+pub(crate) fn is_template(dir: &Path) -> bool {
+    dir.join("HEAD").is_file() && dir.join("config").is_file()
 }
 
 /// The resolved `git` binary's length and mtime, as one path-safe token.
@@ -932,7 +964,23 @@ pub(crate) fn init_repo(dir: &Path) {
         dir.display()
     );
     if dir.starts_with(target_tmp()) {
-        copy_tree(git_init_template(), &dir.join(".git"));
+        let template = git_init_template();
+        copy_tree(template, &dir.join(".git"));
+        // CHECK WHAT THE COPY PRODUCED, HERE (CLOUD-1832). `copy_tree` creates
+        // its destination and copies whatever it finds, so a template that was
+        // not a repository yields a `.git` that is not one either — silently.
+        // The failure then surfaces wherever the fixture first runs git, which
+        // in the measured case was `base_commit`'s `git add -A` reporting
+        // "not a git repository" in a case about config loading. Asserting at
+        // the point of creation is the difference between a defect that names
+        // itself and one that reads as an unrelated test being broken.
+        assert!(
+            is_template(&dir.join(".git")),
+            "copying the template {} into {} did not produce a repository — see \
+             CLOUD-1832",
+            template.display(),
+            dir.display(),
+        );
     } else {
         git_in(dir, &["init", "-q"]);
     }

@@ -1900,3 +1900,69 @@ fn no_case_names_the_template_directory() {
          `make_empty` would wipe it: {named:?}"
     );
 }
+
+// THE PREDICATE BOTH TEMPLATE ASSERTIONS REST ON (CLOUD-1832).
+//
+// `git_init_template` publishes by atomic rename and, when that rename failed,
+// used to return the published path unasked — reading "rename failed" as
+// "somebody else won and their copy is complete". Every other cause of a failed
+// rename arrived at the same `return`, so a process that could not establish a
+// template handed one back anyway, and `init_repo` copied it into a fixture. The
+// first thing to notice was a `git add -A` several calls later reporting a
+// directory that is not a repository: a could-not-look rendered as a result.
+//
+// Both halves of the repair — the loser's branch, and `init_repo` checking what
+// its copy produced — are straight-line uses of `common::is_template`, so this is
+// where the discrimination has to be shown. Poisoning the REAL published template
+// would be the stronger end-to-end arm and is deliberately not taken: that path
+// is shared by every test process under one `CARGO_TARGET_TMPDIR`, so a case that
+// corrupted it would red its concurrent siblings — which is precisely the
+// cross-process hazard this row is about.
+#[test]
+fn a_directory_is_a_template_only_when_it_carries_a_repositorys_own_files() {
+    let root = common::scratch("is-template");
+
+    assert!(
+        !common::is_template(&root.join("never-created")),
+        "a path that does not exist is not a template"
+    );
+
+    let empty = root.join("empty");
+    std::fs::create_dir_all(&empty).expect("create the empty candidate");
+    assert!(
+        !common::is_template(&empty),
+        "an empty directory is not a template — that is the shape a failed \
+         publish leaves behind, and the one that used to be handed back as \
+         though it were a repository"
+    );
+
+    let headless = root.join("no-head");
+    std::fs::create_dir_all(&headless).expect("create the headless candidate");
+    std::fs::write(headless.join("config"), "[core]\n").expect("write config");
+    assert!(
+        !common::is_template(&headless),
+        "config alone is not a repository"
+    );
+
+    let configless = root.join("no-config");
+    std::fs::create_dir_all(&configless).expect("create the configless candidate");
+    std::fs::write(configless.join("HEAD"), "ref: refs/heads/main\n").expect("write HEAD");
+    assert!(
+        !common::is_template(&configless),
+        "HEAD alone is not a repository"
+    );
+
+    // The positive case comes from a repository this suite actually built, not
+    // from two files this test wrote: a predicate checked only against hand-made
+    // directories could agree with itself and disagree with git.
+    let real = common::Fixture::new("is-template-real")
+        .file("a.txt", "a\n")
+        .git()
+        .base_commit()
+        .build();
+    assert!(
+        common::is_template(&real.join(".git")),
+        "a repository this suite just built must satisfy the predicate its own \
+         fixtures are checked against"
+    );
+}
