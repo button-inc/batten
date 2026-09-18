@@ -1966,3 +1966,46 @@ fn a_directory_is_a_template_only_when_it_carries_a_repositorys_own_files() {
          fixtures are checked against"
     );
 }
+
+// CLOUD-1832, the other half: what a process does when it could NOT establish a
+// template.
+//
+// The first repair asserted, and that is what CI then failed on — the assertion
+// fired on a cold musl scratch root and reddened a case whose subject was
+// elsewhere. A missing template is a COST, not a defect: `common` still knows
+// how to fork the repository the template stands for, so the sound answer is to
+// fork it. `init_repo` takes that route whenever `git_init_template` returns
+// `None`, and this pins what the route has to produce.
+//
+// Driving it through `init_repo` itself is not available — the template is a
+// process-wide `OnceLock` and a case cannot un-establish it without redding its
+// concurrent siblings, the same cross-process hazard the case above declines. So
+// the fallback's BODY is the named function both routes call, and it is checked
+// directly: a repository, with the identity the template bakes into its config.
+// A fallback that forked `init` alone would pass `is_template` and still hand
+// every fixture an unset identity, so the identity is asserted, not assumed.
+#[test]
+fn the_route_taken_when_no_template_exists_builds_the_repository_the_template_would_have() {
+    let dir = common::scratch("template-fallback").join("repo");
+    std::fs::create_dir_all(&dir).expect("create the fallback candidate");
+
+    common::fork_the_template_into(&dir);
+
+    assert!(
+        common::is_template(&dir.join(".git")),
+        "the fallback has to produce a repository — it stands in for a template \
+         whose whole content is one"
+    );
+    assert_eq!(
+        common::git_in(&dir, &["config", "user.email"]),
+        "t@example.com",
+        "the template bakes the identity into its own config, so a fallback \
+         that left it unset would differ from the copy route in a way the \
+         binary under test can read"
+    );
+    assert_eq!(
+        common::git_in(&dir, &["config", "user.name"]),
+        "t",
+        "both halves of the identity, for the same reason"
+    );
+}

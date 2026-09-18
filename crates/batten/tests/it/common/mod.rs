@@ -807,6 +807,15 @@ pub(crate) fn git_command(dir: &Path, args: &[&str]) -> Command {
 /// of redundant `git init`s is the wrong trade for a once-per-filesystem cost,
 /// and a lock file is one more thing to leak.
 ///
+/// # `None` is an answer, not a failure (CLOUD-1832)
+///
+/// Every reading of a failed publish that does NOT leave a complete template
+/// behind ends here, and the honest report is that this process has no template
+/// — not a path it hopes is one. The caller's fallback is the `git init` fork
+/// this template exists to avoid, which is a cost rather than a defect, so the
+/// suite stays green on a filesystem where the publish cannot land. The state is
+/// printed, not swallowed: the next run that hits it says why.
+///
 /// # The stamp is the `git` binary's own metadata
 ///
 /// A hand-bumped version constant would leave a stale template behind whenever
@@ -826,56 +835,108 @@ pub(crate) fn git_command(dir: &Path, args: &[&str]) -> Command {
 /// `.git/config` is the same values by a cheaper route. A fixture that wants a
 /// DIFFERENT identity still sets it after the copy, and one whose subject is an
 /// UNSET identity unsets it — `attribution.rs` already does exactly that.
-fn git_init_template() -> &'static Path {
-    static TEMPLATE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    TEMPLATE.get_or_init(|| {
-        let published = target_tmp().join(format!("git-init-template-{}", git_stamp()));
+fn git_init_template() -> Option<&'static Path> {
+    static TEMPLATE: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    TEMPLATE.get_or_init(build_git_init_template).as_deref()
+}
+
+/// Establish the template once per process, or report that this process could
+/// not — see [`git_init_template`] for why the answer is an `Option`.
+#[allow(clippy::print_stderr)]
+fn build_git_init_template() -> Option<PathBuf> {
+    let published = target_tmp().join(format!("git-init-template-{}", git_stamp()));
+    if is_template(&published) {
+        return Some(published);
+    }
+    let staging = target_tmp().join(format!(
+        "git-init-template-{}.staging-{}",
+        git_stamp(),
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&staging);
+    fs::create_dir_all(&staging).expect("create the template staging directory");
+    fork_the_template_into(&staging);
+    // Publish the `.git` itself rather than the work tree around it: what a
+    // fixture copies is a repository directory, and lifting it here keeps
+    // `init_repo` from having to know the template's internal layout.
+    if let Err(error) = fs::rename(staging.join(".git"), &published) {
+        // A FAILED RENAME IS NOT A REPORT THAT SOMEBODY ELSE WON (CLOUD-1832).
+        // That is the LIKELY reading — `rename(2)` onto a non-empty directory
+        // is `ENOTEMPTY` and the winner's copy is complete — but it is not the
+        // only one. A `staging/.git` that was never created, a cross-device
+        // error, a publish interrupted mid-flight: every one of them arrives
+        // here, and returning the path unasked turns "I could not establish a
+        // template" into "here is a template". `init_repo` then copies
+        // whatever is at that path into a fixture, and the first thing to
+        // notice is a `git add -A` three calls later reporting a directory
+        // that is not a repository — a could-not-look wearing a result's
+        // clothes, which is the one thing this repository refuses.
+        //
+        // So the loser's branch reports what it could not establish rather
+        // than assuming it. It does NOT fail the case: the template is a
+        // COST optimisation over a `git init` this module still knows how to
+        // fork, so the sound answer is `None` and one fork for this process.
+        // Failing here would red a suite whose subject is elsewhere for a
+        // reason that is purely about how the fixture was built — the
+        // measured CI failure of exactly that shape is why this is a
+        // fallback and not an assertion.
+        let listing = fs::read_dir(&published).map_or_else(
+            |error| format!("unreadable: {error}"),
+            |entries| {
+                let mut names: Vec<String> = entries
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                    .collect();
+                names.sort();
+                format!("[{}]", names.join(" "))
+            },
+        );
+        let staged_git = staging.join(".git").is_dir();
+        let _ = fs::remove_dir_all(&staging);
         if is_template(&published) {
-            return published;
+            return Some(published);
         }
-        let staging = target_tmp().join(format!(
-            "git-init-template-{}.staging-{}",
-            git_stamp(),
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&staging);
-        fs::create_dir_all(&staging).expect("create the template staging directory");
-        git_in(&staging, &["init", "-q"]);
-        git_in(&staging, &["config", "user.email", "t@example.com"]);
-        git_in(&staging, &["config", "user.name", "t"]);
-        // Publish the `.git` itself rather than the work tree around it: what a
-        // fixture copies is a repository directory, and lifting it here keeps
-        // `init_repo` from having to know the template's internal layout.
-        if fs::rename(staging.join(".git"), &published).is_err() {
-            // A FAILED RENAME IS NOT A REPORT THAT SOMEBODY ELSE WON (CLOUD-1832).
-            // That is the LIKELY reading — `rename(2)` onto a non-empty directory
-            // is `ENOTEMPTY` and the winner's copy is complete — but it is not the
-            // only one. A `staging/.git` that was never created, a cross-device
-            // error, a publish interrupted mid-flight: every one of them arrives
-            // here, and returning the path unasked turns "I could not establish a
-            // template" into "here is a template". `init_repo` then copies
-            // whatever is at that path into a fixture, and the first thing to
-            // notice is a `git add -A` three calls later reporting a directory
-            // that is not a repository — a could-not-look wearing a result's
-            // clothes, which is the one thing this repository refuses.
-            //
-            // So the loser's branch asserts what it assumed.
-            let _ = fs::remove_dir_all(&staging);
-            assert!(
-                is_template(&published),
-                "the template publish at {} failed and {} is not a complete \
-                 template, so this process could not establish one — see \
-                 CLOUD-1832. Every fixture under CARGO_TARGET_TMPDIR copies this \
-                 path, so continuing would hand them a `.git` git does not \
-                 recognise",
-                staging.display(),
-                published.display(),
-            );
-            return published;
-        }
-        let _ = fs::remove_dir_all(&staging);
-        published
-    })
+        // Diagnostics rather than a verdict: this names the state that the
+        // assertion used to only assert, so the next run that hits it says
+        // WHY instead of that it happened.
+        //
+        // `print_stderr` is allowed here and only here. The lint exists so the
+        // BINARY never writes an ungoverned line to a channel its output
+        // contract owns (house-style §6); this is the test harness, whose
+        // stderr nextest already captures per process and prints on failure.
+        // The alternative is a fallback that leaves no trace at all — a silent
+        // change of route, which is the shape that made this defect expensive
+        // to see. The allowance sits on the function rather than here because
+        // a statement-scoped one does not reach this macro — clippy reports it
+        // as an unused attribute.
+        eprintln!(
+            "note: the template publish at {} failed ({error}; staged .git \
+                 present: {staged_git}) and {} is not a complete template \
+                 (contents: {listing}), so this process forks `git init` per \
+                 fixture instead — see CLOUD-1832",
+            staging.display(),
+            published.display(),
+        );
+        return None;
+    }
+    let _ = fs::remove_dir_all(&staging);
+    Some(published)
+}
+
+/// Build the repository [`git_init_template`] publishes, by forking, in `dir`.
+///
+/// The route [`init_repo`] falls back to when no template could be established,
+/// and the reason it is a named function rather than three lines inside that
+/// `else`: the two `config` calls are not decoration. The template bakes the
+/// identity into its own `config`, the binary under test reads it through
+/// `git::config_value`, and a fallback that forked `init` alone would hand the
+/// fixture an UNSET identity — a difference no fixture asks about and every
+/// attribution case would feel. Same commands, same order, same values as the
+/// staging build above.
+pub(crate) fn fork_the_template_into(dir: &Path) {
+    git_in(dir, &["init", "-q"]);
+    git_in(dir, &["config", "user.email", "t@example.com"]);
+    git_in(dir, &["config", "user.name", "t"]);
 }
 
 /// Whether `dir` is a published template this module may copy from.
@@ -963,8 +1024,17 @@ pub(crate) fn init_repo(dir: &Path) {
          template copy is not, so a second initialisation has to be deliberate",
         dir.display()
     );
-    if dir.starts_with(target_tmp()) {
-        let template = git_init_template();
+    if !dir.starts_with(target_tmp()) {
+        git_in(dir, &["init", "-q"]);
+        return;
+    }
+    let Some(template) = git_init_template() else {
+        // No template could be established (CLOUD-1832): fork what it stands
+        // for.
+        fork_the_template_into(dir);
+        return;
+    };
+    {
         copy_tree(template, &dir.join(".git"));
         // CHECK WHAT THE COPY PRODUCED, HERE (CLOUD-1832). `copy_tree` creates
         // its destination and copies whatever it finds, so a template that was
@@ -981,8 +1051,6 @@ pub(crate) fn init_repo(dir: &Path) {
             template.display(),
             dir.display(),
         );
-    } else {
-        git_in(dir, &["init", "-q"]);
     }
 }
 
