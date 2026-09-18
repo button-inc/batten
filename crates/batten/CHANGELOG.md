@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.172](https://github.com/button-inc/batten/compare/v0.0.171...v0.0.172) - 2026-09-18
+
+### Added
+
+- *(policy)* refuse a verb a branch adds and nothing reaches
+
 ## [0.0.171](https://github.com/button-inc/batten/compare/v0.0.170...v0.0.171) - 2026-09-18
 
 ### Fixed
