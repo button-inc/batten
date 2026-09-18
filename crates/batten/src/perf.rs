@@ -1107,8 +1107,8 @@ fn summarise(
     // so the shape where an unsorted series reaches a quantile is not
     // representable here any more.
     let (Some(p50), Some(p95)) = (
-        crate::arm::percentile(times.to_vec(), 50, 100),
-        crate::arm::percentile(times.to_vec(), 95, 100),
+        crate::arm::percentile(times.to_vec(), 50, 100, f64::total_cmp),
+        crate::arm::percentile(times.to_vec(), 95, 100, f64::total_cmp),
     ) else {
         bail!("perf: the {id} {arm} arm carried no times.");
     };
