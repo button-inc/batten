@@ -2590,6 +2590,25 @@ regex = '^[1-9][0-9]*$'
 id = "gh-pr-body-fetch"
 regex = 'gh[[:space:]]+pr[[:space:]]+view\b[^|;&]*--jq[[:space:]]+\.body\b'
 
+# THE SAME FETCH SPELLED THE OTHER WAY THIS REPOSITORY REACHES THE FORGE.
+#
+# The row above selects a shell `gh pr view`; this selects the MCP method that
+# returns the same field. Both feed the ONE `pr-closes` record through the one
+# `closing-keys` program, so this is a second SPELLING of one concept's selector
+# rather than a second concept — which is the distinction this registry exists to
+# keep, and the reason the reading itself is not duplicated anywhere.
+#
+# ANCHORED, because `pull_request_read` serves nine methods and several contain
+# this one as a prefix: `get_files`, `get_reviews`, `get_review_comments`,
+# `get_status`, `get_commits`, `get_diff`, `get_comments`, `get_check_runs`. An
+# unanchored `get` matches every one of them, and `review-happened` already
+# measured what reading one method's result as another's costs — a `get_files`
+# array minted a review record and cleared the check that asks whether a review
+# exists. Only `get` carries `body`.
+[[pattern]]
+id = "pr-read-body-method"
+regex = '^get$'
+
 # A shell program resolves a sibling at RUN TIME, so the repo-relative path a
 # retirement deletes never appears in the caller's text and both of
 # `shell-retirement`'s admission clauses read a conforming cleanup as an
@@ -3046,6 +3065,58 @@ value = { literal = "closes" }
 [[recorder.columns]]
 name = "keys"
 value = { program = { run = "closing-keys", read = "stdout", stdin = { result = "stdout" } } }
+counted-with = ":"
+zero-is-a-count = true
+
+# THE SAME RECORD FROM THE OTHER WAY THIS REPOSITORY REACHES THE FORGE, and its
+# absence made the exemption it feeds unreachable rather than merely unsatisfied.
+#
+# The producer above selects a Bash `gh pr view`. A container whose GitHub access
+# is the MCP server and which carries no `gh` at all cannot satisfy it, and the
+# failure is silent in a way `records-blocked` cannot see: the selector never
+# matches, so no call is ever BLOCKED, so `closes_unreadable` never holds either.
+# `filed-here` then refuses `issue file same` while printing a remedy — "name it
+# in closing form in the PR body" — that no call on that host can make observable.
+#
+# THAT IS CLOUD-1126 EXACTLY, ARRIVING THROUGH A SECOND DOOR. Its measured
+# instance was PR #726: the body carried its closing keys throughout, the
+# exemption's substance held the whole time, and the branch spent a human-answered
+# admission because the free route could not be observed. The fix there taught the
+# MODULE to tell "could not read" from "read and empty"; this teaches the RECORDER
+# the other spelling of the read, so on an MCP-only host the route is satisfied
+# rather than withheld.
+#
+# THE METHOD IS THE SELECTOR, SPELLED THE RECORDER'S OWN WAY. A `[[fact]]` narrows
+# with `when = { method = ... }` and a recorder has no such key; it narrows with
+# `requires-input-matching` against the declared pattern table. Writing the fact's
+# spelling here produced a row the loader could not resolve, and `config lint`
+# reported `config-row-unresolved` — that gate doing its job on a row that would
+# otherwise have enforced nothing while looking correct.
+#
+# `requires` AND the method selector are a PAIR rather than belt-and-braces:
+# `pull_request_read` serves nine methods under one tool name, shape is only a
+# proxy for the method, and `review-happened` already measured what reading one
+# method's result as another's costs.
+#
+# ONE RECORD, TWO PRODUCERS, AND THEY CANNOT DISAGREE: both run the same
+# `closing-keys` program over the same PR body, so whichever fires writes the same
+# keys. This is not a second authority — it is one reading reached by the
+# transport the host actually has.
+[[recorder]]
+name = "pr-body-closes-mcp"
+record = "pr-closes"
+tool = "pull_request_read"
+key = "branch"
+requires = ["body"]
+requires-input-matching = { method = "pr-read-body-method" }
+
+[[recorder.columns]]
+name = "kind"
+value = { literal = "closes" }
+
+[[recorder.columns]]
+name = "keys"
+value = { program = { run = "closing-keys", read = "stdout", stdin = { result = "body" } } }
 counted-with = ":"
 zero-is-a-count = true
 
