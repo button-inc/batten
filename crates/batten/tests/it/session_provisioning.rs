@@ -525,6 +525,16 @@ const COMPILE_ENTRY_POINTS: [&str; 2] = ["install:local", "build:release"];
 /// a second copy of this extraction is a second authority that drifts from the
 /// first.
 fn task_surface(name: &str) -> Option<String> {
+    let block = task_block(name)?;
+    Some(format!(
+        "{}\n{}",
+        task_value(&block, "run"),
+        task_value(&block, "depends")
+    ))
+}
+
+/// One task's declared block, from its own header line to the next table.
+fn task_block(name: &str) -> Option<String> {
     let manifest =
         std::fs::read_to_string(at_root("mise.toml")).expect("the task manifest is readable");
     let headers = [
@@ -534,18 +544,46 @@ fn task_surface(name: &str) -> Option<String> {
     let block = headers
         .iter()
         .find_map(|header| manifest.split(header.as_str()).nth(1))?;
-    let block = block.split("\n[").next().unwrap_or(block).to_owned();
+    Some(block.split("\n[").next().unwrap_or(block).to_owned())
+}
 
-    let value = |key: &str| -> String {
-        let Some(rest) = block.split(&format!("\n{key} = ")).nth(1) else {
-            return String::new();
-        };
-        rest.strip_prefix("\"\"\"").map_or_else(
-            || rest.lines().next().unwrap_or_default().to_owned(),
-            |triple| triple.split("\"\"\"").next().unwrap_or(triple).to_owned(),
-        )
+/// One declared key's value out of a task block, triple-quoted or not.
+fn task_value(block: &str, key: &str) -> String {
+    let Some(rest) = block.split(&format!("\n{key} = ")).nth(1) else {
+        return String::new();
     };
-    Some(format!("{}\n{}", value("run"), value("depends")))
+    rest.strip_prefix("\"\"\"").map_or_else(
+        || rest.lines().next().unwrap_or_default().to_owned(),
+        |triple| triple.split("\"\"\"").next().unwrap_or(triple).to_owned(),
+    )
+}
+
+/// The tasks one task DECLARES as dependencies, as separate entries.
+///
+/// SEPARATE FROM [`task_surface`], AND THE SEPARATION IS THE WHOLE POINT. The
+/// surface concatenates `run` and `depends`, because the reachability scan wants
+/// both and does not care which one a name came from. Asserting a DEPENDENCY over
+/// that concatenation proves nothing: a `run` body merely NAMING the task
+/// satisfies the same `contains`.
+///
+/// Caught in review on CLOUD-1329's first draft, with the counter-example that
+/// settles it — delete the `depends` line and write
+/// `run = "echo target-prune && cargo build …"`, and a `contains` assertion stays
+/// green over a build that runs no precondition at all. That is exactly the shape
+/// CLOUD-418 names: a case that cannot tell the defect from its absence.
+///
+/// So this reads `depends` alone and splits it into entries, and the cases below
+/// ask for an EXACT one rather than a substring of the whole surface.
+fn task_depends(name: &str) -> Vec<String> {
+    let Some(block) = task_block(name) else {
+        return Vec::new();
+    };
+    task_value(&block, "depends")
+        .split(['[', ']', ',', '"'])
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 fn reachable_session_task_bodies() -> Vec<(String, String)> {
@@ -787,10 +825,11 @@ fn the_install_step_is_declared_lockfile_free() {
 /// the suite to green.
 #[test]
 fn the_release_build_runs_the_disk_precondition_before_cargo() {
-    let surface = task_surface("build:release").expect("the release build is a declared task");
+    let depends = task_depends("build:release");
     assert!(
-        surface.contains("target-prune"),
-        "the build that runs before any gate asks the same disk question they do: {surface}"
+        depends.iter().any(|entry| entry == "target-prune"),
+        "the build that runs before any gate DECLARES the same disk question they ask, \
+         as a dependency rather than as a mention: {depends:?}"
     );
 }
 
@@ -802,15 +841,15 @@ fn the_release_build_runs_the_disk_precondition_before_cargo() {
 /// take on trust from a `depends` line in another table.
 #[test]
 fn every_build_entry_point_reaches_the_same_precondition() {
-    let install = task_surface("install:local").expect("the local install is a declared task");
+    let install = task_depends("install:local");
     assert!(
-        install.contains("build:release"),
-        "the install reaches the build, so it inherits what the build declares: {install}"
+        install.iter().any(|entry| entry == "build:release"),
+        "the install DECLARES the build, so it inherits what the build declares: {install:?}"
     );
-    let build = task_surface("build:release").expect("the release build is a declared task");
+    let build = task_depends("build:release");
     assert!(
-        build.contains("target-prune"),
-        "and what the build declares is the precondition: {build}"
+        build.iter().any(|entry| entry == "target-prune"),
+        "and what the build declares is the precondition: {build:?}"
     );
 }
 
@@ -826,7 +865,7 @@ fn every_build_entry_point_reaches_the_same_precondition() {
 fn the_reclaim_itself_stays_dependency_free_and_the_surfaces_are_not_empty() {
     let prune = task_surface("target-prune").expect("the reclaim is a declared task");
     assert!(
-        !prune.contains("depends"),
+        task_depends("target-prune").is_empty(),
         "the reclaim declares no dependency, so the edge this row adds cannot cycle: {prune}"
     );
     assert!(
