@@ -5416,6 +5416,62 @@ pub const SURFACE: &[CommandDecl] = &[
     },
 ];
 
+/// The declared command path `arguments` names, and how many of them it spends.
+///
+/// `arguments` is the argv AFTER the program name. The answer is the LONGEST
+/// fully-declared path those words spell, plus the number of leading tokens it
+/// consumed — flags and their values included, so a caller can treat the
+/// remainder as the command's own operands.
+///
+/// # Why the mediated boundary needs this (CLOUD-1804)
+///
+/// `hook`'s operand walk reads every non-flag word as a path, which is right for
+/// a program whose argv grammar the boundary does not know and wrong for THIS
+/// one, whose grammar is the table above. A consumer that keeps its policy
+/// modules in a directory sharing a name with one of our subcommands — which is
+/// the layout our own starter config recommends — had `batten policy budget`
+/// refused, because the word `policy` resolved as a path enclosing the registered
+/// modules. Adopting the documented convention was what triggered it.
+///
+/// # Fully declared, never a prefix
+///
+/// A prefix that bottoms out in no row consumes NOTHING. Stopping at the longest
+/// declared ancestor would let an undeclared trailing word be read as that
+/// command's operand, and the conservative reading of an unrecognised path is
+/// [`Effect::Ask`] rather than a guess — §5's rule, applied to the walk that
+/// finds the path as well as to the effect it resolves.
+#[must_use]
+pub fn command_path(arguments: &[&str]) -> Option<(&'static str, usize)> {
+    let mut words: Vec<&str> = Vec::new();
+    let mut best: Option<(&'static str, usize)> = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        let token = arguments[index];
+        // A `--` ends option parsing, and everything after it is an operand — so
+        // no command path continues through one.
+        if token == "--" {
+            break;
+        }
+        if token.starts_with('-') {
+            index += 1;
+            if consumes_a_value(token) {
+                index += 1;
+            }
+            continue;
+        }
+        words.push(token);
+        index += 1;
+        let candidate = words.join(" ");
+        // A miss is not the end of the walk: a longer path may still be declared
+        // where its prefix is not, so the loop keeps going and `best` only ever
+        // moves forward onto a row that exists.
+        if let Some(decl) = SURFACE.iter().find(|decl| decl.path == candidate) {
+            best = Some((decl.path, index));
+        }
+    }
+    best
+}
+
 /// Whether `token` is a declared spelling of a flag that consumes the *next*
 /// argument.
 ///
@@ -5706,6 +5762,44 @@ mod identity_tests {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// [`command_path`]'s argv handling, which the mediated boundary depends on
+    /// to stop reading our own subcommand words as paths (CLOUD-1804).
+    #[test]
+    fn a_command_path_spends_its_flags_and_stops_at_the_operands() {
+        // The longest declared path wins, and it spends exactly its own words.
+        assert_eq!(
+            command_path(&["policy", "budget"]),
+            Some(("policy budget", 2))
+        );
+        // A global flag before the path is spent with it, so the count is an
+        // index into argv rather than a count of path words.
+        assert_eq!(
+            command_path(&["-q", "policy", "budget"]),
+            Some(("policy budget", 3))
+        );
+        // A value-taking flag spends its value too, or the value would be read
+        // as the next path word.
+        assert_eq!(
+            command_path(&["--strictness", "strict", "policy", "budget"]),
+            Some(("policy budget", 4))
+        );
+        // What follows a declared path is the command's own argument and is left
+        // where the operand walk can still see it.
+        assert_eq!(
+            command_path(&["policy", "explain", "some token"]),
+            Some(("policy explain", 2))
+        );
+        // NOT A PREFIX. An undeclared trailing word leaves the answer on the
+        // longest row that exists, never on a guess past it.
+        assert_eq!(command_path(&["config", "frobnicate"]), Some(("config", 1)));
+        // And an undeclared path spends nothing at all, which is the reading
+        // that keeps the narrowing to where the surface actually answers.
+        assert_eq!(command_path(&["frobnicate", "policy"]), None);
+        assert_eq!(command_path(&[]), None);
+        // A `--` ends option parsing, so no path continues through one.
+        assert_eq!(command_path(&["--", "policy", "budget"]), None);
+    }
 
     #[test]
     fn every_path_is_declared_once() {

@@ -7661,6 +7661,14 @@ pub const HISTORY_DROP: &str = "history-drop";
 /// The rule id the singleton gate refuses under (CLOUD-438).
 pub const SINGLETON_HELD: &str = "singleton-held";
 
+/// The rule id the unknown-program arm refuses under (CLOUD-1804).
+///
+/// Separate from [`PROTECTED_MUTATION`] because the two arms assert different
+/// things: that one says a declared mutating verb was aimed at a protected path,
+/// this one says the boundary cannot classify the program at all. One id between
+/// them made the honest refusal unattributable and its remedy unreachable.
+pub const PROGRAM_UNKNOWN: &str = "program-unknown";
+
 /// The pseudo-programs a shell redirect is reported as.
 ///
 /// A truncating redirect mutates a file with no program to classify: in
@@ -7966,7 +7974,23 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
                     .protected_readers
                     .iter()
                     .any(|reader| reader == program)
-                    || policy.verbs.iter().any(|verb| verb.verb == program);
+                    || policy.verbs.iter().any(|verb| verb.verb == program)
+                    // THE BUILT-IN FLOOR (CLOUD-1804), and it is the premise
+                    // above being repaired rather than relaxed. "Known" was
+                    // sourced entirely from the consumer's own two tables, which
+                    // holds for the paths the consumer DECLARED and fails for the
+                    // ones `policy_protected_paths` derives: a repository that
+                    // declares three `[[rule]]` rows and nothing else has
+                    // protected paths and an empty reader set, so a bare listing
+                    // of the module directory was refused. See
+                    // `READ_ONLY_PROGRAMS` for why the table is compiled, short,
+                    // and free of interpreters.
+                    //
+                    // Reached LAST, and that ordering is free rather than
+                    // load-bearing — a program on the floor cannot also be a
+                    // `[[verb]]` row's mutating shape, because the mutation walk
+                    // above already returned if it were.
+                    || reads_its_operands(program);
                 if !known {
                     // OPERANDS, AND THE WIDER SCAN WAS TRIED AND REVERTED. Scanning
                     // every word for an embedded protected path catches
@@ -7984,7 +8008,48 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
                     // thing the program was handed; a substring of a quoted argument
                     // is not, and argv cannot tell a path being WRITTEN inside an
                     // interpreter's program text from one being TALKED ABOUT.
-                    for path in operands(&tokens, index + 1).into_iter().map(program_token) {
+                    //
+                    // OUR OWN ARGV IS NOT A LIST OF PATHS (CLOUD-1804). The walk
+                    // below reads every non-flag word as a path, which is the
+                    // right reading for a program whose grammar the boundary does
+                    // not know and the wrong one for THIS program, whose grammar
+                    // is `crate::surface`. A consumer keeping its modules in a
+                    // directory named like one of our subcommands — the layout our
+                    // own starter config recommends — had `<self> policy budget`
+                    // refused, because the SUBCOMMAND word resolved as a path
+                    // enclosing the registered modules. Adopting the documented
+                    // convention was what triggered it.
+                    //
+                    // Two consequences, and the second is the stronger: the
+                    // command path is not operands, and a declared READ-ONLY
+                    // invocation of ours targets nothing at all. An undeclared
+                    // path resolves to `Effect::Ask` and spends nothing, so this
+                    // narrows the walk only where the surface actually answers —
+                    // §5's "absence means ask, never safe", unchanged.
+                    let arguments: Vec<&str> = tokens[index + 1..]
+                        .iter()
+                        .copied()
+                        .map(program_token)
+                        .collect();
+                    // THE BASENAME, NEVER THE TOKEN. An agent reaches for this
+                    // binary by the path it was built or installed at as often as
+                    // by its name, and a bare `==` against the token answers no
+                    // for every one of those spellings — so the narrowing lapsed
+                    // exactly where a consumer is most likely to be running a
+                    // build of ours. Measured: `target/debug/<self> policy --help`
+                    // was refused while the bare name was allowed, which is
+                    // `program_token`'s own "identity, never the spelling" one
+                    // resolution further out.
+                    let own = (program_name(program) == env!("CARGO_PKG_NAME"))
+                        .then(|| crate::surface::command_path(&arguments))
+                        .flatten();
+                    let reads_only = own
+                        .is_some_and(|(path, _)| crate::surface::effect_for(path).is_read_only());
+                    if reads_only {
+                        continue;
+                    }
+                    let start = index + 1 + own.map_or(0, |(_, consumed)| consumed);
+                    for path in operands(&tokens, start).into_iter().map(program_token) {
                         // CLOUD-1141's arm asks the same membership question, so it
                         // had the same hole: an absolute operand was not recognised as
                         // protected here either, and the unknown program was allowed
@@ -8014,8 +8079,18 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
 /// Pointer-only, like every refusal: the program, the path, and no operand text.
 fn unknown_program_refusal(program: &str, path: &str) -> Refusal {
     Refusal::declared(
-        PROTECTED_MUTATION,
-        crate::verdict::Native::ProtectedMutation,
+        PROGRAM_UNKNOWN,
+        // ITS OWN CLASS SINCE CLOUD-1804, and the correction is what the class
+        // ASSERTS rather than how it reads. `path write refused`'s gloss is "a
+        // mutating verb was aimed at a path the config protects", which this arm
+        // contradicts in its own doc comment one paragraph up: the boundary does
+        // not know what this program does and will not guess. The reporting
+        // consumer read that gloss over a config whose `protected` was empty —
+        // the paths were derived from their `[[rule]]` rows — and spent the time
+        // ruling out their own configuration that an honest class would have
+        // saved. It also makes the remedy below reachable from
+        // `batten policy explain`, which resolved the other arm's class before.
+        crate::verdict::Native::ProgramUnknown,
         // Same two tagged pointers, same order, as the declared-verb refusal: the
         // path first so it becomes the finding's own pointer, the program second
         // so the caller recognises which command of theirs was read this way.
@@ -9290,6 +9365,81 @@ const LOOKTHROUGH_WRAPPERS: [&str; 9] = [
 #[must_use]
 pub(crate) fn is_lookthrough_wrapper(token: &str) -> bool {
     LOOKTHROUGH_WRAPPERS.contains(&token)
+}
+
+/// Programs the boundary knows to leave their operands alone (CLOUD-1804).
+///
+/// # The premise this repairs, which is CLOUD-1141's
+///
+/// That row inverted the unknown-program direction: an operand that is a
+/// protected path refuses unless the program is KNOWN — present in `[[verb]]`,
+/// whose rows encode its argv grammar, or in `protected_readers`, which declares
+/// it a reader. The inversion is right and is not touched. Its premise was that
+/// an empty reader set costs nothing because a config declaring no protected
+/// paths has nothing to guard.
+///
+/// That holds for the set a consumer DECLARES and fails for the one
+/// [`policy_protected_paths`] DERIVES: every `[[rule]]` naming a module or a
+/// bundle contributes its path, so enabling policy protects the modules whether
+/// or not anybody declared `protected`. A consumer with three rule rows and no
+/// readers therefore had protected paths and an empty reader set — every program
+/// unknown, every call naming a module refused, reads included.
+///
+/// # What may go in the table, which is the whole safety argument
+///
+/// The question is **"does the boundary know this program does not mutate its
+/// operands"**, never "allow". Every entry is a program whose every invocation
+/// reads — no flag turns it into a write — which is what lets the table be
+/// consulted without asking anything about the rest of the argv. The bar is that
+/// property, not how often the program is reached for.
+///
+/// Three bounds hold it there. The mutating-verb walk runs and returns FIRST, so
+/// a consumer `[[verb]]` row naming a program listed here still refuses under its
+/// own qualifier. Shell redirects are a separate candidate list, also evaluated
+/// first, so `echo x >> <protected>` stays refused however read-only `echo` is.
+/// And a program with a write-capable flag stays off whatever its usual use —
+/// `find` (`-delete`, `-exec`), `sort` (`-o`), `tee`, `cp`, `mv`, `install`.
+///
+/// An INTERPRETER is the load-bearing absence. `sh`, `bash`, `python3` and `perl`
+/// take their program on the command line, so what they do to an operand is not
+/// decidable from the argv — the undecidability CLOUD-1141 ruled on. A shell is
+/// also the wrapper CLOUD-1804's own Workarounds section recommends, so listing
+/// one would close the reported symptom by widening the hole CLOUD-1304 is open
+/// on.
+///
+/// # A floor, never a ceiling, and a constant rather than a key
+///
+/// A consumer's `protected_readers` adds to this and cannot subtract: a
+/// raise-only override system has no spelling for removing an entry that is not a
+/// weakening. It is compiled for the same reason — a key would hand consumers a
+/// switch to turn a safety floor off, and would owe a `min_batten_version` raise
+/// for a change that otherwise needs none.
+///
+/// Declared here beside [`LOOKTHROUGH_WRAPPERS`] and [`SHELL_GRAMMAR`], which are
+/// the precedent: a table of POSIX program names, each admissible because its
+/// bound is stated rather than assumed. It is not the consumer's `[[verb]]` table
+/// one layer over — that one says which programs MUTATE, which is a property of
+/// the repository being guarded and stays in its config (rule 1). This says which
+/// leave their operands alone, which is a property of the programs.
+const READ_ONLY_PROGRAMS: [&str; 16] = [
+    // Listing and printing.
+    "ls", "echo", "cat", "head", "tail",
+    "printf", // Counting and comparing; both report and neither writes.
+    "wc", "diff", "cmp", // Asking what a path IS: metadata, or a name resolved.
+    "stat", "file", "realpath", "dirname", "basename",
+    // Searching. Pure filters — no in-place mode exists for either.
+    "grep", "rg",
+];
+
+/// Is this token a program the boundary knows only reads its operands?
+///
+/// Matched on the bare program name exactly as `protected_readers` is, so a
+/// caller must normalise a grouped or path-qualified token before asking —
+/// CLOUD-1287's over-deny was a declared reader made unreachable behind a
+/// grouping paren, and a second copy of that defect is not wanted here.
+#[must_use]
+fn reads_its_operands(program: &str) -> bool {
+    READ_ONLY_PROGRAMS.contains(&program)
 }
 
 /// Git's global options that CONSUME the next argument, so a subcommand scan
@@ -13461,12 +13611,197 @@ deny contains "refused by themodule" if {
         //
         // Now the consumer says which programs read, in `protected_readers`, and
         // silence means refuse. No guess was added — a declaration is required.
-        // This fixture declares no readers, which is the strictest setting and
-        // why `cat` refuses here while the committed config allows it.
+        //
+        // THE EXEMPLAR MOVED AT CLOUD-1804, AND THE SUBJECT DID NOT. This case
+        // used `cat` against a fixture declaring no readers, on the reasoning
+        // that no readers is "the strictest setting". That fixture is the
+        // reporter's repository exactly — three `[[rule]]` rows, no `protected`,
+        // no `protected_readers` — and refusing `cat` there was the defect, not
+        // the strictness: the protected paths it was refusing against were
+        // DERIVED from the rule table, so nobody had the chance to declare a
+        // reader beside them. `crate::readers` is the repair, and `cat` is on it.
+        //
+        // What this case is about is unchanged: a program the boundary cannot
+        // classify refuses. So it now names one that is on neither the floor nor
+        // any table, and `a_declared_reader_against_a_protected_path_is_allowed`
+        // below still pins the consumer-declaration half.
         assert!(matches!(
-            guarded("cat .serena/memories/core.md"),
+            guarded("frobnicate .serena/memories/core.md"),
             Decision::Deny(_)
         ));
+        // The interpreters CLOUD-1141 measured as ALLOWED before its inversion,
+        // asserted here so the floor cannot quietly re-open them.
+        assert!(matches!(
+            guarded("python3 write.py .serena/memories/core.md"),
+            Decision::Deny(_)
+        ));
+    }
+
+    /// The two arms assert different things and must say so (CLOUD-1804).
+    ///
+    /// BOTH DIRECTIONS, per CLOUD-418: asserting only that the unknown program
+    /// raises its own class passes over an engine that collapsed every refusal
+    /// into it, and asserting only that a declared verb keeps `path write
+    /// refused` passes over the state before this split. The pair discriminates.
+    ///
+    /// What made the old spelling wrong is what the class ASSERTS, not how it
+    /// reads: `path write refused` glosses as "a mutating verb was aimed at a
+    /// path the config protects", and this arm's own composer says the boundary
+    /// does not know what the program does and will not guess.
+    #[test]
+    fn an_unknown_program_refusal_is_a_different_class_from_a_declared_mutation() {
+        let unknown = denial(guarded("frobnicate .serena/memories/core.md"));
+        assert_eq!(
+            unknown.verdict(),
+            Some(crate::verdict::Native::ProgramUnknown.id()),
+            "an unclassifiable program must not be reported as a declared mutation"
+        );
+
+        let declared = denial(guarded("rm .serena/memories/core.md"));
+        assert_eq!(
+            declared.verdict(),
+            Some(crate::verdict::Native::ProtectedMutation.id()),
+            "a declared mutating verb keeps the class that names one"
+        );
+    }
+
+    /// The floor's own table, asserted directly (CLOUD-1804).
+    ///
+    /// The mediated cases above decide the behaviour; this decides the TABLE, and
+    /// the two fail for different reasons — a floor that answered `true` for
+    /// everything would satisfy any single-direction reading of the behaviour.
+    #[test]
+    fn the_read_only_floor_names_readers_and_no_writer() {
+        // The programs CLOUD-1804 measured as refused.
+        for program in ["ls", "echo", "cat"] {
+            assert!(reads_its_operands(program), "{program}");
+        }
+        // MIRROR. An interpreter is the case that decides it: a shell is the
+        // wrapper CLOUD-1804's own workaround recommends, and the rest are
+        // programs whose write-capable flag is why they are absent.
+        for program in [
+            "sh",
+            "bash",
+            "python3",
+            "perl",
+            "ruby",
+            "node",
+            "tee",
+            "cp",
+            "mv",
+            "install",
+            "find",
+            "sort",
+            "sed",
+            "rm",
+            "truncate",
+            "frobnicate",
+        ] {
+            assert!(!reads_its_operands(program), "{program}");
+        }
+        // The table is asked about a BARE name, so a caller that forgot to
+        // normalise gets a miss rather than a hit on the wrong token.
+        for token in ["(ls", "/bin/ls", "ls;", ""] {
+            assert!(!reads_its_operands(token), "{token}");
+        }
+        // A duplicate would read as two reviewers having agreed twice where only
+        // one row was ever considered.
+        let mut seen = READ_ONLY_PROGRAMS.to_vec();
+        seen.sort_unstable();
+        let mut unique = seen.clone();
+        unique.dedup();
+        assert_eq!(seen, unique);
+    }
+
+    /// CLOUD-1804's second defect: our own subcommand word read as a path.
+    ///
+    /// THE FIXTURE IS THE REPORTED REPOSITORY, and it has to be: this repository
+    /// declares its own binary in `protected_readers`, so the whole case is
+    /// invisible against the committed config. What was reported is a consumer
+    /// that declares `[[rule]]` rows and nothing else — no `protected`, no
+    /// readers, no `[[verb]]` — and keeps its modules in `policy/`, which is the
+    /// directory name our own starter config recommends. So the word `policy` in
+    /// `<self> policy budget` resolved as a path enclosing the registered
+    /// modules, and the tool refused its own commands. `config show` was
+    /// unaffected only because no directory of that name existed.
+    #[test]
+    fn our_own_subcommand_word_is_never_an_operand() {
+        let mut policy = protected_policy_with(vec![verb("rm", None)], Vec::new());
+        policy.protected = PathSet::includes("protected", &["policy/*.rego".to_owned()])
+            .expect("the fixture protected set is well formed");
+        policy.protected_readers = Vec::new();
+        let program = env!("CARGO_PKG_NAME");
+
+        // The reported table. Each is a declared READ, so it targets nothing.
+        for command in [
+            format!("{program} policy budget"),
+            format!("{program} policy test"),
+            format!("{program} config show"),
+        ] {
+            assert_eq!(
+                protected_mutation(&policy, &command),
+                Decision::Allow,
+                "our own read must not read its subcommand as a path: {command}"
+            );
+        }
+
+        // MIRROR — a declared WRITE of ours still walks its operands, so the
+        // narrowing is about which words are operands and never about skipping
+        // the question. `receipt record` takes the check name, and a protected
+        // path after it is still a protected path.
+        assert!(
+            matches!(
+                protected_mutation(&policy, &format!("{program} receipt record policy/x.rego")),
+                Decision::Deny(_)
+            ),
+            "a declared write of ours still refuses a protected operand"
+        );
+
+        // MIRROR — an UNDECLARED path of ours spends nothing, so every word stays
+        // an operand. `Effect::Ask` is the conservative reading and this is it:
+        // the narrowing reaches only where the surface actually answers.
+        assert!(
+            matches!(
+                protected_mutation(&policy, &format!("{program} frobnicate policy/x.rego")),
+                Decision::Deny(_)
+            ),
+            "an undeclared path of ours narrows nothing"
+        );
+
+        // THE PATH-QUALIFIED SPELLING, which the first fix missed. An agent
+        // reaches for this binary by the path it was built or installed at as
+        // often as by its name, and the narrowing lapsed for every one of those
+        // — measured against this repository's own config, where `policy` is a
+        // directory, so `target/debug/<self> policy --help` was refused.
+        for reach in [
+            format!("./{program}"),
+            format!("target/debug/{program}"),
+            format!("/usr/local/bin/{program}"),
+        ] {
+            assert_eq!(
+                protected_mutation(&policy, &format!("{reach} policy budget")),
+                Decision::Allow,
+                "the identity is the program, never the path it was reached through: {reach}"
+            );
+        }
+
+        // MIRROR — the narrowing is OURS alone. Another program spelling the same
+        // words is still walked word by word, because the boundary knows nothing
+        // about its grammar. The basename resolution above must not widen this:
+        // a path ENDING in our name is us, and a name merely containing it is not.
+        for other in [
+            "frobnicate",
+            &format!("{program}ish"),
+            &format!("my{program}"),
+        ] {
+            assert!(
+                matches!(
+                    protected_mutation(&policy, &format!("{other} policy budget")),
+                    Decision::Deny(_)
+                ),
+                "another program's argv is not read through our surface: {other}"
+            );
+        }
     }
 
     #[test]

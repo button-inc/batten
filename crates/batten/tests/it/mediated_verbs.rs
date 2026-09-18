@@ -703,6 +703,75 @@ fn a_declared_reader_may_still_read_a_protected_path() {
     assert_allowed(&format!("taplo lint {AUTHORITY}"));
 }
 
+/// THE LIVE REPRO CLOUD-1804 REPORTED, and it is red without `crate::readers`.
+///
+/// The sibling above is about a program this repository DECLARED a reader. This
+/// one is about the programs nobody declared, over paths nobody declared either:
+/// a `[[rule]]` naming a module contributes that path to the protected set, so
+/// enabling policy protects the modules — and `known` was sourced entirely from
+/// the consumer's own two tables. A repository with three rule rows and no
+/// `protected_readers` therefore refused every call naming a module, reads
+/// included.
+///
+/// `ls` and `echo` rather than `cat`: this repository's own `protected_readers`
+/// lists `cat`, which would mask the case here exactly as it masked it from the
+/// tree for two releases. Neither `ls` nor `echo` is declared anywhere in
+/// `batten.toml`, so each reaches the floor or nothing.
+///
+/// The DIRECTORY spelling is the one the ticket leads with, and it is a distinct
+/// reach: `protects` reads a directory as enclosing the modules under it, so
+/// `ls policy` is refused by a path that is not itself any rule's module.
+///
+/// NOT `ls policy/`, AND THAT IS THE SIBLING CASE'S TRAP ONE PATH CLASS OVER.
+/// The trailing-slash spelling is refused here by `tool select other`, which
+/// routes a directory listing to the structured glob surface — a different row,
+/// correctly fired. Asserting it allowed would fail for a reason that has
+/// nothing to do with this gate, and asserting it denied would read as evidence
+/// about the floor when it is evidence about substitution.
+#[test]
+fn a_read_only_program_may_name_a_derived_module() {
+    const MODULE: &str = "policy/memories.rego";
+    assert_allowed("ls policy");
+    assert_allowed(&format!("echo {MODULE}"));
+    assert_allowed(&format!("echo policy {MODULE}"));
+    // And over the DECLARED set too, which is why the floor is one predicate
+    // rather than a second membership rule scoped to the derived half.
+    assert_allowed(&format!("echo {AUTHORITY}"));
+    assert_allowed("echo .github/workflows");
+}
+
+/// MIRROR — without this the floor is satisfied by a `known` that answers `true`,
+/// which would retire CLOUD-1141's inversion rather than repair its premise.
+///
+/// An interpreter is the case that decides it. `sh -c` is the workaround
+/// CLOUD-1804's own Workarounds section recommends, so a floor that listed it
+/// would close the reported symptom by widening the hole CLOUD-1304 pins two
+/// cases above. The rest are programs whose write-capable flag is exactly why
+/// they are absent from the table.
+#[test]
+fn an_unknown_program_that_is_not_on_the_floor_is_still_refused() {
+    const MODULE: &str = "policy/memories.rego";
+    assert_denied(&format!("frobnicate {AUTHORITY}"));
+    assert_denied(&format!("frobnicate {MODULE}"));
+    assert_denied(&format!("python3 write.py {MODULE}"));
+    assert_denied(&format!("tee {MODULE}"));
+    assert_denied(&format!("find {MODULE} -delete"));
+}
+
+/// MIRROR — the redirect half, which the floor must not reach.
+///
+/// `echo` is on the floor and `echo x >> batten.toml` must still be refused: a
+/// redirect target is a separate candidate list, evaluated by the mutation walk
+/// before the unknown-program arm is reached at all. Asserted here as well as at
+/// its own case above, because the two now fail for different reasons and a
+/// reader of this section needs the floor's bound stated where the floor is.
+#[test]
+fn a_redirect_to_a_protected_path_is_refused_from_a_floor_program() {
+    const MODULE: &str = "policy/memories.rego";
+    assert_denied(&format!("echo x >> {AUTHORITY}"));
+    assert_denied(&format!("echo x > {MODULE}"));
+}
+
 /// A program the verb table names is KNOWN even when its mutating rows do not
 /// match, so the new clause must not refuse it.
 ///

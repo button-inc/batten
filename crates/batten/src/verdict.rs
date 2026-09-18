@@ -1328,6 +1328,31 @@ pub enum Native {
     /// left, and the declared hatch is the recovery path. That asymmetry is why
     /// this class exists and why it is exactly one class wide.
     ConfigUnreadable,
+    /// The boundary cannot classify the program, so it will not guess.
+    ///
+    /// **APPENDED, NEVER INSERTED**, per [`Native::ConfigUnreadable`]'s note: this
+    /// enum carries no `repr`, so a variant placed beside its relatives shifts
+    /// every later discriminant.
+    ///
+    /// # Why this is not [`Native::ProtectedMutation`], which it was (CLOUD-1804)
+    ///
+    /// The unknown-program arm and the declared-verb arm are different claims and
+    /// raised one class between them. That class's gloss reads *"a mutating verb
+    /// was aimed at a path the config protects"*, and for this arm it is **false
+    /// every time it fires**: `hook`'s own composer says the boundary does not
+    /// know what the program does to its operands and will not guess, which is
+    /// the opposite of asserting a mutation.
+    ///
+    /// The cost was not cosmetic. The reporting consumer read the class over a
+    /// config whose `protected` was EMPTY — the paths were derived from their
+    /// `[[rule]]` rows — and spent the time ruling out their own configuration
+    /// that a class saying "this program is unclassified" would have saved.
+    ///
+    /// It also makes the remedy reachable. `unknown_program_refusal` already
+    /// carried its own fix — declare the program a reader if it only reads — and
+    /// `batten policy explain` could not reach it, because the class it resolved
+    /// belonged to the other arm.
+    ProgramUnknown,
 }
 
 impl Native {
@@ -1380,6 +1405,7 @@ impl Native {
         Native::StartupTableRefused,
         Native::PlanReadStale,
         Native::OutcomeTableRefused,
+        Native::ProgramUnknown,
     ];
 
     /// The classes the CONFIG LOADER raises, in `parse_ungated` order.
@@ -1419,6 +1445,7 @@ impl Native {
     pub fn id(self) -> &'static str {
         match self {
             Native::ProtectedMutation => "path write refused",
+            Native::ProgramUnknown => "program name unknown",
             Native::InitWouldOverwrite => "config write refused",
             Native::PlanReadStale => "plan read stale",
             Native::OutcomeTableRefused => "outcome table refused",
@@ -1607,6 +1634,26 @@ refusal names when one exists.",
 protected path directly is the only route left, and the write is one a reviewer will see \
 in the diff it lands in",
             ),
+        ],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "program name unknown",
+        gloss: "the boundary cannot classify this program, so it will not guess at a protected path",
+        class: "This is an ADMISSION rather than an accusation: nothing here says the \
+command mutates. The program appears in neither `[[verb]]`, whose rows encode a program's \
+argv grammar, nor `protected_readers`, which declares a program to only read — so what it \
+would do to an operand is unknown, and the operand is a protected path. Silence used to \
+mean allow, and an allowlist-by-omission's omissions were holes: an interpreter writing a \
+protected path went unrefused while a redirect to the same path was denied. The direction \
+is inverted, which makes a forgotten reader a false refusal somebody fixes in a minute \
+rather than a silent hole. A compiled floor of programs that only ever read their operands \
+is consulted first, so the ordinary read tools never reach this class — and note that a \
+protected path may be DERIVED rather than declared: registering a policy module protects \
+it, so this can fire in a repository whose `protected` set is empty.",
+        routes: &[
+            read("config read first", "batten.toml"),
+            run("readers declared", "batten config show"),
         ],
         applicability: Applicability::Advice,
     },
@@ -2527,7 +2574,8 @@ mod tests {
                 | Native::MintTableRefused
                 | Native::RecorderTableRefused
                 | Native::ProvisionTableRefused
-                | Native::StartupTableRefused => native.id(),
+                | Native::StartupTableRefused
+                | Native::ProgramUnknown => native.id(),
             };
             // The prefix is gone (CLOUD-1284), so what makes this a token is the
             // ARITY: exactly three words. Asserting that here rather than a
