@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.170](https://github.com/button-inc/batten/compare/v0.0.169...v0.0.170) - 2026-09-18
+
+### Fixed
+
+- *(tests)* a template that cannot be established is a cost, not a failure
+- *(tests)* the fixture template is verified before it is handed out
+- *(tests)* the refusal cases own their repository, and so their store
+- *(tests)* a fixture must not resolve the repository it runs inside
+
 ## [0.0.169](https://github.com/button-inc/batten/compare/v0.0.168...v0.0.169) - 2026-09-17
 
 ### Fixed
