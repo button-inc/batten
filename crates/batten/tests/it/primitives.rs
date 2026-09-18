@@ -1952,6 +1952,25 @@ fn a_directory_is_a_template_only_when_it_carries_a_repositorys_own_files() {
         "HEAD alone is not a repository"
     );
 
+    // WHAT AN ARCHIVER LEAVES, and the case the first repair passed while CI
+    // stayed red. A fresh `init`'s `objects/` and `refs/` hold nothing but empty
+    // directories, so a round trip through an archiver that skips those strips a
+    // published template down to `HEAD`, `config`, `description`, `hooks/` and
+    // `info/` — which is to say, down to exactly the two files the predicate used
+    // to ask for. `rust.yml`'s `musl` job restores that target directory from a
+    // cache another job wrote, so this shape is delivered rather than raced for.
+    let archived = root.join("archived");
+    std::fs::create_dir_all(&archived).expect("create the archived candidate");
+    std::fs::write(archived.join("HEAD"), "ref: refs/heads/main\n").expect("write HEAD");
+    std::fs::write(archived.join("config"), "[core]\n").expect("write config");
+    std::fs::create_dir_all(archived.join("hooks")).expect("create hooks");
+    std::fs::create_dir_all(archived.join("info")).expect("create info");
+    assert!(
+        !common::is_template(&archived),
+        "a template whose empty directories an archiver dropped carries HEAD and \
+         config and is still not a repository — git refuses it, so this must too"
+    );
+
     // The positive case comes from a repository this suite actually built, not
     // from two files this test wrote: a predicate checked only against hand-made
     // directories could agree with itself and disagree with git.

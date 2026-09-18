@@ -941,13 +941,42 @@ pub(crate) fn fork_the_template_into(dir: &Path) {
 
 /// Whether `dir` is a published template this module may copy from.
 ///
-/// The same two files [`git_init_template`] checks before it stages, named once
-/// so the pre-check and the post-check cannot drift into disagreeing about what
-/// "published" means. Deliberately cheap and structural rather than a `git`
-/// fork: the question is whether the directory is a repository at all, and a
-/// fork per fixture is the cost this template exists to remove.
+/// Named once so the pre-check, the loser's branch and the post-copy check
+/// cannot drift into disagreeing about what "published" means. Deliberately
+/// cheap and structural rather than a `git` fork: the question is whether the
+/// directory is a repository at all, and a fork per fixture is the cost this
+/// template exists to remove.
+///
+/// # The two directory clauses are what an ARCHIVER drops, and CLOUD-1832 was
+/// red without them
+///
+/// `HEAD` and `config` alone were the whole predicate, and they are the two
+/// entries that survive a round trip through an archiver which skips empty
+/// directories — because a fresh `init`'s `objects/` and `refs/` contain nothing
+/// but empty directories (`branches`, `objects/info`, `objects/pack`,
+/// `refs/heads`, `refs/tags`, the list [`copy_tree`]'s own note already carries).
+/// So the damaged shape passed every gate CLOUD-1832 added, was copied into each
+/// fixture, and git refused them all.
+///
+/// THAT IS THE MISSING REPRODUCTION, and it is a cache rather than the race
+/// CLOUD-1832 looked for — which is why thirty cold-start races found nothing and
+/// a wiped scratch root passed. `rust.yml`'s `musl` job restores
+/// `target/x86_64-unknown-linux-musl/` from a cache `cache-warm-musl` wrote, on a
+/// runner image whose `git` gives [`git_stamp`] the same answer, so the template
+/// arrives pre-published from another machine and is adopted before any publish
+/// runs. Measured: with those three directories removed from the local template,
+/// the musl suite reds on exactly the `adjudicate_absent` cases CI named, with
+/// `git ["add", "-A"] failed …: fatal: not a git repository` byte for byte; with
+/// these clauses in, that same damaged template passes the suite.
+///
+/// It asks what git asks and not more. `description`, `hooks/` and `info/` stay
+/// out because git opens a repository without any of them, so requiring one would
+/// reject a template that works.
 pub(crate) fn is_template(dir: &Path) -> bool {
-    dir.join("HEAD").is_file() && dir.join("config").is_file()
+    dir.join("HEAD").is_file()
+        && dir.join("config").is_file()
+        && dir.join("objects").is_dir()
+        && dir.join("refs").is_dir()
 }
 
 /// The resolved `git` binary's length and mtime, as one path-safe token.
