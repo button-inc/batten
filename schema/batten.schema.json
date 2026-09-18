@@ -388,6 +388,13 @@
         }
       ]
     },
+    "record": {
+      "description": "The verb-written record families this repository's producers fill\n(CLOUD-1810).\n\nThe sibling of [`Self::recorders`] on the other side of one split: a\n`[[recorder]]` row is filled from a mediated tool call, and one of these\nis filled by a producer calling `batten record named <family>`. Both\nproject into `input.tree.records`, and until this table existed only the\nfirst could — so a store a `mise` task wrote was invisible to every\nmodule, and the row reading it reported clean over a record that said\notherwise.\n\n**Declared rather than swept**, which is what keeps could-not-look\nreadable: an absent record under a declared family is \"the producer did\nnot run\", where the same absence with nothing declared is not a reading at\nall. [`crate::record::Declared`] carries the whole argument.\n\nConsumer-owned, like the two tables above it: which measurements a\nrepository records, and what fills each, are facts about that repository\nand never about the engine (non-negotiable rule 1).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Declared4"
+      }
+    },
     "recorder": {
       "description": "Records written from the tool result that earned them (CLOUD-1051).\n\nThe third selector on the post-tool event, and the one that can carry a\nvalue another gate decided. A `[[mint]]` renders a template over the\npayload; a `[[recorder]]` may additionally run a declared program and\nrecord its verdict, which is what a board write's refinement column IS.\n\nConsumer-owned for the same reason `[[mint]]` is, and more so: the column\nnames, the verdict tokens and the programs are all a tracker's vocabulary,\nand every one of them is declared here rather than chosen by the engine.\n(The scan this paragraph used to report having run is gone with\n[`Config::mints`]' — same false claim, same reason.)",
       "type": "array",
@@ -1416,6 +1423,25 @@
         "tool",
         "key",
         "columns"
+      ]
+    },
+    "Declared4": {
+      "description": "One family a producer writes through [`run_named`], declared by the consumer\n(CLOUD-1810).\n\n# The gap this closes, and why neither existing surface could\n\n[`run_named`] writes a branch-keyed store, and until this existed nothing\ncould read one. [`crate::rules`]' projection builds the set of families it\nhands a module as the declared [`crate::recorder::Declared`] rows unioned with\n[`VERB_WRITTEN`], and a caller-named family is in neither:\n\n- [`VERB_WRITTEN`] is a fixed list because the ENGINE owns both halves of\n  those three stores. A consumer's family cannot join it without this crate\n  knowing a consumer's name, which non-negotiable rule 1 forbids outright.\n- A `[[recorder]]` cannot express one either: [`crate::recorder::Declared`]\n  requires `tool`, because that table selects on a mediated tool call. A\n  family a `mise` task writes answers to no tool call at all.\n\nSo the store was written, the row was registered, the module read\n`input.tree.records[\"<family>\"]` — and the key was absent, every rule beneath\nit undefined, and the gate green. Measured over `branch-age`: a record naming\na 36-day branch against a two-day threshold, `batten check` exit `0`. That is\nCLOUD-1707's dead gate one surface over.\n\n# Declared rather than swept, which is the whole design\n\nThe projection could have read whatever files happen to sit in the store\ndirectory. It must not, for the reason [`crate::rules`] already gives about a\nsibling fact: a family set cannot become an ambient sweep of whatever records\nhappen to be on disk, because then a leftover file from a retired producer\nanswers as a live measurement and nothing names what SHOULD be there.\n\nA declaration is also what makes could-not-look readable. An absent record\nunder a DECLARED family is \"the producer did not run\"; the same absence under\nno declaration is not a reading at all, and collapsing the two is the error in\nthe fact model this whole store exists to avoid.\n\n# Config rather than a column on the rule that reads it\n\n[`crate::rules`] settles this at its own call site: the fact is what THIS\nrepository's producers accumulated, so a per-rule declaration would be a\nsecond place for the same answer to live. Two rules reading one family is\nordinary; two rules disagreeing about what writes it is not expressible.",
+      "type": "object",
+      "properties": {
+        "record": {
+          "description": "The family name, which is also its file name under the store.\n\nHeld to [`safe_component`]'s grammar at validation rather than at write\ntime alone, so a family that could never be written is refused while its\nauthor is watching instead of on the first producer run.",
+          "type": "string"
+        },
+        "writer": {
+          "description": "What writes it, as a runnable command.\n\n**Never executed, and that is not a gap.** House style §5 keeps the spawn\noutside `check`, so this is a pointer — the job `[[verdict.route]]`'s\n`target` already does. What it buys is that a declared family always says\nwho fills it: a store with no producer is a row that can only ever read\ncould-not-look, and the moment to catch that is at config load rather than\nafter a green run nobody questions.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "record",
+        "writer"
       ]
     },
     "DeclaredVerdict": {

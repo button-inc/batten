@@ -816,6 +816,7 @@ fn run_baseline(
             verdicts: &config.verdicts,
             words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
             recorders: &config.recorders,
+            records: &config.records,
         },
         &root,
         rules::RunOptions {
@@ -6361,6 +6362,7 @@ fn admission_anchor(
             verdicts: &config.verdicts,
             words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
             recorders: &config.recorders,
+            records: &config.records,
         },
         root,
         rules::RunOptions {
@@ -6647,6 +6649,7 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
             verdicts: &config.verdicts,
             words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
             recorders: &config.recorders,
+            records: &config.records,
         },
         policy::ModuleChecks::Run,
         overrides.config_from.as_deref(),
@@ -15884,6 +15887,7 @@ fn filed_here_pointers(
         verdicts: &config.verdicts,
         words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
         recorders: &config.recorders,
+        records: &config.records,
     };
     // `run_static_over` WITH AN INSTANT, because the four-argument wrapper hands
     // `now: None` to `minted_facts`, which reads it as epoch 0 — so every receipt
@@ -18991,6 +18995,7 @@ fn run_rules(
         verdicts: &config.verdicts,
         words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
         recorders: &config.recorders,
+        records: &config.records,
     };
     let (selected, checks) = select_rules(&config.rules, only)?;
     let scope = scope.resolve(&root)?;

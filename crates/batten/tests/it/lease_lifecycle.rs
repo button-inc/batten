@@ -135,6 +135,10 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use crate::common;
+
+use common::{git_in, init_repo, scratch, write};
+
 use batten::lease::{
     Authority, Body, Observed, Terms, authorises, authorises_this_clone, renewal, reservation,
     tombstone,
@@ -709,5 +713,89 @@ fn a_body_already_asked_or_asked_by_its_own_holder_is_left_alone() {
     assert!(
         worth_asking(&blank, RIVAL),
         "a blank request is an absence, so this one IS worth asking"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// CLOUD-1825: what the push actually enumerates, over a history built for it.
+// ---------------------------------------------------------------------------
+
+/// A wider base may enumerate FEWER objects than a narrower one.
+///
+/// `lease::tests::the_base_is_subtracted_rather_than_resent` asserts the economy
+/// of the push — that subtracting a base beats sending everything — against THIS
+/// repository, so what it covers is whatever history happens to be checked out.
+/// It used to assert something stronger and false: that a WIDER base enumerates
+/// at least as much, which is monotonicity in the base.
+///
+/// `git::objects_to_send` does not have that property and never claimed it. Its
+/// subtraction is against the base's OWN TREE, so a base whose tree carries MORE
+/// subtracts more — one commit that deletes a path and a later one that restores
+/// it makes the wider base strictly smaller, because it still holds the blobs and
+/// the narrow one does not.
+///
+/// Measured rather than imagined: it fired on this repository's own history when
+/// a commit deleted 105 generated `man/*.1` pages and the next restored them, and
+/// what it reported was a defect in the assertion rather than in the function. A
+/// one-line comparand change with nothing holding it in place invites the next
+/// author to restore the wider-base comparison, because that one reads as the
+/// more thorough of the two. So the shape is constructed here.
+///
+/// IT LIVES IN THIS TIER RATHER THAN BESIDE THE CASE IT CORRECTS, and that is the
+/// lint deciding rather than a preference: building the history needs `git`, a
+/// spawn is an inventory row (CLOUD-320), and `policy/spawn-widening.rego` refuses
+/// an ADDED `#[expect(clippy::disallowed_types)]` escape. `common::git_in` is the
+/// sanctioned fixture route and it is here, so the case comes to it.
+#[test]
+fn a_wider_base_may_enumerate_fewer_objects_than_a_narrower_one() {
+    let dir = scratch("objects-delete-then-restore");
+    init_repo(&dir);
+
+    // Distinct per file so none of them dedupe, and enough of them that the
+    // inversion cannot be one small blob rounding the other way.
+    for n in 0..24 {
+        write(&dir, &format!("page-{n}.txt"), &format!("page {n}\n"));
+    }
+    write(&dir, "keep.txt", "keep\n");
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-qm", "the pages exist"]);
+
+    for n in 0..24 {
+        std::fs::remove_file(dir.join(format!("page-{n}.txt"))).expect("delete a page");
+    }
+    git_in(&dir, &["add", "-A"]);
+    git_in(
+        &dir,
+        &["commit", "-qm", "a partial regeneration deletes them"],
+    );
+
+    for n in 0..24 {
+        write(&dir, &format!("page-{n}.txt"), &format!("page {n}\n"));
+    }
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-qm", "and the remedy restores them"]);
+
+    let head = batten::git::head_commit(&dir).expect("resolve the fixture head");
+    let narrow =
+        batten::git::objects_to_send(&dir, Some("HEAD~1"), &head).expect("the narrow base");
+    let wide = batten::git::objects_to_send(&dir, Some("HEAD~2"), &head).expect("the wider base");
+
+    assert!(
+        wide.len() < narrow.len(),
+        "the wider base still holds the deleted blobs and subtracts them, so it must \
+         enumerate FEWER than the narrow one: wide {} vs narrow {}",
+        wide.len(),
+        narrow.len()
+    );
+
+    // And the bound the corrected case asserts still holds over the same history,
+    // which is the point: `None` is sound where a wider base is not.
+    let whole = batten::git::objects_to_send(&dir, None, &head).expect("no base at all");
+    assert!(
+        whole.len() >= narrow.len() && whole.len() >= wide.len(),
+        "no base can enumerate more than sending everything: whole {} vs narrow {} / wide {}",
+        whole.len(),
+        narrow.len(),
+        wide.len()
     );
 }

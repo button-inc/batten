@@ -131,6 +131,15 @@ const FAULTS: &[(&str, &str, &str)] = &[
          mode = \"replace\"\nbody = \"b\"\n",
     ),
     (
+        // Two rows naming one family: a second row is a second answer to "who
+        // writes this", which is the one question the table exists to settle.
+        "record declare refused",
+        "record",
+        "version = 1\n\
+         [[record]]\nrecord = \"twice\"\nwriter = \"mise run measure\"\n\
+         [[record]]\nrecord = \"twice\"\nwriter = \"mise run measure\"\n",
+    ),
+    (
         "recorder declare refused",
         "recorder",
         "version = 1\n\

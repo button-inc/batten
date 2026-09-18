@@ -357,6 +357,27 @@ pub struct Config {
     /// [`Config::mints`]' — same false claim, same reason.)
     #[serde(default, rename = "recorder", skip_serializing_if = "Vec::is_empty")]
     pub recorders: Vec<crate::recorder::Declared>,
+    /// The verb-written record families this repository's producers fill
+    /// (CLOUD-1810).
+    ///
+    /// The sibling of [`Self::recorders`] on the other side of one split: a
+    /// `[[recorder]]` row is filled from a mediated tool call, and one of these
+    /// is filled by a producer calling `batten record named <family>`. Both
+    /// project into `input.tree.records`, and until this table existed only the
+    /// first could — so a store a `mise` task wrote was invisible to every
+    /// module, and the row reading it reported clean over a record that said
+    /// otherwise.
+    ///
+    /// **Declared rather than swept**, which is what keeps could-not-look
+    /// readable: an absent record under a declared family is "the producer did
+    /// not run", where the same absence with nothing declared is not a reading at
+    /// all. [`crate::record::Declared`] carries the whole argument.
+    ///
+    /// Consumer-owned, like the two tables above it: which measurements a
+    /// repository records, and what fills each, are facts about that repository
+    /// and never about the engine (non-negotiable rule 1).
+    #[serde(default, rename = "record", skip_serializing_if = "Vec::is_empty")]
+    pub records: Vec<crate::record::Declared>,
     /// The programs a `[[recorder]]` may run, by id.
     ///
     /// Named rather than inline so one program has one spelling, which is
@@ -1991,6 +2012,17 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
 ///
 /// As [`validate_tables`].
 fn validate_sections(config: &Config) -> Result<()> {
+    // The verb-written record families (CLOUD-1810). HERE rather than beside the
+    // recorder table one function up, and the placement is forced rather than
+    // chosen: `validate_tables` sits exactly at its hundred-line cap, so the call
+    // had to land in the other half of the loader. `config.rs`'s own census scans
+    // both bodies, so the call site is still found and the table is still
+    // classified — which is the property that matters, since a table nothing
+    // validates is a refusal that cannot fire (CLOUD-253).
+    under(
+        Native::RecordTableRefused,
+        crate::record::validate(&config.records),
+    )?;
     // `[budget]` is a table rather than a list, so the census below (which scans
     // `Vec<T>` fields) does not reach it — but the failure it guards against is
     // the same one: a table that parses and gates nothing. A `[budget]` header
@@ -3414,6 +3446,7 @@ impl Config {
             credential: None,
             forge: None,
             unresolvable: Vec::new(),
+            records: Vec::new(),
             version: SUPPORTED_VERSION,
             deferrals: Vec::new(),
             host: None,
@@ -3999,6 +4032,11 @@ mod tests {
             "recorders",
             "crate::recorder::validate(",
             Native::RecorderTableRefused,
+        ),
+        (
+            "records",
+            "crate::record::validate(",
+            Native::RecordTableRefused,
         ),
     ];
 

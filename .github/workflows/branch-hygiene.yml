@@ -9,7 +9,8 @@ name: branch-hygiene
 # Failure here is informational: it means branches are accumulating, not that
 # anything is broken. `land` deletes the head of a PR it merges, so a growing
 # list means branches abandoned without landing, or names reused across stories.
-# Run `mise run branch-age-check` locally and delete what has landed.
+# Run `mise run branch-age-record` locally, then `batten check --rule 'branch
+# watch loose'`, and delete what has landed.
 
 on:
   schedule:
@@ -53,7 +54,13 @@ jobs:
           # the reason ci.yml states: the whole toolchain is ~10s a job that
           # this one has no use for.
           install_args: aqua:cli/cli aqua:jqlang/jq
-      - run: mise run branch-age-check
+      # THE SPLIT THE PORT FORCED (CLOUD-1717). The producer makes the two
+      # `gh` reads and the calendar subtraction; the engine adjudicates what
+      # it recorded. Neither half can hold the other: section 5 makes `check`
+      # `read` and incapable of spawning, and the engine calls no clock on any
+      # evaluation path.
+      - run: mise run branch-age-record
+      - run: mise run batten -- check --rule 'branch watch loose'
       # The landing lease is a ref, so its hygiene belongs in the ref sweep
       # rather than in a cron of its own — that is the whole reason it lands
       # here: an added step on a job that already spins costs no runner.

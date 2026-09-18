@@ -64,11 +64,9 @@ commit, and a named ref resolves a declared one.
 
 | task                           | bucket | git variants                 |
 | ------------------------------ | ------ | ---------------------------- |
-| `attestation-check.sh`         | git    | `location`, `remote`         |
 | `awk-regex-check.sh`           | git    | `tracked`                    |
 | `batten-glob-check.sh`         | git    | `location`                   |
 | `board-sweep.sh`               | forge  | `location`, `log`            |
-| `branch-age-check.sh`          | forge  | —                            |
 | `cap-drift.sh`                 | tree   | —                            |
 | `checks-green.sh`              | forge  | `head`                       |
 | `ci-drift.sh`                  | forge  | `location`                   |
@@ -99,7 +97,6 @@ commit, and a named ref resolves a declared one.
 | `install-check.sh`             | git    | `tracked`                    |
 | `issue-read-check.sh`          | git    | `location`, `log`            |
 | `issue-search-check.sh`        | git    | `head`, `location`           |
-| `land-divergence-assert.sh`    | tree   | —                            |
 | `land-lock-check.sh`           | git    | `log`, `remote`              |
 | `landed-check.sh`              | git    | `head`, `log`                |
 | `license-table-check.sh`       | tree   | —                            |
@@ -116,7 +113,6 @@ commit, and a named ref resolves a declared one.
 | `msrv-pin-agreement.sh`        | tree   | —                            |
 | `mutant.sh`                    | git    | `location`, `tracked`        |
 | `no-doctests.sh`               | git    | `location`, `tracked`        |
-| `nonverdict-assert.sh`         | tree   | —                            |
 | `ntia-check.sh`                | git    | `location`                   |
 | `perf-assert.sh`               | tree   | —                            |
 | `perf-compare.sh`              | tree   | —                            |

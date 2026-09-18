@@ -617,7 +617,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "mise,attestation-check,engine-checks-green,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence-assert,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook"
+MUTANT_GATES = "mise,attestation,timeout-drift,engine-checks-green,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-callable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -1866,6 +1866,205 @@ counts=$(jq -r --argjson authored "$authored" '
 # undefined and it says nothing; a record that IS written and names no branch is
 # the different, refused state. Collapsing those two is the silent pass this
 # campaign keeps finding.
+# CLOUD-583's probe and verifier, ported off `attestation-check.sh` under
+# CLOUD-1717.
+#
+# THE SPAWN STAYS OUT HERE AND ONLY THE ADJUDICATION MOVED IN (house-style §5).
+# `policy/attestation.rego` decides what an unverified archive is; this fetches
+# what it decides over, and every step of the fetching is a process `check` may
+# not start: the endpoint probe, the release download, the unpack, and
+# `gh attestation verify` itself.
+#
+# EVERY COULD-NOT-LOOK WRITES NOTHING, which is the half that makes the module's
+# silence honest. No credential, no github.com remote, a posture that is neither
+# 200 nor 404, an unreadable status line, a tag that will not resolve, a download
+# that fails — each refuses here, loudly, while its author is watching, and leaves
+# the record absent. The retired program spelled these as exit 2; on the engine's
+# contract 2 means a finding, so carrying that over would have made could-not-look
+# a violation.
+#
+# THE ZERO DIGEST IS THE PROBE, and it is a question about the REPOSITORY rather
+# than about any file: where attestation is available an unknown digest answers
+# 200 with an empty array, and where it is not the resource itself answers 404.
+[tasks.attestation-record]
+description = "Record the platform's attestation posture and each release archive's verdict, for `release grade unsafe`"
+shell = "bash -c"
+run = '''
+set -euo pipefail
+
+gh_bin="${ATTESTATION_GH:-gh}"
+zero=0000000000000000000000000000000000000000000000000000000000000000
+
+# THE OFFLINE HALF, and the narrowness is the design. It asserts that the
+# verifier resolves and NOTHING about the repository, the credential or the
+# platform, because this is what the `release check unread` row runs at `deny` on
+# every gate invocation — and a gate that blocks on ambient environment blocks
+# everything the moment an environment differs. Measured on the retired program:
+# an earlier version also required GH_TOKEN and a github.com remote, and it
+# reported a violation inside `tests/prebuilt-lint.bats`' fixture repositories,
+# which carry neither. A credential is could-not-look, and could-not-look is the
+# world half's to report rather than this one's to enforce.
+if ! command -v "$gh_bin" >/dev/null 2>&1; then
+	echo "::error:: attestation-record: no verifier at '$gh_bin', so no attestation could ever be checked. Run: mise install aqua:cli/cli" >&2
+	exit 2
+fi
+if [ "${1:-}" = "--precondition" ]; then
+	echo "attestation-record: precondition holds — the verifier resolves"
+	exit 0
+fi
+if [ -z "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]; then
+	echo "::error:: attestation-record: no GH_TOKEN/GITHUB_TOKEN, so a 404 could not be told from a denial. Nothing recorded." >&2
+	exit 2
+fi
+
+remote=$(git remote get-url origin)
+slug=${remote#*github.com[:/]}
+slug=${slug%.git}
+if [ -z "$slug" ]; then
+	echo "::error:: attestation-record: no github.com origin remote, so there is no repository to ask about." >&2
+	exit 2
+fi
+
+status=$("$gh_bin" api "repos/$slug/attestations/sha256:$zero" -i 2>/dev/null |
+	awk 'NR==1 { for (i = 1; i <= NF; i++) if ($i ~ /^[0-9][0-9][0-9]$/) { print $i; exit } }' || true)
+case "$status" in
+404) printf 'posture\t404\n' | cargo run --quiet -p batten -- record named attestation; exit 0 ;;
+200) ;;
+*)
+	echo "::error:: attestation-record: the attestations endpoint answered '${status:-nothing readable}' — neither 200 nor 404, so the platform's posture is unknown and nothing was recorded." >&2
+	exit 2
+	;;
+esac
+
+tag="${1:-}"
+if [ -z "$tag" ]; then
+	if ! tag=$("$gh_bin" release view --json tagName --jq '.tagName' 2>/dev/null) || [ -z "$tag" ]; then
+		echo "::error:: attestation-record: no tag given and no latest release to read, so there is nothing to verify." >&2
+		exit 2
+	fi
+fi
+
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+if ! "$gh_bin" release download "$tag" --dir "$scratch" --pattern '*.tar.gz' --pattern '*.zip' >/dev/null 2>&1; then
+	echo "::error:: attestation-record: could not download $tag's archives, so their provenance is unread. Nothing recorded." >&2
+	exit 2
+fi
+
+{
+	printf 'posture\t200\n'
+	for archive in "$scratch"/*.tar.gz "$scratch"/*.zip; do
+		[ -f "$archive" ] || continue
+		name=${archive##*/}
+		into="$scratch/x-$name"
+		mkdir -p "$into"
+		case "$name" in
+		*.zip) unzip -q -o "$archive" -d "$into" || true ;;
+		*) tar -xzf "$archive" -C "$into" || true ;;
+		esac
+		binary=$(find "$into" -type f \( -name batten -o -name batten.exe \) | head -n1)
+		if [ -z "$binary" ]; then
+			printf 'archive\t%s\tno-binary\n' "$name"
+		elif "$gh_bin" attestation verify "$binary" --repo "$slug" >/dev/null 2>&1; then
+			printf 'archive\t%s\tverified\n' "$name"
+		else
+			printf 'archive\t%s\tunverified\n' "$name"
+		fi
+	done
+} | cargo run --quiet -p batten -- record named attestation
+'''
+
+# CLOUD-266's measurement half, ported off `timeout-drift.sh` under CLOUD-1717.
+#
+# THE ARITHMETIC CANNOT MOVE IN. A p95 over run durations is arithmetic over
+# instants, and the engine calls no clock on any evaluation path — `clippy.toml`'s
+# `disallowed-methods` and `crates/batten/tests/clock_ban.rs` hold it there. So the
+# durations are subtracted here and the classification is
+# `policy/timeout-drift.rego`'s: CLOUD-1559's rule, carry the decisions.
+#
+# MATRIX LEGS POOL. One `timeout-minutes` covers seven `dist` targets and the API
+# reports each leg as `dist (<target>)`, so every leg feeds one distribution —
+# matched on the job key, or the key followed by " (".
+[tasks.timeout-drift-record]
+description = "Record each job's declared budget against its measured p95, for `bound grade other`"
+shell = "bash -c"
+run = '''
+set -euo pipefail
+
+window="${BATTEN_BUDGET_WINDOW:-25}"
+workflows=".github/workflows"
+
+if ! command -v gh >/dev/null 2>&1; then
+	echo "::error:: timeout-drift-record: gh is not on PATH — cannot read the Actions API. Nothing recorded." >&2
+	exit 2
+fi
+if [ ! -d "$workflows" ]; then
+	echo "::error:: timeout-drift-record: $workflows is not a directory, so no budget could be read. Nothing recorded." >&2
+	exit 2
+fi
+
+emit() {
+	for wf in "$workflows"/*.yml; do
+		[ -e "$wf" ] || continue
+		file="$(basename "$wf")"
+		if ! runs=$(gh api "repos/{owner}/{repo}/actions/workflows/$file/runs?status=success&per_page=$window" --jq '.workflow_runs[].id' 2>/dev/null); then
+			echo "::error:: timeout-drift-record: cannot read runs for $file. Nothing recorded." >&2
+			return 2
+		fi
+		durations=""
+		for run in $runs; do
+			[ -n "$run" ] || continue
+			if ! legs=$(gh api "repos/{owner}/{repo}/actions/runs/$run/jobs" --jq '.jobs[] | select(.conclusion == "success") | [.name, .started_at, .completed_at] | @tsv' 2>/dev/null); then
+				echo "::error:: timeout-drift-record: cannot read jobs for run $run. Nothing recorded." >&2
+				return 2
+			fi
+			durations="$durations$(printf '%s\n' "$legs" | awk -F'\t' '
+				NF == 3 {
+					"date -d \"" $2 "\" +%s" | getline from
+					"date -d \"" $3 "\" +%s" | getline to
+					if (from != "" && to != "" && to >= from) printf "%s\t%d\n", $1, to - from
+				}')
+"
+		done
+		awk -v file="$file" -v durations="$durations" '
+			function flush(   samples, n, i, sorted, idx, p95) {
+				if (job == "" || declared == "") return
+				n = 0
+				split(durations, rows, "\n")
+				for (i in rows) {
+					split(rows[i], f, "\t")
+					if (f[1] == job || index(f[1], job " (") == 1) samples[++n] = f[2] + 0
+				}
+				p95 = 0
+				if (n > 0) {
+					asort(samples)
+					idx = int(((95 * n) + 99) / 100)
+					if (idx < 1) idx = 1
+					p95 = samples[idx]
+				}
+				printf "job\t%s\t%s\t%s\t%d\t%d\t%s\n", file, job, declared, p95, n, basis
+			}
+			/^jobs:/ { injobs = 1; next }
+			injobs && /^[a-z]/ { injobs = 0 }
+			injobs && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ {
+				flush()
+				job = $1; sub(":", "", job); declared = ""; basis = "measured"
+			}
+			injobs && job != "" && /^    timeout-minutes:[[:space:]]*[0-9]+/ {
+				value = $0
+				sub(/^[[:space:]]*timeout-minutes:[[:space:]]*/, "", value)
+				sub(/[^0-9].*$/, "", value)
+				declared = value
+				basis = ($0 ~ /grandfathered/) ? "grandfathered" : "measured"
+			}
+			END { flush() }
+		' "$wf"
+	done
+}
+
+emit | cargo run --quiet -p batten -- record named timeout-drift
+'''
+
 [tasks.branch-age-record]
 description = "Effect: record every remote branch's age in days and which names head more than one merged PR (CLOUD-349)"
 shell = "bash -c"
@@ -1910,6 +2109,688 @@ prs=$(gh pr list --state merged --limit 200 --json headRefName --jq '.[].headRef
   printf '%s\\n' "$prs" | sed '/^$/d' | awk -v trunk="$trunk" '$0 != trunk { print "merged\\t" $0 }'
 } | cargo run --quiet -p batten -- record named branch-age
 """
+
+[tasks.nonverdict-record]
+description = "Effect: record which recent required-check failures never reached a verdict, one line per failure plus a window summary (CLOUD-484)"
+# THE MEASURING HALF OF A SPLIT THAT ALREADY EXISTED (CLOUD-1717). This carries
+# `mise-tasks/nonverdict-scan.sh`'s body; `policy/nonverdict.rego` carries
+# `mise-tasks/nonverdict-assert.sh`'s decision. The pair was already apart for
+# CLOUD-1559's reason — a measurement needs the network and a token, a decision
+# needs neither — so the port moved two halves into their homes rather than
+# splitting anything new. House style §5 makes `check` `read` and structurally
+# incapable of spawning the `gh` reads below.
+#
+# COULD-NOT-LOOK REFUSES HERE AND RECORDS NOTHING. The retired scan answered a
+# total read failure with `unreadable=1` over an otherwise empty window, which the
+# decider turned into its exit 2. On the engine's contract exit 2 is a FINDING, so
+# carrying that spelling over would have made blindness a violation. Both arms now
+# fail loudly while their author is watching and write no family at all, and an
+# absent family is the module's silence. `unreadable` survives for the case it was
+# really for: a window read in PART, which is a finding rather than blindness.
+#
+# ## The predicate, and why it is CLOSED
+#
+# CI runs this repo's work through the pinned toolchain and nothing else runs it,
+# which `mise run ci-local-parity` gates ("every task CI runs is one `verify`
+# runs"). So:
+#
+#   a failed job rendered a VERDICT iff one of its failed steps is named
+#   `Run mise run <task>` or `Run mise exec -- <command>`; otherwise it failed
+#   WITHOUT reaching a verdict.
+#
+# `mise exec` IS THE SECOND SPELLING, added after the first cost four jobs in one
+# lap (CLOUD-113). This read `Run mise run <task>` alone, on the stated premise
+# that it is the only way our work reaches a runner — and the `windows` job broke
+# that premise for a measured reason: its task body is bash, so `mise run` puts
+# Git Bash between the runner and cargo, MSYS rewrites PATH across that boundary,
+# and the toolchain the preflight just resolved is invisible three processes down.
+# It runs `mise exec -- cargo test --workspace` instead.
+#
+# The consequence nobody costed: seven genuinely failing tests then classified as
+# a PROVISIONING TRANSIENT, so `land` re-ran the job four times, absorbed four
+# real verdicts, and reported "the provisioning path is broken" about a suite that
+# was reproducibly red. A predicate whose premise has gone false does not fail
+# loudly — it answers confidently and wrongly, in the direction that spends money.
+#
+# Still CLOSED, which is the property that mattered: this names the two ways a
+# verdict is rendered, not the growing set of ways a prelude can fail. The obvious
+# alternative — an allowlist of prelude steps — is an OPEN set that needs an edit
+# every time a setup action is added, and a forgotten edit reads a real
+# provisioning failure as a verdict.
+#
+# ## Two exclusions that are part of the predicate, not caveats
+#
+# * THE `final` FAN-IN. Its failure is manufactured by its siblings: a run can
+#   conclude `cancelled` overall while `final` concludes `failure` with its only
+#   failed step `Assert all required jobs passed` — a bare `run:` step, not a
+#   `mise run` one. Counted naively, `final` would read as a non-verdict failure on
+#   EVERY genuinely red branch. `checks-green` guards the same shape by testing
+#   no-answer before red (CLOUD-334, CLOUD-351).
+# * RUNS CONCLUDED `cancelled`. That is the landing lease declining an
+#   unauthorised branch (CLOUD-420), which is CLOUD-470's category. Counting it
+#   here would double-count a case that already has an owner. The `?status=failure`
+#   query excludes them, and the `.conclusion == "failure"` filter re-checks rather
+#   than trusting it.
+#
+# ## Conditional reads, and the one place this EXTENDS ci-wait
+#
+# `ci-wait` keeps its ETag in a shell scalar for ONE url, alive only for the
+# lifetime of one poll. Neither property survives here: a window over N runs is N
+# urls, and a scheduled tick is a new process every time — so an in-memory ETag
+# would make every tick a cold read and "a quiet tick costs no rate limit" false.
+# The store is therefore a MAP KEYED BY URL, PERSISTED between runs, the
+# out-of-tree posture `epoch.rs`'s cache and the `.git/batten-*` receipts use.
+#
+# A 304 KEEPS THE PREVIOUS READING, which is why the body is cached beside the
+# ETag. `mem:github-rest-etiquette` is explicit that re-parsing an empty 304 body
+# reads as "nothing found", and that the failure then shows up only as unexplained
+# slowness. A 304 with no cached body is `unreadable`, never an empty window.
+#
+# Requests are SERIAL, never concurrent: secondary rate limits are about shape.
+#
+# OUTPUT IS A POINTER, NEVER A PAYLOAD (rule 4): run ids, job names, step names and
+# counts. No log body is ever fetched, so none can leak. TAB-separated, because job
+# and step names carry spaces and a space-separated key=value stream cannot hold
+# them.
+shell = "bash -c"
+run = '''
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+# How many recent failed runs to look at. A count, and deliberately not a date
+# range: a window of runs is stable to re-read and cannot silently widen when the
+# repo gets busier.
+WINDOW="${BATTEN_NONVERDICT_WINDOW:-30}"
+
+# The cache root. Under `.git/`, so it is out of tree, never committed, and
+# discarded with the clone rather than surviving as stale state on a fresh one.
+cache="${BATTEN_NONVERDICT_CACHE:-$(git rev-parse --git-dir)/batten-nonverdict}"
+mkdir -p "$cache"
+
+# `gh api -i`, then the status line and the ETag out of the headers, then the body
+# after the first blank line — `main-watch`'s form. A non-2xx makes `gh` exit
+# non-zero (a 304 included), so the call is guarded rather than trusted: under
+# `set -e` an unguarded 304 would abort the scan on the cheapest possible response.
+#
+# Sets `body` and returns 0 on a usable reading, 1 when it could not look.
+conditional_get() {
+	local url="$1" key etag_file body_file resp status new_etag
+	key=$(printf '%s' "$url" | sha1sum | cut -d' ' -f1)
+	etag_file="$cache/$key.etag"
+	body_file="$cache/$key.body"
+
+	local args=(-i "$url")
+	if [[ -s "$etag_file" ]]; then
+		args+=(-H "If-None-Match: $(cat "$etag_file")")
+	fi
+
+	resp=$(gh api "${args[@]}" 2>/dev/null | tr -d '\r') || true
+	status=$(printf '%s' "$resp" | sed -n '1s@^HTTP/[0-9.]* \([0-9]*\).*@\1@p')
+
+	# Reassigned only when non-empty: a response that carries no ETag must not
+	# clear the stored one, or the next tick is a cold read for no reason.
+	#
+	# `if`, not `[ -n … ] && …`: under `set -e` a trailing `&&` list that fails is
+	# a non-zero command mid-function, which aborts the whole scan. Measured — the
+	# first version exited silently with no records and no summary whenever a
+	# response carried no ETag, which is indistinguishable from a clean empty
+	# window and is exactly the false green this sensor exists to report.
+	new_etag=$(printf '%s' "$resp" | sed -n 's/^[Ee][Tt]ag: //p' | head -n1)
+	if [[ -n "$new_etag" ]]; then
+		printf '%s' "$new_etag" >"$etag_file"
+	fi
+
+	if [[ "$status" = "304" ]]; then
+		# The whole point of the cache. No body arrives, so the previous reading
+		# IS the answer; without one there is nothing to fall back to.
+		[[ -s "$body_file" ]] || return 1
+		body=$(cat "$body_file")
+		return 0
+	fi
+
+	case "$status" in
+	2*) ;;
+	*) return 1 ;;
+	esac
+
+	body=$(printf '%s' "$resp" | awk 'body {print} /^$/ {body=1}')
+	[[ -n "${body//[[:space:]]/}" ]] || return 1
+	printf '%s' "$body" >"$body_file"
+	return 0
+}
+
+# THE POPULATION IS THE REQUIRED ROSTER, and getting this wrong was measured
+# rather than reasoned. The first version judged every failed job in every
+# workflow, and 22 of its 24 hits were `fast-forward` jobs failing at
+# `Run sequoia-pgp/fast-forward@ea7628b…` — the merge bot DECLINING a branch that
+# is no longer a descendant, which is the landing loop working exactly as
+# designed. A sensor whose signal is 90% expected refusals is a sensor nobody
+# reads.
+#
+# Scoping by workflow FILE would have been the obvious fix and is wrong: `ci`,
+# `cross`, `darwin-link`, `msrv`, `semver` and `final` live in `ci.yml`, but
+# `commit-lint`, `zizmor` and `action` do not — and `commit-lint` is the job that
+# carried the CLOUD-404 503. Filtering by path would have dropped the motivating
+# case.
+#
+# So the population is `$CI_REQUIRED_CHECKS`, the one roster `ci-wait` and
+# `land`'s `graded_runs` already share (`mise.toml [env]`). A third reader of that
+# value is what the value is for; a private copy here is the drift CLOUD-327 cost.
+REQUIRED="${CI_REQUIRED_CHECKS:-}"
+if [[ -z "${REQUIRED//[[:space:]]/}" ]]; then
+	echo "::error:: nonverdict-record: CI_REQUIRED_CHECKS is empty — without the roster this cannot tell a required job from an unrelated one, and a count over all of them is meaningless. Run through \`mise run\` so mise.toml's [env] applies. Nothing was recorded." >&2
+	exit 1
+fi
+
+# The fan-in, excluded by name: its failure is manufactured by its siblings.
+FAN_IN="final"
+
+unreadable=0
+runs_seen=0
+records=""
+
+# SINGLE-RUN MODE (CLOUD-483). `land` asks the same question about ONE concluded
+# run, on its red-CI stop path, to tell a provisioning transient from a verdict —
+# `land::absorbed` is the reader. It is a mode rather than a second task because
+# the classification must exist once: two readers deciding "did this job reach a
+# verdict" from two copies of the jq is the CLOUD-351 shape, and the copy that
+# drifts is the one nobody runs on a clock.
+#
+# IT EMITS ON STDOUT AND RECORDS NOTHING, which the port sharpened rather than
+# changed. There is no window to summarise, so there is no window to judge, and
+# writing a windowless family would leave `policy/nonverdict.rego` reading a store
+# whose summary is absent. An empty stream is therefore unambiguous: no failed
+# required job was classifiable, which is "could not look" and never "nothing was
+# wrong".
+one_run=""
+if [[ "${1:-}" = "--run" ]]; then
+	one_run="${2:-}"
+	if [[ -z "${one_run//[[:space:]]/}" ]]; then
+		echo "::error:: nonverdict-record: --run needs a run id. Without one there is nothing to classify, and an empty record stream would read as 'no failed job reached a verdict'." >&2
+		exit 2
+	fi
+fi
+
+if [[ -n "$one_run" ]]; then
+	run_ids="$one_run"
+elif ! conditional_get "repos/{owner}/{repo}/actions/runs?status=failure&per_page=$WINDOW"; then
+	echo "::error:: nonverdict-record: could not read the run list, so this window judged nothing and nothing was recorded. A persistent read failure is a token or rate-limit problem, not a clean window." >&2
+	exit 1
+else
+	# `.id` and `.conclusion` only. Sorted by id so the record stream is
+	# byte-stable across ticks that see the same window in a different order.
+	run_ids=$(printf '%s' "$body" | jq -r '[.workflow_runs[]? | select(.conclusion == "failure") | .id] | sort | .[]' 2>/dev/null) || run_ids=""
+fi
+
+failed_jobs=0
+nonverdict=0
+verdict=0
+
+while IFS= read -r run; do
+	[[ -n "$run" ]] || continue
+	runs_seen=$((runs_seen + 1))
+
+	if ! conditional_get "repos/{owner}/{repo}/actions/runs/$run/jobs?per_page=100"; then
+		unreadable=$((unreadable + 1))
+		continue
+	fi
+
+	# One line per failed job: the job name, then whether any FAILED step is a
+	# `Run mise run …` step. The classification is done in jq over the payload
+	# rather than in shell over a rendered string, so a job name containing a tab
+	# cannot forge a field.
+	while IFS=$'\t' read -r job kind step; do
+		[[ -n "$job" ]] || continue
+		failed_jobs=$((failed_jobs + 1))
+		if [[ "$kind" = "verdict" ]]; then
+			verdict=$((verdict + 1))
+		else
+			nonverdict=$((nonverdict + 1))
+		fi
+		records="${records}${kind}"$'\t'"run=$run"$'\t'"job=$job"$'\t'"step=$step"$'\n'
+	done <<<"$(
+		printf '%s' "$body" | jq -r --arg fan "$FAN_IN" --arg required "$REQUIRED" '
+			($required | split(",") | map(gsub("^\\s+|\\s+$"; ""))) as $roster
+			| [.jobs[]?
+			   | select(.conclusion == "failure")
+			   | select(.name != $fan)
+			   | select([.name] | inside($roster))]
+			| sort_by(.name)
+			| .[]
+			| . as $job
+			| ([$job.steps[]? | select(.conclusion == "failure")] | sort_by(.number)) as $failed
+			| ([$failed[] | select(.name | startswith("Run mise run ") or startswith("Run mise exec -- "))] | first) as $task
+			| if $task
+			  then [$job.name, "verdict", $task.name]
+			  else [$job.name, "nonverdict", (($failed | first | .name) // "unknown")]
+			  end
+			| @tsv
+		' 2>/dev/null
+	)"
+done <<<"$run_ids"
+
+# Records first, sorted, then the summary — so the stream is byte-stable and the
+# module can read the summary without depending on where it sits.
+emit() {
+	if [[ -n "$records" ]]; then
+		printf '%s' "$records" | LC_ALL=C sort
+	fi
+	if [[ -z "$one_run" ]]; then
+		printf 'window\truns=%s\tfailed_jobs=%s\tnonverdict=%s\tverdict=%s\tunreadable=%s\n' \
+			"$runs_seen" "$failed_jobs" "$nonverdict" "$verdict" "$unreadable"
+	fi
+}
+
+# Single-run mode has no window, so there is no family to write — it answers on
+# stdout, where `land::absorbed`'s caller reads it.
+if [[ -n "$one_run" ]]; then
+	emit
+	exit 0
+fi
+
+# BOTH, AND THE ORDER MATTERS. The window goes into the family
+# `policy/nonverdict.rego` reads, and the same bytes go to stdout, where
+# `nonverdict-rate.yml` publishes them to the step summary — the number is the
+# point, and a summary that only appears on green is a report nobody reads at the
+# moment it matters. Rendered once into a variable rather than measured twice, so
+# the published records and the recorded ones cannot differ.
+out=$(emit)
+printf '%s\n' "$out"
+printf '%s\n' "$out" | cargo run --quiet -p batten -- record named nonverdict
+'''
+
+[tasks.land-divergence-record]
+description = "Effect: record how far the landing loop diverged from linear over a window, one line per divergent PR plus a window summary (CLOUD-492)"
+# THE MEASURING HALF OF A SPLIT THAT ALREADY EXISTED (CLOUD-1717). This carries
+# `mise-tasks/land-divergence.sh`'s body; `policy/land-divergence.rego` carries
+# `mise-tasks/land-divergence-assert.sh`'s decision. The pair was already apart for
+# CLOUD-1559's reason — a measurement needs the network and a token, a decision
+# needs neither — so the port moved two halves into their homes rather than
+# splitting anything new. House style §5 makes `check` `read` and structurally
+# incapable of spawning the `gh` reads below, and `Fact::Instant` projects `null`
+# to every module, so every instant subtraction here is unmovable too.
+#
+# ## A CANCELLED RUN IS NOT WASTE, AND COUNTING THEM INVERTS THE VERDICT
+#
+# Measured 2026-08-12 after serialisation: 5 green CI runs against 5 cancelled,
+# which reads as a 50% discard rate and is the opposite. Those cancels had p50
+# lifetime ~20s — `ci-lease-precondition` killing an unauthorised matrix for ~20
+# runner-seconds instead of billing ~500. Before serialisation the same population
+# had p75 147s and max 413s; THOSE were waste. So the graded quantity is CANCEL
+# LATENCY, never cancel count.
+#
+# ## Per workflow, never the global run list
+#
+# `actions/runs` carries ~3100 skipped auto-land runs a day, and at that insertion
+# rate page boundaries shift mid-walk, so a paginated read of it is not stable.
+# Per-workflow with a `created>=` filter is ~3-4 pages each and stable.
+#
+# ## NO WATERMARK, AND THAT IS THE DESIGN
+#
+# The obvious shape is a persisted ledger advanced by a watermark. It cannot work
+# here: a scheduled tick gets a fresh checkout, so nothing survives between them,
+# and a committed ledger pollutes the tree against non-negotiable rule 7. The
+# Actions API is already the durable store (90-day retention), so every tick is a
+# PURE FUNCTION OF ITS WINDOW — which also makes this re-runnable over any past
+# window for free, and that is what a divergence investigation needs. The ETag
+# cache is a different thing: a within-clone read optimisation, discarded with the
+# clone.
+#
+# OUTPUT IS A POINTER, NEVER A PAYLOAD (rule 4): run ids, branch names,
+# conclusions, latencies and counts. No log body, no commit message, no PR title is
+# ever fetched, so none can leak. TAB-separated, because branch names are
+# unconstrained.
+shell = "bash -c"
+run = '''
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+# The window, as an ISO-8601 instant. A DATE RANGE rather than a run count, which
+# is the opposite of `nonverdict-scan`'s choice and deliberately so: that sensor
+# asks "how often does this failure mode occur", which a fixed sample answers,
+# while this one asks "what did the loop cost over a period", which only a period
+# answers. A count would silently narrow the window whenever the fleet got busy —
+# exactly when the answer matters most.
+SINCE="${BATTEN_DIVERGENCE_SINCE:-$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)}"
+
+# The cache root. Under `.git/`, so it is out of tree, never committed, and
+# discarded with the clone rather than surviving as stale state on a fresh one.
+cache="${BATTEN_DIVERGENCE_CACHE:-$(git rev-parse --git-dir)/batten-divergence}"
+mkdir -p "$cache"
+
+unreadable=0
+
+# `gh api -i`, then the status line and the ETag out of the headers, then the
+# body after the first blank line — `main-watch`'s form, as `nonverdict-scan`
+# carries it. A non-2xx makes `gh` exit non-zero (a 304 included), so the call is
+# guarded rather than trusted: under `set -e` an unguarded 304 would abort on the
+# cheapest possible response.
+#
+# Sets `body` and returns 0 on a usable reading, 1 when it could not look.
+conditional_get() {
+	local url="$1" key etag_file body_file resp status new_etag
+	key=$(printf '%s' "$url" | sha1sum | cut -d' ' -f1)
+	etag_file="$cache/$key.etag"
+	body_file="$cache/$key.body"
+
+	local args=(-i "$url")
+	if [[ -s "$etag_file" ]]; then
+		args+=(-H "If-None-Match: $(cat "$etag_file")")
+	fi
+
+	resp=$(gh api "${args[@]}" 2>/dev/null | tr -d '\r') || true
+	status=$(printf '%s' "$resp" | sed -n '1s@^HTTP/[0-9.]* \([0-9]*\).*@\1@p')
+
+	# Reassigned only when non-empty: a response carrying no ETag must not clear
+	# the stored one, or the next tick is a cold read for no reason. `if`, not a
+	# `&&` list — under `set -e` a failing trailing `&&` aborts the whole scan,
+	# which `nonverdict-scan` measured as a silent empty window.
+	new_etag=$(printf '%s' "$resp" | sed -n 's/^[Ee][Tt]ag: //p' | head -n1)
+	if [[ -n "$new_etag" ]]; then
+		printf '%s' "$new_etag" >"$etag_file"
+	fi
+
+	if [[ "$status" = "304" ]]; then
+		# The whole point of the cache. No body arrives, so the previous reading
+		# IS the answer; without one there is nothing to fall back to, and an
+		# empty parse would read as a clean window — the false green this sensor
+		# exists to report.
+		[[ -s "$body_file" ]] || return 1
+		body=$(cat "$body_file")
+		return 0
+	fi
+
+	case "$status" in
+	2*) ;;
+	*) return 1 ;;
+	esac
+
+	body=$(printf '%s' "$resp" | awk 'body {print} /^$/ {body=1}')
+	[[ -n "${body//[[:space:]]/}" ]] || return 1
+	printf '%s' "$body" >"$body_file"
+	return 0
+}
+
+summary() {
+	printf 'window\tsince=%s\tlandings=%s\tgraded=%s\tgreen=%s\tred=%s\tcancelled=%s\tcancel_p50=%s\tpeak_concurrency=%s\tqueue_p90=%s\tqueue_job_p90=%s\tretries=%s\tff_refused=%s\tff_success=%s\tunreadable=%s\n' \
+		"$SINCE" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12}" "$unreadable"
+}
+
+# COULD-NOT-LOOK REFUSES HERE AND RECORDS NOTHING (CLOUD-1717). The retired
+# measurer answered a total read failure with an otherwise-empty window carrying
+# `unreadable=1`, which the decider turned into its exit 2. On the engine's
+# contract exit 2 is a FINDING, so carrying that spelling over would have made
+# blindness a violation. This fails loudly while its author is watching and writes
+# no family at all; an absent family is the module's silence. `unreadable` still
+# counts the PARTIAL reads below, which are a finding rather than blindness.
+bail() {
+	echo "::error:: land-divergence-record: $1 Nothing was recorded." >&2
+	exit 1
+}
+
+# `created>=` must be URL-encoded: `>` is not legal in a query string, and gh
+# passes the path through verbatim.
+enc_since=$(printf '%s' "$SINCE" | sed 's/:/%3A/g')
+
+# --- CI runs over the window --------------------------------------------------
+#
+# `ci.yml` is the matrix a landing buys. `?created=>=` plus a per-page cap, and
+# the walk stops at the first page shorter than the cap — the `link` header is
+# the correct general answer, but a per-workflow day window is a few pages and
+# this keeps the request parameters identical between ticks, which is what keeps
+# the 304 hit rate up (`mem:github-rest-etiquette`).
+# TRUNCATION IS DETECTED BY `total_count`, NOT BY RUNNING OUT OF PAGES, and that
+# distinction was measured rather than reasoned.
+#
+# The Actions runs endpoint HARD-CAPS pagination at 1000 items while still
+# reporting the true `total_count`. Measured on `fast-forward.yml` over a 25-hour
+# window: `total_count` 1446, page 10 full, page 11 EMPTY. So a walk that stops
+# when a page comes back short — the obvious loop, and the one written first here
+# — collects 1000 of 1446 and looks exactly like a clean finish. It reported
+# `ff_refused=0` over a window carrying 598 refusals, which is a perfect score
+# read off a prefix: the precise false green this sensor exists to catch.
+#
+# `total_count` is therefore the only honest stopping condition. Compare it
+# against what was actually collected and report the gap; a wrong number reported
+# confidently is worse than no number, and this is the shape that produces one.
+MAX_PAGES="${BATTEN_DIVERGENCE_MAX_PAGES:-10}"
+
+walk_workflow() { # $1 = workflow file, $2 = jq expression emitting ONE line per run
+	local wf="$1" expr="$2" page=1 got total="" out="" have
+	while [[ "$page" -le "$MAX_PAGES" ]]; do
+		if ! conditional_get "repos/{owner}/{repo}/actions/workflows/$wf/runs?created=%3E%3D$enc_since&per_page=100&page=$page"; then
+			return 1
+		fi
+		if [[ -z "$total" ]]; then
+			total=$(printf '%s' "$body" | jq -r '.total_count // 0' 2>/dev/null) || total=0
+		fi
+		got=$(printf '%s' "$body" | jq -r '.workflow_runs | length' 2>/dev/null) || got=0
+		out="$out$(printf '%s' "$body" | jq -r "$expr" 2>/dev/null)
+"
+		[[ "$got" = "100" ]] || break
+		page=$((page + 1))
+	done
+
+	out=$(printf '%s' "$out" | sed '/^[[:space:]]*$/d')
+	printf '%s' "$out"
+	have=$(printf '%s' "$out" | grep -c . || true)
+	if [[ "$have" -lt "${total:-0}" ]]; then
+		echo "::error:: land-divergence: read $have of $total $wf run(s) since $SINCE — the API caps this endpoint at 1000 items, so these counts describe a prefix of the window. Narrow BATTEN_DIVERGENCE_SINCE." >&2
+		return 2
+	fi
+	return 0
+}
+
+# An exact count for one conclusion, from `total_count` with a status filter —
+# one request, no pagination, and therefore no cap to be truncated by. Used
+# wherever only a COUNT is needed, which is why the fast-forward ratio does not
+# go through `walk_workflow` at all: at this repo's comment volume that window is
+# routinely over the 1000-item ceiling, so a walk would report `could not look`
+# every day for a number that is available exactly and cheaply.
+count_runs() { # $1 = workflow file, $2 = status
+	local n
+	conditional_get "repos/{owner}/{repo}/actions/workflows/$1/runs?created=%3E%3D$enc_since&status=$2&per_page=1" || return 1
+	n=$(printf '%s' "$body" | jq -r '.total_count // empty' 2>/dev/null) || return 1
+	[[ -n "$n" ]] || return 1
+	printf '%s' "$n"
+}
+
+# The per-JOB queue delay (CLOUD-501). A run's `created_at` -> `run_started_at`
+# is the FIRST job's start; a matrix leg that waited behind it is invisible in
+# it, and that is exactly the distinction the diagnosis needs — a wide matrix
+# queueing on its own legs looks nothing like a saturated pool, and the per-run
+# figure cannot tell them apart. Measured: queue p90 252s over the 13-landing
+# window and 218s over the 10-landing one, against 0s over the 25-hour window
+# whose idle stretch averaged it away.
+#
+# ONE REQUEST PER RUN, which is a real cost the header's ETag-stability argument
+# cuts against — so it is bounded rather than waved at. Only GRADED runs in the
+# window are read, which post-serialisation is ~1 per landing, and a run whose
+# jobs cannot be read increments `unreadable` rather than being dropped.
+# Dropping it would report a p90 over the legs that happened to answer, which is
+# the partial-coverage false green this whole sensor exists to refuse.
+#
+# Pointer-only per non-negotiable 4: run id, job name, seconds. Never a log body.
+job_queue() { # $1 = run id — emits `<seconds>\t<job name>`, one line per job
+	conditional_get "repos/{owner}/{repo}/actions/runs/$1/jobs?per_page=100" || return 1
+	printf '%s' "$body" | jq -r '
+		.jobs[]? | select(.created_at != null and .started_at != null)
+		| [.created_at, .started_at, (.name // "-")] | @tsv' 2>/dev/null |
+		while IFS=$'\t' read -r created started name; do
+			c=$(date -u -d "$created" +%s 2>/dev/null) || continue
+			s=$(date -u -d "$started" +%s 2>/dev/null) || continue
+			printf '%s\t%s\n' "$((s - c))" "$name"
+		done
+}
+
+ci_runs=$(walk_workflow ci.yml '
+	.workflow_runs[]?
+	| [(.id|tostring), (.head_branch // "-"), (.conclusion // .status // "-"),
+	   (.created_at // ""), (.run_started_at // ""), (.updated_at // ""),
+	   (.run_attempt // 1 | tostring)]
+	| @tsv') || case $? in
+1) bail "could not read the CI run window, so this window judged nothing." ;;
+2) unreadable=$((unreadable + 1)) ;;
+esac
+
+# --- fast-forward runs: the refusal:success ratio ------------------------------
+#
+# The landing bot's verdict, and CLOUD-393's baseline metric (243 refusals to 5
+# merges in a half hour, before serialisation). `skipped` is not a refusal — it
+# is every issue comment in the repository that was not `/fast-forward`.
+ff_refused=$(count_runs fast-forward.yml failure) || {
+	ff_refused=0
+	unreadable=$((unreadable + 1))
+}
+ff_success=$(count_runs fast-forward.yml success) || {
+	ff_success=0
+	unreadable=$((unreadable + 1))
+}
+
+# --- landings: merged PRs in the window ---------------------------------------
+#
+# A landing is a MERGED PR, not a commit on `main`: a landing pushes several
+# commits at once, so commit timestamps cluster and counting them would inflate
+# the denominator and flatter every ratio.
+if ! conditional_get "repos/{owner}/{repo}/pulls?state=closed&sort=updated&direction=desc&per_page=100"; then
+	bail "could not read the merged-PR list, so there is no denominator and every ratio would be meaningless."
+fi
+landed=$(printf '%s' "$body" | jq -r --arg since "$SINCE" '
+	.[]? | select(.merged_at != null and .merged_at >= $since)
+	| [(.number|tostring), (.head.ref // "-"), .merged_at] | @tsv' 2>/dev/null) || landed=""
+landed=$(printf '%s' "$landed" | sed '/^[[:space:]]*$/d')
+landings=$(printf '%s' "$landed" | grep -c . || true)
+
+# --- per-PR attribution -------------------------------------------------------
+#
+# Runs are joined to a landing by branch AND bounded by `merged_at`, so a
+# branch's post-merge runs — and a reused branch name's later life — are not
+# attributed to it. A `skipped` run is a draft-era push: it spends no matrix and
+# is not graded, so it is deliberately not counted.
+records=""
+graded=0
+green=0
+red=0
+cancelled=0
+while IFS=$'\t' read -r pr branch merged; do
+	[[ -n "$pr" ]] || continue
+	counts=$(awk -F'\t' -v b="$branch" -v m="$merged" '
+		$2 == b && $4 <= m && $3 != "skipped" {
+			g++
+			if ($3 == "success") s++
+			else if ($3 == "failure") f++
+			else if ($3 == "cancelled") c++
+		}
+		END { printf "%d\t%d\t%d\t%d", g, s, f, c }
+	' <<<"$ci_runs")
+	IFS=$'\t' read -r g s f c <<<"$counts"
+	graded=$((graded + g))
+	green=$((green + s))
+	red=$((red + f))
+	cancelled=$((cancelled + c))
+	# Only a PR that diverged earns a record. One graded green run is the ideal
+	# and says nothing a reader needs.
+	if [[ "$g" -gt 1 ]] || [[ "$f" -gt 0 ]]; then
+		records="${records}pr"$'\t'"number=$pr"$'\t'"branch=$branch"$'\t'"graded=$g"$'\t'"green=$s"$'\t'"red=$f"$'\t'"cancelled=$c"$'\n'
+	fi
+done <<<"$landed"
+
+# --- cancel latency, peak concurrency, queue delay, retries -------------------
+#
+# Latency, not count — see the header. A cancel at ~20s is the lease precondition
+# working; one at 400s is a matrix billed for a verdict nobody reads.
+cancel_lat=$(awk -F'\t' '
+	$3 == "cancelled" && $5 != "" && $6 != "" { print }
+' <<<"$ci_runs" | while IFS=$'\t' read -r id branch _conc _created started updated _attempt; do
+	s=$(date -u -d "$started" +%s 2>/dev/null) || continue
+	u=$(date -u -d "$updated" +%s 2>/dev/null) || continue
+	printf '%s\t%s\t%s\n' "$((u - s))" "$id" "$branch"
+done | LC_ALL=C sort -n)
+
+while IFS=$'\t' read -r lat id branch; do
+	[[ -n "$lat" ]] || continue
+	records="${records}cancel"$'\t'"run=$id"$'\t'"branch=$branch"$'\t'"latency=$lat"$'\n'
+done <<<"$cancel_lat"
+
+pct() { # stream of sorted numbers on stdin, percentile as $1
+	awk -v p="$1" '{ v[n++] = $1 } END { if (n == 0) { print 0; exit } i = int((n - 1) * p / 100); print v[i] }'
+}
+cancel_p50=$(cut -f1 <<<"$cancel_lat" | sed '/^$/d' | pct 50)
+
+# Queue delay: created -> run_started. Zero on a healthy runner pool; a non-zero
+# p90 is the fleet waiting for capacity, which is a different defect from any
+# amount of contention and must not be read as one.
+queue_p90=$(awk -F'\t' '$4 != "" && $5 != "" && $3 != "skipped" { print $4 "\t" $5 }' <<<"$ci_runs" |
+	while IFS=$'\t' read -r created started; do
+		c=$(date -u -d "$created" +%s 2>/dev/null) || continue
+		s=$(date -u -d "$started" +%s 2>/dev/null) || continue
+		printf '%s\n' "$((s - c))"
+	done | LC_ALL=C sort -n | pct 90)
+
+# The same delay attributed PER JOB (CLOUD-501). Read only for graded runs in
+# the window — the bound `job_queue`'s header states — and a run whose jobs are
+# unreadable is counted as such rather than silently contributing nothing.
+job_lat=""
+while IFS=$'\t' read -r id _branch; do
+	[[ -n "$id" ]] || continue
+	if ! out=$(job_queue "$id"); then
+		unreadable=$((unreadable + 1))
+		continue
+	fi
+	while IFS=$'\t' read -r secs name; do
+		[[ -n "$secs" ]] || continue
+		job_lat="${job_lat}${secs}"$'\t'"$id"$'\t'"$name"$'\n'
+	done <<<"$out"
+done <<<"$(awk -F'\t' '$3 != "skipped" && $3 != "-" { print $1 "\t" $2 }' <<<"$ci_runs")"
+
+job_lat=$(printf '%s' "$job_lat" | sed '/^[[:space:]]*$/d')
+# `pct` takes an ALREADY-SORTED stream, so this needs its own sort rather than
+# inheriting one from the walk above.
+queue_job_p90=$(cut -f1 <<<"$job_lat" | sed '/^$/d' | LC_ALL=C sort -n | pct 90)
+
+# A `job` record only where the leg actually waited: a zero-wait leg is the ideal
+# and says nothing a reader needs, which is the rule the `pr` records already use.
+while IFS=$'\t' read -r secs id name; do
+	[[ -n "$secs" ]] || continue
+	[[ "$secs" -gt 0 ]] || continue
+	records="${records}job"$'\t'"run=$id"$'\t'"job=$name"$'\t'"queue=$secs"$'\n'
+done <<<"$job_lat"
+
+# Peak concurrency: a sweep over start/end events. This is the metric that caught
+# serialisation working — 25 concurrent matrices before the lease, 3 after.
+peak=$(awk -F'\t' '$3 != "skipped" && $5 != "" && $6 != "" { print $5 "\t" $6 }' <<<"$ci_runs" |
+	while IFS=$'\t' read -r started updated; do
+		s=$(date -u -d "$started" +%s 2>/dev/null) || continue
+		u=$(date -u -d "$updated" +%s 2>/dev/null) || continue
+		printf '%s\t1\n%s\t-1\n' "$s" "$u"
+	done | LC_ALL=C sort -n -k1,1 -k2,2r |
+	awk -F'\t' '{ cur += $2; if (cur > max) max = cur } END { print max + 0 }')
+
+retries=$(awk -F'\t' '$7 != "" && $7 + 0 > 1' <<<"$ci_runs" | grep -c . || true)
+
+# Records first, sorted, then the summary — byte-stable, and the module can read
+# the summary without depending on where it sits.
+emit() {
+	if [[ -n "$records" ]]; then
+		printf '%s' "$records" | LC_ALL=C sort
+	fi
+	summary "$landings" "$graded" "$green" "$red" "$cancelled" \
+		"${cancel_p50:-0}" "${peak:-0}" "${queue_p90:-0}" "${queue_job_p90:-0}" \
+		"$retries" "$ff_refused" "$ff_success"
+}
+
+# BOTH, AND THE ORDER MATTERS. The window goes into the family
+# `policy/land-divergence.rego` reads, and the same bytes go to stdout, where
+# `land-divergence.yml` publishes them to the step summary — the numbers are the
+# point, and a summary that only appears on green is a report nobody reads at the
+# moment it matters. Rendered once into a variable rather than measured twice, so
+# the published records and the recorded ones cannot differ.
+out=$(emit)
+printf '%s\n' "$out"
+printf '%s\n' "$out" | cargo run --quiet -p batten -- record named land-divergence
+'''
 
 [tasks.record-verdicts]
 description = "Effect: run each declared third-party validator OUTSIDE the engine and record its verdict where `batten check` reads it (CLOUD-1265)"
@@ -2081,8 +2962,26 @@ if [ -n "$forge_sha" ] && [ -n "$forge_fanin" ]; then
 	# last would win by listing order rather than by recency. `checks-green` draws
 	# the same distinction with `started_at` and `id`; this is that reduction,
 	# spelled once, at the producer.
+	# A `skipped` CONCLUSION IS NOT A GRADING, and admitting one is how this
+	# producer reintroduced the defect it exists to remove (CLOUD-1717). The
+	# filter read `.conclusion != null`, which was written for the PENDING case
+	# — and `skipped` is non-null. Every pull request starts as a draft by this
+	# repository's own contract, CI does not run on one, and a draft's twelve
+	# check-runs all conclude `skipped`. So the fan-in read as GRADED, the record
+	# spelled `final skipped`, and `forge-verdict-required` read that as the
+	# forge having looked and refused.
+	#
+	# Measured 2026-09-17 on PR #962: twelve checks skipped, the record written,
+	# `verify` refusing `forge check red` and `head grade twice`, and the branch
+	# unable to take its first lap — from the state the contract says every PR
+	# begins in. A could-not-look recorded as a verdict, which is precisely what
+	# CLOUD-1707 was about, one layer in.
+	#
+	# Filtered here rather than at the fan-in test alone, because a skipped job in
+	# a real run rendered no verdict either: recording `<job> skipped` would say
+	# that job refused.
 	if forge_runs=$(gh api "repos/$forge_repo/commits/$forge_sha/check-runs?per_page=100" \
-		--jq '.check_runs | map(select(.conclusion != null)) | group_by(.name) | map(max_by([(.started_at // ""), (.id // 0)])) | .[] | "\(.name)\t\(.conclusion)"' 2>/dev/null); then
+		--jq '.check_runs | map(select(.conclusion != null and .conclusion != "skipped")) | group_by(.name) | map(max_by([(.started_at // ""), (.id // 0)])) | .[] | "\(.name)\t\(.conclusion)"' 2>/dev/null); then
 		# The fan-in decides whether ANY record is written; the name filter then
 		# decides what the record may spell.
 		forge_graded=$(printf '%s\n' "$forge_runs" |
@@ -2893,6 +3792,30 @@ run = "mise run reclaim-census record-boot >/dev/null 2>&1 || true; v=$(mise run
 [tasks.lock-complete]
 description = "Gate: mise.lock has no partial or bogus platform entry — a pure function of the committed lockfile, no network, no write"
 run = "cargo run --quiet -p batten -- check --rule 'lock cover partial'"
+
+# CLOUD-1833. The engine, with the arguments the caller gives — the half of
+# `batten-check` that is not the consumer-#1 gate.
+#
+# IT EXISTS BECAUSE THREE COMMITTED WORKFLOWS ALREADY CALL IT AND IT HAS NEVER
+# EXISTED. `branch-hygiene.yml`, `land-divergence.yml` and `nonverdict-rate.yml`
+# each run `mise run batten -- check --rule …`; the spelling was invented once,
+# copied twice, and read back by the next author as a precedent. All three die at
+# the step, and all three fire only on `schedule` or `workflow_run`, so no pull
+# request has ever seen it. `workflow run unknown` is the clause that found them
+# and is what keeps the fourth from being written.
+#
+# A PASSTHROUGH RATHER THAN A TASK PER RULE, and `lock-complete`'s comment above
+# is the reason to say why. Its drift argument is about a TRIPLE — an hk step
+# name, a task, and a rule id, which hk selects between by name and which can
+# therefore disagree. A workflow step names the task directly, so there is no
+# second selector to drift against, and four near-identical wrapper rows would be
+# the duplication rather than the guard.
+#
+# `cargo run` for `batten-check`'s reason: the gate judges the working tree's
+# engine and config together, the pair that ships.
+[tasks.batten]
+description = "Run the working tree's engine with the given arguments, so a workflow step can select one rule"
+run = "cargo run --quiet -p batten --"
 
 [tasks.batten-check]
 description = "Consumer #1: evaluate the committed batten.toml with batten's own engine against this repository"

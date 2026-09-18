@@ -659,6 +659,14 @@ pub struct Vocabulary<'a> {
     /// has the recorders too. The alternative was a fifth positional on four
     /// public entry points, which is the shape this parameter exists to prevent.
     pub recorders: &'a [crate::recorder::Declared],
+    /// The `[[record]]` table (CLOUD-1810).
+    ///
+    /// Here for the same reason `recorders` is, and it is the same question: a
+    /// module reads a record projected from a DECLARATION, so a caller holding
+    /// the recorders needs the verb-written families too or half the store is
+    /// invisible to it. Carrying it on this struct is what keeps the arity of the
+    /// four public entry points from growing again.
+    pub records: &'a [crate::record::Declared],
 }
 
 impl Vocabulary<'_> {
@@ -672,6 +680,7 @@ impl Vocabulary<'_> {
         verdicts: &[],
         words: None,
         recorders: &[],
+        records: &[],
     };
 }
 
@@ -682,6 +691,7 @@ impl<'a> From<&'a crate::config::Config> for Vocabulary<'a> {
             verdicts: &config.verdicts,
             words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
             recorders: &config.recorders,
+            records: &config.records,
         }
     }
 }
@@ -698,6 +708,7 @@ impl<'a> From<&'a crate::resolve::Resolved> for Vocabulary<'a> {
             verdicts: &resolved.verdicts,
             words: (!resolved.vocabulary.is_empty()).then_some(&resolved.vocabulary),
             recorders: &resolved.recorders,
+            records: &resolved.records,
         }
     }
 }
@@ -739,6 +750,30 @@ pub enum ModuleChecks {
     SkipOnHotPath,
 }
 
+/// Which source a policy row names: its `module`, `bundle` or `preset`.
+///
+/// Extracted from [`load`] rather than inlined, and the reason is the same one
+/// that keeps it a refusal at all: `validate` already refuses a policy row naming
+/// none of the three and one naming more than one, so this is the LOCATED
+/// restatement — a caller reaching `load` directly cannot get a silent skip
+/// instead of a refusal.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) for a policy row naming none of the three.
+fn source_key(rule: &Rule) -> Result<&str> {
+    rule.module
+        .as_deref()
+        .or(rule.bundle.as_deref())
+        .or(rule.preset.as_deref())
+        .ok_or_else(|| {
+            UsageError::raise(format!(
+                "rule `{}` is a policy row naming neither `module`, `bundle` nor `preset`",
+                rule.id
+            ))
+        })
+}
+
 /// Load, compile and smoke-test every module the rule set registers.
 ///
 /// Boundary I/O, called once per process from the config resolution path — never
@@ -767,6 +802,7 @@ pub fn load(
         verdicts,
         words,
         recorders: _,
+        records: _,
     } = vocabulary;
     // The table is validated at PARSE, beside `verbs` and `redirects` and for
     // their reason (`config.rs`'s `VALIDATED_AT_LOAD` census asserts the call
@@ -798,21 +834,7 @@ pub fn load(
     // difference between a pointer and a complaint.
     let mut ids: BTreeMap<String, String> = BTreeMap::new();
     for rule in rules.iter().filter(|r| r.kind == RuleKind::Policy) {
-        // `validate` already refuses a policy row naming none of the three
-        // sources, and one naming more than one; this is the located
-        // restatement, so a caller reaching `load` directly cannot get a silent
-        // skip instead of a refusal.
-        let source_key = rule
-            .module
-            .as_deref()
-            .or(rule.bundle.as_deref())
-            .or(rule.preset.as_deref())
-            .ok_or_else(|| {
-                UsageError::raise(format!(
-                    "rule `{}` is a policy row naming neither `module`, `bundle` nor `preset`",
-                    rule.id
-                ))
-            })?;
+        let source_key = source_key(rule)?;
         // Two rows naming one source AT ONE SCOPE is dead config: the second
         // enablement decides nothing the first did not, and "which one denied
         // me" is not a question a reviewer should have to answer.

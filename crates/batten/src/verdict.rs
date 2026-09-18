@@ -1282,6 +1282,12 @@ pub enum Native {
     MintTableRefused,
     /// The `[[recorder]]` table would not load.
     RecorderTableRefused,
+    /// The `[[record]]` table would not load (CLOUD-1810).
+    ///
+    /// Its own class rather than the recorder's, on the reason the environment
+    /// pair one screen up already states: the two tables carry different rows and
+    /// a refusal has to name which one to edit.
+    RecordTableRefused,
     /// The `[[provision]]` table would not load.
     ProvisionTableRefused,
     /// The `[[startup]]` table would not load.
@@ -1376,6 +1382,7 @@ impl Native {
         Native::FactTableRefused,
         Native::MintTableRefused,
         Native::RecorderTableRefused,
+        Native::RecordTableRefused,
         Native::ProvisionTableRefused,
         Native::StartupTableRefused,
         Native::PlanReadStale,
@@ -1410,6 +1417,7 @@ impl Native {
         Native::FactTableRefused,
         Native::MintTableRefused,
         Native::RecorderTableRefused,
+        Native::RecordTableRefused,
         Native::ProvisionTableRefused,
         Native::StartupTableRefused,
     ];
@@ -1459,6 +1467,7 @@ impl Native {
             Native::FactTableRefused => "fact declare refused",
             Native::MintTableRefused => "mint declare refused",
             Native::RecorderTableRefused => "recorder declare refused",
+            Native::RecordTableRefused => "record declare refused",
             Native::ProvisionTableRefused => "provision declare refused",
             Native::StartupTableRefused => "startup declare refused",
         }
@@ -2117,6 +2126,16 @@ the ids are known to be well formed themselves.",
         applicability: Applicability::Advice,
     },
     VendoredVerdict {
+        id: "record declare refused",
+        gloss: "the record table would not load",
+        class: "`[[record]]` declares a family a producer fills with `batten record named`, so \
+that a module may read its store at all. A row whose name could never be written, or whose \
+writer is unnamed, is a family that can only ever answer could-not-look -- and the moment to \
+say so is at load, not after a green run nobody questioned.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
         id: "provision declare refused",
         gloss: "the provision table would not load",
         class: "`[[provision]]` is how a pinned tool reaches the cache a rule will look for \
@@ -2526,6 +2545,7 @@ mod tests {
                 | Native::FactTableRefused
                 | Native::MintTableRefused
                 | Native::RecorderTableRefused
+                | Native::RecordTableRefused
                 | Native::ProvisionTableRefused
                 | Native::StartupTableRefused => native.id(),
             };

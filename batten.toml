@@ -2109,6 +2109,62 @@ regex = '(?i)(^|[^0-9A-Za-z-])(clos(e|es|ed)|fix(|es|ed)|resolv(e|es|ed))[[:blan
 id = "whole-number"
 regex = '^[0-9]+$'
 
+# THE VERB-WRITTEN RECORD FAMILIES THIS REPOSITORY FILLS (CLOUD-1810).
+#
+# The sibling of `[[recorder]]` across one split: a recorder row is filled from a
+# mediated tool call, and one of these is filled by a producer calling `batten
+# record named <family>`. Both project into `input.tree.records`; until this table
+# existed only the first could, so a store a `mise` task wrote was invisible to
+# every module and the row reading it reported clean over a record that said
+# otherwise.
+#
+# DECLARED RATHER THAN SWEPT. The engine could have projected whatever files sit
+# in the store directory and does not, because then a leftover file from a retired
+# producer answers as a live measurement and nothing names what SHOULD be there.
+# The declaration is also what keeps could-not-look readable: an absent record
+# under a declared family is "the producer did not run", where the same absence
+# with nothing declared is not a reading at all.
+#
+# `writer` IS NEVER EXECUTED, and that is not a gap. Section 5 keeps the spawn
+# outside `check`, so this is a pointer — the job `[[verdict.route]]`'s `target`
+# already does. What it buys is that a declared family always says who fills it,
+# because a store with no producer is a row that can only ever read
+# could-not-look.
+[[record]]
+record = "branch-age"
+writer = "mise run branch-age-record"
+
+# CLOUD-583's probe and verifier, ported off `attestation-check.sh` under
+# CLOUD-1717. The producer makes the posture probe, downloads the release's
+# archives, unpacks each one and runs `gh attestation verify` over the BINARY
+# inside — every step of which section 5 keeps outside `check`.
+[[record]]
+record = "attestation"
+writer = "mise run attestation-record"
+
+# CLOUD-266's other half, ported off `timeout-drift.sh` under CLOUD-1717. The
+# producer reads successful runs from the Actions API, subtracts their instants
+# and computes a p95 per job; the engine calls no clock, so the arithmetic cannot
+# move in and only the classification does.
+[[record]]
+record = "timeout-drift"
+writer = "mise run timeout-drift-record"
+
+# CLOUD-484's measuring half, ported off `nonverdict-scan.sh` under CLOUD-1717.
+# The decider half is `policy/nonverdict.rego`; the split is the retired pair's
+# own, kept for its own reason — a measurement needs the network and a token, a
+# decision needs neither.
+[[record]]
+record = "nonverdict"
+writer = "mise run nonverdict-record"
+
+# CLOUD-492's measuring half, ported off `land-divergence.sh` under CLOUD-1717.
+# The decider half is `policy/land-divergence.rego`; the split is the retired
+# pair's own, for the reason the `nonverdict` pair's is.
+[[record]]
+record = "land-divergence"
+writer = "mise run land-divergence-record"
+
 [[pattern]]
 id = "closed-issue-status"
 regex = '^(done|canceled|duplicate)$'
@@ -5512,8 +5568,8 @@ no_fix_reason = "the missing fields do not exist in a cargo lockfile, so no comm
 
 # Release provenance, adopted as `gh attestation verify` (CLOUD-583, CLOUD-279
 # verdict 1 — `slsa-verifier` is redundant against the same absent provenance and
-# `cosign` has no signing identity here). `mise-tasks/attestation-check.sh` carries
-# the design; what belongs here is why this is ONE row and which half it runs.
+# `cosign` has no signing identity here). `policy/attestation.rego` carries the
+# design; what belongs here is why this is ONE row and which half it runs.
 #
 # THE OFFLINE HALF, and that is the whole of the wiring decision. Whether a
 # published release is attested changes with no diff, so it is a property of the
@@ -5544,11 +5600,23 @@ no_fix_reason = "the missing fields do not exist in a cargo lockfile, so no comm
 # had anything to do with attestation. CLOUD-614 carries the general defect; naming
 # the file the row exists to run is what makes the trigger and the mechanism the
 # same object rather than a coincidence.
+# REPOINTED, NOT REMOVED (CLOUD-1717). `mise-tasks/attestation-check.sh` is
+# retired, and its precondition mode survives as `[tasks.attestation-record]
+# --precondition`: the same one fact, decided from the same local reading, still
+# at `deny` on every gate invocation. Retiring the row instead would have removed
+# a gate and owed a weakening; this changes only which program carries it.
+#
+# THE GLOB FOLLOWS THE CHECK, which is this row's own discipline one paragraph
+# down: it must name a path `batten-glob-check` can prove covered, and it must not
+# match inside a fixture tree, because a `mise run` check resolves only where a
+# mise.toml is findable. `mise.toml` is both — it is in hk's `batten-check` list,
+# and it is where the task body now lives, so the trigger and the mechanism stay
+# the same object.
 [[rule]]
 id = "release check unread"
 kind = "command"
-glob = "mise-tasks/attestation-check.sh"
-check = "mise run attestation-check --precondition"
+glob = "mise.toml"
+check = "mise run attestation-record --precondition"
 severity = "deny"
 scope = "tree"
 no_fix_reason = "install the pinned `gh` (`mise install aqua:cli/cli`) or supply GH_TOKEN; neither is a change to this tree's content"
@@ -5582,7 +5650,7 @@ no_fix_reason = "install the pinned `gh` (`mise install aqua:cli/cli`) or supply
 #
 # `deny` is safe because the check is offline and local: it reads one tracked
 # file, makes no network call, and needs no credential — so it cannot block on
-# ambient environment the way an earlier `attestation-check` did inside fixture
+# ambient environment the way an earlier attestation precondition did inside fixture
 # repositories. The only way it reds is the workflow actually losing its wiring.
 [[rule]]
 id = "release wire missing"
@@ -6213,6 +6281,73 @@ id = "branch watch loose"
 kind = "policy"
 scope = "tree"
 module = "policy/branch-age.rego"
+severity = "warn"
+
+# CLOUD-583, ported off `mise-tasks/attestation-check.sh` under CLOUD-1717.
+#
+# `deny` BECAUSE THE GAP IS NOT A VERDICT. The module fires nothing while the
+# platform offers no attestation — a 404 posture judges no artifact — so the only
+# way this reds is a release whose binaries the verifier actually refused where
+# attestation IS available. That is a release to fix, which is what `deny` means.
+[[rule]]
+id = "release grade unsafe"
+kind = "policy"
+scope = "tree"
+module = "policy/attestation.rego"
+severity = "deny"
+
+# CLOUD-266's world half, ported off `mise-tasks/timeout-drift.sh` under
+# CLOUD-1717.
+#
+# `warn` IS THE PORTED POSTURE, not a hedge. The retired program reported and
+# never blocked: it failed only its own scheduled run, filed no issue and posted
+# no comment, because a budget that no longer matches reality means nothing is
+# broken and no branch is at fault. A warn finding is reported without failing the
+# run, which is that posture on the engine's contract.
+[[rule]]
+id = "bound grade other"
+kind = "policy"
+scope = "tree"
+module = "policy/timeout-drift.rego"
+severity = "warn"
+
+# CLOUD-484, ported off `mise-tasks/nonverdict-assert.sh` under CLOUD-1717.
+#
+# `warn` HOLDS TWO CLAIMS THAT LOOK OPPOSED, and both are the retired pair's own.
+# The decider argued that a rate which rises has to FAIL something or it becomes
+# an artifact nobody opens (non-negotiable rule 2) — it was filed against twice,
+# both times by someone deciding the number was not worth collecting.
+# `nonverdict-rate.yml` argued just as plainly that its failure is informational:
+# a job dying in provisioning is the platform having a bad afternoon, no branch
+# is at fault, and nothing in the tree is broken.
+#
+# A warn finding is reported without failing the run, so an ordinary `check` and
+# every `verify` stay green — which is what stops a branch going red for a reason
+# it did not cause — while the scheduled job runs `--fail-on-warning` and reds on
+# the rate. The gate is preserved and its blast radius is the clock, not the
+# landing path.
+[[rule]]
+id = "job grade other"
+kind = "policy"
+scope = "tree"
+module = "policy/nonverdict.rego"
+severity = "warn"
+
+# CLOUD-492, ported off `mise-tasks/land-divergence-assert.sh` under CLOUD-1717.
+#
+# `warn` FOR THE REASON `job grade other` ABOVE CARRIES, one surface over. Every
+# metric here is a property of the FLEET and the loop over a window — cancel
+# latency, queue delay, peak concurrency, the fast-forward bot's refusal ratio —
+# and no branch causes any of them. Failing a branch's `verify` over yesterday's
+# runner saturation is how a gate gets switched off. The scheduled job runs
+# `--fail-on-warning` and reds on the divergence, which is the retired decider's
+# posture exactly: a number that rises has to fail something or it becomes another
+# artifact nobody opens.
+[[rule]]
+id = "lane grade other"
+kind = "policy"
+scope = "tree"
+module = "policy/land-divergence.rego"
 severity = "warn"
 
 [[rule]]
@@ -7419,6 +7554,34 @@ line_sources = [".github/workflows/*.yml"]
 module = "policy/ci-cache-declared.rego"
 severity = "deny"
 
+# CLOUD-1833. A retirement deletes a program and nothing asked whether its
+# CALLERS still resolve. Measured when this row was written: five steps across
+# four workflows named tasks that do not exist — two deleted by CLOUD-1717's own
+# commits, and three spelling a `mise run batten` that has never existed at all.
+# Every one fires on `workflow_run`, `schedule` or `workflow_dispatch`, so it
+# reaches no pull request and no reviewer, and a workflow failing on 100% of its
+# invocations is indistinguishable from one that has never fired.
+#
+# THE THIRD POPULATION OF A PREDICATE THIS TREE ALREADY HAS TWICE.
+# `command-task-defined` asks it of a `[[rule]]`'s `check`,
+# `verdict-routes-resolve` of a `[[verdict.route]]`'s `target`, and this of a
+# workflow step's `run`. Each owns its population; the shared `defined` shape is
+# deliberate, for the reason `verdict-routes-resolve`'s header states.
+#
+# The two declared sources are `ci-cache-declared`'s pair and for its reason: the
+# question is about mise's TASK GRAPH, which it owns and this reads as a parsed
+# document rather than re-parsing text. `line_sources` is the workflows only —
+# every pointer this module emits is into one, and nothing it decides needs a
+# line in `mise.toml`.
+[[rule]]
+id = "workflow run unknown"
+kind = "policy"
+scope = "tree"
+sources = [".github/workflows/*.yml", "mise.toml"]
+line_sources = [".github/workflows/*.yml"]
+module = "policy/task-callable.rego"
+severity = "deny"
+
 # CLOUD-1431. The two pinned-tool surfaces this repository has, compared for the
 # first time: what `release-artifacts.yml` PUBLISHES against what a
 # `[[provision]]` row can RESOLVE.
@@ -8166,11 +8329,27 @@ keep = 2
 # $GIT_DIR/batten-prune/laps.json and already governs — so the declared number is
 # not raised to meet it. A declared floor that chases the worst observed lap is the
 # floor-nobody-can-satisfy this file warns about, two blocks down.
+# THE 2026-09-17 WARM RESCALE (CLOUD-1717's corpus campaign). The campaign owes a
+# `crates/batten/tests/it/*.rs` per retired gate and had landed eleven of them,
+# taking the live count to 266 against a basis of 255 with a tolerance of 10 —
+# this gate working, exactly as the 2026-09-12 entry above describes it working.
+#
+# WARM SCALES BY THE STEM MODEL, as every move above it did: 11642 at 255 is 45.65
+# per stem, and 45.65 x 266 is 12144. Derived rather than independently measured,
+# and said so for the reason the basis block insists on: an honest warm number
+# needs a minimal post-prune tree, and a reader who needs it exact should take it
+# rather than trust this line.
+#
+# THE LIVE COUNT IS 266 AND `git ls-files` SAYS 265, which is not a discrepancy to
+# reconcile away. The engine's `Selector` sets `literal_separator(true)`, so its
+# `**` matches zero directories as well as many and the glob reaches
+# `crates/batten/tests/policy_modules.rs` at the top level; git's pathspec `**`
+# does not. `count` is the number the GATE compares against, so it is the engine's.
 [prune.warm]
-mb = 11642
-worst_mb = 11642
+mb = 12144
+worst_mb = 12144
 multiplier = 1
-measured = "2026-09-12"
+measured = "2026-09-17"
 
 [prune.cold]
 mb = 21455
@@ -8625,7 +8804,7 @@ measured = "2026-09-07"
 # makes the very next lap refuse on the other arm with warm never breached.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 255
+count = 266
 tolerance = 10
 
 # COLD'S BASIS MOVES AND COLD'S FLOOR DOES NOT, and that is the entry above
@@ -8645,7 +8824,7 @@ tolerance = 10
 # together.
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 255
+count = 266
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
@@ -9158,6 +9337,28 @@ id = "disk-full"
 pattern = "No space left on device"
 stream = "both"
 reason = "the disk filled, so this is the environment rather than your branch. Run `mise run target-prune`, and consider building with CARGO_INCREMENTAL=0."
+
+# THE ROW THE PRUNE BLOCK HAS OWED SINCE ITS SIXTH MISREPORT (CLOUD-1717). Seven
+# times now `verify` has rendered a STEM-COUNT refusal as "not enough disk to run
+# the gate, and pruning did not recover it", every time over ample free space, and
+# twice with the callee printing the margin two lines above the caller's claim
+# there was none. The measurements are in the `[prune]` block; this is the remedy
+# they justify.
+#
+# IT MATCHES THE CALLEE, NOT THE CALLER. `target-prune` prints this sentence and
+# `verify` wraps it, so keying on the wrapper would match every environment
+# refusal the task emits and carry a specific remedy for all of them — the opposite
+# of the point. The callee's line reaches both streams through the wrapper.
+#
+# `Environment` RATHER THAN A FAILING GATE is the classification that matters: the
+# tree is fine, the branch is fine, and "reproduce and fix locally" sends a reader
+# after a defect that is not there. What is stale is a number in the committed
+# authority, and the remedy is to move it.
+[[verify_environment_pattern]]
+id = "prune-basis-stale"
+pattern = "was measured against a tree that no longer exists"
+stream = "both"
+reason = "the prune floor's basis is stale, not the disk. Nothing is wrong with this branch: the declared stem count has drifted past its tolerance, which is what a campaign adding test files does. Re-measure `[prune.warm]` by the stem model the block documents, and move `mb`, `worst_mb`, `measured` and BOTH `basis.count` values together."
 
 [lease]
 landing_paths = [
@@ -12084,6 +12285,32 @@ kind = "document"
 target = ".github/workflows/release-assets.yml"
 
 [[verdict]]
+id = "task run unknown"
+gloss = "a workflow step runs a mise task that neither the manifest nor a program under mise-tasks/ defines"
+class = """
+The step will fail the moment it runs, and it will fail invisibly. A workflow \
+triggered by `schedule`, `workflow_run` or `workflow_dispatch` reaches no pull \
+request and no reviewer, so a run that dies at the step is indistinguishable \
+from one that never fired — which is how five such callers accumulated across \
+four files before anything asked the question. Nothing about a dead caller \
+decays over time: it was wrong on the commit that introduced it, and the only \
+reason it survived is that no surface was reading.
+
+An interpolated name is not this class. `mise run ${{ matrix.task }}` is not \
+decidable from a committed document, so it abstains rather than being refused.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/task-callable.rego"
+
+[[verdict.route]]
+id = "task list first"
+kind = "command"
+target = "mise tasks ls --all"
+
+[[verdict]]
 id = "workflow read unread"
 gloss = "the workflow this rule judges would not parse, so nothing was decided"
 class = """
@@ -12988,6 +13215,260 @@ and killing it took `kill -9` on the process group. A heredoc, `< msg.txt` or \
 id = "patch run first"
 kind = "command"
 target = "git commit -F <path>"
+
+# CLOUD-583's three readings, ported off `attestation-check.sh` under CLOUD-1717.
+[[verdict]]
+id = "release ship unsafe"
+gloss = "a release archive's binary carries no verifiable provenance"
+class = """
+`gh attestation verify` refused the executable inside a published archive while \
+the platform DOES offer attestation for this repository. That is a release to \
+fix rather than a gap to report, and the two are told apart by the attestations \
+endpoint's own status code: 200 with an empty array where the feature exists, \
+404 on the resource where it does not. The subject is the BINARY and not the \
+archive, because `release-artifacts.yml` attests the executable deliberately so \
+that repackaging cannot launder the claim.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run attestation-record"
+
+[[verdict]]
+id = "release carry missing"
+gloss = "a release archive carries no executable to verify"
+class = """
+The archive unpacked and held no `batten` binary, so there was nothing for the \
+verifier to judge. A packaging problem rather than a provenance one, and its own \
+class for that reason: collapsing it into the unverified finding would send a \
+reader after a signing identity when the dist matrix dropped a file.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run attestation-record"
+
+[[verdict]]
+id = "release list empty"
+gloss = "the producer looked at a tag and found no archive on it"
+class = """
+A green verdict over a release carrying nothing would be about nothing. \
+Present-and-empty and absent are different readings and must not collapse: an \
+absent record is the producer unable to look, where this is the producer having \
+looked and found a tag with no archives.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run attestation-record"
+
+# CLOUD-266's four readings, ported off `timeout-drift.sh` under CLOUD-1717.
+[[verdict]]
+id = "bound pin loose"
+gloss = "a job's declared timeout sits well above what its measurement justifies"
+class = """
+A budget is a ceiling rather than a target, so headroom is correct and a slack \
+allowance keeps this off a job that merely got a little faster. Past that \
+allowance the number has gone slack, which is the direction a report that only \
+complained about tightness would let rot upward forever. Nothing is broken and no \
+branch is at fault: re-derive the number and commit the new comment.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run timeout-drift-record"
+
+[[verdict]]
+id = "bound pin wrong"
+gloss = "a job's measurement has outgrown its declared timeout"
+class = """
+The p95 of recent successful runs, times the repo-wide headroom multiplier, is \
+already above the committed budget. Raise it before it starts failing healthy \
+runs — this is the direction that turns into a red job nobody caused.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run timeout-drift-record"
+
+[[verdict]]
+id = "bound pin stale"
+gloss = "a dated debt entry now has a usable sample and can become a measured budget"
+class = """
+The prompt, never the conversion. A bot re-baselining the number it is supposed \
+to defend is the move section 4 forbids outright, so this reports that the debt \
+is now convertible and a deliberate commit does the converting.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run timeout-drift-record"
+
+[[verdict]]
+id = "bound measure partial"
+gloss = "too few successful runs to characterise a job, so no budget is proposed"
+class = """
+Below the declared minimum a job is uncharacterised rather than fast, and saying \
+so is itself the useful signal. Most jobs here run weekly or on release, so a \
+naive percentile over a short window would compute a confident value from two \
+samples and propose tightening a release job on it.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run timeout-drift-record"
+
+# CLOUD-484's two readings, ported off `nonverdict-assert.sh` under CLOUD-1717.
+[[verdict]]
+id = "job read partial"
+gloss = "the scan could not read part of its window, so a green verdict would cover less than it claims"
+class = """
+`bench-assert`'s partial-coverage rule: a run that measured two of three paths \
+and reported green over the two is exactly the partial-coverage false green. It \
+fires whatever the count is, because a budget met over part of a window is a \
+budget met over nothing in particular. A persistent read failure is a token or \
+rate-limit problem, not a clean window.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run nonverdict-record"
+
+[[verdict]]
+id = "job answer missing"
+gloss = "a required job failed before reaching any verdict-bearing step"
+class = """
+The run spent its minutes, redded the branch, and answered nothing. Every \
+occurrence then costs a human or an agent the time to discover it was never a \
+verdict at all — CLOUD-404 has five, and the one on #376 sent an agent to \
+reproduce a `commit-lint` failure that passes locally because `commit-lint` \
+never linted anything.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run nonverdict-record"
+
+# CLOUD-492's eight readings, ported off `land-divergence-assert.sh` under
+# CLOUD-1717.
+[[verdict]]
+id = "lane read partial"
+gloss = "the measurement could not read part of its window, so a green verdict would cover less than it claims"
+class = """
+The Actions runs endpoint caps pagination at 1000 items while still \
+reporting the true total, so a walk that stops on a short page reads a PREFIX \
+and looks like a clean finish. Measured: 1000 of 1446 runs collected, reporting \
+zero fast-forward refusals over a window carrying 598. Narrow the window.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run land-divergence-record"
+
+[[verdict]]
+id = "lane count spent"
+gloss = "the landing loop bought more CI matrices per landing than its budget"
+class = """
+The ideal is 1.00 — one matrix, run to green, landed. The budget is 2.00 \
+because the second run is the lease precondition cancelling an unauthorised \
+matrix, which is the mechanism working.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run land-divergence-record"
+
+[[verdict]]
+id = "lane grade red"
+gloss = "red CI runs per landing are over budget"
+class = """
+A red run means `verify` was skipped or disagreed with CI, and each one \
+spent a full matrix to say so.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run land-divergence-record"
+
+[[verdict]]
+id = "lane reach late"
+gloss = "cancelled runs have a median lifetime past the budget"
+class = """
+LATENCY, NEVER COUNT. An early cancellation is `ci-lease-precondition` \
+stopping an unauthorised matrix for ~20 runner-seconds instead of billing ~500; \
+a late one is a matrix billed for a verdict nobody reads.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run land-divergence-record"
+
+[[verdict]]
+id = "lease guard dropped"
+gloss = "more CI matrices ran concurrently than the lease admits"
+class = """
+Landing is serialised behind a lease, so concurrency above the \
+admitted-successor bound means something is spending CI without holding it.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run land-divergence-record"
+
+[[verdict]]
+id = "lane measure late"
+gloss = "runs waited past the budget at p90 before starting"
+class = """
+The runner pool saturating, which is a different defect from contention \
+and must not be read as one.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run land-divergence-record"
+
+[[verdict]]
+id = "job measure late"
+gloss = "individual matrix legs waited past the budget at p90 before starting"
+class = """
+A run's own figure is its FIRST job's start, so this is the one that sees \
+a leg queueing behind its siblings — the two disagreeing is what tells a wide \
+matrix apart from a saturated pool (CLOUD-501).
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run land-divergence-record"
+
+[[verdict]]
+id = "branch reach stale"
+gloss = "the fast-forward bot refused a branch that had gone behind"
+class = """
+A refusal means the branch went behind before the bot answered — the \
+thundering herd the landing lease exists to remove (243:5 before, 0:5 after). \
+Any refusal at all is a divergence, so the budget is zero.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run land-divergence-record"
 
 # CLOUD-349's two readings, ported off `branch-age-check.sh` under CLOUD-1717.
 [[verdict]]

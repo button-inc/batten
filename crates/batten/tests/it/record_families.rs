@@ -209,3 +209,137 @@ fn a_family_that_would_escape_its_store_is_refused() {
     let refused = run_with_stdin(&dir, &["record", "keyed", "../escape", "k"], "v\n");
     assert_eq!(refused.status.code(), Some(1));
 }
+
+// ---------------------------------------------------------------------------
+// The projection: a declared family reaches a module (CLOUD-1810).
+// ---------------------------------------------------------------------------
+
+/// A module that decides from one record and nothing else.
+///
+/// Deliberately the thinnest thing that can tell the three states apart: it
+/// reports when the record holds a `hit` line, and is undefined when the family
+/// is not projected at all. A richer module would let a case pass for a reason
+/// that has nothing to do with the projection.
+const READS_A_FAMILY: &str = r#"# METADATA
+# description: reads one verb-written record family.
+# schemas:
+#   - input: schema["policy-input.schema"]
+package batten.reads_a_family
+
+import rego.v1
+
+rules contains "record read other"
+
+recorded := input.tree.records["measured"]
+
+violation contains {
+	"rule": "record read other",
+	"verdict": "record read other",
+} if {
+	some line in recorded
+	line == "hit"
+}
+"#;
+
+/// Config registering that module, with `declares` deciding whether the family
+/// is declared at all.
+fn family_config(declares: bool) -> String {
+    let table = if declares {
+        "\n[[record]]\nrecord = \"measured\"\nwriter = \"mise run measure\"\n"
+    } else {
+        ""
+    };
+    format!(
+        r#"version = 1
+scope = ["**"]
+
+[[verdict]]
+id = "record read other"
+gloss = "the record this rule reads says so"
+class = "A test fixture's class."
+
+[[verdict.route]]
+id = "record read first"
+kind = "document"
+target = "the record this rule reads"
+
+[[rule]]
+id = "record read other"
+kind = "policy"
+scope = "tree"
+module = "policy/reads-a-family.rego"
+severity = "deny"
+{table}"#
+    )
+}
+
+/// The tree both cases below run over, differing only in the declaration.
+fn family_repo(name: &str, declares: bool) -> std::path::PathBuf {
+    let dir = repo(name);
+    write(&dir, "batten.toml", &family_config(declares));
+    write(&dir, "policy/reads-a-family.rego", READS_A_FAMILY);
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-qm", "register the module"]);
+    dir
+}
+
+#[test]
+fn a_declared_family_reaches_the_module_that_reads_it() {
+    // THE DEFECT THIS ROW EXISTS FOR (CLOUD-1810). Before the declaration table,
+    // `record named` wrote a store no module could read: the key never reached
+    // `input.tree.records`, every rule beneath it was undefined, and the row
+    // reported clean over a record that said otherwise. Measured over
+    // `branch-age`: a 36-day branch against a two-day threshold, exit 0.
+    let dir = family_repo("projected", true);
+    let written = run_with_stdin(
+        &dir,
+        &["record", "named", "measured"],
+        "hit
+",
+    );
+    assert!(written.status.success(), "the setup write lands");
+
+    let decided = run(&dir, &["check"]);
+    assert_eq!(
+        decided.status.code(),
+        Some(2),
+        "a declared family's record must reach the module and decide\n{}",
+        String::from_utf8_lossy(&decided.stderr)
+    );
+}
+
+#[test]
+fn an_absent_record_under_a_declared_family_says_nothing() {
+    // THE OTHER HALF OF THE PAIR, and the half a weaker tier skips. Asserting
+    // only the case above passes on a projection that reads the DECLARATION
+    // rather than the store — it would report the finding with nothing written.
+    // Absent is could-not-look, never a pass and never a violation.
+    let dir = family_repo("absent", true);
+
+    let quiet = run(&dir, &["check"]);
+    assert_eq!(
+        quiet.status.code(),
+        Some(0),
+        "an absent record is could-not-look, so the module says nothing\n{}",
+        String::from_utf8_lossy(&quiet.stderr)
+    );
+}
+
+#[test]
+fn an_undeclared_family_is_not_projected_whatever_the_store_holds() {
+    // DECLARED RATHER THAN SWEPT, as an exit code. If the projection read the
+    // store directory instead of the table, this record would decide — and a
+    // leftover file from a retired producer would answer as a live measurement
+    // with nothing naming what should be there.
+    let dir = family_repo("undeclared", false);
+    let written = run_with_stdin(&dir, &["record", "named", "measured"], "hit\n");
+    assert!(written.status.success(), "the setup write lands");
+
+    let quiet = run(&dir, &["check"]);
+    assert_eq!(
+        quiet.status.code(),
+        Some(0),
+        "an undeclared family is not a family, whatever sits in its store\n{}",
+        String::from_utf8_lossy(&quiet.stderr)
+    );
+}

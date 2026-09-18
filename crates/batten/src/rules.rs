@@ -7011,9 +7011,13 @@ fn run(
     // when some unrelated recorder happened to be declared would make a gate's
     // liveness depend on a table it has nothing to do with.
     let records = match (crate::git::git_dir(root), crate::git::current_branch(root)) {
-        (Ok(git_dir), Ok(Some(branch))) => {
-            recorder_records(&git_dir, &branch, recorders, crate::record::VERB_WRITTEN)
-        }
+        (Ok(git_dir), Ok(Some(branch))) => recorder_records(
+            &git_dir,
+            &branch,
+            recorders,
+            vocabulary.records,
+            crate::record::VERB_WRITTEN,
+        ),
         _ => BTreeMap::new(),
     };
     // CLOUD-1126, read UNCONDITIONALLY for `VERB_WRITTEN`'s reason: the engine
@@ -7424,10 +7428,29 @@ fn recorder_blocked(git_dir: &std::path::Path, branch: &str) -> BTreeMap<String,
         .collect()
 }
 
+// THE PROJECTION'S OWN DISCRIMINATION (CLOUD-1810). The first mutation is the
+// defect this row fixed, restored: with the declared names dropped from the
+// chain, a `record named` family reaches no module and its rule reports clean.
+// The second replaces the declaration with a hardcoded name, which is the
+// ambient sweep this table exists to refuse — it passes the present case and
+// only a case asserting that an UNDECLARED family stays unprojected can see it.
+//MUTANT-SUITE crates/batten/tests/it/record_families.rs
+//MUTANT declared-family-unprojected|s@        .chain(families.iter().map(|family| family.record.as_str()))@@|a_declared_family_reaches_the_module_that_reads_it
+//MUTANT undeclared-family-projected|s@        .chain(families.iter().map(|family| family.record.as_str()))@        .chain(std::iter::once("measured"))@|an_undeclared_family_is_not_projected_whatever_the_store_holds
 fn recorder_records(
     git_dir: &std::path::Path,
     branch: &str,
     recorders: &[crate::recorder::Declared],
+    // The verb-written families this repository declares (CLOUD-1810). A THIRD
+    // source beside the two below rather than an extension of either, because the
+    // three differ in who writes them: a `[[recorder]]` row is filled from a
+    // mediated tool call, `verb_written` names the stores the ENGINE owns both
+    // halves of, and these are filled by a producer calling `record named`.
+    //
+    // Without it a `record named` family was in no source at all, so its key never
+    // reached `input.tree.records`, every rule beneath it was undefined, and the
+    // row reading it reported clean over a record that said otherwise.
+    families: &[crate::record::Declared],
     verb_written: &[&str],
 ) -> BTreeMap<String, Vec<String>> {
     let mut found: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -7439,6 +7462,7 @@ fn recorder_records(
     let names = recorders
         .iter()
         .map(|recorder| recorder.record.as_str())
+        .chain(families.iter().map(|family| family.record.as_str()))
         .chain(verb_written.iter().copied());
     // THE SAME PARTITION THE WRITER USED (CLOUD-1300). A branch name outlives the
     // branch it described, so reading by name alone let this attempt read the

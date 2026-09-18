@@ -436,6 +436,7 @@ fn replayed_findings(
             verdicts,
             words: None,
             recorders: &[],
+            records: &[],
         },
         dir,
     )
