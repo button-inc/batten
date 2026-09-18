@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-show-address 1  batten 
+.SH NAME
+batten\-show\-address \- The content address of each path read on stdin, one `<path>\\t<address>` line apiece
+.SH SYNOPSIS
+\fBbatten show address\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+The content address of each path read on stdin, one `<path>\\t<address>` line apiece
+.SH OPTIONS
+.TP
+\fB\-J\fR, \fB\-\-json\fR
+Emit byte\-stable JSON instead of pointer lines
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
