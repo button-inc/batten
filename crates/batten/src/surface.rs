@@ -4864,15 +4864,6 @@ pub const SURFACE: &[CommandDecl] = &[
     // `ExitCode::ALL`, the gates from the resolved config — so this row adds a
     // VIEW and no new source of truth. See `agent.rs`'s module doc.
     CommandDecl {
-        path: "show address",
-        id: "show.address",
-        about: "The content address of each path read on stdin, one `<path>\\t<address>` line apiece",
-        data_channel: true,
-        exits: EXITS_STANDARD,
-        effect: Effect::Read,
-        flags: &[JSON],
-    },
-    CommandDecl {
         path: "show agent",
         id: "show.agent",
         about: "What an agent may do in this repository: the read-only verbs, the exit contract, and the declared gates",

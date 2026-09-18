@@ -121,11 +121,6 @@ pub enum Command {
         /// The output format for the spec.
         format: SpecFormat,
     },
-    /// Report the content address of each path read on stdin (CLOUD-1717).
-    ShowAddress {
-        /// Emit the data document rather than pointer lines.
-        json: bool,
-    },
     /// Report what an agent may do in this repository (CLOUD-1180).
     ShowAgent {
         /// Emit the data document rather than pointer lines.
@@ -2402,14 +2397,11 @@ fn capture_of(matches: &ArgMatches) -> Option<CaptureCommand> {
 /// what keeps that match readable as a census of the surface rather than as a
 /// parser.
 ///
-/// `show` is a noun over its leaves, so an absent subcommand is a usage error
-/// rather than a default action — `surface::is_noun` marks it and clap refuses
-/// the bare invocation before this runs.
+/// `show` is a noun over one leaf today, so an absent subcommand is a usage
+/// error rather than a default action — `surface::is_noun` marks it and clap
+/// refuses the bare invocation before this runs.
 fn show_of(matches: &ArgMatches) -> Option<Command> {
     match matches.subcommand()? {
-        ("address", matches) => Some(Command::ShowAddress {
-            json: flag(matches, "json"),
-        }),
         ("agent", matches) => Some(Command::ShowAgent {
             json: flag(matches, "json"),
         }),
