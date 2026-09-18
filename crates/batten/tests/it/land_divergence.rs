@@ -22,7 +22,7 @@
 //! CLOUD-1559's reason: a measurement needs the network and a token, a decision
 //! needs neither. The measurement is `[tasks.land-divergence-record]`, the
 //! decision is `policy/land-divergence.rego`, and no decision changed hands. The
-//! pagination walk, the ETag cache, the `total_count` truncation guard and every
+//! pagination walk, the `ETag` cache, the `total_count` truncation guard and every
 //! instant subtraction could not move: §5 makes `check` `read` and incapable of
 //! spawning, and `Fact::Instant` projects `null` to every module.
 //!
@@ -94,6 +94,8 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::fmt::Write as _;
+
 use crate::common;
 
 use common::{git_in, init_repo, run, run_with_stdin, scratch, write};
@@ -149,7 +151,11 @@ writer = "mise run land-divergence-record"
 "#,
     );
     for id in verdicts {
-        out.push_str(&format!(
+        // `write!` rather than `push_str(&format!(..))`: clippy's
+        // `format_push_string` refuses the second for the extra allocation, and
+        // `fmt::Write` for `String` is infallible, so the `expect` cannot fire.
+        write!(
+            out,
             r#"
 [[verdict]]
 id = "{id}"
@@ -161,7 +167,8 @@ id = "task run first"
 kind = "command"
 target = "mise run land-divergence-record"
 "#
-        ));
+        )
+        .expect("writing to a String cannot fail");
     }
     out
 }
