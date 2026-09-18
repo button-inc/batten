@@ -538,6 +538,17 @@ CI_ABSENT_OK_CHECKS = "zizmor,cross,musl,darwin-link (aarch64-apple-darwin),darw
 # conclusions — they are the absence of an answer, and reading either as red
 # wedges a branch with no exit.
 #
+# THERE IS A THIRD READER, AND IT RECURRED EXACTLY AS THIS COMMENT PREDICTED
+# (CLOUD-1831). `policy/forge-verdict-required.rego` is a `severity = "deny"` row
+# that read `final skipped` as red — the same one word, the same wedge, measured
+# on #973 and again on #974 where it cost four laps. It now carries the
+# complement of this set as `non_answers`, and the two are COMPLEMENTS RATHER
+# THAN COPIES for a reason stated there: the module cannot spell this as the
+# answered set without reintroducing CLOUD-900's false pass, because a record
+# that omits the fan-in entirely fails an is-an-answer test too and would stop
+# being refused. So a change to either list owes a look at the other, and the
+# module's own comment points back here.
+#
 # THE CATCH-ALL IS GONE, which is the half that makes the next unknown conclusion
 # FAIL SAFE. `checks-green` used to define red by negation, so a conclusion nobody
 # had seen would be reported red on a head that had not been judged. Not in this

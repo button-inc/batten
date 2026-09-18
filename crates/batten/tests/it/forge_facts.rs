@@ -18,7 +18,7 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{batten, git_in, run_with_stdin, scratch, stderr, stdout, write};
+use common::{at_root, batten, git_in, init_repo, run_with_stdin, scratch, stderr, stdout, write};
 
 /// The sha the row declares, and the one a record must be keyed to.
 const DECLARED_SHA: &str = "1111111111111111111111111111111111111111";
@@ -132,6 +132,112 @@ fn check(dir: &Path) -> std::process::Output {
     let mut command = batten();
     command.current_dir(dir).arg("check");
     command.output().expect("run batten check")
+}
+
+/// The committed config, pointed at the REAL module rather than the probe.
+///
+/// The probe above pins the FACT — that the engine builds `input.tree.forge` and
+/// keys it to the declared sha. It installs no module of this repository's, which
+/// is exactly what `#MUTANT-OWNER CLOUD-845` declares on the suite: no case in it
+/// can turn red under a mutation of the shipping predicate.
+///
+/// So the cases below install the real thing. They are the second tier
+/// `rules/policy-modules.md` demands and the only one a `#MUTANT` row over
+/// `forge-verdict-required` can name honestly.
+fn real_config(sha: &str) -> String {
+    format!(
+        r#"version = 1
+
+[[rule]]
+id = "forge check red"
+kind = "policy"
+scope = "tree"
+module = "forge-verdict-required.rego"
+severity = "deny"
+forge = ["{sha}"]
+
+[[verdict]]
+id = "forge check red"
+gloss = "the forge judged this commit and its fan-in check did not pass"
+class = "A fixture copy of the committed row; the id is what the module raises."
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "forge-verdict-required.rego"
+"#
+    )
+}
+
+/// A repository carrying the real module and a record whose body is `record`.
+///
+/// THE WHOLE RECORD rather than one conclusion, because the anti-vacuity case
+/// needs a second line — a leaf skipping beside a fan-in that genuinely failed.
+fn real_fixture(name: &str, record: &str) -> PathBuf {
+    let dir = scratch(&format!("forge-real-{name}"));
+    write(&dir, "batten.toml", &real_config(DECLARED_SHA));
+    // THE REAL MODULE, read off the tree rather than restated. A fixture copy
+    // would drift from the thing that ships, which is the whole failure this
+    // tier exists to catch one level up.
+    let module = std::fs::read_to_string(at_root("policy/forge-verdict-required.rego"))
+        .expect("read the shipping module");
+    write(&dir, "forge-verdict-required.rego", &module);
+    // `init_repo`, never a `git init` fork: main's fixture-fork ratchet
+    // (`test add duplicate`) prices every ADDED fork, and under
+    // `CARGO_TARGET_TMPDIR` this copies the published template at zero forks.
+    init_repo(&dir);
+    let store = dir.join(".git").join("batten-forge");
+    std::fs::create_dir_all(&store).expect("record store");
+    std::fs::write(store.join(DECLARED_SHA), record).expect("write record");
+    dir
+}
+
+#[test]
+fn a_skipped_fan_in_is_not_refused() {
+    // CLOUD-1831, over the compiled binary. A draft's checks are stamped
+    // `skipped`; `record-verdicts` writes that record; this row used to refuse
+    // it, and readying the pull request — the only thing that makes `final`
+    // report anything else — is downstream of the `land` the refusal stops.
+    //
+    // Measured on #973 and again on #974, where it cost four laps.
+    let dir = real_fixture("skipped", "final skipped\n");
+    let outcome = check(&dir);
+    assert!(
+        outcome.status.success(),
+        "a declined fan-in was read as a refusal\n{}{}",
+        stdout(&outcome),
+        stderr(&outcome)
+    );
+}
+
+#[test]
+fn a_cancelled_fan_in_is_not_refused() {
+    // The same class one cause over: a run superseded before it could answer.
+    // CLOUD-363 fixed this same word for `ci-wait` and `checks-green`.
+    let dir = real_fixture("cancelled", "final cancelled\n");
+    let outcome = check(&dir);
+    assert!(
+        outcome.status.success(),
+        "a cancelled fan-in was read as a refusal\n{}{}",
+        stdout(&outcome),
+        stderr(&outcome)
+    );
+}
+
+#[test]
+fn a_failed_fan_in_beside_a_skipped_leaf_is_still_refused() {
+    // THE HALF THAT KEEPS THE FIX FROM BECOMING CLOUD-900's FALSE PASS, and
+    // without it the two cases above are satisfied by a module that refuses
+    // nothing. The fan-in genuinely failed; a leaf skipping alongside it changes
+    // nothing about that.
+    let dir = real_fixture("failed-with-skip", "final failure\nwindows skipped\n");
+    let outcome = check(&dir);
+    assert!(
+        !outcome.status.success(),
+        "a failed fan-in stopped being refused\n{}{}",
+        stdout(&outcome),
+        stderr(&outcome)
+    );
 }
 
 #[test]
