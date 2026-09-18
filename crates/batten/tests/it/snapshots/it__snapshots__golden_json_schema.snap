@@ -1156,6 +1156,38 @@ expression: stdout_of(&output)
           "help": "How many of a `:::` bundle's commands run at once"
         },
         {
+          "name": "lock",
+          "short": null,
+          "long": "lock",
+          "takes_value": true,
+          "positional": false,
+          "help": "Hold this clone's named singleton lock for the child's lifetime"
+        },
+        {
+          "name": "lock_attempts",
+          "short": null,
+          "long": "lock-attempts",
+          "takes_value": true,
+          "positional": false,
+          "help": "How many times to ask for the lock before reporting it held"
+        },
+        {
+          "name": "lock_label",
+          "short": null,
+          "long": "lock-label",
+          "takes_value": true,
+          "positional": false,
+          "help": "What the wait is for, named by the caller for the refusal line"
+        },
+        {
+          "name": "lock_path",
+          "short": null,
+          "long": "lock-path",
+          "takes_value": true,
+          "positional": false,
+          "help": "Hold the lock at this path, for a resource the clone does not own"
+        },
+        {
           "name": "style",
           "short": null,
           "long": "style",
@@ -1812,6 +1844,32 @@ expression: stdout_of(&output)
             }
           ],
           "subcommands": []
+        },
+        {
+          "path": "mcp spawn",
+          "id": "mcp.spawn",
+          "about": "Record that a client actually spawned this server, then exec the launch line unchanged",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "command",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The launch line, run verbatim — Batten execs it and does not supervise it"
+            },
+            {
+              "name": "server",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The server this launch is for, as the spawn ledger and `mcp-attach-check` name it"
+            }
+          ],
+          "subcommands": []
         }
       ]
     },
@@ -2435,6 +2493,15 @@ expression: stdout_of(&output)
       "flags": [],
       "subcommands": [
         {
+          "path": "receipt clean",
+          "id": "receipt.clean",
+          "about": "Refuse when the working tree differs from HEAD, so a receipt keyed to HEAD would attest bytes no commit contains",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        },
+        {
           "path": "receipt record",
           "id": "receipt.record",
           "about": "Record that the named check concluded pass against the current HEAD",
@@ -2643,6 +2710,24 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": true,
               "help": "The key to look under"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "record suites",
+          "id": "record.suites",
+          "about": "Derive what each bats suite costs from the report the runner wrote, and record it where an author reads it",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "write",
+              "short": null,
+              "long": "write",
+              "takes_value": false,
+              "positional": false,
+              "help": "Write the corpus to its committed path instead of printing it"
             }
           ],
           "subcommands": []
@@ -3164,6 +3249,32 @@ expression: stdout_of(&output)
       ]
     },
     {
+      "path": "verdict",
+      "id": "verdict",
+      "about": "Fold a run's findings and blind spots into this tool's exit code",
+      "effect": "read",
+      "data_channel": false,
+      "flags": [
+        {
+          "name": "findings",
+          "short": null,
+          "long": "findings",
+          "takes_value": true,
+          "positional": false,
+          "help": "How many blocking findings the run produced"
+        },
+        {
+          "name": "unjudgeable",
+          "short": null,
+          "long": "unjudgeable",
+          "takes_value": true,
+          "positional": false,
+          "help": "How many subjects the run could not read"
+        }
+      ],
+      "subcommands": []
+    },
+    {
       "path": "wiring",
       "id": "wiring",
       "about": "Repair a host's hook registrations",
@@ -3454,6 +3565,10 @@ expression: stdout_of(&output)
       "path": "ready lint"
     },
     {
+      "id": "receipt.clean",
+      "path": "receipt clean"
+    },
+    {
       "id": "receipt.status",
       "path": "receipt status"
     },
@@ -3488,6 +3603,10 @@ expression: stdout_of(&output)
     {
       "id": "task.read",
       "path": "task read"
+    },
+    {
+      "id": "verdict",
+      "path": "verdict"
     },
     {
       "id": "worktree.status",

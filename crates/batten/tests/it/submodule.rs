@@ -104,6 +104,110 @@ fn base_paths(dir: &Path) -> BTreeSet<String> {
         .collect()
 }
 
+/// A LINKED WORKTREE counts its OWN files, not the main checkout's
+/// (CLOUD-1753).
+///
+/// `git::repo_root` answers with the common dir's parent on purpose, so every
+/// linked worktree resolves to one store (CLOUD-164). The working-tree walk used
+/// that as the directory to read files FROM, which compares this checkout's
+/// index against the other checkout's bytes. Measured: a worktree whose branch
+/// had committed a different `batten.toml` reported that file as uncommitted on
+/// a tree `git status` called clean, and the count fell to zero the moment the
+/// main checkout's copy was made to match — which is the tell that the wrong
+/// file was being read.
+///
+/// The fixture makes the two checkouts DISAGREE on a tracked file, because a
+/// worktree whose content matches the main one cannot distinguish the two
+/// readings at all.
+#[test]
+fn a_linked_worktree_counts_its_own_files_rather_than_the_main_checkouts() {
+    let main = Fixture::new("worktree-own-files")
+        .file("shared.txt", "main's own text\n")
+        .git()
+        .build();
+    git_in(&main, &["add", "-A"]);
+    git_in(&main, &["commit", "-q", "-m", "base"]);
+    git_in(&main, &["branch", "sibling"]);
+
+    let linked = main.join("..").join("worktree-own-files-linked");
+    let _ = std::fs::remove_dir_all(&linked);
+    git_in(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            linked.to_str().expect("a utf-8 fixture path"),
+            "sibling",
+        ],
+    );
+    std::fs::write(linked.join("shared.txt"), "the branch's own text\n").unwrap();
+    git_in(&linked, &["add", "-A"]);
+    git_in(&linked, &["commit", "-q", "-m", "this branch's own text"]);
+
+    // The premise: the two checkouts must actually differ, or the walk cannot
+    // tell which one it read.
+    assert_ne!(
+        std::fs::read_to_string(main.join("shared.txt")).unwrap(),
+        std::fs::read_to_string(linked.join("shared.txt")).unwrap(),
+        "the fixture must make the two checkouts disagree"
+    );
+    assert_eq!(
+        git_in(&linked, &["status", "--porcelain"]).trim(),
+        "",
+        "and the linked worktree must be clean before the count is asked for"
+    );
+
+    assert_eq!(
+        batten::git::uncommitted(&linked).expect("count the uncommitted paths"),
+        0,
+        "a linked worktree is judged by its own files"
+    );
+}
+
+/// A clean superproject carrying a submodule has NO uncommitted paths
+/// (CLOUD-1753).
+///
+/// The walk behind `uncommitted` compares each index entry against the bytes on
+/// disk. A gitlink's entry records a commit id in another repository and its
+/// path on disk is a DIRECTORY, so the read fails and the deletion arm claims a
+/// change that no git command reports. This asserts the superproject reads as
+/// clean, and then that the same walk still SEES an ordinary edit — because a
+/// walk that skipped too much would pass the first half by answering nothing.
+#[test]
+fn a_submodule_is_not_counted_as_an_uncommitted_path() {
+    let dir = repo_with_submodule("submodule-uncommitted", SPANNING_CONFIG);
+
+    // The premise: the gitlink must actually be an index entry, or "no
+    // uncommitted paths" is true for a fixture with no submodule in it.
+    let staged = git_in(&dir, &["ls-files", "-s", SUBMODULE]);
+    assert!(
+        staged.starts_with("160000"),
+        "{SUBMODULE} must be a gitlink for this case to mean anything; got {staged:?}"
+    );
+    // And git itself must agree the tree is clean, so the assertion below is a
+    // disagreement with git rather than a second opinion about real work.
+    assert_eq!(
+        git_in(&dir, &["status", "--porcelain"]).trim(),
+        "",
+        "the fixture must be clean before the count is asked for"
+    );
+
+    assert_eq!(
+        batten::git::uncommitted(&dir).expect("count the uncommitted paths"),
+        0,
+        "a checked-out submodule is not uncommitted work"
+    );
+
+    // The other direction, so the skip is narrow rather than a blanket silence.
+    std::fs::write(dir.join("tests/own.bats"), bats("own one edited")).unwrap();
+    assert_eq!(
+        batten::git::uncommitted(&dir).expect("count the uncommitted paths"),
+        1,
+        "an ordinary unstaged edit is still counted"
+    );
+}
+
 #[test]
 fn tree_files_stops_at_a_nested_repository_boundary() {
     // The direct assertion the acceptance list demands: whatever the walker

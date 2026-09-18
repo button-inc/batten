@@ -1666,7 +1666,7 @@ pub struct Rule {
     /// this is how a row EXCLUDES one, and without it the only expressible
     /// predicate over a flag is "must be present".
     ///
-    /// **The measured case is `git rebase`.** `rebase-not-hand-stepped` bans a
+    /// **The measured case is `git rebase`.** `patch run loose` bans a
     /// hand-driven landing lap — `git rebase origin/main` — by asking whether the
     /// line names `origin/main`. But `git rebase --onto origin/main <upstream>
     /// <branch>` names it too, and is not a lap at all: `--onto` moves a range

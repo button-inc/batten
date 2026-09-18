@@ -1223,7 +1223,22 @@ enum Changes {
 /// is one whose index or `HEAD` cannot be read.
 fn working_tree_changes(dir: &Path, want: Changes) -> Result<BTreeSet<String>> {
     let repo = open(dir)?;
-    let root = repo_root(dir)?;
+    // THIS CHECKOUT'S OWN WORKDIR, never [`repo_root`]. That helper answers with
+    // the COMMON dir's parent on purpose (CLOUD-164), so every linked worktree
+    // resolves to ONE store — which is right for a store path and wrong for
+    // "which bytes are in the tree in front of me". Reading the files there
+    // compares THIS worktree's index against the MAIN checkout's working tree.
+    //
+    // MEASURED: a `git worktree add` checkout whose branch had committed a
+    // different `batten.toml` reported that file as uncommitted, on a tree `git
+    // status` called clean, and the count went to zero the moment the MAIN
+    // checkout's copy was made to match. That is the mis-rooting class this
+    // module's own header says it exists to kill, arriving through the helper
+    // written to prevent the other half of it.
+    let root = repo
+        .workdir()
+        .map(Path::to_path_buf)
+        .map_or_else(|| repo_root(dir), Ok)?;
     let refusal = || {
         UsageError::raise(
             "cannot read the changed paths; this is not a git repository, or it has no commits"
@@ -1261,6 +1276,28 @@ fn working_tree_changes(dir: &Path, want: Changes) -> Result<BTreeSet<String>> {
         if want == Changes::Staged {
             continue;
         }
+        // A SUBMODULE IS NOT A BLOB, and everything below this line assumes one.
+        // A gitlink's index entry records a COMMIT id in another repository; the
+        // path on disk is a directory, so the read below fails and its arm reads
+        // that failure as a deletion. The result is one path reported as
+        // permanently uncommitted on a tree that has no uncommitted work.
+        //
+        // MEASURED, not reasoned: consumer #1 vendors bats at `tests/bats`, and
+        // `receipt clean` refused `verify` on a tree whose `git status
+        // --porcelain`, `git diff-files` and `git diff-index HEAD` were all
+        // empty -- one path, always that one. The walk has read gitlinks this way
+        // since it was written; the defect surfaced only when CLOUD-1753 added a
+        // caller that asks whether the tree IS `HEAD`, because every earlier
+        // caller wanted the wider "is there work here" set, where one spurious
+        // entry among many changed no answer.
+        //
+        // The comparison ABOVE already answers what a submodule can be asked at
+        // this layer: whether the pointer this commit records has moved. Whether
+        // the submodule's own worktree is dirty is a question about a different
+        // repository, which this walk does not open and must not guess at.
+        if entry.mode.contains(gix::index::entry::Mode::COMMIT) {
+            continue;
+        }
         // Unstaged: the index entry against the file on disk. Compared by CONTENT
         // hash rather than by stat, because a stat match is a cache hint and this
         // is being asked whether work exists.
@@ -1291,6 +1328,15 @@ fn working_tree_changes(dir: &Path, want: Changes) -> Result<BTreeSet<String>> {
     // what it means to every rule that reads the tree.
     if want == Changes::All {
         for path in crate::rules::tree_files(&root)? {
+            // `.git` IS NOT TREE CONTENT, and in a LINKED WORKTREE it is a
+            // regular FILE rather than the directory every walker skips by
+            // name. Measured: a `git worktree add` checkout reported exactly one
+            // uncommitted path on a tree `git status` called clean, and it was
+            // this. No commit can contain it, so it is never a difference from
+            // `HEAD`.
+            if path == ".git" {
+                continue;
+            }
             if !tracked.contains(&path) {
                 changed.insert(path);
             }
