@@ -161,14 +161,20 @@ impl Observable {
 }
 
 /// What an arm's runs reduced to, or why they did not.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// `Eq` AS WELL AS `PartialEq`, WHICH THE FLOAT USED TO FORBID. `WallClock`
+/// carried `f64` percentiles until the reduction stopped converting: a duration
+/// is a count, `percentile` selects an element rather than averaging, and
+/// nothing here ever did float arithmetic. Recovering total equality is the
+/// second thing that conversion was costing, after the lint escape it needed.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reading {
     /// A percentile pair over the wall-clock series, with the sample count.
     WallClock {
         /// The median.
-        p50: f64,
+        p50: u128,
         /// The 95th percentile.
-        p95: f64,
+        p95: u128,
         /// How many runs the series holds.
         runs: usize,
     },
@@ -312,13 +318,7 @@ fn run_one(
     for _ in 0..runs {
         match once(arm) {
             Ok(run) => {
-                // THE CAST IS HERE AND NOWHERE ELSE, at the one point where a
-                // count of nanoseconds becomes the float a percentile needs.
-                #[expect(
-                    clippy::cast_precision_loss,
-                    reason = "a run's nanosecond count is far below 2^53, where f64 is still exact; the alternative is a percentile over integers, which is a different reduction"
-                )]
-                series.push(run.nanos as f64);
+                series.push(run.nanos);
                 outputs.push(run.output);
                 exits.push(run.exit);
             }
@@ -386,12 +386,32 @@ fn exit_status(exits: &[i32]) -> Outcome {
 /// nothing is rounded, nothing is cast, and there is no lint to waive. A zero
 /// denominator is [`None`] rather than a panic, for the reason an empty series
 /// is: this is a reduction, and a reduction that cannot answer says so.
+///
+/// # The ELEMENT type is the caller's too, and for the same reason
+///
+/// A nearest-rank percentile SELECTS an element; it never averages, so it needs
+/// an order over the series and nothing else. This used to fix the element as
+/// `f64`, which made `arm` convert `Run::nanos` — a `u128` count, as its own doc
+/// insists — and buy a `cast_precision_loss` escape to do it. The float was the
+/// type the sort wanted, never the type the answer needed.
+///
+/// Taking `compare` moves the order to the caller and lets each series keep the
+/// type it measured: `u128` nanoseconds here, and `f64` seconds in
+/// [`crate::perf`], whose times come from an external tool and whose mean is a
+/// real float division. `f64::total_cmp` is the total order floats do have, so
+/// the float caller is served without this function knowing about floats — and
+/// `Reading` recovered `Eq`, which the `f64` field had forbidden.
 #[must_use]
-pub fn percentile(mut series: Vec<f64>, numerator: usize, denominator: usize) -> Option<f64> {
+pub fn percentile<T>(
+    mut series: Vec<T>,
+    numerator: usize,
+    denominator: usize,
+    compare: impl FnMut(&T, &T) -> core::cmp::Ordering,
+) -> Option<T> {
     if series.is_empty() || denominator == 0 {
         return None;
     }
-    series.sort_by(f64::total_cmp);
+    series.sort_by(compare);
     let last = series.len() - 1;
     // CLAMPED RATHER THAN REFUSED, because the clamp is what a percentile above
     // the top of the series means: the last element. The float form clamped the
@@ -403,16 +423,16 @@ pub fn percentile(mut series: Vec<f64>, numerator: usize, denominator: usize) ->
     // budget exists to bound stops being represented at all. Integer ceiling
     // division, so the rounding is exact rather than a float's best effort.
     let index = scaled.div_ceil(denominator);
-    series.get(index.min(last)).copied()
+    series.into_iter().nth(index.min(last))
 }
 
 /// Reduce a wall-clock series to a reading, or say why it could not be.
 #[must_use]
-pub fn wall_clock(series: Vec<f64>) -> Outcome {
+pub fn wall_clock(series: Vec<u128>) -> Outcome {
     let runs = series.len();
     let (Some(p50), Some(p95)) = (
-        percentile(series.clone(), 50, 100),
-        percentile(series, 95, 100),
+        percentile(series.clone(), 50, 100, u128::cmp),
+        percentile(series, 95, 100, u128::cmp),
     ) else {
         return Outcome::NotObserved(String::from("the arm produced no timing series"));
     };
@@ -603,13 +623,22 @@ mod tests {
     fn a_percentile_over_a_known_series_matches_a_hand_computation() {
         // Ten values, so the indices are checkable by eye: p50 takes index
         // ceil(9 * 0.5) = 5, and p95 takes ceil(9 * 0.95) = 9.
-        let series: Vec<f64> = (1..=10).map(f64::from).collect();
-        assert_eq!(percentile(series.clone(), 50, 100), Some(6.0));
-        assert_eq!(percentile(series.clone(), 95, 100), Some(10.0));
+        let series: Vec<u128> = (1..=10).collect();
+        assert_eq!(percentile(series.clone(), 50, 100, u128::cmp), Some(6));
+        assert_eq!(percentile(series.clone(), 95, 100, u128::cmp), Some(10));
         // And it does not depend on the order it was handed.
         let mut shuffled = series;
         shuffled.reverse();
-        assert_eq!(percentile(shuffled, 95, 100), Some(10.0));
+        assert_eq!(percentile(shuffled, 95, 100, u128::cmp), Some(10));
+    }
+
+    #[test]
+    fn the_order_is_the_callers_so_a_float_series_is_served_too() {
+        // `perf` measures seconds as `f64` from an external tool, and this is
+        // the property that lets one selection serve both without this module
+        // knowing about floats. `total_cmp` is the total order floats have.
+        let series = vec![3.5_f64, 1.25, 2.0];
+        assert_eq!(percentile(series, 50, 100, f64::total_cmp), Some(2.0));
     }
 
     #[test]
@@ -617,7 +646,7 @@ mod tests {
         // The whole `Outcome` distinction, at its source: an empty series has no
         // percentile, and returning `0.0` would make an arm that produced
         // nothing the fastest one in the comparison.
-        assert_eq!(percentile(Vec::new(), 50, 100), None);
+        assert_eq!(percentile(Vec::<u128>::new(), 50, 100, u128::cmp), None);
         assert!(matches!(wall_clock(Vec::new()), Outcome::NotObserved(_)));
     }
 
