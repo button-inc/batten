@@ -247,6 +247,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         ),
         Some(Command::Config { command }) => run_config(&command, &overrides, mode, out, err),
         Some(Command::Spec { format }) => run_spec(format, out),
+        Some(Command::ShowAddress { json }) => run_show_address(json, out),
         Some(Command::ShowAgent { json }) => run_show_agent(json, &overrides, out),
         Some(Command::Doctor { command }) => run_doctor(&command, out),
         // `init` reads no config — it is the verb that exists because there is
@@ -20195,6 +20196,65 @@ fn run_show_agent(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Res
         output::line(out, &reading)?;
     }
     // Always `0`: this verb reports a state and judges nothing, so there is no
+    // finding for it to raise and no `2` it could honestly mint.
+    Ok(ExitCode::Success)
+}
+
+/// The content address of each path read on stdin, one line apiece (CLOUD-1717).
+///
+/// # Why the engine owns this and `sha256sum` did not
+///
+/// `mise-tasks/checksums.sh` shelled `sha256sum` to build a release manifest,
+/// and three things followed from that which this verb removes. The digest was
+/// bare — no domain separation, no version, no length — so a manifest entry and
+/// any other sha256 in the tree were the same 64 characters and nothing could
+/// say which was which. The spelling differed per platform (`sha256sum` against
+/// `shasum -a 256`), which is a second authority over one answer. And the
+/// manifest was in a format only that program wrote and only that program read.
+///
+/// [`identity::ContentAddress`] is the tree's one answer to "what is this
+/// content", already used by the capture store and by `DocumentInput`, and the
+/// release manifest joins them rather than keeping a fourth spelling.
+///
+/// # `read`, structurally
+///
+/// It opens the paths handed to it and writes to `out`; there is no path from
+/// here to a mutation or a spawn, which is what keeps it in `spec`'s read-only
+/// allowlist and what `surface::tests::every_leaf_under_show_is_read` holds.
+///
+/// # A path it cannot read is exit 1, and the line is not written
+///
+/// Never a partial manifest. A missing or unreadable path means the caller's
+/// input was wrong, which §7 spends `1` on — `2` is the policy verdict and this
+/// verb judges nothing. The alternative, skipping the line, would produce a
+/// manifest that is short rather than absent, and a short manifest compares
+/// equal to a release that is genuinely missing that asset.
+fn run_show_address(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
+    let mut raw = String::new();
+    std::io::stdin().read_to_string(&mut raw)?;
+
+    let mut addressed: Vec<(String, String)> = Vec::new();
+    for path in raw.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let bytes = std::fs::read(path)
+            .map_err(|failed| UsageError::raise(format!("show address: {path}: {failed}")))?;
+        let address = identity::ContentAddress::of(identity::AddressDomain::Artifact, &bytes);
+        addressed.push((path.to_owned(), address.to_string()));
+    }
+
+    if json {
+        // Unconditional, including when stdin named nothing: JSON that is
+        // sometimes absent is unparseable.
+        let document: Vec<_> = addressed
+            .iter()
+            .map(|(path, address)| serde_json::json!({"path": path, "address": address}))
+            .collect();
+        writeln!(out, "{}", serde_json::to_string_pretty(&document)?)?;
+    } else {
+        for (path, address) in &addressed {
+            writeln!(out, "{path}\t{address}")?;
+        }
+    }
+    // Always `0`: this verb reports a reading and judges nothing, so there is no
     // finding for it to raise and no `2` it could honestly mint.
     Ok(ExitCode::Success)
 }

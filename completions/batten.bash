@@ -814,6 +814,9 @@ _batten() {
             batten__subcmd__help__subcmd__semver,check)
                 cmd="batten__subcmd__help__subcmd__semver__subcmd__check"
                 ;;
+            batten__subcmd__help__subcmd__show,address)
+                cmd="batten__subcmd__help__subcmd__show__subcmd__address"
+                ;;
             batten__subcmd__help__subcmd__show,agent)
                 cmd="batten__subcmd__help__subcmd__show__subcmd__agent"
                 ;;
@@ -1336,11 +1339,17 @@ _batten() {
             batten__subcmd__semver__subcmd__help,help)
                 cmd="batten__subcmd__semver__subcmd__help__subcmd__help"
                 ;;
+            batten__subcmd__show,address)
+                cmd="batten__subcmd__show__subcmd__address"
+                ;;
             batten__subcmd__show,agent)
                 cmd="batten__subcmd__show__subcmd__agent"
                 ;;
             batten__subcmd__show,help)
                 cmd="batten__subcmd__show__subcmd__help"
+                ;;
+            batten__subcmd__show__subcmd__help,address)
+                cmd="batten__subcmd__show__subcmd__help__subcmd__address"
                 ;;
             batten__subcmd__show__subcmd__help,agent)
                 cmd="batten__subcmd__show__subcmd__help__subcmd__agent"
@@ -5643,8 +5652,22 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__show)
-            opts="agent"
+            opts="address agent"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__help__subcmd__show__subcmd__address)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -9861,8 +9884,38 @@ _batten() {
             return 0
             ;;
         batten__subcmd__show)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help agent help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help address agent help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --strictness)
+                    COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-level)
+                    COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__show__subcmd__address)
+            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -9921,8 +9974,22 @@ _batten() {
             return 0
             ;;
         batten__subcmd__show__subcmd__help)
-            opts="agent help"
+            opts="address agent help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__show__subcmd__help__subcmd__address)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

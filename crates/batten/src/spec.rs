@@ -647,6 +647,7 @@ mod tests {
                 // is what keeps a writer from ever reaching this list through
                 // the noun's own `read` (CLOUD-170's prefix hazard).
                 "show".to_owned(),
+                "show address".to_owned(),
                 "show agent".to_owned(),
                 "spec".to_owned(),
                 "state list".to_owned(),
@@ -1070,6 +1071,7 @@ mod tests {
             // as `agent instructions` — the row's own 2026-08-30 amendment, on
             // `record <object>`'s precedent.
             "show".to_owned(),
+            "show address".to_owned(),
             "show agent".to_owned(),
             "singleton".to_owned(),
             "singleton acquire".to_owned(),
