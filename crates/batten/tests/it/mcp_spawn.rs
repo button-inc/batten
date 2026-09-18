@@ -35,19 +35,17 @@
 //! with its own basename-stripping and its own ledger logic. The verb takes the
 //! name as an argument, so a second server is an argument.
 //
-// carried: mise-tasks/serena-mcp.sh crates/batten/src/mcp.rs kind:verb crates/batten/tests/it/mcp_spawn.rs runs:batten+mcp+spawn
-// carried: tests/serena-mcp.bats crates/batten/src/mcp.rs kind:verb crates/batten/tests/it/mcp_spawn.rs runs:batten+mcp+spawn
+// NO RETIREMENT ARM, AND ITS ABSENCE IS THE CORRECTION (CLOUD-1326).
 //
-// carried: "a launch appends one record naming the server, and execs the launch line" crates/batten/src/mcp.rs
-// carried: "THE SERVER'S PID IS THE SHIM'S — it execs rather than forks" crates/batten/src/mcp.rs
-// carried: "the record carries five fields: epoch, server, pid, load, siblings" crates/batten/src/mcp.rs
-// carried: "a launch inside the window counts the earlier one as a sibling" crates/batten/src/mcp.rs
-// carried: "a launch outside the window counts no sibling" crates/batten/src/mcp.rs
-// carried: "STDOUT CARRIES ONLY THE SERVER'S BYTES — stdout is the MCP transport" crates/batten/src/mcp.rs
-// carried: "an unwritable ledger never stops the server from starting" crates/batten/src/mcp.rs
-// changed: "the server name comes from the shim's own basename, so a second server is a second name" crates/batten/src/mcp.rs from `tests/serena-mcp.bats`. The property it protected — one name per server, never one script per server — is now structural: the name is a positional argument, so a second server cannot get the first one's name without somebody typing it. What the case actually asserted was a basename-stripping loop (`.sh` off before `-mcp`, in that order, or the suffix never matches) and that loop does not exist any more. `a_second_server_is_an_argument_rather_than_a_second_script` is the property without the loop
-// changed: "the shim is what .mcp.json launches, so the ledger is populated in real sessions" crates/batten/src/mcp.rs from `tests/serena-mcp.bats`. Same claim, new spelling: the case grepped `.mcp.json` for the script path, and `the_committed_client_config_launches_this_verb` reads the same file for the verb's argv. It is CHANGED rather than CARRIED because the committed spelling moved from a path to a command line
-// changed: "the launch args stay in .mcp.json, so the pin gate still reads them" crates/batten/src/mcp.rs from `tests/serena-mcp.bats`. The args are still in `.mcp.json` and `mise-pin-agreement` still reads the pin out of them, but they now sit BEHIND the verb's trailing separator rather than at the head of the array. The case asserted their position as well as their presence, and only the presence survives — which is the half the pin gate needs
+// This tier landed carrying `carried:` arms for `mise-tasks/serena-mcp.sh` and
+// `tests/serena-mcp.bats`, which is a claim that the shim's callers had moved to
+// this verb. They had not: the only caller is `.mcp.json`, read by a client that
+// resolves `batten` on `PATH`, and no release ships `mcp spawn`. Both the shim
+// and its suite are tracked again and still hold every claim the arms listed.
+//
+// The verb stays — it is the better mechanism and its own properties are asserted
+// below. What it does not yet have is a caller it can actually serve, and a
+// retirement arm is a statement about callers.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -277,38 +275,25 @@ fn a_launch_line_that_will_not_start_is_a_refusal_and_not_a_silent_success() {
     assert!(text.contains("could not become"), "{text}");
 }
 
-#[test]
-fn the_committed_client_config_launches_this_verb() {
-    // The retired case grepped `.mcp.json` for the script path; this reads the
-    // same file for the verb's argv. Without it the ledger is empty in every real
-    // session and the whole mechanism is inert — which is the property, and it
-    // cannot be asserted about a fixture.
-    let config = std::fs::read_to_string(at_root(".mcp.json")).unwrap();
-    let parsed: serde_json::Value = serde_json::from_str(&config).unwrap();
-    let serena = &parsed["mcpServers"]["serena"];
-    assert_eq!(serena["command"], "batten", "{parsed}");
-    let args: Vec<String> = serena["args"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|value| value.as_str().unwrap().to_owned())
-        .collect();
-    assert_eq!(args[0], "mcp", "{args:?}");
-    assert_eq!(args[1], "spawn", "{args:?}");
-    assert_eq!(args[2], "serena", "{args:?}");
-    // THE SEPARATOR IS PART OF THE CONTRACT. Without it clap refuses the argv
-    // outright, so a config that dropped it would fail every launch — and the
-    // failure would look like the client never spawning the server, which is the
-    // exact reading this ledger exists to disambiguate.
-    assert_eq!(args[3], "--", "{args:?}");
-}
+// THE COMMITTED CLIENT CONFIG IS NOT THIS VERB'S CALLER, AND ASSERTING THAT IT
+// WAS IS WHAT BROKE (CLOUD-1326).
+//
+// A case here asserted `.mcp.json` names `batten mcp spawn`. The MCP client reads
+// that file with the `batten` on `PATH` — a RELEASE — and no release ships this
+// verb, so the server died at startup with no report and `mem:*` was unreachable
+// for a whole session. The tier was green throughout: it read the committed bytes
+// and found exactly what the commit had written there.
+//
+// The repoint belongs to the release that ships the verb, not to the commit that
+// adds it. `policy/self-image.rego` refuses the class now, so the property this
+// case wanted — the committed config launches something that exists — is a gate's
+// rather than a fixture-blind string compare's.
 
 #[test]
 fn the_pinned_launch_args_are_still_in_the_committed_config() {
     // `mise-pin-agreement` reads the pin out of `.mcp.json`, so the args have to
-    // stay there. They moved BEHIND the verb rather than leading the array, and
-    // the pin gate reads presence rather than position — which is why the arm for
-    // this one is `// changed:` and not a carry.
+    // stay there. Asserted here rather than only in the pin gate's own cases
+    // because this tier is the one that runs over the committed file.
     let config = std::fs::read_to_string(at_root(".mcp.json")).unwrap();
     assert!(config.contains("pipx:serena-agent@"), "{config}");
     assert!(config.contains("start-mcp-server"), "{config}");
