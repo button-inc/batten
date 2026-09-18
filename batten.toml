@@ -7554,6 +7554,34 @@ line_sources = [".github/workflows/*.yml"]
 module = "policy/ci-cache-declared.rego"
 severity = "deny"
 
+# CLOUD-1833. A retirement deletes a program and nothing asked whether its
+# CALLERS still resolve. Measured when this row was written: five steps across
+# four workflows named tasks that do not exist — two deleted by CLOUD-1717's own
+# commits, and three spelling a `mise run batten` that has never existed at all.
+# Every one fires on `workflow_run`, `schedule` or `workflow_dispatch`, so it
+# reaches no pull request and no reviewer, and a workflow failing on 100% of its
+# invocations is indistinguishable from one that has never fired.
+#
+# THE THIRD POPULATION OF A PREDICATE THIS TREE ALREADY HAS TWICE.
+# `command-task-defined` asks it of a `[[rule]]`'s `check`,
+# `verdict-routes-resolve` of a `[[verdict.route]]`'s `target`, and this of a
+# workflow step's `run`. Each owns its population; the shared `defined` shape is
+# deliberate, for the reason `verdict-routes-resolve`'s header states.
+#
+# The two declared sources are `ci-cache-declared`'s pair and for its reason: the
+# question is about mise's TASK GRAPH, which it owns and this reads as a parsed
+# document rather than re-parsing text. `line_sources` is the workflows only —
+# every pointer this module emits is into one, and nothing it decides needs a
+# line in `mise.toml`.
+[[rule]]
+id = "workflow run unknown"
+kind = "policy"
+scope = "tree"
+sources = [".github/workflows/*.yml", "mise.toml"]
+line_sources = [".github/workflows/*.yml"]
+module = "policy/task-callable.rego"
+severity = "deny"
+
 # CLOUD-1431. The two pinned-tool surfaces this repository has, compared for the
 # first time: what `release-artifacts.yml` PUBLISHES against what a
 # `[[provision]]` row can RESOLVE.
@@ -12255,6 +12283,32 @@ releasing, which is itself reached by one.
 id = "workflow read first"
 kind = "document"
 target = ".github/workflows/release-assets.yml"
+
+[[verdict]]
+id = "task run unknown"
+gloss = "a workflow step runs a mise task that neither the manifest nor a program under mise-tasks/ defines"
+class = """
+The step will fail the moment it runs, and it will fail invisibly. A workflow \
+triggered by `schedule`, `workflow_run` or `workflow_dispatch` reaches no pull \
+request and no reviewer, so a run that dies at the step is indistinguishable \
+from one that never fired — which is how five such callers accumulated across \
+four files before anything asked the question. Nothing about a dead caller \
+decays over time: it was wrong on the commit that introduced it, and the only \
+reason it survived is that no surface was reading.
+
+An interpolated name is not this class. `mise run ${{ matrix.task }}` is not \
+decidable from a committed document, so it abstains rather than being refused.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/task-callable.rego"
+
+[[verdict.route]]
+id = "task list first"
+kind = "command"
+target = "mise tasks ls --all"
 
 [[verdict]]
 id = "workflow read unread"

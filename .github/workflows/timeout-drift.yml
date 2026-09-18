@@ -66,8 +66,21 @@ jobs:
       # `${{ }}` expansion is textual substitution into the shell script, and
       # zizmor gates that at high severity. All logic is in the task; nothing
       # here but the invocation.
-      - name: Report budgets that no longer match their measurement
+      # THE SPLIT THE PORT FORCED (CLOUD-1717), and the shape `branch-hygiene.yml`
+      # takes: the producer makes the forge reads, the engine adjudicates what it
+      # recorded. Neither half can hold the other — section 5 makes `check` `read`
+      # and incapable of spawning, and the engine calls no clock on any evaluation
+      # path.
+      #
+      # `--fail-on-warning` because `bound grade other` is declared `warn`: a
+      # budget drifting is a report about the world rather than a verdict on a
+      # branch, and this scheduled job is the one caller that should still go red
+      # for it.
+      - name: Record each job's measured duration against its declared budget
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: mise run timeout-drift
+        run: mise run timeout-drift-record
+      - name: Report budgets that no longer match their measurement
+        shell: bash
+        run: mise run batten -- check --rule 'bound grade other' --fail-on-warning
