@@ -1403,11 +1403,25 @@ bytes the tracker returned, never a re-typed copy; do NOT re-type one by hand.""
 # at load any `while_marker` naming a family that sweep does not carry — so the
 # deny cannot outlive the work it was about.
 #
-# NO OVERRIDE ROUTE AND NO `bypass_env`, deliberately. CLOUD-1311 measured that a
-# prose escape hatch is the thing being fixed rather than a safety valve on it:
-# the punt this refuses is itself a well-argued sentence, so a field accepting a
-# well-argued sentence gates nothing. The honest escape is the one the remedy
-# names.
+# NO `bypass_env`, and CLOUD-1311's reason still holds for the SHAPE it ruled on:
+# a prose escape hatch on the punt itself is the thing being fixed rather than a
+# safety valve on it, because the punt this refuses is itself a well-argued
+# sentence, so a field accepting a well-argued sentence gates nothing.
+#
+# "AND NO OVERRIDE ROUTE" IS WITHDRAWN (CLOUD-1823), because the sentence that
+# followed it — "the honest escape is the one the remedy names" — became false in
+# the one state that matters. The remedy names `verify`; where `verify` is red for
+# reasons only a write can repair, re-running it cannot change its answer, and the
+# write that would is this row's own subject. Measured twice, the second time
+# costing a whole session, with `BATTEN_HOOK_BYPASS` as the only exit — the
+# password shape CLOUD-1051 retired.
+#
+# THE ROUTE IS DECLARED ON THE CLASS, not here: `receipt read other` is vendored
+# (`crates/batten/src/verdict.rs`) and shared with every other receipt row, so the
+# repair reaches all of them. It is also a TIGHTENING — `honours_hatch` reads that
+# field, so declaring the route is what stops the bare variable working — which is
+# the opposite of the valve CLOUD-1311 refused. The difference is checkability: a
+# red check on a named head is a fact a reader can verify, not a sentence.
 [[rule]]
 id = "turn mint ahead"
 kind = "receipt"
