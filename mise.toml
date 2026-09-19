@@ -617,7 +617,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "mise,attestation,timeout-drift,engine-checks-green,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure,evaluator-io-check,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,linear-check,lock-complete,macos-link,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-callable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules"
+MUTANT_GATES = "mise,attestation,timeout-drift,engine-checks-green,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure,evaluator-io-probe,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,linear-check,lock-complete,macos-link,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-callable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -2125,6 +2125,62 @@ emit | cargo run --quiet -p batten -- record named timeout-drift
 # The census WRITES NOTHING when the root does not exist — the question could not
 # be asked — which the module reads as silence. A root that was walked and held
 # no transcripts records `sessions 0`, which is an answer.
+# CLOUD-418's obligation made runnable, ported off
+# `mise-tasks/evaluator-io-check.sh` under CLOUD-1717. The one thing that is not
+# a decision: building the test with `probe-evaluator-io` on and reading what the
+# harness said.
+#
+# THE VERDICT IS THE HARNESS'S OWN LINE, NEVER THE EXIT CODE. `cargo test` exits
+# non-zero for a compile error, an unresolved feature, an absent toolchain and a
+# panic in another test — every one of which would read as "the probe falsified
+# the assertion" and hand the gate a pass it did not earn. Worse, that pass gets
+# MORE likely as the crate breaks, so the gate would be loudest exactly when it
+# was lying.
+#
+# The `failures:` LISTING rather than the per-test line, because the per-test
+# line is not stable across harness modes: plain prints `test <name> ... FAILED`
+# and `--quiet` prints `<name> --- FAILED`. The listing is one indented name in
+# both, and anchoring on it is what stops this going quietly could-not-look the
+# day someone adds or drops `--quiet`.
+#
+# `EVALUATOR_IO_PROBE_CMD` overrides the invocation so the tier can drive all
+# three verdicts without a two-minute rebuild per case. Read-only; never set
+# outside `crates/batten/tests/it/evaluator_io_probe.rs`.
+#
+# Receipt-gated (CLOUD-424) on the real path only: a feature toggle forces a
+# fresh compile of the crate and its test binary, the one case where the ~0.3s a
+# check/record pair costs is obviously dwarfed.
+#
+# POINTER-ONLY: one token. The probe log carries module bodies and paths, and no
+# byte of it reaches the record.
+[tasks.evaluator-io-record]
+description = "Effect: record whether the IO-free evaluator test goes red under `probe-evaluator-io`, for `test judge never`"
+shell = "bash -c"
+run = """
+probe_test=no_evaluator_feature_admits_io
+if [ -n "${EVALUATOR_IO_PROBE_CMD:-}" ]; then
+  # shellcheck disable=SC2086 # deliberate word-splitting: the override is an argv
+  set -- $EVALUATOR_IO_PROBE_CMD
+else
+  if ./mise-tasks/step-receipt.sh check evaluator-io-check; then exit 0; fi
+  set -- cargo test --quiet -p batten --features probe-evaluator-io \
+    --test policy_modules "$probe_test" -- --include-ignored
+fi
+
+log=$(mktemp)
+trap 'rm -f "$log"' EXIT
+
+status=0
+"$@" >"$log" 2>&1 || status=$?
+verdict=$(python3 mise-tasks/probe_verdict.py "$status" "$log" "$probe_test") || exit 0
+
+printf '%s\\n' "$verdict" | cargo run --quiet -p batten -- record named evaluator-io-probe
+
+if [ -z "${EVALUATOR_IO_PROBE_CMD:-}" ] && [ "$verdict" = 'probe failed' ]; then
+  ./mise-tasks/step-receipt.sh record evaluator-io-check || true
+fi
+"""
+
 [tasks.transcript-corpus-record]
 description = "Effect: count this host's independent session transcripts against a threshold, for `corpus count thin`"
 shell = "bash -c"

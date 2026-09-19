@@ -123,6 +123,7 @@ mod egress_fencing;
 mod emission_census;
 mod enforce_journal;
 mod evaluator_closure;
+mod evaluator_io_probe;
 mod extension_surfaces;
 mod external_facts;
 mod extracted_facts;

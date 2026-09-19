@@ -6,8 +6,8 @@ runner measured it; the suite runs `--no-parallelize-within-files`, so a
 file's number is its own serial cost and is what an author adding a case
 to it pays.
 
-- suites: 96
-- serial total: 157.5s
+- suites: 95
+- serial total: 157.4s
 
 | seconds | share | suite |
 | ---: | ---: | --- |
@@ -93,7 +93,6 @@ to it pays.
 | 0.1 | 0.1% | `tests/task-fail-closed.bats` |
 | 0.1 | 0.1% | `tests/dist.bats` |
 | 0.1 | 0.1% | `tests/egress-check.bats` |
-| 0.1 | 0.1% | `tests/evaluator-io-check.bats` |
 | 0.0 | 0.0% | `tests/darwin-link.bats` |
 | 0.0 | 0.0% | `tests/cross-check.bats` |
 | 0.0 | 0.0% | `tests/zizmor-split.bats` |

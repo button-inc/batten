@@ -5997,6 +5997,63 @@ no_fix_reason = "the number rises when the collector reaches this host, not when
 record = "transcript-corpus"
 writer = "mise run transcript-corpus-record"
 
+# CLOUD-418's obligation, made runnable rather than promised, and ported under
+# CLOUD-1717. `no_evaluator_feature_admits_io` is green under the shipped feature
+# set whether or not it still DISCRIMINATES; this is the row that requires it to
+# go red with `regorus/http` on.
+#
+# THE ROW'S ID IS NOT ONE OF ITS VERDICT TOKENS, and the engine holds it both
+# ways: a rule that is a class's SOLE raiser must be spelled as that class, and
+# one that raises TWO must not, because the name would answer for two different
+# things. This row raises `test judge never` and `test run unread`, so it carries
+# a third name of its own.
+[[rule]]
+id = "test cover never"
+kind = "policy"
+scope = "tree"
+module = "policy/evaluator-io-probe.rego"
+severity = "deny"
+no_fix_reason = "a test that no longer discriminates is fixed in the test, not here: either the assertion has been reworded into something the probe cannot falsify, or the fixture no longer reaches `http.send`"
+
+[[record]]
+record = "evaluator-io-probe"
+writer = "mise run evaluator-io-record"
+
+[[verdict]]
+id = "test judge never"
+gloss = "the IO-free evaluator test stayed green with regorus's http feature on, so it discriminates nothing"
+class = """
+A test that is green whether or not the evaluator can reach the network is not \
+evidence that it cannot. `crates/batten/src/policy.rs` admits consumer-authored \
+code to the mediated call on the claim that a policy module cannot open a file, \
+start a process or reach the network, and this test is that claim's evidence — so \
+a version of it that cannot fail is coverage theatre standing where the evidence \
+should be. Fix the test, not the gate.
+"""
+
+[[verdict.route]]
+id = "test read first"
+kind = "document"
+target = "crates/batten/tests/policy_modules.rs"
+
+[[verdict]]
+id = "test run unread"
+gloss = "the probe build exited non-zero without running the named test to a failure"
+class = """
+COULD NOT LOOK, and it is the arm a gate written to the obvious shape gets wrong. \
+`cargo test` exits non-zero for a compile error, an unresolved feature, an absent \
+toolchain and a panic in another test — every one of which would read as "the \
+probe falsified the assertion" and hand this gate a pass it did not earn. That \
+pass gets MORE likely as the crate breaks, so the gate would be loudest exactly \
+when it was lying. The producer reads the harness's own failures listing instead, \
+and says so here when it saw something else.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run evaluator-io-record"
+
 [[verdict]]
 id = "prose measure partial"
 gloss = "this host carries fewer independent session transcripts than the caller asked for"
