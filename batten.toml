@@ -5976,6 +5976,45 @@ no_fix_reason = "a dependency needing a macOS SDK is not fixable by a rewrite he
 record = "macos-link"
 writer = "mise run macos-link-record"
 
+# CLOUD-326 section 8.1's unblock condition, as a command and an exit code rather
+# than as prose no gate reads. Ported under CLOUD-1717 from
+# `mise-tasks/transcript-corpus-check.sh`.
+#
+# `warn`, and that is the honest severity: the count is a reading about the
+# WORLD — whether CLOUD-651's collector has landed and reached this host — rather
+# than about the branch, so no commit is at fault when it is low. A caller that
+# wants it blocking reads `--fail-on-warning`, which is the same posture
+# `land-divergence` and `nonverdict` take one row over.
+[[rule]]
+id = "prose measure partial"
+kind = "policy"
+scope = "tree"
+module = "policy/transcript-corpus.rego"
+severity = "warn"
+no_fix_reason = "the number rises when the collector reaches this host, not when a branch changes: nothing in a diff can raise it, so there is nothing here to rewrite"
+
+[[record]]
+record = "transcript-corpus"
+writer = "mise run transcript-corpus-record"
+
+[[verdict]]
+id = "prose measure partial"
+gloss = "this host carries fewer independent session transcripts than the caller asked for"
+class = """
+Every prose-shaped literal in this repository is held to a measured corpus — \
+firings AND true positives among them — and a transcript-derived literal has no \
+corpus until independent sessions accumulate. A low count is a PROGRESS reading \
+rather than a permanent state: transcripts are collected to the Batten service \
+(CLOUD-651), so it means the collector has not landed or has not reached this \
+host. The number is expected to rise; do not read a permanent block into it, and \
+do not fit a literal to the single transcript it was derived from.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run transcript-corpus-record"
+
 [[verdict]]
 id = "manifest carry unsafe"
 gloss = "a package in the built macOS graph declares a `links` key, so it needs a real SDK to find that library"

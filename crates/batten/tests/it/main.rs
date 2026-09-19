@@ -290,6 +290,7 @@ mod timeout_drift;
 mod todo_promotion;
 mod tool_selector;
 mod tool_verdict_facts;
+mod transcript_corpus;
 mod transcript_stop_reason;
 mod transcript_tool_result;
 mod trunk_watch;
