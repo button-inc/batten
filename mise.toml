@@ -617,7 +617,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "mise,attestation,timeout-drift,engine-checks-green,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure,evaluator-io-check,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-callable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules"
+MUTANT_GATES = "mise,attestation,timeout-drift,engine-checks-green,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure,evaluator-io-check,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,linear-check,lock-complete,macos-link,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-callable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -2093,6 +2093,38 @@ emit | cargo run --quiet -p batten -- record named timeout-drift
 # contract: an absent record is "the producer did not run", and the module reads
 # it as silence rather than as a clean closure. A graph that DID resolve without
 # an evaluator node is a different answer and the walk records it as `absent`.
+# The macOS link gate's producer, ported off `mise-tasks/macos-link-check.sh`
+# under CLOUD-1717. The two things that are not decisions: the `cargo metadata`
+# spawn and the graph walk.
+#
+# `--filter-platform aarch64-apple-darwin` IS THE QUESTION, not an optimisation.
+# A macOS-only transitive dep must be seen and a Linux-only one must not, so the
+# graph is resolved FOR macOS. Apple Silicon because it is the platform a
+# maintainer is most likely to run, and both Darwin triples share these deps.
+# (`evaluator-closure-record` deliberately does NOT filter: its pin is a claim
+# about every platform this crate ships to, so narrowing would let an IO crate
+# arrive behind a `cfg` for a platform the gate does not run on.)
+#
+# `BATTEN_LINK_CHECK_METADATA` substitutes a recorded graph so the filter can be
+# shown able to FAIL: the live tree is clean by construction, which is the point
+# of the gate.
+#
+# NOTHING IS WRITTEN WHEN THE GRAPH WILL NOT RESOLVE — the record contract, so an
+# absent record reads as "the producer did not run" rather than as a clean graph.
+[tasks.macos-link-record]
+description = "Effect: record the built macOS graph's links-declaring and framework-linking crates, for `workspace carry unsafe`"
+shell = "bash -c"
+run = """
+if [ -n "${BATTEN_LINK_CHECK_METADATA:-}" ]; then
+  metadata=$(cat "$BATTEN_LINK_CHECK_METADATA") || exit 0
+else
+  metadata=$(cargo metadata --format-version 1 --filter-platform aarch64-apple-darwin 2>/dev/null) || exit 0
+fi
+printf '%s' "$metadata" \
+  | python3 mise-tasks/macos-link.py \
+  | cargo run --quiet -p batten -- record named macos-link
+"""
+
 [tasks.evaluator-closure-record]
 description = "Effect: record the evaluator's activated sub-closure and any IO-bearing crate in it, for `layer reach unsafe`"
 shell = "bash -c"

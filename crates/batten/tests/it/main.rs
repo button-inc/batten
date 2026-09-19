@@ -179,6 +179,7 @@ mod lease_precondition;
 mod lease_record;
 mod locator_index;
 mod lock_complete;
+mod macos_link;
 mod mcp_dispatch;
 mod mcp_reduce_array;
 mod mediated_admission;

@@ -720,9 +720,16 @@ local gate = new Mapping<String, Step> {
   // Globbed on the manifests alone (CLOUD-224): the predicate is `cargo metadata
   // --filter-platform` over the resolved graph, so the inputs are exactly the
   // files that can move that graph. Nothing else can add a dependency.
+  //
+  // TWO COMMANDS SINCE CLOUD-1717, and the split is forced rather than chosen:
+  // section 5 makes `check` `read` and structurally incapable of spawning
+  // `cargo metadata`, so the producer resolves the graph and the engine
+  // adjudicates what it recorded. The step name and the rule id are one object,
+  // which is why the second command names the rule rather than running a bare
+  // `batten check` under a name that promises the link gate.
   ["macos-link-check"] {
     glob = List("Cargo.toml", "Cargo.lock", "crates/**/Cargo.toml")
-    check = "mise run macos-link-check"
+    check = "mise run macos-link-record && mise run batten -- check --rule 'workspace carry unsafe'"
   }
 
   // --- shell: the mise-tasks/ programs and the bats suite -------------------
