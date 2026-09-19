@@ -114,7 +114,7 @@ fn record(dir: &std::path::Path, lines: &str) {
 /// does. This is what keeps the walk cases assertable after the port.
 #[expect(
     clippy::disallowed_types,
-    reason = "CLOUD-320's inventory row, and the verdict is that this spawn IS the subject under test: the walk moved out of the dying program into `mise-tasks/macos-link.py` over the shared `cargo_graph.py` precisely so a compiled case could drive it, and a harness re-implementing it in Rust would be the second authority both programs' headers warned about"
+    reason = "stays, and it is the subject under test rather than a convenience: the walk moved out of the dying program into `mise-tasks/macos-link.py` over the shared `cargo_graph.py` precisely so a compiled case could drive it, and a harness re-implementing it in Rust would be the second authority both programs' headers warned about"
 )]
 fn walk(metadata: &str) -> String {
     use std::io::Write as _;
@@ -346,7 +346,7 @@ fn the_walk_starts_at_the_workspace_members() {
 #[test]
 #[expect(
     clippy::disallowed_types,
-    reason = "CLOUD-320's inventory row: resolving the REAL macOS graph is the whole of this case, and it is the only evidence that the fixtures above agree with the tree the release actually links"
+    reason = "stays: resolving the REAL macOS graph is the whole of this case, and it is the only evidence that the fixtures above agree with the tree the release actually links"
 )]
 fn the_repo_as_it_stands_has_no_sdk_requiring_dependency() {
     // The anti-vacuity arm, against the graph as it actually resolves FOR macOS.

@@ -188,7 +188,7 @@ fn an_absent_record_says_nothing_rather_than_refusing() {
 /// extracted to remove one gate over.
 #[expect(
     clippy::disallowed_types,
-    reason = "CLOUD-320's inventory row, and the verdict is that this spawn IS the subject under test: the classification of a probe build's output is what moved out of the dying program, and driving it directly is what keeps the three arms assertable without a two-minute rebuild per case"
+    reason = "stays, and it is the subject under test rather than a convenience: the classification of a probe build's output is what moved out of the dying program, and driving it directly is what keeps the three arms assertable without a two-minute rebuild per case"
 )]
 fn classify(name: &str, status: i32, log: &str) -> String {
     let dir = scratch(&format!("evaluator-io-stub-{name}"));

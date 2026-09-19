@@ -117,7 +117,7 @@ fn record(dir: &std::path::Path, lines: &str) {
 /// does. This is what keeps the four walk cases assertable after the port.
 #[expect(
     clippy::disallowed_types,
-    reason = "CLOUD-320's inventory row, and the verdict is that this spawn IS the subject under test: the walk moved out of the dying program into `mise-tasks/evaluator-closure.py` precisely so a compiled case could drive it, and a harness that re-implemented it in Rust would be a second authority over the reachability the producer actually runs"
+    reason = "stays, and it is the subject under test rather than a convenience: the walk moved out of the dying program into `mise-tasks/evaluator-closure.py` precisely so a compiled case could drive it, and a harness that re-implemented it in Rust would be a second authority over the reachability the producer actually runs"
 )]
 fn walk(metadata: &str) -> String {
     use std::io::Write as _;
@@ -359,7 +359,7 @@ fn a_dev_dependency_of_the_evaluator_is_not_in_the_built_closure() {
 #[test]
 #[expect(
     clippy::disallowed_types,
-    reason = "CLOUD-320's inventory row: resolving the REAL graph is the whole of this case, and it is the only evidence that the fixtures above agree with the tree `Cargo.toml`'s pin comment makes its claim about"
+    reason = "stays: resolving the REAL graph is the whole of this case, and it is the only evidence that the fixtures above agree with the tree `Cargo.toml`'s pin comment makes its claim about"
 )]
 fn the_repos_real_graph_is_clean_today() {
     // The anti-vacuity arm, against the tree as it actually resolves. Every case
