@@ -111,6 +111,14 @@
 # spending a binding that SURVIVES, which is the loosening `case_earns_removal`
 # warns about arriving one arm over.
 #MUTANT bats-binding-survives|s@assigned_name(binding) == variable@true@|a_bats_case_spending_a_surviving_binding_is_refused
+# CLOUD-1717's arm F. The first row kills the arm outright; the second turns
+# the data exclusion into a refusal, which the admitted-data case observes; the
+# third unanchors the directory test, so the arm fires on every added path in
+# the tree and the outside-`mise-tasks/` case goes red. Three conjuncts, three
+# cases, and each case fails for a different reason.
+#MUTANT interpreter-add-unchecked|s@not endswith(path, ".sh")@false@|an_added_program_in_another_interpreter_is_refused
+#MUTANT interpreter-data-not-excluded|s@not declared_data(path)@true@|a_declared_data_file_under_mise_tasks_is_admitted
+#MUTANT interpreter-scope-unanchored|s@startswith(path, "mise-tasks/")@true@|an_added_file_outside_mise_tasks_is_not_this_arms_business
 #
 #MUTANT-SUITE crates/batten/tests/it/shell_retirement.rs
 
@@ -269,6 +277,81 @@ declares_it_stays_bash(path) if {
 	some line in input.tree.lines[path]
 	contains(line, "# stays-bash:")
 }
+
+# ---------------------------------------------------------------------------
+# F: a program does not leave the corpus by CHANGING INTERPRETER. A's companion.
+# ---------------------------------------------------------------------------
+
+# MEASURED ON THIS MODULE'S OWN CAMPAIGN, 2026-09-19 (CLOUD-1717).
+#
+# `under_mise_tasks` excludes `.py` and `.tsv`, and every arm above is built on
+# it — so a program written in Python under `mise-tasks/` is not an added shell
+# rule (A), not an edited one (B), and owes no mapping when deleted (C). It is
+# not in the corpus at all. Five retirements in one session moved 615 lines of
+# shell reading into six `.py` siblings and reported five programs retired: the
+# corpus shrank by five and the tree kept every line of the logic, one
+# interpreter over. Each file carried a header ARGUING the exclusion admitted
+# it, which is the tell — an agent that has to write the argument has already
+# found the hole.
+#
+# THIS IS CLOUD-929's SHAPE, ONE CAMPAIGN LATER: the campaign to delete bash
+# added bash, and nothing on the board was positioned to notice. What that
+# defect cost was a stale prose count; what this one costs is the campaign's
+# own premise, because a retirement that relocates the reading has retired
+# nothing and the ratchet says it has.
+#
+# WHY NOT SIMPLY COUNT `.py` AS A PROGRAM — the fix that reads as obvious and
+# builds a trap. `under_mise_tasks` feeds `governed_at_head`, and arm B reads
+# `input.tree.lines[path]` to decide what an edit changed. This rule's
+# `line_sources` is `mise-tasks/*.sh`, so a governed `.py` has NO lines entry:
+# `head` is the empty set, every base line reads as removed, `shell edit
+# refused` fires, and no admission can clear it because every admission is a
+# predicate over lines that are not there. A rule that cannot be satisfied is
+# not a ratchet, it is a wall. The neighbouring case is
+# `shell_retirement.rs`'s `generated_and_non_shell_paths_are_not_governed`,
+# which pins the exclusion this arm narrows — and narrows on the ADDED side
+# only, so that case keeps passing: it EDITS a `.py` the base already had.
+#
+# SO THIS ARM READS THE PATH AND ONLY THE PATH. It needs no lines, which is why
+# it is sound on exactly the paths the others cannot see, and it fires on
+# ADDITION — the one move that creates the evasion. An author who genuinely
+# needs a new non-shell file under `mise-tasks/` widens `declared_data` in the
+# same review, which is a groomed row and a human, not an annotation an agent
+# writes about its own work.
+#
+# WHY NO CASE ESCAPES, STATED RATHER THAN ASSUMED — the obligation rule 2 puts
+# on a green gate, since a gate says only "nothing it can SEE is wrong":
+#   - a `.rb`, `.js`, `.ts` or `.pl` sibling: caught, the test is not `.sh`
+#     rather than a list of interpreters, so a language nobody has thought of
+#     is already in it;
+#   - an extensionless executable carrying `#!`: caught here AND by A, which
+#     reads the shebang — the two arms overlap on purpose;
+#   - a `.sh` that is one line of `exec python3 helper.py`: the helper is
+#     caught here, and the wrapper is an added authored shell rule, so A
+#     catches it even when the helper lands elsewhere;
+#   - a `__pycache__/*.pyc`: caught, and it is also ignored, so it never
+#     reaches a delta in the first place.
+# THE STATED LIMIT, which is a bound and not an oversight: a program written
+# OUTSIDE `mise-tasks/` — `scripts/`, `tools/` — is not this arm's business,
+# because `mise-tasks/` is what the corpus is defined over and a rule reaching
+# past it would be deciding something this module does not own. `task-callable`
+# is the surface that notices an uncallable task; a program nothing calls is
+# nobody's evasion.
+violation contains {
+	"rule": "shell retire other",
+	"verdict": "program add refused",
+	"subjects": [{"path": path}],
+} if {
+	some path in delta.added
+	startswith(path, "mise-tasks/")
+	not endswith(path, ".sh")
+	not declared_data(path)
+}
+
+# The non-program files `mise-tasks/` is allowed to hold. A CLOSED LIST for
+# `under_mise_tasks`'s own stated reason one arm up — the set is small, and a
+# pattern here would admit the next extension without anyone deciding to.
+declared_data(path) if endswith(path, ".tsv")
 
 # ---------------------------------------------------------------------------
 # B: a migration does not EDIT one in place. The load-bearing arm.

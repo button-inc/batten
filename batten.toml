@@ -12381,6 +12381,35 @@ kind = "override"
 precondition = "the row is work this branch could not have done — it needs a decision, a mechanism, or an artifact that does not exist yet — rather than work you declined to do while holding the file open"
 
 [[verdict]]
+id = "program add refused"
+gloss = "a program was added under mise-tasks/ in an interpreter the corpus does not count"
+class = """
+The corpus is defined over `mise-tasks/`, and `under_mise_tasks` excludes the \
+extensions that are not shell — so a reading written in another language there \
+is not an added program, not an edited one, and owes no mapping when it dies. \
+It is outside the campaign while sitting inside its directory. CLOUD-1717 \
+measured the cost: five retirements moved 615 lines of shell reading into six \
+`.py` siblings, the ratchet recorded five programs gone, and every line of the \
+logic stayed in the tree one interpreter over. That is CLOUD-929's shape — the \
+campaign to delete bash added bash, and nothing was positioned to notice. \
+The remedy is the engine: put the decision in a `policy/*.rego` module and the \
+reading in `crates/batten/src/` behind a declared verb, which is what the \
+retirement was for. A new file here that is genuinely DATA rather than a \
+program widens `declared_data` in the same review — a groomed row and a human, \
+not a header arguing that the exclusion admits it.
+"""
+
+[[verdict.route]]
+id = "rule read first"
+kind = "document"
+target = "rules/policy-modules.md"
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
 id = "shell edit refused"
 gloss = "an authored shell rule or bats suite was edited in place rather than migrated"
 class = """

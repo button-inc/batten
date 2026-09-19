@@ -698,6 +698,80 @@ fn an_added_shell_rule_is_refused() {
     assert_eq!(findings(&root), vec!["shell retire other".to_owned()]);
 }
 
+/// CLOUD-1717's arm F, over the compiled surface rather than `with input as`.
+///
+/// The evasion this refuses was MEASURED on this module's own campaign: five
+/// retirements moved 615 lines of shell reading into `.py` siblings, which
+/// `under_mise_tasks` excludes, so the ratchet recorded five programs gone
+/// while every line of the logic stayed in the tree one interpreter over.
+#[test]
+fn an_added_program_in_another_interpreter_is_refused() {
+    let root = repo(
+        "added-interpreter",
+        &[],
+        &Head {
+            written: &[("mise-tasks/new-gate.py", "print('a gate')\n")],
+            removed: &[],
+        },
+    );
+    assert_eq!(findings(&root), vec!["shell retire other".to_owned()]);
+}
+
+/// NOT A LIST OF INTERPRETERS. The test is "not `.sh`", so a language nobody
+/// has thought of is already inside it — which is the property that keeps this
+/// from being the next hole one extension over.
+#[test]
+fn an_added_program_in_an_unforeseen_interpreter_is_refused_too() {
+    let root = repo(
+        "added-unforeseen",
+        &[],
+        &Head {
+            written: &[("mise-tasks/new-gate.rb", "puts 'a gate'\n")],
+            removed: &[],
+        },
+    );
+    assert_eq!(findings(&root), vec!["shell retire other".to_owned()]);
+}
+
+/// The admitted half, and it is what keeps the arm from being a wall: a DATA
+/// file is not a program, and `declared_data` is the closed list that says so.
+#[test]
+fn a_declared_data_file_under_mise_tasks_is_admitted() {
+    let root = repo(
+        "added-data",
+        &[],
+        &Head {
+            written: &[("mise-tasks/new-table.tsv", "a\tb\n")],
+            removed: &[],
+        },
+    );
+    assert!(
+        findings(&root).is_empty(),
+        "a declared data file is not a program: {:?}",
+        findings(&root)
+    );
+}
+
+/// THE STATED LIMIT, asserted rather than assumed. `mise-tasks/` is what the
+/// corpus is defined over; a rule reaching past it would decide something this
+/// module does not own.
+#[test]
+fn an_added_file_outside_mise_tasks_is_not_this_arms_business() {
+    let root = repo(
+        "added-outside",
+        &[],
+        &Head {
+            written: &[("crates/batten/src/lib.rs", "// code\n")],
+            removed: &[],
+        },
+    );
+    assert!(
+        findings(&root).is_empty(),
+        "this arm is bounded by the corpus directory: {:?}",
+        findings(&root)
+    );
+}
+
 #[test]
 fn an_added_bats_suite_is_refused() {
     let root = repo(
