@@ -184,6 +184,47 @@ mise reshim
 #    setup rather than at first use.
 mise run deps-install || echo "setup: 'deps-install' incomplete — see output above" >&2
 
+# 6a. SUPERSEDE THE CONSUMER ARTIFACT WITH THIS CLONE'S OWN BUILD (CLOUD-1859).
+#
+#     `deps-install` runs `install.sh`, which resolves `-musl` for every Linux
+#     host deliberately — "the one that runs on any Linux whatever its glibc
+#     version" (`install.sh:136`). That is right for a CONSUMER and wrong for this
+#     container, because the binary it drops on PATH is the one every harness hook
+#     spawns on every single tool call.
+#
+#     Measured 2026-09-19, same version, same tree, same box, warm and repeated:
+#
+#       operation                     musl       gnu    ratio
+#       adjudicate (every tool call) 1444ms     96ms    15.0x
+#       check --rule                  506ms     93ms     5.4x
+#       check (143 rules)           15501ms   1791ms     8.7x
+#
+#     Both emit byte-identical output and exit 0, so this is not two programs
+#     doing different work. `strace -c` names the mechanism rather than leaving it
+#     to inference: 5779 syscalls against 362, of which 2728 `mmap` and 2718
+#     `munmap` — 94% of the calls and 97% of the syscall time — which is mallocng
+#     returning freed memory to the OS on every free where glibc retains arenas.
+#
+#     `install:local` is the task that already exists for this, "a dev-clone
+#     convenience that supersedes a release build" (`mise.toml:2444`), writing to
+#     `install.sh`'s own destination character for character. Until now nothing
+#     invoked it.
+#
+#     HERE RATHER THAN IN `deps-install`, because that task's own comment is right
+#     that a provisioning path "cannot assume a Rust toolchain, a 141-second
+#     compile, or that the checkout builds at all" (CLOUD-1085). This script
+#     installs the pinned toolchain at step 4, so the assumption holds at this
+#     line and only here. That task is also one line under a `non_increasing`
+#     ratchet, so growing its body is refused regardless.
+#
+#     Soft-failed like its neighbours: a clone that cannot build still has the
+#     musl binary `deps-install` installed, which works and is merely slower.
+#
+#     The CONSUMER-side question — whether `install.sh` should prefer `-gnu`
+#     where glibc is present — is CLOUD-1861 and is deliberately not decided here.
+mise run install:local ||
+	echo "setup: 'install:local' incomplete — the slower musl build stays on PATH" >&2
+
 # 6b. THE ONE FACT ONLY THIS ENVIRONMENT CAN STATE (CLOUD-1383).
 #
 #     Batten repairs the surfaces it owns — the harness hook registrations it
