@@ -637,6 +637,34 @@ pub fn run_derive(
             let signed = required_input(&inputs, family, "signed")?;
             crate::signer_posture::record(signingkey, program, conflict, signed)
         }
+        "transcript-corpus" => {
+            only_these_inputs(&inputs, family, &["root", "threshold", "exclude"])?;
+            let root = required_input(&inputs, family, "root")?;
+            let raw = required_input(&inputs, family, "threshold")?;
+            let threshold: usize = raw.parse().map_err(|_| {
+                UsageError::raise(format!(
+                    "record derive {family}: threshold `{raw}` is not a whole number"
+                ))
+            })?;
+            let root = Path::new(root);
+            if !root.is_dir() {
+                // THE QUESTION COULD NOT BE ASKED. Write NOTHING — an absent
+                // record is "the producer did not run", which must never be
+                // spelled the same way as a root that was walked and held no
+                // transcripts.
+                return Err(UsageError::raise(format!(
+                    "record derive {family}: no transcript root to walk"
+                )));
+            }
+            // ABSENT AND PRESENT-BUT-EMPTY ARE DIFFERENT CLAIMS, which is the
+            // whole reason this is an `Option` rather than a defaulted string: a
+            // caller naming no exclusion is saying nothing, and a caller naming
+            // the empty string is saying "exclude nothing". `--input exclude=`
+            // is the second, and omitting the flag is the first.
+            let exclude = inputs.get("exclude").map(String::as_str);
+            let sessions = crate::transcript::census(root, exclude);
+            format!("sessions {sessions}\nthreshold {threshold}\n")
+        }
         // AN UNKNOWN FAMILY IS A USAGE ERROR, never a record written under a name
         // nothing reads. A producer whose family was renamed would otherwise go on
         // writing happily into a key no module has looked at since.

@@ -1112,6 +1112,108 @@ fn result_text(content: &Value) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The independent-session census (CLOUD-388, CLOUD-651, CLOUD-1717).
+// ---------------------------------------------------------------------------
+
+/// The session id of an authored, non-sidechain user record, or `None`.
+///
+/// # What counts as independent, and why it is not "one file, one session"
+///
+/// A transcript is independent evidence when it belongs to a DIFFERENT session
+/// that a person actually drove. Three things therefore do not count:
+///
+/// * **a subagent stream** — `isSidechain: true`. CLOUD-326 §8.1 recorded "one
+///   session plus five subagent transcripts" and correctly called that N=1;
+///   counting the five would inflate the corpus with the orchestrator's own
+///   turns wearing different file names.
+/// * **a transcript with nobody in it** — a `tool_result` also arrives as a
+///   `user` record, and that is the harness handing work back rather than a
+///   person speaking. The boundary test is `finding-sink-check`'s pass 1,
+///   reused rather than re-derived.
+/// * **the asking session** — excluded by [`census`], not here.
+///
+/// A LINE THIS BUILD CANNOT DECODE YIELDS NOTHING RATHER THAN A FAILURE TO
+/// LOOK. The format is a HOST's and it moves, so an undecodable line
+/// contributes no id instead of turning the whole census into could-not-look —
+/// this module's own forward-compatibility law, applied from the other side.
+#[must_use]
+pub fn authored_session_id(line: &str) -> Option<String> {
+    let parsed: Line = serde_json::from_str(line).ok()?;
+    if parsed.is_sidechain == Some(true) {
+        return None;
+    }
+    if parsed.kind.as_deref() != Some("user") {
+        return None;
+    }
+    if !authored_content(parsed.message.as_ref()?.content.as_ref()?) {
+        return None;
+    }
+    parsed.session_id.filter(|id| !id.is_empty())
+}
+
+/// Whether a user record's content carries a person's own words.
+///
+/// A bare string is a typed turn. An array counts only when it holds a `text`
+/// block: an array of `tool_result` blocks is the harness answering itself.
+fn authored_content(content: &Value) -> bool {
+    match content {
+        Value::String(_) => true,
+        Value::Array(blocks) => blocks
+            .iter()
+            .any(|block| block.get("type") == Some(&Value::String("text".to_owned()))),
+        _ => false,
+    }
+}
+
+/// How many DISTINCT independent sessions live under `root`.
+///
+/// `exclude` is `Option` and not `&str` on purpose: absent and present-but-empty
+/// are different claims. A caller who names no exclusion is saying nothing, and
+/// only then does an ambient session id apply; a caller who names the empty
+/// string is saying "exclude nothing". Collapsing the two would launder one into
+/// the other.
+///
+/// POINTER-ONLY IS A SECURITY PROPERTY HERE, not a style one (rule 4): the
+/// return value is a count. A transcript is the richest source of secrets this
+/// repository can be pointed at, and no path, session id or byte of one leaves
+/// this function.
+#[must_use]
+pub fn census(root: &std::path::Path, exclude: Option<&str>) -> usize {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(next) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&next) else {
+            // One unreadable directory is not a failed census of the rest.
+            continue;
+        };
+        // SORTED FOR BYTE-STABILITY (house style §6): the same root yields the
+        // same count however the filesystem chose to order itself.
+        let mut names: Vec<_> = entries.flatten().map(|entry| entry.path()).collect();
+        names.sort();
+        for path in names {
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path.extension().is_none_or(|ext| ext != "jsonl") {
+                continue;
+            }
+            let Ok(body) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            // THE FIRST AUTHORED ID IN THE FILE IDENTIFIES IT; a file with none
+            // at all is a subagent stream or a transcript nobody was in.
+            if let Some(found) = body.lines().find_map(authored_session_id)
+                && Some(found.as_str()) != exclude
+            {
+                seen.insert(found);
+            }
+        }
+    }
+    seen.len()
+}
+
 /// Decide whether a user-role turn was opened by a person (CLOUD-267).
 ///
 /// Every branch is an exact read of a typed field — a boolean the host set, or
@@ -1196,6 +1298,18 @@ struct Line {
     is_meta: Option<bool>,
     #[serde(rename = "isSynthetic")]
     is_synthetic: Option<bool>,
+    /// The record's own kind, as the host spells it (`user`, `assistant`, …).
+    ///
+    /// Read by [`authored_session_id`] rather than by the event parse above,
+    /// which goes through `message.role`. The two agree on a well-formed line;
+    /// the census reads the outer one because a line with no `message` at all
+    /// still has a kind, and "not a user record" has to be decidable without
+    /// one.
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    /// The host marking a record as belonging to a SUBAGENT stream (CLOUD-326).
+    #[serde(rename = "isSidechain")]
+    is_sidechain: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1490,6 +1604,158 @@ pub fn configured_path(config: Option<&TranscriptConfig>) -> Option<PathBuf> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    // --- the independent-session census (CLOUD-1717) -----------------------
+
+    /// One authored user turn, in the host's real shape.
+    fn authored(session: &str) -> String {
+        format!(
+            r#"{{"type":"user","sessionId":"{session}","message":{{"role":"user","content":[{{"type":"text","text":"a turn"}}]}}}}"#
+        )
+    }
+
+    fn census_root(name: &str, files: &[(&str, String)]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("batten-transcript-census-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch root");
+        for (leaf, body) in files {
+            std::fs::write(dir.join(leaf), body).expect("write transcript");
+        }
+        dir
+    }
+
+    #[test]
+    fn an_authored_turn_yields_its_session_id() {
+        assert_eq!(
+            authored_session_id(&authored("alpha")),
+            Some("alpha".to_owned())
+        );
+    }
+
+    /// A bare string turn is authored too — a host that types the content as a
+    /// string rather than an array is still recording a person speaking.
+    #[test]
+    fn a_plain_string_turn_is_authored() {
+        let line =
+            r#"{"type":"user","sessionId":"beta","message":{"role":"user","content":"typed"}}"#;
+        assert_eq!(authored_session_id(line), Some("beta".to_owned()));
+    }
+
+    /// CLOUD-326 §8.1: one session plus five subagent transcripts is N=1.
+    #[test]
+    fn a_subagent_stream_is_not_an_independent_session() {
+        let line = r#"{"type":"user","isSidechain":true,"sessionId":"gamma","message":{"role":"user","content":[{"type":"text","text":"x"}]}}"#;
+        assert_eq!(authored_session_id(line), None);
+    }
+
+    /// A `tool_result` arrives as a `user` record. That is the harness handing
+    /// work back, not a person speaking.
+    #[test]
+    fn a_transcript_carrying_only_tool_results_has_nobody_in_it() {
+        let line = r#"{"type":"user","sessionId":"delta","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"out"}]}}"#;
+        assert_eq!(authored_session_id(line), None);
+    }
+
+    #[test]
+    fn an_assistant_turn_is_not_an_authored_user_record() {
+        let line = r#"{"type":"assistant","sessionId":"eps","message":{"role":"assistant","content":[{"type":"text","text":"x"}]}}"#;
+        assert_eq!(authored_session_id(line), None);
+    }
+
+    /// FORWARD COMPATIBILITY: the host's format moves, and an undecodable line
+    /// contributes nothing rather than failing the census.
+    #[test]
+    fn a_line_this_build_cannot_decode_yields_nothing_rather_than_a_failure() {
+        assert_eq!(authored_session_id("{not json at all"), None);
+        assert_eq!(authored_session_id("[]"), None);
+        assert_eq!(authored_session_id(""), None);
+    }
+
+    /// An empty `sessionId` names no session, so it is not one.
+    #[test]
+    fn an_empty_session_id_is_not_a_session() {
+        let line = r#"{"type":"user","sessionId":"","message":{"role":"user","content":"x"}}"#;
+        assert_eq!(authored_session_id(line), None);
+    }
+
+    #[test]
+    fn two_files_carrying_one_session_are_one_session() {
+        let root = census_root(
+            "one-session",
+            &[("a.jsonl", authored("zeta")), ("b.jsonl", authored("zeta"))],
+        );
+        assert_eq!(census(&root, None), 1);
+    }
+
+    #[test]
+    fn three_distinct_sessions_are_three() {
+        let root = census_root(
+            "three",
+            &[
+                ("a.jsonl", authored("one")),
+                ("b.jsonl", authored("two")),
+                ("c.jsonl", authored("three")),
+            ],
+        );
+        assert_eq!(census(&root, None), 3);
+    }
+
+    /// COUNTING YOURSELF IS WORSE THAN COUNTING NOTHING: a literal fitted to the
+    /// single transcript it was derived from is the unmeasured-shape failure the
+    /// method exists to prevent.
+    #[test]
+    fn excluding_the_asking_session_turns_its_own_transcript_into_zero() {
+        let root = census_root("exclude", &[("a.jsonl", authored("self"))]);
+        assert_eq!(census(&root, Some("self")), 0);
+        assert_eq!(census(&root, None), 1);
+    }
+
+    /// ABSENT AND PRESENT-BUT-EMPTY ARE DIFFERENT CLAIMS, which is why the
+    /// parameter is an `Option`. An empty exclusion excludes nothing, and no
+    /// session is ever named by the empty string, so it can never match.
+    #[test]
+    fn an_explicitly_empty_exclusion_excludes_nothing() {
+        let root = census_root("empty-exclusion", &[("a.jsonl", authored("eta"))]);
+        assert_eq!(census(&root, Some("")), 1);
+    }
+
+    #[test]
+    fn an_empty_root_is_zero_independent_sessions_which_is_an_answer() {
+        let root = census_root("empty", &[("keep.txt", "not a transcript".to_owned())]);
+        assert_eq!(census(&root, None), 0);
+    }
+
+    /// One unreadable or absent directory is not a failed census of the rest.
+    #[test]
+    fn an_absent_root_counts_nothing_rather_than_panicking() {
+        assert_eq!(census(std::path::Path::new("/nowhere/at/all"), None), 0);
+    }
+
+    /// Nested directories are walked: a host shards transcripts by project.
+    #[test]
+    fn transcripts_in_subdirectories_are_counted() {
+        let root = census_root("nested", &[("a.jsonl", authored("outer"))]);
+        let inner = root.join("project");
+        std::fs::create_dir_all(&inner).expect("nested dir");
+        std::fs::write(inner.join("b.jsonl"), authored("inner")).expect("nested transcript");
+        assert_eq!(census(&root, None), 2);
+    }
+
+    /// POINTER-ONLY (rule 4), and here it is a security property: a transcript
+    /// is the richest source of secrets this repository can be pointed at, and
+    /// what comes back is a number.
+    #[test]
+    fn the_census_carries_no_byte_of_any_transcript() {
+        let secret = format!(
+            "{}\n{}",
+            r#"{"type":"user","sessionId":"theta","message":{"role":"user","content":"SUPERSECRETSTRING"}}"#,
+            authored("theta")
+        );
+        let root = census_root("secret", &[("a.jsonl", secret)]);
+        let counted = census(&root, None);
+        assert_eq!(counted, 1);
+        assert!(!format!("{counted}").contains("SUPERSECRET"));
+    }
 
     /// A miniature transcript in the host's real shape: an assistant turn making
     /// a tool call, a hook record denying it, and a user turn carrying the error.

@@ -2297,8 +2297,24 @@ description = "Effect: count this host's independent session transcripts against
 shell = "bash -c"
 run = """
 root="${BATTEN_TRANSCRIPT_ROOT:-$HOME/.claude/projects}"
-python3 mise-tasks/transcript_census.py "$root" "${1:-2}" \
-  | cargo run --quiet -p batten -- record named transcript-corpus
+threshold="${1:-2}"
+
+# THE WALK IS THIS TASK'S ROOT TO NAME — §5 keeps a host-filesystem walk
+# outside `check` — and WHAT COUNTS as an independent session is
+# `crates/batten/src/transcript.rs`, beside the parse that already owns
+# this host format (CLOUD-1717).
+#
+# ABSENT AND PRESENT-BUT-EMPTY ARE DIFFERENT CLAIMS about the exclusion,
+# which is why the flag is added rather than always passed: an unset
+# `BATTEN_SESSION_ID` is a caller saying nothing, and `--input exclude=`
+# would be a caller saying "exclude nothing". Passing the empty one
+# always would launder the first into the second.
+set -- --input "root=$root" --input "threshold=$threshold"
+if [ -n "${BATTEN_SESSION_ID:-}" ]; then
+  set -- "$@" --input "exclude=$BATTEN_SESSION_ID"
+fi
+
+cargo run --quiet -p batten -- record derive transcript-corpus "$@"
 """
 
 [tasks.macos-link-record]

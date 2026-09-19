@@ -17,32 +17,38 @@
 //! distinction, and an undecodable line. That is the entire substance of the
 //! gate; the comparison it feeds is one `<`.
 //!
-//! Inlined into the task body they would be assertable by nothing.
-//! `mise-tasks/transcript_census.py` instead, driven directly below, so they
-//! carry. `shell-retirement.rego:159-163` excludes `.py` from
-//! `under_mise_tasks`, so that file adds no shell rule.
+//! They live in `crates/batten/src/transcript.rs` — beside the parse that
+//! already owns this host's format and declares the same pointer-only and
+//! forward-compatibility laws, rather than in a module of its own. Its
+//! `#[cfg(test)] mod tests` asserts each independence rule directly, plus three
+//! the retired program never had: a nested project directory, an empty
+//! `sessionId`, and an assistant turn.
+//!
+//! What stays HERE is the half a unit test cannot reach: that the engine
+//! carries the count through `record derive` into a record the real module then
+//! decides over, and that a root it could not walk writes NOTHING.
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
-//! Four cases are not carried and each says why in its own row.
+//! Five cases are not carried and each says why in its own row.
 //!
 // carried: mise-tasks/transcript-corpus-check.sh policy/transcript-corpus.rego kind:mechanism crates/batten/tests/it/transcript_corpus.rs
 // carried: tests/transcript-corpus-check.bats policy/transcript-corpus.rego kind:mechanism crates/batten/tests/it/transcript_corpus.rs
-// carried: "an empty root is zero independent sessions, which is an answer and not a failure to look" policy/transcript-corpus.rego kind:mechanism
+// carried: "an empty root is zero independent sessions, which is an answer and not a failure to look" crates/batten/src/transcript.rs kind:mechanism crates/batten/tests/it/transcript_corpus.rs
 // carried: "one transcript is one session, and one is not a corpus" policy/transcript-corpus.rego kind:mechanism
 // carried: "three distinct sessions satisfy the default threshold" policy/transcript-corpus.rego kind:mechanism
 // carried: "the threshold is the argument, so the same corpus can fail a stricter one" policy/transcript-corpus.rego kind:mechanism
-// carried: "a subagent stream is not an independent session" policy/transcript-corpus.rego kind:mechanism
-// carried: "a transcript carrying only tool results has nobody in it" policy/transcript-corpus.rego kind:mechanism
-// carried: "two files carrying one session are one session" policy/transcript-corpus.rego kind:mechanism
-// carried: "a line this build cannot decode yields nothing rather than a failure to look" policy/transcript-corpus.rego kind:mechanism
-// carried: "excluding the asking session turns its own transcript into zero" policy/transcript-corpus.rego kind:mechanism
-// carried: "the exclusion defaults from the environment when no argument names one" policy/transcript-corpus.rego kind:mechanism
-// carried: "an explicitly empty exclusion excludes nothing, and does not fall back to the environment" policy/transcript-corpus.rego kind:mechanism
+// carried: "a subagent stream is not an independent session" crates/batten/src/transcript.rs kind:mechanism crates/batten/tests/it/transcript_corpus.rs
+// carried: "a transcript carrying only tool results has nobody in it" crates/batten/src/transcript.rs kind:mechanism crates/batten/tests/it/transcript_corpus.rs
+// carried: "two files carrying one session are one session" crates/batten/src/transcript.rs kind:mechanism crates/batten/tests/it/transcript_corpus.rs
+// carried: "a line this build cannot decode yields nothing rather than a failure to look" crates/batten/src/transcript.rs kind:mechanism crates/batten/tests/it/transcript_corpus.rs
+// carried: "excluding the asking session turns its own transcript into zero" crates/batten/src/transcript.rs kind:mechanism crates/batten/tests/it/transcript_corpus.rs
+// carried: "an explicitly empty exclusion excludes nothing, and does not fall back to the environment" crates/batten/src/transcript.rs kind:mechanism crates/batten/tests/it/transcript_corpus.rs
 // carried: "an absent root is exit 2, never a verdict about a corpus nobody looked at" policy/transcript-corpus.rego kind:mechanism
-// carried: "the report is two counts and carries no byte of any transcript" policy/transcript-corpus.rego kind:mechanism
-// changed: "a malformed threshold is exit 2" mise.toml argument validation is the PRODUCER's, so it moved with the census it guards: `transcript_census.py` refuses a non-numeric threshold at exit 2 and writes nothing, and `a_malformed_threshold_refuses_and_writes_nothing` below drives that. The module never sees an argument to malform
-// changed: "more arguments than the contract names is exit 2" mise.toml the same split one argument over, and for the same reason: the arity contract belongs to the thing that takes the arguments
+// carried: "the report is two counts and carries no byte of any transcript" crates/batten/src/transcript.rs kind:mechanism crates/batten/tests/it/transcript_corpus.rs
+// changed: "a malformed threshold is exit 2" mise.toml argument validation is the PRODUCER's, so it moved with the census it guards. It is now `record derive transcript-corpus`, which refuses a non-numeric threshold as a USAGE error — exit 1 under the engine's one 0/1/2/3 table, where the retired program spent 2 — and writes nothing either way. `a_malformed_threshold_refuses_and_writes_nothing` below drives both halves. The module never sees an argument to malform
+// changed: "more arguments than the contract names is exit 2" mise.toml the arity contract belongs to the thing that takes the arguments, and under named `--input` flags "too many positionals" ceases to exist as a concept. What replaces it is stricter rather than weaker: an input key no family declares is a usage error, which `an_input_key_the_family_does_not_read_is_a_usage_error` pins one tier over — a misspelled input can no longer exit clean from a reading that ran on something else
+// changed: "the exclusion defaults from the environment when no argument names one" mise.toml the environment read is the PRODUCER's, not the reading's: the task adds `--input exclude=` only when `BATTEN_SESSION_ID` is set, which is what keeps absent and present-but-empty two different claims at the verb. The reading takes `Option<&str>` and `an_explicitly_empty_exclusion_excludes_nothing` pins the distinction in the engine module
 // withdrawn: "the refusal names what would raise the number, not just the arithmetic" the sentence is the `[[verdict]]` row's `class` now, which is config a reviewer reads rather than a string a case greps. `verdict declare refused` already refuses a class that is an override alone, and `remedy-authorship` holds the prose; a case re-asserting the wording here would be a second authority over it
 // withdrawn: "the refusal does not tell the reader the count can never rise" the same row's `class`, and the same reason. Both cases asserted over a shell `echo` that no longer exists, and the claim they protected — that a low count is a PROGRESS reading rather than a permanent state — is stated in the class and in the module header where a reader meets it
 
@@ -104,34 +110,6 @@ fn record(dir: &std::path::Path, lines: &str) {
         "the setup write lands: {}",
         String::from_utf8_lossy(&written.stderr)
     );
-}
-
-/// Run the REAL census over a scratch transcript root, exactly as the producer
-/// does. `exclude` is `None` for an absent argument and `Some("")` for an
-/// explicitly empty one — the distinction the contract turns on.
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays, and it is the subject under test rather than a convenience: the census moved out of the dying program into `mise-tasks/transcript_census.py` precisely so a compiled case could drive it, and a harness re-implementing the independence rules in Rust would be a second authority over what counts as a session"
-)]
-fn census(
-    root: &std::path::Path,
-    threshold: &str,
-    exclude: Option<&str>,
-    env: Option<&str>,
-) -> std::process::Output {
-    let mut command = std::process::Command::new("python3");
-    command
-        .arg("../../mise-tasks/transcript_census.py")
-        .arg(root)
-        .arg(threshold);
-    if let Some(value) = exclude {
-        command.arg(value);
-    }
-    match env {
-        Some(value) => command.env("BATTEN_SESSION_ID", value),
-        None => command.env_remove("BATTEN_SESSION_ID"),
-    };
-    command.output().expect("the census runs")
 }
 
 fn counted(done: &std::process::Output) -> String {
@@ -212,7 +190,11 @@ fn the_report_is_two_counts_and_carries_no_byte_of_any_transcript() {
         )],
     );
 
-    let done = census(&held, "2", Some(""), None);
+    let dir = repo("secretive");
+    // `Some("")` is an EXPLICITLY EMPTY exclusion — "exclude nothing" — which is
+    // a different claim from naming none at all, and the one that keeps the
+    // count at 1 here.
+    let done = derive(&dir, &held, "2", Some(""));
     let said = format!(
         "{}{}",
         counted(&done),
@@ -226,165 +208,150 @@ fn the_report_is_two_counts_and_carries_no_byte_of_any_transcript() {
     assert!(said.contains("sessions 1"), "only the counts do\n{said}");
 }
 
-// --- the census itself -------------------------------------------------------
+// --- the census, over the real verb ------------------------------------------
+
+/// Drive the REAL census the producer runs, through the REAL verb.
+///
+/// `crates/batten/src/transcript.rs` is the one authority on what counts as an
+/// independent session — beside the parse that already owns this host's format,
+/// rather than in a module of its own. Its `#[cfg(test)] mod tests` asserts each
+/// independence rule directly, plus three the retired program never had: a
+/// nested project directory, an empty `sessionId`, and an assistant turn.
+///
+/// What THIS tier adds is the half a unit test cannot reach: that the engine
+/// carries the count into a record the real module then decides over.
+fn derive(
+    dir: &std::path::Path,
+    transcripts: &std::path::Path,
+    threshold: &str,
+    exclude: Option<&str>,
+) -> std::process::Output {
+    let mut args = vec![
+        "record".to_owned(),
+        "derive".to_owned(),
+        "transcript-corpus".to_owned(),
+        "--input".to_owned(),
+        format!("root={}", transcripts.display()),
+        "--input".to_owned(),
+        format!("threshold={threshold}"),
+    ];
+    if let Some(value) = exclude {
+        args.push("--input".to_owned());
+        args.push(format!("exclude={value}"));
+    }
+    let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_with_stdin(dir, &borrowed, "")
+}
 
 #[test]
-fn an_empty_root_is_zero_independent_sessions_which_is_an_answer() {
-    let held = root("empty", &[("keep.txt", "not a transcript\n")]);
-    let done = census(&held, "2", Some(""), None);
-    assert!(done.status.success(), "an empty root is not a failure");
+fn the_verb_derives_a_thin_corpus_into_the_finding() {
+    let dir = repo("derive-thin");
+    let transcripts = root("derive-thin", &[("a.jsonl", &authored("only-one"))]);
+    let written = derive(&dir, &transcripts, "2", None);
     assert!(
-        counted(&done).contains("sessions 0"),
-        "zero is an answer\n{}",
-        counted(&done)
+        written.status.success(),
+        "the derivation lands: {}",
+        String::from_utf8_lossy(&written.stderr)
+    );
+    assert!(
+        counted(&written).contains("sessions 1"),
+        "the count reaches the record\n{}",
+        counted(&written)
+    );
+
+    let decided = run(&dir, &["check"]);
+    assert_eq!(
+        decided.status.code(),
+        Some(2),
+        "one session is not a corpus\n{}",
+        String::from_utf8_lossy(&decided.stderr)
     );
 }
 
 #[test]
-fn a_subagent_stream_is_not_an_independent_session() {
-    // CLOUD-326 section 8.1 recorded "one session plus five subagent
-    // transcripts" and correctly called that N=1.
-    let held = root(
-        "sidechain",
-        &[(
-            "sub.jsonl",
-            r#"{"type":"user","sessionId":"beta","isSidechain":true,"message":{"content":[{"type":"text","text":"hi"}]}}"#,
-        )],
-    );
-    let done = census(&held, "2", Some(""), None);
-    assert!(
-        counted(&done).contains("sessions 0"),
-        "a sidechain is the orchestrator's own turns\n{}",
-        counted(&done)
-    );
-}
-
-#[test]
-fn a_transcript_carrying_only_tool_results_has_nobody_in_it() {
-    // A `tool_result` also arrives as a user record; that is the harness handing
-    // work back, not a person speaking.
-    let held = root(
-        "toolonly",
-        &[(
-            "t.jsonl",
-            r#"{"type":"user","sessionId":"gamma","message":{"content":[{"type":"tool_result","content":"out"}]}}"#,
-        )],
-    );
-    let done = census(&held, "2", Some(""), None);
-    assert!(
-        counted(&done).contains("sessions 0"),
-        "nobody was in it\n{}",
-        counted(&done)
-    );
-}
-
-#[test]
-fn two_files_carrying_one_session_are_one_session() {
-    let held = root(
-        "split",
+fn the_verb_derives_a_sufficient_corpus_into_silence() {
+    let dir = repo("derive-enough");
+    let transcripts = root(
+        "derive-enough",
         &[
-            ("one.jsonl", &authored("delta")),
-            ("two.jsonl", &authored("delta")),
+            ("a.jsonl", &authored("one")),
+            ("b.jsonl", &authored("two")),
+            ("c.jsonl", &authored("three")),
         ],
     );
-    let done = census(&held, "2", Some(""), None);
+    let written = derive(&dir, &transcripts, "2", None);
+    assert!(written.status.success(), "the derivation lands");
     assert!(
-        counted(&done).contains("sessions 1"),
-        "distinct sessions, not distinct files\n{}",
-        counted(&done)
+        counted(&written).contains("sessions 3"),
+        "{}",
+        counted(&written)
+    );
+
+    let quiet = run(&dir, &["check"]);
+    assert_eq!(
+        quiet.status.code(),
+        Some(0),
+        "three distinct sessions satisfy the threshold\n{}",
+        String::from_utf8_lossy(&quiet.stderr)
     );
 }
 
-#[test]
-fn a_line_this_build_cannot_decode_yields_nothing_rather_than_a_failure_to_look() {
-    // The format is a HOST's and it moves. `transcript.rs`'s
-    // forward-compatibility law, applied at the same boundary from this side.
-    let held = root(
-        "undecodable",
-        &[(
-            "mixed.jsonl",
-            &format!("{{not json at all\n{}\n", authored("epsilon")),
-        )],
-    );
-    let done = census(&held, "2", Some(""), None);
-    assert!(done.status.success(), "one bad line is not a failed census");
-    assert!(
-        counted(&done).contains("sessions 1"),
-        "the readable line still counts\n{}",
-        counted(&done)
-    );
-}
-
-#[test]
-fn excluding_the_asking_session_turns_its_own_transcript_into_zero() {
-    let held = root("selfonly", &[("self.jsonl", &authored("zeta"))]);
-    let done = census(&held, "2", Some("zeta"), None);
-    assert!(
-        counted(&done).contains("sessions 0"),
-        "a session is not independent evidence about itself\n{}",
-        counted(&done)
-    );
-}
-
-#[test]
-fn the_exclusion_defaults_from_the_environment_when_no_argument_names_one() {
-    let held = root("envexcl", &[("self.jsonl", &authored("eta"))]);
-    let done = census(&held, "2", None, Some("eta"));
-    assert!(
-        counted(&done).contains("sessions 0"),
-        "the ambient session id applies when nothing names one\n{}",
-        counted(&done)
-    );
-}
-
-#[test]
-fn an_explicitly_empty_exclusion_excludes_nothing_and_does_not_fall_back_to_the_environment() {
-    // ABSENT AND EMPTY ARE DIFFERENT CLAIMS. Defaulting an explicit empty would
-    // launder "exclude nothing" into "exclude whatever the host happens to say".
-    let held = root("emptyexcl", &[("self.jsonl", &authored("theta"))]);
-    let done = census(&held, "2", Some(""), Some("theta"));
-    assert!(
-        counted(&done).contains("sessions 1"),
-        "an explicit empty excludes nothing\n{}",
-        counted(&done)
-    );
-}
-
+/// THE QUESTION COULD NOT BE ASKED, so the producer writes NOTHING. An absent
+/// record is "the producer did not run", which must never be spelled the same
+/// way as a root that was walked and held no transcripts.
 #[test]
 fn an_absent_root_is_could_not_look_and_writes_nothing() {
-    // Never a verdict about a corpus nobody looked at.
-    let missing = scratch("transcript-root-missing").join("nowhere");
-    let done = census(&missing, "2", Some(""), None);
-    assert_eq!(done.status.code(), Some(2), "could not look");
-    assert!(
-        counted(&done).is_empty(),
-        "and writes nothing, so the module reads silence\n{}",
-        counted(&done)
+    let dir = repo("derive-no-root");
+    let refused = derive(&dir, std::path::Path::new("/nowhere/at/all"), "2", None);
+    assert_eq!(
+        refused.status.code(),
+        Some(1),
+        "a root that is not there is a usage error\n{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+
+    let quiet = run(&dir, &["check"]);
+    assert_eq!(
+        quiet.status.code(),
+        Some(0),
+        "and nothing was written, so the module says nothing\n{}",
+        String::from_utf8_lossy(&quiet.stderr)
     );
 }
 
 #[test]
 fn a_malformed_threshold_refuses_and_writes_nothing() {
-    let held = root("badmin", &[("a.jsonl", &authored("iota"))]);
-    let done = census(&held, "two", Some(""), None);
-    assert_eq!(done.status.code(), Some(2), "a malformed threshold refuses");
-    assert!(counted(&done).is_empty(), "and writes nothing");
+    let dir = repo("derive-bad-threshold");
+    let transcripts = root("derive-bad-threshold", &[("a.jsonl", &authored("one"))]);
+    let refused = derive(&dir, &transcripts, "two", None);
+    assert_eq!(
+        refused.status.code(),
+        Some(1),
+        "a threshold that is not a number is a usage error\n{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+
+    let quiet = run(&dir, &["check"]);
+    assert_eq!(
+        quiet.status.code(),
+        Some(0),
+        "and the refusal wrote no record\n{}",
+        String::from_utf8_lossy(&quiet.stderr)
+    );
 }
 
+/// EXCLUDING YOURSELF IS THE POINT: a literal fitted to the single transcript it
+/// was derived from is the unmeasured-shape failure the method exists to
+/// prevent, so counting yourself is worse than counting nothing.
 #[test]
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays: the arity contract belongs to the thing that takes the arguments, so asserting it means invoking the producer with the wrong arity"
-)]
-fn more_arguments_than_the_contract_names_refuses() {
-    let held = root("arity", &[("a.jsonl", &authored("kappa"))]);
-    let done = std::process::Command::new("python3")
-        .arg("../../mise-tasks/transcript_census.py")
-        .arg(&held)
-        .arg("2")
-        .arg("")
-        .arg("extra")
-        .output()
-        .expect("the census runs");
-    assert_eq!(done.status.code(), Some(2), "an over-long call refuses");
+fn excluding_the_asking_session_turns_its_own_transcript_into_zero() {
+    let dir = repo("derive-exclude");
+    let transcripts = root("derive-exclude", &[("a.jsonl", &authored("mine"))]);
+    let written = derive(&dir, &transcripts, "2", Some("mine"));
+    assert!(written.status.success(), "the derivation lands");
+    assert!(
+        counted(&written).contains("sessions 0"),
+        "{}",
+        counted(&written)
+    );
 }
