@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.173](https://github.com/button-inc/batten/compare/v0.0.172...v0.0.173) - 2026-09-19
+
+### Fixed
+
+- *(ci)* the first build runs the disk precondition the rest already do
+
+### Other
+
+- *(ci)* assert the build's disk precondition as a dependency, not a mention
+
 ## [0.0.172](https://github.com/button-inc/batten/compare/v0.0.171...v0.0.172) - 2026-09-18
 
 ### Added
