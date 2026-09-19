@@ -53,6 +53,7 @@
 //! is here rather than at the report: a validator's output is the likeliest place
 //! in this family for a secret to appear.
 
+use std::collections::BTreeMap;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
@@ -206,6 +207,7 @@ pub fn run(
         crate::cli::RecordCommand::Plan => run_plan(),
         crate::cli::RecordCommand::Closes => run_closes(overrides),
         crate::cli::RecordCommand::Named { family } => run_named(&family),
+        crate::cli::RecordCommand::Derive { family, inputs } => run_derive(&family, &inputs, out),
         crate::cli::RecordCommand::Keyed { family, key } => run_keyed(&family, &key),
         crate::cli::RecordCommand::Journal { family } => run_journal(&family),
         crate::cli::RecordCommand::Show { family, key } => run_keyed_show(&family, &key, out),
@@ -520,6 +522,145 @@ fn safe_component(what: &str, value: &str) -> Result<String> {
         )));
     }
     Ok(clean.to_owned())
+}
+
+/// The non-document inputs a family was handed, as a key/value map.
+///
+/// # Errors
+///
+/// A [`UsageError`] for a token carrying no `=`, for an empty key, and for a
+/// key given twice — a repeated key is a caller who believes both values are in
+/// effect, and silently keeping one would run the reading on an input nobody
+/// asked for.
+fn derive_inputs(inputs: &[String]) -> Result<BTreeMap<String, String>> {
+    let mut parsed = BTreeMap::new();
+    for token in inputs {
+        let Some((key, value)) = token.split_once('=') else {
+            return Err(UsageError::raise(format!(
+                "record derive: `--input {token}` is not `<key>=<value>`"
+            )));
+        };
+        if key.is_empty() {
+            return Err(UsageError::raise(
+                "record derive: an input with no key names nothing".to_owned(),
+            ));
+        }
+        if parsed.insert(key.to_owned(), value.to_owned()).is_some() {
+            return Err(UsageError::raise(format!(
+                "record derive: input `{key}` was given twice"
+            )));
+        }
+    }
+    Ok(parsed)
+}
+
+/// One required input, or a usage error naming what is missing.
+fn required_input<'a>(
+    inputs: &'a BTreeMap<String, String>,
+    family: &str,
+    key: &str,
+) -> Result<&'a str> {
+    inputs.get(key).map(String::as_str).ok_or_else(|| {
+        UsageError::raise(format!(
+            "record derive {family}: needs `--input {key}=<value>`"
+        ))
+    })
+}
+
+/// Refuse an input key the family does not read.
+///
+/// **A KEY NOBODY READS IS A USAGE ERROR, NEVER A SILENT DEFAULT**, and that is
+/// the same property `--rule` has one verb over: a caller who misspells an input
+/// would otherwise get a clean exit from a reading that ran on something else.
+/// The failure would be invisible precisely because the record still got written.
+fn only_these_inputs(
+    inputs: &BTreeMap<String, String>,
+    family: &str,
+    accepted: &[&str],
+) -> Result<()> {
+    for key in inputs.keys() {
+        if !accepted.contains(&key.as_str()) {
+            return Err(UsageError::raise(format!(
+                "record derive {family}: reads no input `{key}`"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Derive one family's record from its input and write it.
+///
+/// The engine applies the READING; the effects that produced the input stay in
+/// the producer task (house-style §5), so nothing here spawns.
+///
+/// # Errors
+///
+/// A [`UsageError`] for an unknown family, a malformed or missing input, a
+/// family that is not a single path component, a repository with no branch to
+/// key on, or a tree that is not a repository; an internal error when the store
+/// cannot be written.
+pub fn run_derive(
+    family: &str,
+    inputs: &[String],
+    out: &mut dyn std::io::Write,
+) -> Result<ExitCode> {
+    let inputs = derive_inputs(inputs)?;
+    let derived = match family {
+        "evaluator-io-probe" => {
+            only_these_inputs(&inputs, family, &["status", "test"])?;
+            let raw = required_input(&inputs, family, "status")?;
+            let status: i32 = raw.parse().map_err(|_| {
+                UsageError::raise(format!(
+                    "record derive {family}: status `{raw}` is not a whole number"
+                ))
+            })?;
+            let test = required_input(&inputs, family, "test")?;
+            let log = verdict_lines()?;
+            format!(
+                "{}\n",
+                crate::probe_verdict::verdict(status, &log, test).token()
+            )
+        }
+        // AN UNKNOWN FAMILY IS A USAGE ERROR, never a record written under a name
+        // nothing reads. A producer whose family was renamed would otherwise go on
+        // writing happily into a key no module has looked at since.
+        _ => {
+            return Err(UsageError::raise(format!(
+                "record derive: no reading is declared for family `{family}`"
+            )));
+        }
+    };
+
+    let family = safe_component("family", family)?;
+    let root = Path::new(".");
+    let git_dir = git::git_dir(root).map_err(|_| {
+        UsageError::raise(
+            "record derive: not a git repository, so there is nothing to key on".to_owned(),
+        )
+    })?;
+    let Ok(Some(branch)) = git::current_branch(root) else {
+        return Err(UsageError::raise(
+            "record derive: a detached HEAD has no branch to key the record on".to_owned(),
+        ));
+    };
+    let claim = claim_of(&git_dir, &branch);
+    store(
+        &crate::recorder::record_path(&git_dir, &family, &branch, claim.as_deref()),
+        &derived,
+    )?;
+
+    // THE DERIVED RECORD GOES TO STDOUT TOO, and it stays pointer-only doing it:
+    // what is emitted is the READING — a bounded set of tokens this verb
+    // computed — never a byte of the input it read. That distinction is why
+    // `record named` prints nothing and this does: `named` cannot tell a verdict
+    // from a payload, because it never looked at one.
+    //
+    // It matters beyond symmetry. A producer task composes: `evaluator-io-record`
+    // branches on `probe failed` to mint its step receipt, and a verb that
+    // swallowed its own answer would force the task to read the record store back
+    // — a second reader of a path `recorder::record_path` is the one authority on.
+    out.write_all(derived.as_bytes())?;
+    Ok(ExitCode::Success)
 }
 
 /// Record one named family under this branch, read from stdin.

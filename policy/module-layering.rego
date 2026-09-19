@@ -533,6 +533,23 @@ declared_modules := {
 	# `error` and `exit`, the codes its report answers in. Its back-edges are
 	# forbidden below for the acquisition modules' reason.
 	"task",
+	# `probe_verdict` arrived with CLOUD-1717 and this rule named it a
+	# seventeenth time, which is the coverage clause working once more: the
+	# module was written, its unit tests and its tier were green, clippy was
+	# clean, and this is what said nobody had placed it.
+	#
+	# It is `environment`'s class and reaches NOTHING — not `error`, not `exit`.
+	# It is one total function from `(i32, &str, &str)` to a three-valued enum,
+	# with no failure to report: a log it cannot make sense of is `Unread`, which
+	# is the could-not-look the caller already has to handle. A `Result` here
+	# would add a state whose only honest handling is the one `Unread` gets.
+	#
+	# THE PLACEMENT IS WHY THE READING MOVED HERE AT ALL. It was a `.py` beside
+	# the task, where the classification of a probe build's output was a second
+	# authority nothing in this crate could test. Reaching nothing is what lets
+	# `record` call it without the producer's effects reaching the engine: the
+	# spawn stays in the task (house-style §5) and only the reading is here.
+	"probe_verdict",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.

@@ -2448,6 +2448,22 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   appearing after the record moves the key instead of being invisible. Every
   failure is could-not-look, which allows; a fact naming every program in a
   project must never refuse on a failure to see.
+- `probe_verdict.rs` — which of three things a probe build did, from its exit
+  status and its log (CLOUD-418, CLOUD-1717). THE VERDICT IS THE HARNESS'S OWN
+  LINE, NEVER THE EXIT CODE ALONE: `cargo test` exits non-zero for a compile
+  error, an unresolved feature, an absent toolchain and a panic in some other
+  test, every one of which would read as "the probe falsified the assertion" and
+  hand the gate a pass it did not earn — and that pass gets MORE likely as the
+  crate breaks, so a gate written to the obvious shape is loudest exactly when it
+  is lying. Anchored on the `failures:` listing rather than the per-test line,
+  which is not stable across `--quiet`. It reaches NOTHING, not even `error`:
+  one total function to a three-valued enum, where a log it cannot make sense of
+  is `Unread` — the could-not-look the caller already handles, so a `Result`
+  would add a state with no distinct handling. Ported off
+  `mise-tasks/probe_verdict.py`, which was the campaign to delete bash routing a
+  reading into another interpreter; `shell-retirement.rego`'s arm F now refuses
+  that shape. Its caller is `record derive`, which SPAWNS NOTHING — the probe
+  build stays in the producer task (§5) and the log arrives on stdin.
 - `prune.rs` — the build tree's reclaim and its disk floor (CLOUD-766/861/1030),
   retired out of `mise-tasks/target-prune.sh` under CLOUD-1059.
   `Effect::Destructive` on `Surface::VerifyOnly`, beside `capture prune` — §5's

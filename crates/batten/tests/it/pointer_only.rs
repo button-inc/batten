@@ -1930,6 +1930,17 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::ToolVerdict,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-1717's reading door. Pointer-only matters MORE here than for the
+    // generic writers above, not less: the input it reads is the richest payload
+    // any producer hands the engine — a whole `cargo metadata` document, a probe
+    // build's log — and the record it writes is a handful of tokens. A verb that
+    // echoed any of it would put a build log into a file a module reads.
+    Verb {
+        path: "record derive",
+        args: &["census"],
+        stdin: Stdin::ToolVerdict,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "record keyed",
         args: &["census", "a-key"],

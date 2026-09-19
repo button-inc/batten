@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-record-derive 1  batten 
+.SH NAME
+batten\-record\-derive \- Derive one named family\*(Aqs record from its input and write it
+.SH SYNOPSIS
+\fBbatten record derive\fR [\fB\-\-input\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIfamily\fR> 
+.SH DESCRIPTION
+Derive one named family\*(Aqs record from its input and write it
+.SH OPTIONS
+.TP
+\fB\-\-input\fR
+A `<key>=<value>` input this family needs beyond stdin (repeatable)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIfamily\fR>
+The record family, which selects the reading and is the key a module reads it under

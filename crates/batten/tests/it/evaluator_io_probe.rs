@@ -7,7 +7,7 @@
 //! fabricates its input with `with input as`, which is the shape
 //! `rules/policy-modules.md` warns about.
 //!
-//! # And why the PRODUCER's classification is driven here
+//! # And why the PRODUCER's reading is driven here
 //!
 //! Three of the dying suite's five cases are about how the probe build's output
 //! is READ, not about the verdict that follows: a build that passed, one that
@@ -17,18 +17,27 @@
 //! exit from `cargo test` means a compile error just as readily as a falsified
 //! assertion.
 //!
-//! `EVALUATOR_IO_PROBE_CMD` is what makes that drivable without a two-minute
-//! rebuild per case, and these cases use it exactly as the retired suite did.
+//! Those three are now pinned where they belong: `crates/batten/src/probe_verdict.rs`
+//! carries the classification and asserts all of them — plus two the retired
+//! program never had, an unindented occurrence of the name and a longer name
+//! containing it — in its own `#[cfg(test)] mod tests`, over fabricated
+//! `(status, log)` pairs no build could be made to produce.
+//!
+//! What stays HERE is the half a unit test cannot reach: that the engine carries
+//! that reading through `record derive` into a record the real module then
+//! refuses over. The `--input` seam makes it drivable without a two-minute
+//! rebuild per case, exactly as `EVALUATOR_IO_PROBE_CMD` did for the retired
+//! program.
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
 // carried: mise-tasks/evaluator-io-check.sh policy/evaluator-io-probe.rego kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
 // carried: tests/evaluator-io-check.bats policy/evaluator-io-probe.rego kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
-// carried: "a probe build in which the test PASSES is the finding, not a pass" policy/evaluator-io-probe.rego kind:mechanism
-// carried: "a probe build in which the test FAILS is the pass" policy/evaluator-io-probe.rego kind:mechanism
-// carried: "a probe build that failed to COMPILE is could-not-look, not the pass" policy/evaluator-io-probe.rego kind:mechanism
-// carried: "a probe build where the named test never ran is could-not-look" policy/evaluator-io-probe.rego kind:mechanism
-// carried: "the probe build's own output never reaches the gate's output" policy/evaluator-io-probe.rego kind:mechanism
+// carried: "a probe build in which the test PASSES is the finding, not a pass" crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
+// carried: "a probe build in which the test FAILS is the pass" crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
+// carried: "a probe build that failed to COMPILE is could-not-look, not the pass" crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
+// carried: "a probe build where the named test never ran is could-not-look" crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
+// carried: "the probe build's own output never reaches the gate's output" crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
 // changed: "the refusal names the test to fix" batten.toml the retired program printed `<file> <test-name>`; the engine renders `<file> <rule-id>`, because `rules/policy-modules.md` makes the first path-bearing subject the finding's pointer whatever order the subjects are declared in. That is non-negotiable rule 5 — one output contract, no per-verb exception — so the test name moved to the `[[verdict]]` row's gloss and to the JSON channel, where a reader still meets it
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
@@ -179,73 +188,168 @@ fn an_absent_record_says_nothing_rather_than_refusing() {
     );
 }
 
-// --- the producer's classification -------------------------------------------
+// --- the producer's reading, over the real verb ---------------------------------
 
-/// Run the REAL reading the producer runs, over a status and a log.
+/// Drive the REAL reading the producer runs, through the REAL verb.
 ///
-/// `mise-tasks/probe_verdict.py` is the one authority on these three branches;
-/// a copy of them here would be the second authority `cargo_graph.py` was
-/// extracted to remove one gate over.
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays, and it is the subject under test rather than a convenience: the classification of a probe build's output is what moved out of the dying program, and driving it directly is what keeps the three arms assertable without a two-minute rebuild per case"
-)]
-fn classify(name: &str, status: i32, log: &str) -> String {
-    let dir = scratch(&format!("evaluator-io-stub-{name}"));
-    write(&dir, "probe.log", log);
+/// `crates/batten/src/probe_verdict.rs` is the one authority on the three
+/// branches, and its own `#[cfg(test)] mod tests` asserts them directly over
+/// fabricated `(status, log)` pairs — that is where the classification is
+/// pinned, because a unit test can produce an arbitrary pair and a build cannot.
+///
+/// What THIS tier adds is the half a unit test cannot reach: that the engine
+/// carries the reading all the way to a record a module then refuses over. The
+/// `--input` seam is what makes that drivable without a two-minute rebuild per
+/// case, exactly as `EVALUATOR_IO_PROBE_CMD` did for the retired program.
+fn derive(dir: &std::path::Path, status: i32, log: &str) -> std::process::Output {
+    run_with_stdin(
+        dir,
+        &[
+            "record",
+            "derive",
+            "evaluator-io-probe",
+            "--input",
+            &format!("status={status}"),
+            "--input",
+            "test=no_evaluator_feature_admits_io",
+        ],
+        log,
+    )
+}
 
-    let done = std::process::Command::new("python3")
-        .arg("../../mise-tasks/probe_verdict.py")
-        .arg(status.to_string())
-        .arg(dir.join("probe.log"))
-        .arg("no_evaluator_feature_admits_io")
-        .output()
-        .expect("the reading runs");
+#[test]
+fn the_verb_derives_a_green_probe_into_the_finding() {
+    // END TO END, and it is the arm no unit test reaches: a probe build that
+    // SUCCEEDED is derived, written, read back by the real module, and refused.
+    let dir = repo("derive-passed");
+    let written = derive(&dir, 0, "");
     assert!(
-        done.status.success(),
-        "the reading completes: {}",
-        String::from_utf8_lossy(&done.stderr)
+        written.status.success(),
+        "the derivation lands: {}",
+        String::from_utf8_lossy(&written.stderr)
     );
-    String::from_utf8_lossy(&done.stdout).trim().to_owned()
+
+    let decided = run(&dir, &["check"]);
+    assert_eq!(
+        decided.status.code(),
+        Some(2),
+        "a green probe is the finding\n{}",
+        String::from_utf8_lossy(&decided.stderr)
+    );
 }
 
 #[test]
-fn a_probe_build_that_succeeds_classifies_as_passed() {
-    assert_eq!(classify("green", 0, ""), "probe passed");
+fn the_verb_derives_a_compile_failure_into_could_not_look() {
+    // THE ARM A GATE WRITTEN TO THE OBVIOUS SHAPE GETS WRONG, carried all the
+    // way through: non-zero, no harness line, and the engine must still refuse
+    // rather than read the exit code as the discrimination it wanted.
+    let dir = repo("derive-unread");
+    let written = derive(&dir, 101, "error[E0432]: unresolved import\n");
+    assert!(written.status.success(), "the derivation lands");
+
+    let decided = run(&dir, &["check"]);
+    assert_eq!(
+        decided.status.code(),
+        Some(2),
+        "could not look is loud, never the pass\n{}",
+        String::from_utf8_lossy(&decided.stderr)
+    );
 }
 
 #[test]
-fn a_probe_build_that_ran_the_named_test_to_a_failure_classifies_as_failed() {
+fn the_verb_derives_a_real_failure_into_the_pass() {
+    let dir = repo("derive-failed");
     let harness = "failures:\n    no_evaluator_feature_admits_io\n\ntest result: FAILED. 0 passed; 1 failed\n";
-    assert_eq!(classify("red", 101, harness), "probe failed");
+    let written = derive(&dir, 101, harness);
+    assert!(written.status.success(), "the derivation lands");
+
+    let quiet = run(&dir, &["check"]);
+    assert_eq!(
+        quiet.status.code(),
+        Some(0),
+        "it failed, which is the pass\n{}",
+        String::from_utf8_lossy(&quiet.stderr)
+    );
 }
 
+/// POINTER-ONLY THROUGH THE WHOLE PATH (rule 4). The unit test asserts the
+/// verdict carries no log byte; this asserts the RECORD does not either, which
+/// is the claim that matters — the record is a file on disk a module reads.
 #[test]
-fn a_probe_build_that_failed_to_compile_classifies_as_unread() {
-    // THE ARM A GATE WRITTEN TO THE OBVIOUS SHAPE GETS WRONG: non-zero, and no
-    // harness line at all.
-    let broken = "error[E0432]: unresolved import\n";
-    assert_eq!(classify("compile", 101, broken), "probe unread");
-}
+fn no_byte_of_the_probe_log_reaches_the_record() {
+    let dir = repo("derive-noisy");
+    let written = derive(&dir, 101, "SECRET_MODULE_BODY\nerror: build failed\n");
+    assert!(written.status.success(), "the derivation lands");
 
-#[test]
-fn a_probe_build_where_the_named_test_never_ran_classifies_as_unread() {
-    // A different test failed, so the harness says FAILED and the listing names
-    // somebody else. Reading the exit code would call this the discrimination
-    // this gate is looking for.
-    let other = "failures:\n    some_other_test\n\ntest result: FAILED. 3 passed; 1 failed\n";
-    assert_eq!(classify("other", 101, other), "probe unread");
-}
-
-#[test]
-fn the_probe_builds_own_output_never_reaches_the_record() {
-    // Pointer-only (rule 4): the probe log carries module bodies and paths, and
-    // what the record receives is one token.
-    let noisy = "SECRET_MODULE_BODY\nerror: build failed\n";
-    let classified = classify("noisy", 101, noisy);
-    assert_eq!(classified, "probe unread");
+    // Every byte the engine wrote under the scratch repository's git dir,
+    // walked rather than guessed at: the record's exact path is
+    // `recorder::record_path`'s business, and a test naming it would be a
+    // second authority over where records live.
+    let mut stored = String::new();
+    let mut pending = vec![dir.join(".git")];
+    while let Some(next) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&next) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if let Ok(body) = std::fs::read_to_string(&path) {
+                stored.push_str(&body);
+            }
+        }
+    }
     assert!(
-        !classified.contains("SECRET_MODULE_BODY"),
-        "no byte of the probe log reaches the record\n{classified}"
+        !stored.contains("SECRET_MODULE_BODY"),
+        "no byte of the probe log reaches anything the engine wrote\n{stored}"
+    );
+    assert!(
+        !said(&written).contains("SECRET_MODULE_BODY"),
+        "nor the verb's own output\n{}",
+        said(&written)
+    );
+}
+
+/// A KEY THE FAMILY DOES NOT READ IS A USAGE ERROR, never a silent default.
+/// A caller who misspells an input would otherwise get a clean exit from a
+/// reading that ran on something else, and the record would still be written.
+#[test]
+fn an_input_key_the_family_does_not_read_is_a_usage_error() {
+    let dir = repo("derive-unknown-input");
+    let refused = run_with_stdin(
+        &dir,
+        &[
+            "record",
+            "derive",
+            "evaluator-io-probe",
+            "--input",
+            "status=0",
+            "--input",
+            "test=x",
+            "--input",
+            "nonsense=1",
+        ],
+        "",
+    );
+    assert_eq!(
+        refused.status.code(),
+        Some(1),
+        "an unread input is a usage error\n{}",
+        said(&refused)
+    );
+}
+
+/// A family with no declared reading is a usage error too, rather than a record
+/// written under a name nothing reads.
+#[test]
+fn a_family_with_no_declared_reading_is_a_usage_error() {
+    let dir = repo("derive-unknown-family");
+    let refused = run_with_stdin(&dir, &["record", "derive", "no-such-family"], "");
+    assert_eq!(
+        refused.status.code(),
+        Some(1),
+        "an undeclared family is a usage error\n{}",
+        said(&refused)
     );
 }

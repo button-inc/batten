@@ -95,6 +95,7 @@ pub mod pipeline;
 pub mod policy;
 pub mod pr_watch;
 pub mod preset;
+pub mod probe_verdict;
 pub mod provision;
 pub mod prune;
 pub mod race;

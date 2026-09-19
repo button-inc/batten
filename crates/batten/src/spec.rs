@@ -1033,6 +1033,11 @@ mod tests {
             // a third row spelled the old way would be a third row to invert.
             "record".to_owned(),
             "record closes".to_owned(),
+            // CLOUD-1717's READING door, and the write band is where it belongs:
+            // it applies a reading the engine owns and WRITES the result, so it
+            // is absent from the read-only allowlist above for `record named`'s
+            // reason. The spawn its input comes from stays in the task.
+            "record derive".to_owned(),
             // The two READ leaves of this noun (CLOUD-1713). They fold and
             // print what the write leaves already stored, which is why they —
             // alone under `record` — are also on the read-only allowlist above.

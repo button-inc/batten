@@ -2268,9 +2268,13 @@ trap 'rm -f "$log"' EXIT
 
 status=0
 "$@" >"$log" 2>&1 || status=$?
-verdict=$(python3 mise-tasks/probe_verdict.py "$status" "$log" "$probe_test") || exit 0
+# The READING is the engine's (CLOUD-1717): the spawn above stays here,
+# where house-style §5 puts a producer's effects, and the classification of
+# what it wrote is `crates/batten/src/probe_verdict.rs` — Rust the engine
+# tests rather than a script beside this task.
+verdict=$(cargo run --quiet -p batten -- record derive evaluator-io-probe \
+  --input "status=$status" --input "test=$probe_test" <"$log") || exit 0
 
-printf '%s\\n' "$verdict" | cargo run --quiet -p batten -- record named evaluator-io-probe
 
 if [ -z "${EVALUATOR_IO_PROBE_CMD:-}" ] && [ "$verdict" = 'probe failed' ]; then
   ./mise-tasks/step-receipt.sh record evaluator-io-check || true

@@ -1079,6 +1079,34 @@ const VERDICT_TOKEN: FlagDecl = FlagDecl {
 /// filter that matched nothing and exited 0 is the vacuous pass in its purest
 /// form: the caller would read "the gate passed" from a gate that was never
 /// selected, and a renamed row would silently stop being enforced.
+/// The non-document inputs a `record derive` family needs, as `<key>=<value>`.
+///
+/// ONE DECLARED FLAG RATHER THAN A COLUMN PER FAMILY, and the alternative is
+/// what makes this the narrow choice: `--status`, `--test`, `--root`,
+/// `--threshold`, `--exclude`, `--signingkey` and `--ssh-program` on one leaf
+/// would declare seven flags of which every caller uses at most three, and each
+/// new producer would widen the committed surface again. The keys a family
+/// accepts are that family's own contract, documented on its reader, and a key
+/// no family declares is a usage error rather than a silent default.
+///
+/// `StrMany` for `LAND_RESOLVE`'s reason: `Str` keeps only the LAST occurrence,
+/// so a caller naming two inputs would silently lose the first — and a producer
+/// running on a partial input is precisely the could-not-look this family's
+/// three-valued read exists to keep loud.
+const DERIVE_INPUT: FlagDecl = FlagDecl {
+    id: "input",
+    long: Some("input"),
+    short: None,
+    help: "A `<key>=<value>` input this family needs beyond stdin (repeatable)",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::StrMany,
+};
+
 const CHECK_RULE: FlagDecl = FlagDecl {
     id: "rule",
     long: Some("rule"),
@@ -4961,6 +4989,36 @@ pub const SURFACE: &[CommandDecl] = &[
             "family",
             "The record family, which is the key a module reads it under",
         )],
+    },
+    // CLOUD-1717's READING door, and it is the other half of `record named`
+    // rather than a second spelling of it. `record named` takes a verdict a
+    // producer already computed; this takes the producer's RAW INPUT and applies
+    // the reading itself, so the reading is Rust the engine tests rather than a
+    // script beside the task.
+    //
+    // THE SPAWN STAYS OUTSIDE, which is what makes this admissible at all.
+    // House-style §5 puts a producer's `cargo metadata` or `cargo test` in the
+    // task; the document arrives on stdin and the engine never executes
+    // anything. `spawn-adapters` and `spawn-widening` both refuse a new
+    // `Command` site under `crates/batten/src/**` with no override route, and
+    // they are right to: a reading that needed one would have the wrong shape.
+    //
+    // `Effect::Write`, never `Read`: the agent read-only allowlist is DERIVED
+    // from `effect == read` (`spec.rs`), and this writes a record.
+    CommandDecl {
+        path: "record derive",
+        id: "record.derive",
+        about: "Derive one named family's record from its input and write it",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[
+            FlagDecl::positional(
+                "family",
+                "The record family, which selects the reading and is the key a module reads it under",
+            ),
+            DERIVE_INPUT,
+        ],
     },
     CommandDecl {
         path: "record keyed",

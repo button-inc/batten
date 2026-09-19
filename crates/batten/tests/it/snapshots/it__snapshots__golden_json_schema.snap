@@ -2515,6 +2515,32 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "record derive",
+          "id": "record.derive",
+          "about": "Derive one named family's record from its input and write it",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "family",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The record family, which selects the reading and is the key a module reads it under"
+            },
+            {
+              "name": "input",
+              "short": null,
+              "long": "input",
+              "takes_value": true,
+              "positional": false,
+              "help": "A `<key>=<value>` input this family needs beyond stdin (repeatable)"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "record fold",
           "id": "record.fold",
           "about": "Fold a journal family: `nothing`, its records, or `unreadable <path>`",

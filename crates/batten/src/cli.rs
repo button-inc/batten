@@ -1391,6 +1391,25 @@ pub enum RecordCommand {
         /// The record family, which is the key a module reads it under.
         family: String,
     },
+    /// Derive one named family's record from its input and write it.
+    ///
+    /// [`RecordCommand::Named`]'s sibling, and the difference is WHERE the
+    /// reading lives. `Named` takes a verdict a producer already computed, so
+    /// the reading is whatever wrote to the pipe; this takes the producer's raw
+    /// input and applies a reading the engine owns and tests.
+    ///
+    /// The effects stay in the task: the document arrives on stdin and this
+    /// spawns nothing (house-style §5).
+    Derive {
+        /// The record family, which selects the reading and is the key a module
+        /// reads the result under.
+        family: String,
+        /// The non-document inputs, as `<key>=<value>`, in the order written.
+        ///
+        /// Which keys are accepted is the family's own contract; a key no
+        /// family declares is a usage error rather than a silent default.
+        inputs: Vec<String>,
+    },
     /// Put one value into a keyed store family (CLOUD-1713).
     Keyed {
         /// The store family the record belongs to.
@@ -2468,6 +2487,16 @@ fn record_of(matches: &ArgMatches) -> Option<RecordCommand> {
         }),
         ("named", matches) => Some(RecordCommand::Named {
             family: matches.get_one::<String>("family")?.clone(),
+        }),
+        ("derive", matches) => Some(RecordCommand::Derive {
+            family: matches.get_one::<String>("family")?.clone(),
+            // `unwrap_or_default` rather than `?`: a family needing no input
+            // beyond stdin passes the flag never, and an absent repeatable flag
+            // is an empty selection rather than a parse failure.
+            inputs: matches
+                .get_many::<String>("input")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
         }),
         ("keyed", matches) => Some(RecordCommand::Keyed {
             family: matches.get_one::<String>("family")?.clone(),
