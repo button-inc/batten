@@ -132,6 +132,10 @@
 // changed: "PRESSURE: two waiters against one holder produce exactly ONE winner" crates/batten/src/lease.rs kind:verb
 // changed: "PRESSURE: the lease passes to exactly one waiter after release, not both" crates/batten/src/lease.rs kind:verb
 
+/*
+#MUTANT-SUITE crates/batten/tests/it/lease_lifecycle.rs
+#MUTANT rebuild-the-lease-time-inline|s@        time: crate::git::utc_at(seconds),@        time: gix::date::Time { seconds, offset: 3600 },@|a_lease_object_is_stamped_in_utc
+*/
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -709,5 +713,72 @@ fn a_body_already_asked_or_asked_by_its_own_holder_is_left_alone() {
     assert!(
         worth_asking(&blank, RIVAL),
         "a blank request is an absence, so this one IS worth asking"
+    );
+}
+
+/// The instant and the offset a commit header carries for `field`.
+///
+/// Git's signature line ends `<seconds> <+hhmm>`, so the last two
+/// whitespace-separated tokens are the whole of what this asks about — and reading
+/// them off the raw header rather than a decoded struct is what keeps the
+/// assertion about the BYTES the object is hashed from.
+fn stamp(raw: &str, field: &str) -> (i64, String) {
+    let line = raw
+        .lines()
+        .find(|line| line.starts_with(field))
+        .unwrap_or_else(|| panic!("the commit carries a `{field}` header"));
+    let mut tokens = line.split_whitespace().rev();
+    let offset = tokens.next().expect("an offset token").to_owned();
+    let seconds = tokens
+        .next()
+        .expect("a seconds token")
+        .parse()
+        .expect("the seconds token is an integer");
+    (seconds, offset)
+}
+
+/// A minted lease object is stamped in UTC, and two mints of one input agree
+/// (CLOUD-1486).
+///
+/// **The offset is load-bearing here in a way it is not for an ordinary commit.**
+/// The lease is a parentless commit over the empty tree whose id must be a
+/// function of its content alone — that is what makes the ref swap a genuine CAS
+/// rather than an occasional silent fast-forward, and what makes the nonce the
+/// only thing distinguishing two mints. An offset resolved from the host would put
+/// the landing machine's `TZ` into that id, so two clones agreeing on every field
+/// would disagree on the object, and each would read the other's live lease as
+/// something it had never written.
+///
+/// **The agreement assertion is the anti-vacuity mirror**, and it is the half that
+/// would survive a wrong fix: `offset == 0` alone passes over an implementation
+/// that zeroes the offset while taking its seconds from the clock, because every
+/// such mint is still nominally UTC. Two mints of the SAME `seconds` producing the
+/// same id is what says the instant came from the caller.
+///
+/// **What it does not assert:** that `+0000` is how gix renders a zero offset.
+/// That is the library's business, and a case pinning it would be asserting
+/// against `gix` rather than against this crate.
+#[test]
+fn a_lease_object_is_stamped_in_utc() {
+    use batten::lease::lease_object;
+
+    let minted = lease_object("holder: clone-a\nnonce: n1\n", NOW).expect("mint");
+    let raw = String::from_utf8(minted.body.clone()).expect("a lease commit is utf-8");
+
+    assert_eq!(
+        stamp(&raw, "committer "),
+        (NOW, String::from("+0000")),
+        "a lease object's committer is the caller's instant, in UTC"
+    );
+    assert_eq!(
+        stamp(&raw, "author "),
+        (NOW, String::from("+0000")),
+        "and so is its author — the lease authors itself, so both are this pin's"
+    );
+
+    let again = lease_object("holder: clone-a\nnonce: n1\n", NOW).expect("mint again");
+    assert_eq!(
+        minted.id, again.id,
+        "two mints of one message and one instant are one object, or the CAS is not a CAS"
     );
 }

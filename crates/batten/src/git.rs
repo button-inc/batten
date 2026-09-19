@@ -1636,6 +1636,33 @@ pub fn open_for_write(dir: &Path) -> Result<gix::Repository> {
     open(dir)
 }
 
+/// The one UTC stamp both committer signatures take (CLOUD-1486).
+///
+/// **Two git objects this binary writes carry a signature it builds itself, and
+/// they disagreed about the offset.** [`crate::lease::lease_object`] pinned
+/// `offset: 0` inline; [`crate::gitwrite`]'s replay took `repo.committer()` whole,
+/// whose time gix resolves through `gix_date::Time::now_local_or_utc()`
+/// (`gix/src/repository/identity.rs`). So a replayed commit's `+hhmm` was the
+/// landing host's, and two clones replaying one range minted different ids for
+/// identical content — which the lap's fast-forward and the lease's CAS both
+/// assume cannot happen.
+///
+/// **It takes the instant rather than reading a clock.** `lease_object`'s caller
+/// supplies `seconds` deliberately, so that a mint is reproducible from its inputs
+/// and its nonce contract is testable; a constructor that read the clock would be
+/// unusable at one of the two sites it exists to serve. Pinning only the offset
+/// also leaves an explicitly supplied committer date alone.
+///
+/// **Here rather than in `lib.rs`, and that is a gate rather than a preference.**
+/// [`gix_is_confined_to_the_git_modules`](tests) holds a closed list —
+/// `git.rs`, `gitwrite.rs`, `lease.rs` — and no other file under `src/` may name
+/// `gix::`. Both callers already reach this module, so this adds no edge to
+/// `policy/module-layering.rego`'s graph.
+#[must_use]
+pub const fn utc_at(seconds: i64) -> gix::date::Time {
+    gix::date::Time { seconds, offset: 0 }
+}
+
 /// Does the local odb already carry this object?
 ///
 /// **A read, and a total one**: a repository that will not open answers `false`,
