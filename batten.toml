@@ -12303,6 +12303,33 @@ kind = "document"
 target = "mise.toml"
 
 [[verdict]]
+id = "task admit stale"
+gloss = "a lane is exempted from the LOCAL gate by a claim the manifest no longer bears out"
+class = """
+`task cover stale` one row up is the sensor on a CONTAINMENT claim: one lane's \
+body is a prefix of another's, so running the wide one runs the narrow one and \
+naming both is waste. This is the sensor on a different claim, about the other \
+way property 3's premise fails. That premise is "a free local run would have \
+caught it", and the foreign-runner exemption exists where it is false because \
+there is no local Windows. A lane can also fail it by not being FREE: measured \
+2026-09-19 on a quiet 4-core container, each suite alone, `test:cargo` ran 256.4s \
+against `test:musl`'s 2261.6s over the same 5570 cases — 8.8x, the target rather \
+than contention — inside the gate a branch must clear before it may ask for the \
+landing lease. So the manifest may DECLARE that a lane verify CAN run \
+approximates one it cannot afford to, and this fires when that declaration stops \
+being true. Three ways: the two bodies no longer name the triple the claim is \
+about, `verify` no longer reaches the approximator, or no pull-request job runs \
+the exempted lane any more. The third is what keeps the relation from becoming a \
+route to deleting a check rather than moving it: the exemption takes a lane off \
+the LOCAL gate and nowhere else.
+"""
+
+[[verdict.route]]
+id = "task read first"
+kind = "document"
+target = "mise.toml"
+
+[[verdict]]
 id = "task run duplicate"
 gloss = "a depends list names a lane and the lane that covers it, so its steps run twice a lap"
 class = """

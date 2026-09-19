@@ -36,6 +36,9 @@
 #MUTANT cover-may-be-asserted-unchecked|s@\tnot covering_holds(task, covering)@\tfalse@|a_declared_cover_whose_bodies_no_longer_hold_is_refused
 #MUTANT cover-may-skip-the-reach|s@\tlane_reaches(covering)@\ttrue@|a_covered_lane_verify_never_reaches_is_still_refused
 #MUTANT both-lanes-may-be-named|s@\tnames_the_covering_lane(list, covering)@\tfalse@|a_depends_list_naming_a_lane_and_its_cover_is_refused
+#MUTANT approximation-may-be-asserted-unchecked|s@\tapproximation_holds(task, entry)@\ttrue@|an_approximation_whose_bodies_no_longer_share_the_triple_is_refused
+#MUTANT approximation-may-skip-the-reach|s@\tlane_reaches(entry.by)@\ttrue@|an_approximator_verify_never_reaches_is_still_refused
+#MUTANT approximated-task-may-run-nowhere|s@\tnot approximated_task_runs_in_ci(task)@\tfalse@|a_declared_approximation_for_a_task_no_job_runs_is_refused
 #
 #MUTANT dist-list-unread|s@\tnot provisions_from_a_list(job)@\tfalse@|a_release_leg_that_installs_everything_is_refused
 #MUTANT-SUITE crates/batten/tests/it/ci_parity.rs
@@ -195,6 +198,7 @@ violation contains {
 	some [path, task] in ci_task_used
 	not contains(verify_text, task)
 	not covered_by_a_lane_verify_runs(task)
+	not approximated_by_a_lane_verify_runs(task)
 }
 
 # --- a task verify does not NAME may still be one verify RUNS -----------------
@@ -321,6 +325,106 @@ violation contains {
 	governed
 	some task, covering in covering_lane
 	not covering_holds(task, covering)
+}
+
+# --- a lane verify CANNOT run locally, approximated by one it can (CLOUD-1840) --
+#
+# A SECOND RELATION RATHER THAN A WIDENING OF THE FIRST, because it answers a
+# different question about the same premise. `covering_lane` above is about
+# CONTAINMENT: one body is the other with a filter applied, so running the wide
+# one runs every step of the narrow one and naming both is waste. Nothing about
+# that shape fits here, which is why reusing it was tried and refused — see the
+# prefix rule's own warning against generalising it.
+#
+# THE PREMISE IS THE ONE STATED AT property 3's HEAD: "a free local run would
+# have caught it". The foreign-runner exemption exists because that premise is
+# FALSE on an OS the author is not — there is no local Windows. This relation
+# exists because the premise can fail a second way: the run is not free. Measured
+# 2026-09-19 on a quiet 4-core container, each suite alone with nothing else
+# running: `test:cargo` 256.4s against `test:musl` 2261.6s over the same 5570
+# cases, 8.8x, with parallel efficiency 3.83 against 3.87 — so the cost is the
+# TARGET rather than contention, and it lands inside the gate a branch must clear
+# before it may ask for the landing lease. A lane that costs nine times the suite
+# beside it is not a free local run, and property 3's premise does not reach it.
+#
+# WHAT THIS IS NOT. It is not a route to dropping the check: arm three below
+# requires the exempted task to still be run by a `pull_request` job, so the
+# exemption moves a lane OFF the local gate and nowhere else. `musl` stays in
+# `CI_REQUIRED_CHECKS`, stays on `pull_request`, and the task stays declared and
+# runnable by name. The same reasoning is why `windows` and `macos` keep their
+# jobs while taking the runner exemption.
+#
+# THE CLAIM IS STATED AND THEN CHECKED, exactly as `covering_lane` is and for the
+# same reason (see its own paragraph): a claim of coverage cannot be detected as
+# absent against an open world. Here the claim is that `cross-check` approximates
+# `test:musl`, and `over` names WHAT makes the approximation true — the triple
+# both bodies must still mention. `cross-check` type-checks
+# `x86_64-unknown-linux-musl` and `test:musl` executes against it; a type-check
+# cannot see a behavioural fault, which is the coverage CI keeps, and it CAN see
+# the target still building, which is what makes it an approximation rather than
+# nothing. If `cross-check` stops naming the triple the claim stops holding and
+# property 3 re-arms on `test:musl`, which is the direction a miss must fail in.
+approximated_lane := {"test:musl": {"by": "cross-check", "over": "x86_64-unknown-linux-musl"}}
+
+# BOTH bodies, never one. Reading only the approximator would let a `test:musl`
+# retargeted at a different triple keep an exemption earned by this one; reading
+# only the exempted task would let `cross-check` drop the triple silently.
+approximation_holds(task, entry) if {
+	contains(task_run(task), entry.over)
+	contains(task_run(entry.by), entry.over)
+}
+
+approximated_task_runs_in_ci(task) if {
+	some [_, used] in ci_task_used
+	used == task
+}
+
+# THE CI ARM IS DELIBERATELY ABSENT HERE and present only in the staleness clause
+# below. This predicate is consulted from the parity violation, which has already
+# bound `task` out of `ci_task_used` — so a conjunct asserting the task runs in CI
+# is true by construction at this call site, and a mutation over it would SURVIVE
+# for a reason that has nothing to do with the gate. `rules/policy-modules.md`
+# names that trap: choose a mutation that discriminates.
+approximated_by_a_lane_verify_runs(task) if {
+	entry := approximated_lane[task]
+	approximation_holds(task, entry)
+	lane_reaches(entry.by)
+}
+
+# ANTI-VACUITY, three ways a declared approximation stops being true. Same role as
+# `task cover stale` one clause up: the data above is allowed to exempt a lane
+# only for as long as the reason it was allowed still holds.
+violation contains {
+	"rule": "job run other",
+	"verdict": "task admit stale",
+	"subjects": [{"path": "mise.toml"}, {"artifact": task}],
+} if {
+	governed
+	some task, entry in approximated_lane
+	not approximation_holds(task, entry)
+}
+
+violation contains {
+	"rule": "job run other",
+	"verdict": "task admit stale",
+	"subjects": [{"path": "mise.toml"}, {"artifact": task}],
+} if {
+	governed
+	some task, entry in approximated_lane
+	not lane_reaches(entry.by)
+}
+
+# The arm that keeps this from becoming a deletion route: a lane exempted from the
+# LOCAL gate must still be run by a pull-request job somewhere, or the declaration
+# is exempting a task nothing checks at all.
+violation contains {
+	"rule": "job run other",
+	"verdict": "task admit stale",
+	"subjects": [{"path": "mise.toml"}, {"artifact": task}],
+} if {
+	governed
+	some task, _ in approximated_lane
+	not approximated_task_runs_in_ci(task)
 }
 
 # --- the required roster names exactly the pull-request jobs (property 5) -----
@@ -1003,7 +1107,7 @@ violation contains {
 sound_manifest := {
 	"tasks": {
 		"verify": {"run": "mise run verify:gated\nmise run test:bats"},
-		"verify:gated": {"run": "mise run lint", "depends": ["ci"]},
+		"verify:gated": {"run": "mise run lint", "depends": ["ci", "cross-check"]},
 		"test:cargo": {"run": "if ! cargo nextest run --workspace; then exit 1; fi"},
 		# THE TWO LANES THE COVERING RELATION IS ABOUT. The anti-vacuity clause
 		# judges every declared pair against the manifest, so a fixture omitting
@@ -1012,9 +1116,17 @@ sound_manifest := {
 		"ci": {"depends": ["hooks", "deny"]},
 		"hooks": {"run": "hk check --all"},
 		"ci:quick": {"run": "hk check --all --profile '!slow'"},
+		# AND THE TWO THE APPROXIMATION RELATION IS ABOUT, present for exactly the
+		# reason stated one comment up. Both bodies must name the declared triple
+		# or `approximation_holds` fails, and `verify:gated` must reach the
+		# approximator or `lane_reaches` does — so a fixture carrying neither would
+		# have `test_a_sound_tree_is_clean` pinning a stale admission rather than a
+		# clean tree.
+		"cross-check": {"run": "for t in x86_64-pc-windows-gnu x86_64-unknown-linux-musl; do cargo check --target \"$t\"; done"},
+		"test:musl": {"run": "if ! cargo nextest run --workspace --target x86_64-unknown-linux-musl; then exit 1; fi"},
 	},
 	"env": {
-		"CI_REQUIRED_CHECKS": "ci,final",
+		"CI_REQUIRED_CHECKS": "ci,musl,final",
 		"CI_FANIN_CHECK": "final",
 		"CI_FANIN_WORKFLOW": ".github/workflows/ci.yml",
 	},
@@ -1030,6 +1142,15 @@ sound_workflow := {
 			"name": "ci",
 			"runs-on": "ubuntu-latest",
 			"steps": [lease_first, {"run": "mise run lint"}],
+		},
+		# THE APPROXIMATED LANE'S OWN JOB. Arm three of the admission requires the
+		# exempted task to still be run by a pull-request job, so the exemption
+		# moves a lane off the LOCAL gate and nowhere else. A fixture without this
+		# job would make `test_a_sound_tree_is_clean` pin a stale admission.
+		"musl": {
+			"name": "musl",
+			"runs-on": "ubuntu-latest",
+			"steps": [lease_first, {"run": "mise run test:musl"}],
 		},
 		# The fan-in is exempt from the lease clause for a REASON rather than by
 		# enumeration: it cannot start before its dependencies are terminal.

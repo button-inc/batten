@@ -207,11 +207,30 @@ jobs:
   # identified variable. Same reason `darwin-link` runs its legs under
   # `fail-fast: false` rather than as a loop.
   #
-  # `mise run test:musl`, NOT `mise exec -- cargo …`. This runner is
-  # `ubuntu-latest`, which `ci-local-parity` does not class as foreign, so
-  # property 3 applies in full and the task must be one `verify` runs by name. The
-  # `mise exec` spelling `windows` and `macos` use exists BECAUSE they are exempt;
-  # borrowing it here would give up a parity that is available.
+  # `mise run test:musl`, NOT `mise exec -- cargo …`, and the reason has MOVED
+  # (CLOUD-1840). It used to be that this runner is `ubuntu-latest`, which is not
+  # foreign, so parity property 3 applied in full and the task had to be one
+  # `verify` runs by name. Property 3 no longer demands that here: `verify` does
+  # not run `test:musl`, and `approximated_lane` in `policy/ci-parity.rego` is the
+  # declared, checked claim that `cross-check` — which type-checks this same
+  # triple and which `verify` DOES run — approximates it locally.
+  #
+  # The spelling is still `mise run`, for a reason that outlived the first one.
+  # `mise exec -- cargo …` is what property 16 pins byte-for-byte against
+  # `test:cargo`'s single declared statement, and it scans every line of every
+  # file rather than only foreign jobs — so borrowing that spelling here would
+  # make `windows` and `macos` run the LINUX musl suite. Two separable questions,
+  # two tasks, one name each.
+  #
+  # WHY THE LANE LEFT `verify` AND THE JOB DID NOT. Measured 2026-09-19, each
+  # suite alone on a quiet 4-core container, same commit, 5570 cases and 5570
+  # passes on both arms: `test:cargo` 256.4s against `test:musl` 2261.6s — 8.8x,
+  # at parallel efficiencies of 3.83 and 3.87, so the cost is the TARGET rather
+  # than the box. A lane that heavy inside the gate a branch must clear before it
+  # may ask for the landing lease is paid every lap and discarded on roughly 45%
+  # of them. It runs here instead, on its own runner, on every pull request, and
+  # it stays in `CI_REQUIRED_CHECKS`. The coverage CLOUD-1821 bought is unchanged;
+  # only the place it executes moved.
   musl:
     name: musl
     if: ${{ github.event.pull_request.draft == false }}

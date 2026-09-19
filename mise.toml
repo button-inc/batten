@@ -4250,13 +4250,38 @@ shell = "bash -c"
 # completeness question it was named for is now `lock-complete`, a pure gate in
 # hk.pkl; currency runs on a schedule (.github/workflows/lock-currency.yml).
 #
-# `test:musl` IS HERE BECAUSE ITS CI LEG IS NOT FOREIGN (CLOUD-1821). The job runs
-# on `ubuntu-latest`, so `ci-local-parity` property 3 applies in full — every task
-# CI runs is one `verify` runs — and the exemption `windows` and `macos` take does
-# not reach it. That is the property working rather than a cost: this suite CAN be
-# run locally, so a failure in it is one a free local run catches before a runner
-# does. It costs no wall clock that `ci` does not already cost, since `depends`
-# runs its entries in parallel.
+# `test:musl` IS NOT HERE, AND THE SENTENCE THAT PUT IT HERE WAS UNMEASURED
+# (CLOUD-1840). It read: "It costs no wall clock that `ci` does not already cost,
+# since `depends` runs its entries in parallel." That is an assertion about a cost,
+# in a repository whose non-negotiable rule 3 says a gate decides and never
+# estimates, and it is false.
+#
+# Measured 2026-09-19, quiet 4-core container, each suite ALONE with nothing else
+# running, same commit, 5570 cases and 5570 passes on both arms:
+#
+#   test:cargo   256.4s wall    980.8s summed   3.83x parallel efficiency
+#   test:musl   2261.6s wall   8750.5s summed   3.87x parallel efficiency
+#
+# 8.8x. Neither arm was contended and the two efficiencies agree, so the cost is
+# the TARGET and not the box — which is the attribution CLOUD-1840's step 4 asked
+# for and CLOUD-1839's first diagnosis got wrong. On a container where the triple
+# is not installed it is also a `rustup target add` and a full second workspace
+# compile before any of that is spent.
+#
+# `depends` running in parallel is exactly why this was the wrong place for it: a
+# lane nine times heavier than the one beside it does not disappear into the fan,
+# it BECOMES the fan, inside the gate a branch must clear before it may ask for
+# the landing lease — and roughly 45% of laps discard that gate when trunk moves.
+#
+# THE COVERAGE IS UNCHANGED, which is the half worth stating twice. `musl` stays
+# in `CI_REQUIRED_CHECKS` and `CI_ABSENT_OK_CHECKS`, its job stays on
+# `pull_request` on `ubuntu-latest`, and `test:musl` stays declared and runnable
+# by name. What moved is WHERE the suite executes, not whether. We cannot run
+# macOS or Windows locally either; `cross-check` and `darwin-link` approximate
+# them and CI runs the real suite. musl now takes the same shape, and
+# `approximated_lane` in `policy/ci-parity.rego` is the declared, checked claim
+# that says so — `cross-check` type-checks the same triple, and property 3
+# re-arms on `test:musl` the moment it stops.
 #
 # `tree-clean` is here AND in the body, and the duplication is the design
 # (CLOUD-277). Here it fails a dirty tree in seconds rather than after the ~170s
@@ -4267,7 +4292,7 @@ shell = "bash -c"
 # window, the same shape `linear-check` already has in `verify` and
 # `ready-guard`. It is deliberately NOT an hk step: `pre-commit` runs over a
 # tree that is dirty by definition.
-depends = ["tree-clean", "ci", "cross-check", "darwin-link", "test:musl", "zizmor", "semver"]
+depends = ["tree-clean", "ci", "cross-check", "darwin-link", "zizmor", "semver"]
 run = '''
 # A task body does not run under `set -e` (see rules/toolchain.md), so
 # every step whose failure changes the verdict is guarded by hand.

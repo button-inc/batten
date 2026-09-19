@@ -306,6 +306,15 @@ jobs:
             "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
       - run: mise run lint
       - run: mise exec -- cargo nextest run --workspace
+  musl:
+    name: musl
+    runs-on: ubuntu-latest
+    steps:
+      - name: Landing lease precondition
+        run: |
+          "$RUNNER_TEMP/batten-bin/batten" lease guard \
+            "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
+      - run: mise run test:musl
   final:
     name: final
     runs-on: ubuntu-latest
@@ -332,7 +341,7 @@ jobs:
 
 const MANIFEST: &str = r#"
 [env]
-CI_REQUIRED_CHECKS = "ci,final"
+CI_REQUIRED_CHECKS = "ci,musl,final"
 CI_FANIN_CHECK = "final"
 CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 
@@ -341,7 +350,20 @@ run = "mise run verify:gated"
 
 [tasks."verify:gated"]
 run = "mise run lint"
-depends = ["ci"]
+depends = ["ci", "cross-check"]
+
+# THE TWO LANES THE APPROXIMATION RELATION IS ABOUT, here for the same reason the
+# covering pair below is: `approximated_lane` lets a lane verify CANNOT AFFORD to
+# run go unnamed when the manifest declares one it can that still names the same
+# target triple, and `task admit stale` is the sensor on that claim. A fixture
+# declaring neither would report a stale admission over a tree that simply has no
+# such lanes, and every case in this file would be judging that finding instead of
+# its own subject.
+[tasks."cross-check"]
+run = "for t in x86_64-pc-windows-gnu x86_64-unknown-linux-musl; do cargo check --target \"$t\"; done"
+
+[tasks."test:musl"]
+run = "if ! cargo nextest run --workspace --target x86_64-unknown-linux-musl; then exit 1; fi"
 
 # THE TWO LANES THE COVERING RELATION IS ABOUT, AND THEY ARE A REGRESSION TERM
 # RATHER THAN SCENERY. `ci-task-parity` lets a narrowed lane go unnamed when the
@@ -465,6 +487,80 @@ fn a_ci_task_verify_does_not_run_is_refused() {
     assert!(
         !findings(&root).is_empty(),
         "a task CI runs that verify does not should be refused"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The approximation relation (CLOUD-1840): a lane verify cannot AFFORD to run,
+// exempted from the local gate by a declared lane it can that still covers the
+// same triple. Each arm shown able to fail, and each is a declared mutation.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_approximated_lane_is_not_refused_for_going_unnamed() {
+    // The positive direction, without which the three refusals below could all
+    // be produced by a relation that never admits anything.
+    let root = sound("approximation-admits");
+    assert!(
+        findings(&root).is_empty(),
+        "cross-check approximates test:musl, so the musl job is not a parity defect: {:?}",
+        findings(&root)
+    );
+}
+
+#[test]
+fn an_approximation_whose_bodies_no_longer_share_the_triple_is_refused() {
+    // The claim is about a TRIPLE, not about two names. Retarget the approximator
+    // and the reason the exemption was granted has stopped being true — which is
+    // the silent hole a declared pair is allowed in order to avoid.
+    let root = sound("approximation-stale-bodies");
+    common::write(
+        &root,
+        "mise.toml",
+        &MANIFEST.replace(
+            "for t in x86_64-pc-windows-gnu x86_64-unknown-linux-musl; do",
+            "for t in x86_64-pc-windows-gnu aarch64-apple-darwin; do",
+        ),
+    );
+    let raised = verdicts_raised(&root);
+    assert!(
+        raised.iter().any(|v| v == "task admit stale"),
+        "an approximator that stopped covering the triple should be refused: {raised:?}"
+    );
+}
+
+#[test]
+fn an_approximator_verify_never_reaches_is_still_refused() {
+    // An approximation `verify` does not run buys nothing: the local gate never
+    // executes the lane that is standing in, so the exemption is free.
+    let root = sound("approximation-unreached");
+    common::write(
+        &root,
+        "mise.toml",
+        &MANIFEST.replace(r#"depends = ["ci", "cross-check"]"#, r#"depends = ["ci"]"#),
+    );
+    let raised = verdicts_raised(&root);
+    assert!(
+        raised.iter().any(|v| v == "task admit stale"),
+        "an approximator verify never reaches should be refused: {raised:?}"
+    );
+}
+
+#[test]
+fn a_declared_approximation_for_a_task_no_job_runs_is_refused() {
+    // THE ARM THAT KEEPS THIS FROM BEING A DELETION ROUTE. Moving a lane off the
+    // local gate is only sound while CI still runs it; a declaration for a task
+    // no pull-request job runs exempts a lane nothing checks at all.
+    let root = sound("approximation-runs-nowhere");
+    common::write(
+        &root,
+        ".github/workflows/ci.yml",
+        &WORKFLOW.replace("      - run: mise run test:musl\n", ""),
+    );
+    let raised = verdicts_raised(&root);
+    assert!(
+        raised.iter().any(|v| v == "task admit stale"),
+        "an approximation for a task no job runs should be refused: {raised:?}"
     );
 }
 
@@ -683,7 +779,7 @@ fn a_roster_name_matching_no_job_is_refused() {
     common::write(
         &root,
         "mise.toml",
-        &MANIFEST.replace(r#""ci,final""#, r#""ci,final,ghost""#),
+        &MANIFEST.replace(r#""ci,musl,final""#, r#""ci,musl,final,ghost""#),
     );
     assert!(
         !findings(&root).is_empty(),
