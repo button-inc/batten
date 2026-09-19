@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.174](https://github.com/button-inc/batten/compare/v0.0.173...v0.0.174) - 2026-09-19
+
+### Fixed
+
+- *(policy)* give the stale-receipt class an exit that is not the password
+- *(policy)* a skipped fan-in is a non-answer, not a red verdict
+
 ## [0.0.173](https://github.com/button-inc/batten/compare/v0.0.172...v0.0.173) - 2026-09-19
 
 ### Fixed
