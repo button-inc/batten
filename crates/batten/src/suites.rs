@@ -42,7 +42,7 @@
 //! drift job rather than in a gate, and what the companion rule decides is
 //! MEMBERSHIP — which is deterministic — never a duration.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::Result;
@@ -203,6 +203,131 @@ pub fn derive(root: &Path, tracked: &BTreeSet<String>) -> Result<(Vec<Row>, Stri
     }
     let text = render(&rows);
     Ok((rows, text))
+}
+
+/// A path that can move a suite whose `# subject:` header does not name it.
+///
+/// **Enumerated rather than inferred, and the enumeration is the conservative
+/// direction**: a path absent from this list still has to match the narrow shape
+/// in [`select`] to avoid a wide run, so a shared input somebody forgets to add
+/// is caught by the shape test instead of slipping through.
+///
+/// `mise.toml` defines the tasks the suites invoke, `hk.pkl` defines the gate,
+/// `batten.toml` is the policy authority, and `tests/helpers` is sourced widely.
+/// Subject-intersection alone selected 7 suites for a `mise.toml` edit and
+/// skipped `tests/land.bats`, which is WORSE than running everything.
+const SHARED_INPUTS: &[&str] = &[
+    ".claude/settings.json",
+    "batten.toml",
+    "hk.pkl",
+    "mise.lock",
+    "mise.toml",
+];
+
+/// The prefix whose every path is a shared input.
+const SHARED_PREFIX: &str = "tests/helpers";
+
+/// Which suites a diff can move, or every suite and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Selection {
+    /// The suites to run, sorted.
+    pub suites: Vec<String>,
+    /// Why the selection widened to everything, or `None` where it narrowed.
+    ///
+    /// Pointer-only (rule 4): the path that forced the widening and the reason,
+    /// never a line of anybody's diff.
+    pub widened: Option<String>,
+}
+
+/// Decide which bats suites a changed set can move.
+///
+/// # THE ASYMMETRY DECIDES THE WHOLE DESIGN
+///
+/// A selection that is too WIDE costs money and is obvious in the bill. One that
+/// is too NARROW does not fail: the suites simply do not run, the count matches
+/// whatever was selected, and a regression lands green. There is no symptom. So
+/// this is a DENY-LIST, never an allow-list — selection applies only when every
+/// changed path is provably inert with respect to every other suite, and
+/// anything else runs everything.
+///
+/// Pure over its inputs, which is what lets the decision be exercised without
+/// paying for the run it gates. The caller resolves `changed`, `suites` and each
+/// suite's declared subjects; nothing here reads the filesystem.
+///
+/// An EMPTY changed set widens. It is not "nothing to run": it is a question
+/// this could not answer, because a caller running the task by hand on a clean
+/// tree still wants the suite.
+#[must_use]
+pub fn select(
+    changed: &BTreeSet<String>,
+    suites: &BTreeSet<String>,
+    subjects: &BTreeMap<String, BTreeSet<String>>,
+) -> Selection {
+    let everything = || Vec::from_iter(suites.iter().cloned());
+    if changed.is_empty() {
+        return Selection {
+            suites: everything(),
+            widened: Some(String::from("no changed paths could be computed")),
+        };
+    }
+
+    let mut selected: BTreeSet<String> = BTreeSet::new();
+    for path in changed {
+        if SHARED_INPUTS.contains(&path.as_str()) || path.starts_with(SHARED_PREFIX) {
+            return Selection {
+                suites: everything(),
+                widened: Some(format!(
+                    "{path} is an input to suites whose subject does not name it"
+                )),
+            };
+        }
+        // A suite selects itself; a `mise-tasks/` program resolves through the
+        // declared headers. Nothing is inferred from the FILENAME: CLOUD-807
+        // measured 19 of 142 suites with no same-named program and every one
+        // legitimate, so a name heuristic would both skip real work and select
+        // the wrong thing.
+        if path.starts_with("tests/") && path.ends_with(".bats") {
+            // A DELETED SUITE HAS NOTHING TO RUN. The changed set reports a
+            // removed path, and handing bats a file it cannot open is a failure
+            // rather than coverage — reachable in this very campaign, which
+            // retires suites.
+            if suites.contains(path) {
+                selected.insert(path.clone());
+            }
+            continue;
+        }
+        if !path.starts_with("mise-tasks/") {
+            return Selection {
+                suites: everything(),
+                widened: Some(format!(
+                    "{path} is outside the set selection can reason about"
+                )),
+            };
+        }
+        // The header is `# subject:` followed by whitespace-separated paths, so
+        // the match is on a WHOLE FIELD rather than a substring: `mise-tasks/land`
+        // must not select a suite whose subject is `mise-tasks/land-lock`.
+        let hits: Vec<&String> = subjects
+            .iter()
+            .filter(|(_, declared)| declared.contains(path))
+            .map(|(suite, _)| suite)
+            .collect();
+        // A path under `mise-tasks/` that no suite declares as its subject is a
+        // program nothing covers, or a header that has rotted. Either way this
+        // cannot say which suites it moves, and could-not-look widens.
+        if hits.is_empty() {
+            return Selection {
+                suites: everything(),
+                widened: Some(format!("no suite declares {path} as its subject")),
+            };
+        }
+        selected.extend(hits.into_iter().cloned());
+    }
+
+    Selection {
+        suites: selected.into_iter().collect(),
+        widened: None,
+    }
 }
 
 /// Where the corpus is written.

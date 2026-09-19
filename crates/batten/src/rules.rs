@@ -10511,7 +10511,7 @@ fn undeclared_growth(
 /// winning. Two declarations naming different subjects then require BOTH to die,
 /// which is the refusing direction: a stray line can only make a retirement
 /// harder to buy, never easier.
-fn declared_subject(text: &str, token: &str) -> BTreeSet<String> {
+pub(crate) fn declared_subject(text: &str, token: &str) -> BTreeSet<String> {
     text.lines()
         .filter_map(|line| line.strip_prefix(token))
         .flat_map(str::split_whitespace)

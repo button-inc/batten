@@ -552,6 +552,24 @@ expression: stdout_of(&output)
             }
           ],
           "subcommands": []
+        },
+        {
+          "path": "ci suites",
+          "id": "ci.suites",
+          "about": "Name the bats suites a diff can move, or every suite where it cannot prove one inert",
+          "effect": "read",
+          "data_channel": true,
+          "flags": [
+            {
+              "name": "base",
+              "short": null,
+              "long": "base",
+              "takes_value": true,
+              "positional": false,
+              "help": "The revision this checkout is diffed against"
+            }
+          ],
+          "subcommands": []
         }
       ]
     },
@@ -3417,6 +3435,10 @@ expression: stdout_of(&output)
     {
       "id": "ci.slow-needed",
       "path": "ci slow-needed"
+    },
+    {
+      "id": "ci.suites",
+      "path": "ci suites"
     },
     {
       "id": "claim.keys",

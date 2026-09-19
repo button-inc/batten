@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-ci-suites 1  batten 
+.SH NAME
+batten\-ci\-suites \- Name the bats suites a diff can move, or every suite where it cannot prove one inert
+.SH SYNOPSIS
+\fBbatten ci suites\fR [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-base\fR> 
+.SH DESCRIPTION
+Name the bats suites a diff can move, or every suite where it cannot prove one inert
+.SH OPTIONS
+.TP
+\fB\-\-base\fR
+The revision this checkout is diffed against
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

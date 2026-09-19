@@ -1550,12 +1550,6 @@ pub enum ConfigCommand {
     },
 }
 
-/// Diagnoses of `doctor` (house style §2: the verb nests focused
-/// sub-diagnostics).
-///
-/// [`DoctorCommand::Diagnose`] is what a bare `batten doctor` selects, so adding
-/// a sub-verb did not turn the parent into a noun that refuses to answer — house
-/// style §8 promises bare `doctor` validates the resolved config, and
 /// The `ci` sub-verbs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -1565,8 +1559,23 @@ pub enum CiCommand {
         /// The revision this checkout is diffed against.
         base: String,
     },
+    /// Which bats suites a diff can move (CLOUD-1716).
+    ///
+    /// APPENDED LAST, for the reason every enum here records: no `repr`, so a
+    /// variant beside its siblings shifts every later discriminant and
+    /// `mise run semver` reads that as a break the crate has to declare.
+    Suites {
+        /// The revision this checkout is diffed against.
+        base: String,
+    },
 }
 
+/// Diagnoses of `doctor` (house style §2: the verb nests focused
+/// sub-diagnostics).
+///
+/// [`DoctorCommand::Diagnose`] is what a bare `batten doctor` selects, so adding
+/// a sub-verb did not turn the parent into a noun that refuses to answer — house
+/// style §8 promises bare `doctor` validates the resolved config, and
 /// `surface::is_noun` is what keeps that promise structural.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -2037,10 +2046,13 @@ fn doctor_of(matches: &ArgMatches) -> DoctorCommand {
     }
 }
 
-/// The  sub-verb a parse resolved to.
+/// The `ci` sub-verb a parse resolved to.
 fn ci_of(matches: &ArgMatches) -> Option<CiCommand> {
     match matches.subcommand()? {
         ("slow-needed", matches) => Some(CiCommand::SlowNeeded {
+            base: matches.get_one::<String>("base").cloned()?,
+        }),
+        ("suites", matches) => Some(CiCommand::Suites {
             base: matches.get_one::<String>("base").cloned()?,
         }),
         _ => None,

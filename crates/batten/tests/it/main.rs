@@ -78,6 +78,7 @@ mod ci_hygiene;
 mod ci_parity;
 mod ci_slow_needed;
 mod ci_suite_lane;
+mod ci_suites;
 mod ci_tools;
 mod claim;
 mod claim_carry;

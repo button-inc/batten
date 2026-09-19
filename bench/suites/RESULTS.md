@@ -6,32 +6,31 @@ runner measured it; the suite runs `--no-parallelize-within-files`, so a
 file's number is its own serial cost and is what an author adding a case
 to it pays.
 
-- suites: 68
-- serial total: 160.7s
+- suites: 67
+- serial total: 158.8s
 
 | seconds | share | suite |
 | ---: | ---: | --- |
-| 20.7 | 12.9% | `tests/graph-check.bats` |
-| 12.1 | 7.5% | `tests/board-diff-overlap.bats` |
+| 20.7 | 13.0% | `tests/graph-check.bats` |
+| 12.1 | 7.6% | `tests/board-diff-overlap.bats` |
 | 8.3 | 5.2% | `tests/ready-lint.bats` |
 | 8.0 | 5.0% | `tests/token-bench.bats` |
-| 7.3 | 4.5% | `tests/board-sweep.bats` |
+| 7.3 | 4.6% | `tests/board-sweep.bats` |
 | 6.9 | 4.3% | `tests/released.bats` |
 | 5.9 | 3.7% | `tests/in-progress-drain.bats` |
-| 5.7 | 3.5% | `tests/release-tracking-check.bats` |
-| 5.5 | 3.4% | `tests/release-assets-check.bats` |
+| 5.7 | 3.6% | `tests/release-tracking-check.bats` |
+| 5.5 | 3.5% | `tests/release-assets-check.bats` |
 | 5.0 | 3.1% | `tests/mcp-allow-check.bats` |
 | 4.8 | 3.0% | `tests/landed-check.bats` |
-| 4.7 | 2.9% | `tests/sbom.bats` |
+| 4.7 | 3.0% | `tests/sbom.bats` |
 | 4.0 | 2.5% | `tests/step-receipt.bats` |
 | 3.8 | 2.4% | `tests/closing-key-check.bats` |
-| 3.6 | 2.2% | `tests/land-divergence.bats` |
+| 3.6 | 2.3% | `tests/land-divergence.bats` |
 | 3.5 | 2.2% | `tests/ntia-check.bats` |
 | 3.5 | 2.2% | `tests/ready-cites-check.bats` |
 | 3.0 | 1.9% | `tests/lint-rego.bats` |
-| 2.8 | 1.7% | `tests/hk-selection.bats` |
+| 2.8 | 1.8% | `tests/hk-selection.bats` |
 | 2.6 | 1.6% | `tests/install.bats` |
-| 1.9 | 1.2% | `tests/suite-select.bats` |
 | 1.8 | 1.1% | `tests/finding-sink-check.bats` |
 | 1.8 | 1.1% | `tests/lint-deno.bats` |
 | 1.7 | 1.1% | `tests/reclaim-census.bats` |
@@ -41,7 +40,7 @@ to it pays.
 | 1.5 | 0.9% | `tests/ready-lint-deferral.bats` |
 | 1.4 | 0.9% | `tests/install-check.bats` |
 | 1.3 | 0.8% | `tests/spawn-census.bats` |
-| 1.2 | 0.7% | `tests/verify.bats` |
+| 1.2 | 0.8% | `tests/verify.bats` |
 | 1.1 | 0.7% | `tests/perf-record.bats` |
 | 1.1 | 0.7% | `tests/land-divergence-assert.bats` |
 | 1.1 | 0.7% | `tests/nonverdict-scan.bats` |
@@ -65,10 +64,10 @@ to it pays.
 | 0.5 | 0.3% | `tests/board-payloads.bats` |
 | 0.5 | 0.3% | `tests/commit-convention.bats` |
 | 0.5 | 0.3% | `tests/connector-allow-guard.bats` |
-| 0.4 | 0.2% | `tests/sonar-gate.bats` |
-| 0.4 | 0.2% | `tests/release-due.bats` |
-| 0.4 | 0.2% | `tests/serena-mcp.bats` |
-| 0.4 | 0.2% | `tests/nonverdict-assert.bats` |
+| 0.4 | 0.3% | `tests/sonar-gate.bats` |
+| 0.4 | 0.3% | `tests/release-due.bats` |
+| 0.4 | 0.3% | `tests/serena-mcp.bats` |
+| 0.4 | 0.3% | `tests/nonverdict-assert.bats` |
 | 0.3 | 0.2% | `tests/transcript-corpus-check.bats` |
 | 0.3 | 0.2% | `tests/connector-allow-resolve.bats` |
 | 0.2 | 0.1% | `tests/git-hook.bats` |
