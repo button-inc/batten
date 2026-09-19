@@ -639,6 +639,11 @@
           "description": "[`crate::lease::Asked::Successor`] — which branch the live holder\nadmitted behind it, on stdout, or nothing where no reservation stands.",
           "type": "string",
           "const": "lease-successor"
+        },
+        {
+          "description": "[`crate::ready::named_paths`] — which tracked paths an issue body names.\n\n**Named for the question rather than for the retired program** (rule 1):\n\"the paths this row names\" is a statement about a tracker body, where\n`board-diff-overlap` was one repository's file name for a sensor that\nalso had a second mode nothing reached.",
+          "type": "string",
+          "const": "named-paths"
         }
       ]
     },

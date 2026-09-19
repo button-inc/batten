@@ -372,6 +372,13 @@ pub enum Ask {
     /// [`crate::lease::Asked::Successor`] — which branch the live holder
     /// admitted behind it, on stdout, or nothing where no reservation stands.
     LeaseSuccessor,
+    /// [`crate::ready::named_paths`] — which tracked paths an issue body names.
+    ///
+    /// **Named for the question rather than for the retired program** (rule 1):
+    /// "the paths this row names" is a statement about a tracker body, where
+    /// `board-diff-overlap` was one repository's file name for a sensor that
+    /// also had a second mode nothing reached.
+    NamedPaths,
 }
 
 /// What a recorder reads back from a program it ran.
@@ -700,6 +707,9 @@ pub fn evaluate(value: &Value, context: &Context<'_>) -> Option<serde_json::Valu
                     context.root,
                     context.now,
                 )?,
+                // The payload IS the subject here, unlike both lease arms: the
+                // question is about the body the tracker stored.
+                Ask::NamedPaths => crate::ready::named_paths(&payload, context.root)?,
             };
             read_back(read, status, &out)
         }

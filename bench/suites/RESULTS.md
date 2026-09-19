@@ -6,47 +6,46 @@ runner measured it; the suite runs `--no-parallelize-within-files`, so a
 file's number is its own serial cost and is what an author adding a case
 to it pays.
 
-- suites: 67
-- serial total: 158.8s
+- suites: 66
+- serial total: 146.7s
 
 | seconds | share | suite |
 | ---: | ---: | --- |
-| 20.7 | 13.0% | `tests/graph-check.bats` |
-| 12.1 | 7.6% | `tests/board-diff-overlap.bats` |
-| 8.3 | 5.2% | `tests/ready-lint.bats` |
-| 8.0 | 5.0% | `tests/token-bench.bats` |
-| 7.3 | 4.6% | `tests/board-sweep.bats` |
-| 6.9 | 4.3% | `tests/released.bats` |
-| 5.9 | 3.7% | `tests/in-progress-drain.bats` |
-| 5.7 | 3.6% | `tests/release-tracking-check.bats` |
-| 5.5 | 3.5% | `tests/release-assets-check.bats` |
-| 5.0 | 3.1% | `tests/mcp-allow-check.bats` |
-| 4.8 | 3.0% | `tests/landed-check.bats` |
-| 4.7 | 3.0% | `tests/sbom.bats` |
-| 4.0 | 2.5% | `tests/step-receipt.bats` |
-| 3.8 | 2.4% | `tests/closing-key-check.bats` |
-| 3.6 | 2.3% | `tests/land-divergence.bats` |
-| 3.5 | 2.2% | `tests/ntia-check.bats` |
-| 3.5 | 2.2% | `tests/ready-cites-check.bats` |
-| 3.0 | 1.9% | `tests/lint-rego.bats` |
-| 2.8 | 1.8% | `tests/hk-selection.bats` |
-| 2.6 | 1.6% | `tests/install.bats` |
-| 1.8 | 1.1% | `tests/finding-sink-check.bats` |
-| 1.8 | 1.1% | `tests/lint-deno.bats` |
-| 1.7 | 1.1% | `tests/reclaim-census.bats` |
-| 1.6 | 1.0% | `tests/spec-ref-check.bats` |
-| 1.6 | 1.0% | `tests/deferral-check.bats` |
-| 1.5 | 0.9% | `tests/signing-posture.bats` |
-| 1.5 | 0.9% | `tests/ready-lint-deferral.bats` |
-| 1.4 | 0.9% | `tests/install-check.bats` |
-| 1.3 | 0.8% | `tests/spawn-census.bats` |
+| 20.7 | 14.1% | `tests/graph-check.bats` |
+| 8.3 | 5.7% | `tests/ready-lint.bats` |
+| 8.0 | 5.5% | `tests/token-bench.bats` |
+| 7.3 | 5.0% | `tests/board-sweep.bats` |
+| 6.9 | 4.7% | `tests/released.bats` |
+| 5.9 | 4.0% | `tests/in-progress-drain.bats` |
+| 5.7 | 3.9% | `tests/release-tracking-check.bats` |
+| 5.5 | 3.7% | `tests/release-assets-check.bats` |
+| 5.0 | 3.4% | `tests/mcp-allow-check.bats` |
+| 4.8 | 3.3% | `tests/landed-check.bats` |
+| 4.7 | 3.2% | `tests/sbom.bats` |
+| 4.0 | 2.7% | `tests/step-receipt.bats` |
+| 3.8 | 2.6% | `tests/closing-key-check.bats` |
+| 3.6 | 2.5% | `tests/land-divergence.bats` |
+| 3.5 | 2.4% | `tests/ntia-check.bats` |
+| 3.5 | 2.4% | `tests/ready-cites-check.bats` |
+| 3.0 | 2.0% | `tests/lint-rego.bats` |
+| 2.8 | 1.9% | `tests/hk-selection.bats` |
+| 2.6 | 1.8% | `tests/install.bats` |
+| 1.8 | 1.2% | `tests/finding-sink-check.bats` |
+| 1.8 | 1.2% | `tests/lint-deno.bats` |
+| 1.7 | 1.2% | `tests/reclaim-census.bats` |
+| 1.6 | 1.1% | `tests/spec-ref-check.bats` |
+| 1.6 | 1.1% | `tests/deferral-check.bats` |
+| 1.5 | 1.0% | `tests/signing-posture.bats` |
+| 1.5 | 1.0% | `tests/ready-lint-deferral.bats` |
+| 1.4 | 1.0% | `tests/install-check.bats` |
+| 1.3 | 0.9% | `tests/spawn-census.bats` |
 | 1.2 | 0.8% | `tests/verify.bats` |
 | 1.1 | 0.7% | `tests/perf-record.bats` |
 | 1.1 | 0.7% | `tests/land-divergence-assert.bats` |
 | 1.1 | 0.7% | `tests/nonverdict-scan.bats` |
 | 1.1 | 0.7% | `tests/linear-check.bats` |
-| 1.0 | 0.6% | `tests/done-check.bats` |
-| 1.0 | 0.6% | `tests/release-backfill.bats` |
+| 1.0 | 0.7% | `tests/done-check.bats` |
+| 1.0 | 0.7% | `tests/release-backfill.bats` |
 | 0.9 | 0.6% | `tests/evaluator-closure-check.bats` |
 | 0.9 | 0.6% | `tests/attestation-check.bats` |
 | 0.9 | 0.6% | `tests/commit-attribution.bats` |
@@ -54,10 +53,10 @@ to it pays.
 | 0.8 | 0.5% | `tests/pr-unsubscribed.bats` |
 | 0.8 | 0.5% | `tests/done-pr-check.bats` |
 | 0.8 | 0.5% | `tests/sbom-binary.bats` |
-| 0.7 | 0.4% | `tests/duplicate-close-check.bats` |
-| 0.7 | 0.4% | `tests/mcp-attach-check.bats` |
-| 0.7 | 0.4% | `tests/timeout-drift.bats` |
-| 0.7 | 0.4% | `tests/mcp-timeout-budget.bats` |
+| 0.7 | 0.5% | `tests/duplicate-close-check.bats` |
+| 0.7 | 0.5% | `tests/mcp-attach-check.bats` |
+| 0.7 | 0.5% | `tests/timeout-drift.bats` |
+| 0.7 | 0.5% | `tests/mcp-timeout-budget.bats` |
 | 0.6 | 0.4% | `tests/macos-link-check.bats` |
 | 0.6 | 0.4% | `tests/checksums.bats` |
 | 0.5 | 0.3% | `tests/branch-age-check.bats` |

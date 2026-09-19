@@ -205,6 +205,7 @@ mod module_map;
 mod msrv_pin_agreement;
 mod mutate;
 mod mutation_declared_case;
+mod named_paths;
 mod narrow_adoption;
 mod nextest_slow;
 mod no_doctests;
