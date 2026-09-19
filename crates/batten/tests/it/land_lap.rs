@@ -247,6 +247,7 @@ fn every_lap_ending_is_reachable_from_some_step_and_code() {
                 Some(TapVerdict::Green),
                 Some(TapVerdict::Red),
                 Some(TapVerdict::Pending),
+                Some(TapVerdict::DeadEnd),
             ] {
                 for basis in [land::Basis::Own, land::Basis::Borrowed] {
                     let progress = land::progress_of(step, code, verdict, basis);
@@ -270,6 +271,75 @@ fn every_lap_ending_is_reachable_from_some_step_and_code() {
         assert!(
             seen.contains(&ending),
             "{ending:?} is unreachable from every (step, code, verdict): a lap can never end that way"
+        );
+    }
+}
+
+/// **CLOUD-497: A DEAD END STOPS THE LAP, AND AN UNANSWERED WAIT STILL LAPS.**
+///
+/// The half the exit code cannot carry, and the whole reason `Waited::DeadEnd` is
+/// its own variant. `(Wait, Internal)` is `Progress::Lap` — correctly, for an
+/// unanswered wait, whose next lap is how it learns. A dead end arrives at the
+/// SAME code with the opposite fact: the wait learned something conclusive, and
+/// lapping re-asks a question that is closed.
+///
+/// Measured cost of getting it wrong, from the row: `land` holds
+/// `refs/heads/batten-land-lock` for the lap's duration and its rolling TTL
+/// renews from a live process rather than from progress, so a branch lapping
+/// forever in an unrecognised dead end stopped EVERY other session from landing
+/// for as long as its process stayed alive. `Progress::Stop` is what unwinds
+/// through `Compensation::ReleaseLease`, so the stop is also the release.
+///
+/// The two mirrors are what make this a statement about the verdict rather than
+/// about the step: same step, same code, three readings, and only one stops.
+#[test]
+fn a_dead_end_wait_stops_the_lap_where_an_unanswered_one_laps() {
+    use ExitCode::Internal;
+
+    for basis in [land::Basis::Own, land::Basis::Borrowed] {
+        assert_eq!(
+            land::progress_of(Step::Wait, Internal, Some(TapVerdict::DeadEnd), basis),
+            Progress::Stop,
+            "a closed masked set is not a question another lap can answer ({basis:?})"
+        );
+        // MIRROR ONE: the ran-out-of-asks reading, which is the same code and is
+        // right to lap. Collapsing the two is the defect, so they are asserted
+        // together rather than in separate cases a reader can meet apart.
+        assert_eq!(
+            land::progress_of(Step::Wait, Internal, Some(TapVerdict::Pending), basis),
+            Progress::Lap,
+            "an unanswered wait has learned nothing, and the next lap is how it learns"
+        );
+        // MIRROR TWO: a reading nobody took. Never a stop — stranding a branch on
+        // a failure to look is the posture `closes_the_tap` refuses one door over.
+        assert_eq!(
+            land::progress_of(Step::Wait, Internal, None, basis),
+            Progress::Lap,
+            "a could-not-look must not end a landing"
+        );
+    }
+
+    // AND IT REACHES EXACTLY ONE CELL. The verdict is a discriminator on the
+    // wait's own refusal, never a veto the driver can carry into another step:
+    // `seen` is whatever the LAST wait saw, so a dead end still in hand during a
+    // later push must not stop that push. This is the defect `progress_of`'s own
+    // comment records for the red cell, asserted for this one.
+    for step in [
+        Step::Replay,
+        Step::Verify,
+        Step::Ready,
+        Step::Push,
+        Step::FastForward,
+    ] {
+        assert_eq!(
+            land::progress_of(
+                step,
+                ExitCode::Success,
+                Some(TapVerdict::DeadEnd),
+                land::Basis::Own
+            ),
+            land::progress_of(step, ExitCode::Success, None, land::Basis::Own),
+            "{step:?} at Success must read the same with a stale dead end in hand"
         );
     }
 }

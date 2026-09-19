@@ -499,6 +499,24 @@ pub enum Waited {
         /// Where the base points now.
         base: String,
     },
+    /// The green question answered, and the answer was that no answer is coming.
+    ///
+    /// **THE STATE THAT HELD THE FLEET'S LEASE (CLOUD-497).** Every required check
+    /// is terminal and at least one required name's newest run is masked, so the
+    /// reading cannot change without a new event. [`Waited::Unanswered`] laps, and
+    /// lapping this re-asks a question already closed while
+    /// `refs/heads/batten-land-lock` renews off a live process rather than off
+    /// progress — so one branch in an unrecognised dead end stopped every other
+    /// session from landing for as long as its process stayed alive.
+    ///
+    /// **Separate from `Unanswered` although both exit `3`,** because the exit
+    /// code is not the discriminator here and never was: `seen` is. That is
+    /// already how a red reading is told from a stale one in the same cell, and
+    /// [`progress_of`] is the one table over the pair.
+    DeadEnd {
+        /// Which required names are masked, as pointers.
+        findings: Vec<crate::checks_green::Finding>,
+    },
     /// Neither question answered inside the lap's bound.
     ///
     /// **Exit `3`'s reading, and not an error.** A wait that ran out of asks has
@@ -633,6 +651,16 @@ pub fn wait(
                     Ok(crate::checks_green::Verdict::Red(findings)) => {
                         stop.store(true, std::sync::atomic::Ordering::Relaxed);
                         drop(green.send(Waited::Red { findings }));
+                        return;
+                    }
+                    // AND THE THIRD TERMINAL ANSWER (CLOUD-497): a closed required
+                    // set with a masked name. It ends the wait for the same reason
+                    // the two above do — nothing further is coming — and it must
+                    // end it HERE rather than by running out of asks, because
+                    // running out spells `Unanswered`, which laps.
+                    Ok(crate::checks_green::Verdict::DeadEnd(findings)) => {
+                        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                        drop(green.send(Waited::DeadEnd { findings }));
                         return;
                     }
                     // Pending is the state this loop exists to sit in, and a
@@ -1510,6 +1538,26 @@ pub const fn progress_of(
     // can produce, since `seen` is whatever the last wait saw. The qualifier
     // reaches exactly one cell: the wait's own `2`.
     if let (Step::Wait, crate::exit::ExitCode::Violation, Some(TapVerdict::Red)) =
+        (step, code, seen)
+    {
+        return Progress::Stop;
+    }
+    // AND THE CELL THE FLEET PAID FOR (CLOUD-497). `Step::Wait` at `Internal` is
+    // `Progress::Lap` below, and it is right to be: an unanswered wait has learned
+    // nothing, and the next lap is how it learns. A DEAD END IS THE SAME CODE AND
+    // THE OPPOSITE FACT — the wait learned something conclusive, and lapping
+    // re-asks a question that is closed. The two are told apart by `seen`, exactly
+    // as red is told from stale one cell up; the exit code cannot do it, and a
+    // fifth code for it would be the per-verb exception rule 5 forbids.
+    //
+    // ROUTED TO `Stop` RATHER THAN A FOURTH `Progress`, and that is the whole
+    // reason to pick `Stop`: the lease release is not new code, it is
+    // `Compensation::ReleaseLease` unwinding on the way out. A branch wedged here
+    // held `refs/heads/batten-land-lock` against every other session, because the
+    // lease's rolling TTL renews from a live process rather than from progress —
+    // so the stop IS the release, and inventing a variant that did not unwind
+    // would have fixed the poll and kept the fleet-scale half of the defect.
+    if let (Step::Wait, crate::exit::ExitCode::Internal, Some(TapVerdict::DeadEnd)) =
         (step, code, seen)
     {
         return Progress::Stop;
@@ -2458,7 +2506,14 @@ pub fn closes_the_tap(state: &Tap) -> bool {
         // COULD NOT LOOK IS NOT RED. `None` is a reading nobody took, and
         // draft-ing on it would punish a network blip with a stopped branch.
         None | Some(TapVerdict::Green) => false,
-        Some(TapVerdict::Red | TapVerdict::Pending) => true,
+        // A DEAD END JOINS THE TWO THAT RE-DRAFT, and it is the arm with the
+        // strongest claim to (CLOUD-497). `Red` and `Pending` re-draft because the
+        // resume needs a fresh run whatever happens; for a dead end that is not a
+        // prediction but the definition — the set is closed, so a fresh run is the
+        // ONLY thing that can change it, and re-drafting is half of how one is
+        // bought. Leaving it ready would let every later push spend a runner on a
+        // head whose verdict is already masked.
+        Some(TapVerdict::Red | TapVerdict::Pending | TapVerdict::DeadEnd) => true,
     }
 }
 
@@ -2480,6 +2535,7 @@ pub const fn tap_verdict(waited: &Waited) -> Option<TapVerdict> {
         Waited::Green { .. } => Some(TapVerdict::Green),
         Waited::Red { .. } => Some(TapVerdict::Red),
         Waited::Unanswered => Some(TapVerdict::Pending),
+        Waited::DeadEnd { .. } => Some(TapVerdict::DeadEnd),
         Waited::Stale { .. } => None,
     }
 }
@@ -2500,9 +2556,13 @@ pub struct Tap {
 
 /// The checks reading, narrowed to what the tap turns on.
 ///
-/// **Three values rather than [`crate::checks_green::Verdict`] itself**, because
+/// **Four values rather than [`crate::checks_green::Verdict`] itself**, because
 /// the tap does not care WHICH check failed or why a pending one is pending —
 /// and a decision that carried the findings would invite a predicate over them.
+///
+/// The fourth is CLOUD-497's, and it is here rather than folded into `Pending`
+/// because [`progress_of`] reads this same type: the tap wants the two treated
+/// alike, and the lap must not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TapVerdict {
     /// Every required check terminal and green.
@@ -2511,6 +2571,8 @@ pub enum TapVerdict {
     Red,
     /// Not an answer yet.
     Pending,
+    /// Not an answer, and not going to be one (CLOUD-497).
+    DeadEnd,
 }
 
 impl TapVerdict {
@@ -2521,6 +2583,7 @@ impl TapVerdict {
             crate::checks_green::Verdict::Green => Self::Green,
             crate::checks_green::Verdict::Red(_) => Self::Red,
             crate::checks_green::Verdict::Pending(_) => Self::Pending,
+            crate::checks_green::Verdict::DeadEnd(_) => Self::DeadEnd,
         }
     }
 }
@@ -2694,6 +2757,10 @@ pub fn buys_a_matrix(
             crate::checks_green::Pending::NoVerdict(_)
             | crate::checks_green::Pending::Unregistered(_) => Spend::Refire,
         },
+        // The same answer `NoVerdict` gets, for the same reason and with more
+        // certainty (CLOUD-497): this IS the masked terminal set that arm was
+        // guessing at, so a re-fire is the one thing that can move it.
+        Some(crate::checks_green::Verdict::DeadEnd(_)) => Spend::Refire,
     }
 }
 
@@ -4045,6 +4112,39 @@ mod tests {
         assert_eq!(
             TapVerdict::of(&Verdict::Pending(Pending::Unregistered(Vec::new()))),
             TapVerdict::Pending
+        );
+        assert_eq!(
+            TapVerdict::of(&Verdict::DeadEnd(Vec::new())),
+            TapVerdict::DeadEnd
+        );
+    }
+
+    /// **THE RE-FIRE IS WHERE A DEAD END'S REMEDY LIVES (CLOUD-497), and it is
+    /// what lets the poll stop without losing the mechanism.**
+    ///
+    /// `pr_watch` used to sit on a closed masked set because "the next lap
+    /// re-fires the ready and the fresh run supersedes these by name". That is
+    /// the right remedy in the wrong place: a poll cannot perform a re-fire, so
+    /// waiting for one it would never cause was the hang. Stopping is only safe
+    /// if the thing that CAN re-fire still does — so this asserts the spend, and
+    /// the mirror asserts that a run in flight is still never cancelled for one.
+    #[test]
+    fn a_dead_end_buys_the_fresh_run_and_a_running_set_still_buys_nothing() {
+        use crate::checks_green::{Pending, Verdict};
+
+        assert_eq!(
+            buys_a_matrix(Some(false), Some(&Verdict::DeadEnd(Vec::new()))),
+            Spend::Refire,
+            "nothing else can move a closed masked set"
+        );
+        let running = Verdict::Pending(Pending::Running {
+            pending: 1,
+            graded: 0,
+        });
+        assert_eq!(
+            buys_a_matrix(Some(false), Some(&running)),
+            Spend::Nothing,
+            "re-firing here cancels the run the lap just paid for"
         );
     }
 

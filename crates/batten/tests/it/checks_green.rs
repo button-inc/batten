@@ -152,15 +152,25 @@ fn a_green_head_exits_success() {
 #[test]
 fn every_non_green_state_exits_non_zero() {
     // THE SAFETY PROPERTY, and it is asserted over the states rather than over
-    // one of them: a reader that ignores stdout must hold on all four. Under any
+    // one of them: a reader that ignores stdout must hold on all five. Under any
     // mapping that gave one of these a `0`, `land` would fast-forward a head
     // nothing had judged — CLOUD-337, re-introduced by the port meant to
     // preserve it.
-    let cases: [(&str, &str); 4] = [
+    //
+    // THE FIFTH IS CLOUD-497'S, and it is the one a new arm is likeliest to get
+    // wrong: a dead end exits `3`, which is the code a reading that could not be
+    // TAKEN also carries, and `3` is a long way from `0` in every direction but
+    // the one that matters here. Swept with the rest so the safety property is
+    // total over the states rather than over the ones that existed first.
+    let cases: [(&str, &str); 5] = [
         ("a required check failed", "completed\tfailure\tci\t\t0"),
         ("a draft-era skip", "completed\tskipped\tci\t\t0"),
         ("a run still going", "in_progress\t-\tci\t\t0"),
         ("nothing registered yet", ""),
+        (
+            "a closed set with a masked name",
+            "completed\tskipped\tci\t\t1\ncompleted\tsuccess\tperf\t\t2\ncompleted\tsuccess\tfinal\t\t3",
+        ),
     ];
     for (what, reading) in cases {
         let (code, stdout, _) = green(reading, &roster());
@@ -269,16 +279,64 @@ fn a_non_fanin_failure_over_cancelled_siblings_is_the_verdict() {
 #[test]
 fn an_unnamed_fanin_leaves_every_failure_manufacturable() {
     // The safe default, and the half easiest to lose in a port: with no fan-in
-    // named this is CLOUD-363's ordering intact, so the same reading answers
-    // "pending" rather than promoting a failure that a cancellation may have
-    // manufactured.
+    // named this is CLOUD-363's ordering intact, so the same reading does not
+    // promote a failure that a cancellation may have manufactured.
+    //
+    // `3` AND "dead-end" SINCE CLOUD-497, and what this case pins is unchanged.
+    // Every name here is terminal and none is unregistered, so the reading is
+    // closed — it was the wedge itself before the split, a set that said "ask
+    // again" to a question nothing would answer. The property asserted is still
+    // that no failure is promoted to red; only the spelling of the non-answer
+    // moved, and it moved in the direction that stops the poll.
     let reading = "completed\tfailure\tci\t\t0\ncompleted\tcancelled\tperf\t\t0\ncompleted\tcancelled\tfinal\t\t0";
     let (code, stdout, _) = green(reading, &["--required", REQUIRED, "--answered", ANSWERED]);
-    assert_eq!(code, 2, "still not landable either way");
+    assert_eq!(code, 3, "not landable, and not worth another look");
+    // THE VERDICT WORD, NOT THE SUBSTRING. `contains("red")` matches inside
+    // "requi**red** check" and passes over any output at all — the anchored
+    // spelling is the one that discriminates.
     assert!(
-        stdout.contains("pending"),
+        !stdout.contains("checks green: red"),
         "no failure is promoted: {stdout}"
     );
+    assert!(stdout.contains("checks green: dead-end"), "{stdout}");
+}
+
+/// CLOUD-497 at the boundary: a closed masked set exits `3`, an open one does not.
+///
+/// The unit tier decides the predicate; this asserts the thing only a process can
+/// show — that the distinction survives as an EXIT CODE, which is all `ci-wait`'s
+/// adapter and `land`'s lap can read. A split that reached the right verdict and
+/// then collapsed both onto `2` at the boundary would fix nothing: the poll would
+/// still ask again.
+///
+/// Measured input, PR #378 head `f5ac94f8`: `ci`'s newest run is a `skipped`
+/// minted six minutes after its own success, over siblings that graded.
+#[test]
+fn a_closed_masked_set_exits_three_and_an_open_one_does_not() {
+    let closed = "completed\tskipped\tci\t2026-08-12T21:58:23Z\t94276140437\n\
+                  completed\tsuccess\tperf\t2026-08-12T21:52:23Z\t94274706740\n\
+                  completed\tsuccess\tfinal\t2026-08-12T21:59:13Z\t94276319070";
+    let (code, stdout, stderr) = green(closed, &roster());
+    assert_eq!(code, 3, "a closed masked set is not worth another look");
+    assert!(stdout.contains("checks green: dead-end"), "{stdout}");
+    assert!(stdout.contains("ci skipped"), "{stdout}");
+    // The remedy is on stderr and names what buys a fresh run, because a reader
+    // who stops here has to do something and the code alone cannot say what.
+    assert!(stderr.contains("re-ready"), "{stderr}");
+
+    // MIRROR: the same mask with one sibling still running is `2` and "pending",
+    // so the poller keeps waiting — unbounded, exactly as before this row.
+    let open = "completed\tskipped\tci\t2026-08-12T21:58:23Z\t94276140437\n\
+                in_progress\t-\tperf\t2026-08-12T21:52:23Z\t94274706740\n\
+                completed\tsuccess\tfinal\t2026-08-12T21:59:13Z\t94276319070";
+    let (code, stdout, _) = green(open, &roster());
+    assert_eq!(code, 2, "an answer may still arrive: {stdout}");
+    assert!(stdout.contains("checks green: pending"), "{stdout}");
+
+    // MIRROR: a terminal set with nothing masked is still green, so the new arm
+    // costs the ordinary landing path nothing.
+    let (code, _, _) = green(&all_green(), &roster());
+    assert_eq!(code, 0);
 }
 
 #[test]

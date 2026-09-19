@@ -17,8 +17,18 @@
 //! | --- | --- |
 //! | [`Verdict::Green`] | `Success` |
 //! | [`Verdict::Red`] and [`Verdict::Pending`] | `Violation` — this head is not landable |
+//! | [`Verdict::DeadEnd`] | `Internal` — no answer, and none is coming |
 //! | a roster that will not resolve | `Usage` |
 //! | a reading that could not be taken | `Internal` |
+//!
+//! **[`Verdict::DeadEnd`] shares `Internal` with a reading that could not be
+//! taken, and shares it correctly** (CLOUD-497). `Internal` already means "could
+//! not get an answer", which is exactly what a closed set with a masked required
+//! name is; the two differ in why, and that travels on stdout as every other
+//! distinction here does. Minting a fifth code for it would be the per-verb
+//! exception non-negotiable rule 5 forbids. It is deliberately NOT `Violation`:
+//! that code says "this head is not landable", which invites a caller to ask
+//! again, and asking again is the whole defect.
 //!
 //! **Red and pending collapse onto one code deliberately.** They differ only in
 //! whether the caller should ask again, never in whether the head may land, and
@@ -62,6 +72,28 @@ pub enum Verdict {
     Red(Vec<Finding>),
     /// Not an answer yet: still running, no verdict, or never registered.
     Pending(Pending),
+    /// No answer, and no answer is coming (CLOUD-497).
+    ///
+    /// **"NOT YET" AND "NOT EVER" WERE THE SAME STATE, AND THAT IS THE DEFECT.**
+    /// Every required name is terminal, none is unregistered, and the newest run
+    /// for at least one of them carries a conclusion the caller does not count as
+    /// an answer — a draft-era `skipped`, a `cancelled`. Nothing further will be
+    /// minted for this SHA, so a poll over it is not patience; it is a hang with a
+    /// heartbeat. Measured 2026-08-12 on PR #378: forty-eight minutes on a head
+    /// whose CI was fully green, holding the landing lease against a queue, killed
+    /// by hand.
+    ///
+    /// **The distinction is terminality, never a clock.** A set with anything
+    /// still running stays [`Verdict::Pending`] and waits unbounded exactly as it
+    /// did, which is what `mem:workflow/landing-loop` requires — a wall-clock cap
+    /// reintroduces the VM-reap gap and lands as a false refusal on a slow bot.
+    /// This arm adds no bound; it recognises a set that can no longer change.
+    ///
+    /// **Its own variant rather than a flag on [`Pending`]**, whose doc means "not
+    /// an answer *yet*" and whose every caller reads it as "ask again". A boolean
+    /// inside it would leave that reading true for a reader that did not know to
+    /// look, which is the fail-open direction.
+    DeadEnd(Vec<Finding>),
 }
 
 /// Why a reading is not yet an answer. Carried rather than collapsed, because
@@ -386,6 +418,43 @@ pub fn judged(runs: &[Run], roster: &Roster) -> Vec<Finding> {
 /// Returns [`RosterError`] when the roster cannot decide anything. That is a
 /// statement about the invocation, not about the repository, which is why it is
 /// an error here and [`crate::exit::ExitCode::Usage`] at the boundary.
+///
+/// CLOUD-497's terminality split lives in the masked-bucket arm below, and all
+/// three mutations of it are declared here because that is where the source line
+/// is. The opener is `//` and not `///` for the reason [`winner`]'s own
+/// declaration states in full: a doc comment's third slash leaves the marker
+/// unmatched, and the subject silently disappears.
+///
+/// `wait-is-never-a-dead-end` deletes the rule outright, which is the mutation
+/// CLOUD-418's acceptance names. The other two delete one conjunct each, and they
+/// are what keep the case's two mirrors from being decoration: drop `pending == 0`
+/// and a skip beside a running check stops a landing whose answer was moments
+/// away; drop `unregistered.is_empty()` and a fresh SHA stops before its siblings
+/// have registered. A surviving mutant there would mean the mirror asserts
+/// nothing.
+///
+/// **RUN BY HAND, 2026-09-19, because `mutate sweep` cannot currently look at
+/// this gate.** All five `engine-checks-green` rows — the two that predate this
+/// change included — report `names-no-case`, which is a could-not-look rather
+/// than a pass: the cases they name all exist in this file, so the staged-tree
+/// cargo run is selecting none of them. That is a defect in the sweep's
+/// Rust-suite resolution rather than in these declarations, and repairing it is
+/// not this row's. So each declaration was verified directly, applied to this
+/// file with the suite run over it:
+///
+/// | mutation | reddened |
+/// | --- | --- |
+/// | `wait-is-never-a-dead-end` | the case below **and** `a_fanin_failure_over_cancelled_siblings_is_no_verdict` |
+/// | `dead-end-ignores-running` | the case below ALONE — mirror one is the only thing that sees it |
+/// | `dead-end-ignores-unregistered` | the case below **and** `a_cancelled_required_check_is_not_an_answer_either` |
+///
+/// So each conjunct is caught, and the middle row is the one worth reading: one
+/// case, one mirror, nothing else in 5,587 noticing. That is what a mirror is
+/// for, and it is also why removing either would be invisible without it.
+//MUTANT-SUITE crates/batten/src/checks_green.rs
+//MUTANT wait-is-never-a-dead-end|s@        if pending == 0 && unregistered.is_empty() {@        if false {@|a_closed_set_with_a_masked_name_is_a_dead_end_and_an_open_one_still_waits
+//MUTANT dead-end-ignores-running|s@        if pending == 0 && unregistered.is_empty() {@        if unregistered.is_empty() {@|a_closed_set_with_a_masked_name_is_a_dead_end_and_an_open_one_still_waits
+//MUTANT dead-end-ignores-unregistered|s@        if pending == 0 && unregistered.is_empty() {@        if pending == 0 {@|a_closed_set_with_a_masked_name_is_a_dead_end_and_an_open_one_still_waits
 pub fn decide(runs: &[Run], roster: &Roster) -> Result<Verdict, RosterError> {
     if roster.required.is_empty() {
         return Err(RosterError::NoRequiredChecks);
@@ -463,6 +532,26 @@ pub fn decide(runs: &[Run], roster: &Roster) -> Result<Verdict, RosterError> {
     // independent verdict. Promoting red here would put the branch back in that
     // wedge. A genuine failure leaves this bucket empty and falls through.
     if !no_verdict.is_empty() {
+        // AND HERE IS WHERE "NOT YET" SPLITS FROM "NOT EVER" (CLOUD-497). The
+        // bucket is the same one; what decides is whether anything can still
+        // arrive to change it. `pending == 0` says every registered required name
+        // has reached a conclusion, and `unregistered.is_empty()` says no required
+        // name is still to register — together, the set is closed. A masked name
+        // in a closed set will be masked forever, so the caller must stop rather
+        // than ask again.
+        //
+        // BOTH CONJUNCTS, and dropping either re-opens a wait as a stop. Without
+        // the first, a skip beside three still-running checks would stop a landing
+        // whose answer was minutes away; without the second, a fresh SHA whose
+        // first run happened to skip would stop before the rest had registered.
+        //
+        // The position is unchanged: still after `real_failed` (a red tree is a
+        // verdict, not a dead end) and still before the `graded`/`pending` test,
+        // so CLOUD-363's precedence — no-answer outranks a fan-in red — holds for
+        // both halves of the split.
+        if pending == 0 && unregistered.is_empty() {
+            return Ok(Verdict::DeadEnd(no_verdict));
+        }
         return Ok(Verdict::Pending(Pending::NoVerdict(no_verdict)));
     }
     if graded == 0 || pending > 0 {
@@ -732,12 +821,21 @@ mod tests {
     fn a_fanin_failure_over_cancelled_siblings_is_no_verdict() {
         // CLOUD-363's measured set on #293: `final failure` plus cancelled
         // siblings. `final` fans in over them, so its failure was manufactured.
+        //
+        // A DEAD END SINCE CLOUD-497, AND THE PRECEDENCE IS WHAT IS PINNED HERE.
+        // Every name is terminal and none is unregistered, so this closed set
+        // answers `DeadEnd` rather than `Pending` — but the thing CLOUD-363 asked
+        // of this case is that the fan-in's failure does NOT come back as `Red`,
+        // and that is unchanged: the split happens inside the same bucket, below
+        // the same `real_failed` test, so the promotion this refuses stays
+        // refused. Before the split this set was the wedge itself — a closed
+        // reading that spelled "ask again" forever.
         let reading = vec![
             run("completed", "cancelled", "ci", "", 0),
             run("completed", "cancelled", "perf", "", 0),
             run("completed", "failure", "final", "", 0),
         ];
-        let Ok(Verdict::Pending(Pending::NoVerdict(_))) = decide(&reading, &roster()) else {
+        let Ok(Verdict::DeadEnd(_)) = decide(&reading, &roster()) else {
             panic!("a manufactured fan-in failure is not a verdict");
         };
     }
@@ -769,7 +867,10 @@ mod tests {
             run("completed", "cancelled", "perf", "", 0),
             run("completed", "cancelled", "final", "", 0),
         ];
-        let Ok(Verdict::Pending(Pending::NoVerdict(_))) = decide(&reading, &r) else {
+        // `DeadEnd` since CLOUD-497 — a closed set — and the direction this case
+        // exists for is untouched: with no fan-in named the failure is still not
+        // promoted to `Red`, which is what "stays manufacturable" means.
+        let Ok(Verdict::DeadEnd(_)) = decide(&reading, &r) else {
             panic!("with no fan-in named, no failure is promoted");
         };
     }
@@ -820,6 +921,123 @@ mod tests {
             panic!("an unknown conclusion is not an answer");
         };
         assert_eq!(findings[0].to_string(), "ci invented_tomorrow");
+    }
+
+    /// CLOUD-497's discriminating case, and its two mirrors in the same body so
+    /// the distinction cannot be read without what bounds it.
+    ///
+    /// **The measured input.** PR #378, head `f5ac94f8`, 2026-08-12: a second,
+    /// wholly-skipped run minted six minutes AFTER the real one had passed, so
+    /// `ci`'s newest run was `skipped` over a set that was otherwise graded. Forty
+    /// eight minutes of polling a reading that could not change, holding
+    /// `refs/heads/batten-land-lock` against a queue, killed by hand.
+    ///
+    /// **Why the mirrors are in this case rather than beside it.** Each removes
+    /// exactly one conjunct of the predicate, and a reader who sees only the first
+    /// assertion cannot tell a terminality rule from a rule about skips at all:
+    ///
+    /// * **Still running beside the skip** — `pending > 0`, so a verdict may yet
+    ///   arrive. Stays `Pending`, waits unbounded, no clock introduced anywhere.
+    ///   This is the arm `mem:workflow/landing-loop` protects.
+    /// * **A required name not yet registered** — `unregistered` non-empty, so the
+    ///   set is not closed even with nothing running. Stays `Pending`, because a
+    ///   fresh SHA whose first run happens to skip must not stop a landing before
+    ///   its siblings have registered.
+    ///
+    /// Both mirrors answer `Pending::NoVerdict` and carry the SAME finding as the
+    /// dead end, which is what makes them mirrors at all: three readings that name
+    /// `ci skipped` identically, and only one of them closed.
+    ///
+    /// A `Green` mirror is not needed here: `an_all_green_set_is_green` and
+    /// `an_unrelated_check_gets_neither_a_vote_nor_a_veto` already hold that half,
+    /// and a terminal green set has an empty masked bucket so it never reaches
+    /// this branch at all.
+    #[test]
+    fn a_closed_set_with_a_masked_name_is_a_dead_end_and_an_open_one_still_waits() {
+        // CLOSED: every required name terminal, `ci` masked by a skip minted
+        // after its own success. Nothing further will be minted for this sha.
+        let closed = vec![
+            run(
+                "completed",
+                "skipped",
+                "ci",
+                "2026-08-12T21:58:23Z",
+                94_276_140_437,
+            ),
+            run(
+                "completed",
+                "success",
+                "perf",
+                "2026-08-12T21:52:23Z",
+                94_274_706_740,
+            ),
+            run(
+                "completed",
+                "success",
+                "final",
+                "2026-08-12T21:59:13Z",
+                94_276_319_070,
+            ),
+        ];
+        let Ok(Verdict::DeadEnd(findings)) = decide(&closed, &roster()) else {
+            panic!("a closed set with a masked name is a dead end, not a wait");
+        };
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].to_string(), "ci skipped");
+
+        // MIRROR ONE: the same mask, one sibling still running. The answer may be
+        // moments away, so this waits — and waits without a bound.
+        //
+        // IT IS `NoVerdict` AND NOT `Running`, because the masked bucket is tested
+        // above the running tally and always was. That is the point rather than an
+        // accident of ordering: both mirrors and the dead end come out of the ONE
+        // bucket, so what tells them apart is terminality alone and nothing about
+        // which spelling of "not an answer" a set happens to carry.
+        let mut running = closed.clone();
+        running[1] = run(
+            "in_progress",
+            "-",
+            "perf",
+            "2026-08-12T21:52:23Z",
+            94_274_706_740,
+        );
+        let Ok(Verdict::Pending(Pending::NoVerdict(findings))) = decide(&running, &roster()) else {
+            panic!("a skip beside a running check is still a wait");
+        };
+        assert_eq!(findings[0].to_string(), "ci skipped");
+
+        // MIRROR TWO: the same mask, one required name with no run at all. Not
+        // closed either, and for a different reason — `final` may still register.
+        let unregistered: Vec<Run> = closed
+            .iter()
+            .filter(|row| row.name != "final")
+            .cloned()
+            .collect();
+        let Ok(Verdict::Pending(Pending::NoVerdict(findings))) = decide(&unregistered, &roster())
+        else {
+            panic!("a mask over a set still registering is a wait");
+        };
+        assert_eq!(findings[0].to_string(), "ci skipped");
+    }
+
+    /// A red tree is a verdict, never a dead end — the ordering CLOUD-497 must not
+    /// disturb, asserted rather than left to the comment that claims it.
+    ///
+    /// `real_failed` returns above the masked bucket, so a failure no cancellation
+    /// could have manufactured still answers `Red` over a set that is otherwise
+    /// closed and masked. Getting this wrong would turn every red landing into a
+    /// "push to buy a fresh run", which is the opposite of the remedy.
+    #[test]
+    fn a_real_failure_over_a_closed_masked_set_is_still_red() {
+        let reading = vec![
+            run("completed", "failure", "ci", "", 0),
+            run("completed", "cancelled", "perf", "", 0),
+            run("completed", "success", "final", "", 0),
+        ];
+        let Ok(Verdict::Red(findings)) = decide(&reading, &roster()) else {
+            panic!("a real failure is a verdict even where a sibling is masked");
+        };
+        assert_eq!(findings[0].to_string(), "ci failure");
     }
 
     #[test]
@@ -885,12 +1103,20 @@ mod tests {
     fn one_cancelled_check_is_not_redeemed_by_another_that_succeeded() {
         // The bucket is per NAME, not a tally: a cancelled `ci` is still no
         // verdict however many siblings graded green beside it.
+        //
+        // AND THIS IS CLOUD-497'S OWN MEASURED SHAPE, one conclusion over. PR
+        // #378's head carried `ci skipped` newest beside a graded `final`, and
+        // this is that set with `cancelled` for `skipped` — every name terminal,
+        // one of them masked. It read `Pending` and `ci-wait` polled it for 48
+        // minutes holding the landing lease. The per-name bucketing this case
+        // pins is what makes the mask survive; the terminality split is what
+        // stops the poll.
         let reading = vec![
             run("completed", "cancelled", "ci", "", 0),
             run("completed", "success", "perf", "", 0),
             run("completed", "success", "final", "", 0),
         ];
-        let Ok(Verdict::Pending(Pending::NoVerdict(findings))) = decide(&reading, &roster()) else {
+        let Ok(Verdict::DeadEnd(findings)) = decide(&reading, &roster()) else {
             panic!("one cancelled name is not redeemed by a sibling");
         };
         assert_eq!(findings[0].to_string(), "ci cancelled");
@@ -939,7 +1165,11 @@ mod tests {
             run("completed", "skipped", "final", "", 0),
             run("completed", "success", "SonarCloud Code Analysis", "", 0),
         ];
-        let Ok(Verdict::Pending(Pending::NoVerdict(findings))) = decide(&reading, &roster()) else {
+        // `DeadEnd` since CLOUD-497: the roster's three are all terminal, so this
+        // set is closed. CLOUD-327's rule is what is pinned and it is unchanged —
+        // a third party's success still answers for nobody but itself, and all
+        // three roster names are still named in the findings.
+        let Ok(Verdict::DeadEnd(findings)) = decide(&reading, &roster()) else {
             panic!("a third party cannot answer for the roster");
         };
         assert_eq!(findings.len(), 3);
@@ -1173,7 +1403,9 @@ mod tests {
             run("completed", "success", "perf", "2026-08-11T00:00:00Z", 2),
             run("completed", "skipped", "final", "2026-08-12T00:00:00Z", 3),
         ];
-        let Ok(Verdict::Pending(Pending::NoVerdict(findings))) = decide(&reading, &roster()) else {
+        // `DeadEnd` since CLOUD-497 — all three terminal. The scoping this case
+        // pins is what decides WHICH names are masked, and it still reports one.
+        let Ok(Verdict::DeadEnd(findings)) = decide(&reading, &roster()) else {
             panic!("each name answers for itself");
         };
         assert_eq!(findings.len(), 1);
