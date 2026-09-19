@@ -2448,6 +2448,27 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   appearing after the record moves the key instead of being invisible. Every
   failure is could-not-look, which allows; a fact naming every program in a
   project must never refuse on a failure to see.
+- `signer_posture.rs` — whether a git signing configuration names a key anyone
+  can verify (CLOUD-669, CLOUD-1717). NOT AN ARGUMENT AGAINST SIGNING: signing
+  in CI with a published public half is the desired end state and CLOUD-591 owns
+  getting there. What this names is narrower — a signature from a key that
+  cannot be verified or reproduced, which is WORSE than no signature because it
+  looks like provenance and carries none. Two measured conditions: a
+  `gpg.ssh.program` under `/tmp`, which the container reclaims, and a
+  `user.signingkey` naming a file that is empty, unreadable, absent or a
+  DIRECTORY. Four file tests rather than one, because a size test alone calls a
+  directory healthy — a measured defect, not thoroughness. A literal inline key
+  is not a path and is the most publishable form there is, so it short-circuits
+  before any file test; the `/tmp` test outranks everything, because a reclaimed
+  signer breaks verification whatever the key is. It also owns the RECORD'S
+  SHAPE, including truncating each sha to eight characters — the difference
+  between a pointer and a payload (rule 4) — which was a sequence of `printf`
+  calls in a task body that nothing tested. It reaches NOTHING and never runs
+  `git config`: the two values arrive as `&str`, which keeps the reading
+  testable against a scratch path and a developer's real configuration out of
+  the tests. Ported off `mise-tasks/signer_posture.py`; `signing-posture-repair`
+  no longer classifies a second time but reads the posture off the record the
+  producer just wrote.
 - `probe_verdict.rs` — which of three things a probe build did, from its exit
   status and its log (CLOUD-418, CLOUD-1717). THE VERDICT IS THE HARNESS'S OWN
   LINE, NEVER THE EXIT CODE ALONE: `cargo test` exits non-zero for a compile

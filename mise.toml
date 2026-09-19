@@ -2157,12 +2157,14 @@ emit | cargo run --quiet -p batten -- record named timeout-drift
 # CLOUD-1717. The things that are not decisions: the git config reads, the
 # filesystem tests behind them, and the range scan.
 #
-# THE SIGNER CLASSIFICATION IS `mise-tasks/signer_posture.py`, shared with
-# `crates/batten/tests/it/signing_posture.rs`, because seven of the dying suite's
-# cases are about exactly which configurations are unverifiable — an empty key, a
-# directory, an unreadable file, a path that does not exist, an inline literal, a
-# `/tmp` signer, and a healthy one. Those are the substance; the module's half is
-# two set memberships.
+# THE SIGNER CLASSIFICATION IS `crates/batten/src/signer_posture.rs`, because
+# seven of the dying suite's cases are about exactly which configurations are
+# unverifiable — an empty key, a directory, an unreadable file, a path that does
+# not exist, an inline literal, a `/tmp` signer, and a healthy one. Those are the
+# substance; the module's half is two set memberships. They are `#[cfg(test)]`
+# cases beside the function now, where a scratch path exercises them directly;
+# it was a `.py` beside this task, which was the campaign to delete bash routing
+# a reading into another interpreter (CLOUD-1717).
 #
 # THE CONFLICT, NEVER THE MERE ABSENCE OF A LOCAL KEY. `config conflict` is
 # recorded only where something OUTSIDE the checkout turns signing on and nothing
@@ -2186,34 +2188,39 @@ shell = "bash -c"
 run = """
 git rev-parse --git-dir >/dev/null 2>&1 || exit 0
 
+# THE GATHERING IS THIS TASK'S — `git config`, `git rev-list` and `git
+# cat-file` are spawns house-style §5 keeps outside the engine. What the facts
+# MEAN, including the signer classification and the record's own shape, is
+# `crates/batten/src/signer_posture.rs` (CLOUD-1717).
 key=$(git config --get user.signingkey 2>/dev/null || true)
 prog=$(git config --get gpg.ssh.program 2>/dev/null || true)
-signer=$(python3 mise-tasks/signer_posture.py "$key" "$prog") || exit 0
 
-{
-  printf 'signer %s\\n' "$signer"
+gpgsign=none
+local_setting=$(git config --local --get commit.gpgsign 2>/dev/null || true)
+inherited=$(git config --global --get commit.gpgsign 2>/dev/null || true)
+if [ "$local_setting" != false ]; then
+  case "$inherited$local_setting" in
+  *true*) gpgsign=conflict ;;
+  esac
+fi
 
-  local_setting=$(git config --local --get commit.gpgsign 2>/dev/null || true)
-  inherited=$(git config --global --get commit.gpgsign 2>/dev/null || true)
-  if [ "$local_setting" != false ]; then
-    case "$inherited$local_setting" in
-    *true*) printf 'config conflict\\n' ;;
+signed=
+base="${BASE_SHA:-}"
+head="${HEAD_SHA:-}"
+[ -n "$base" ] || base=$(git rev-parse --verify --quiet origin/main) || base=""
+[ -n "$head" ] || head=$(git rev-parse --verify --quiet HEAD) || head=""
+if [ -n "$base" ] && [ -n "$head" ]; then
+  for sha in $(git rev-list --no-merges "$base..$head" 2>/dev/null || true); do
+    header=$(git cat-file commit "$sha" 2>/dev/null | sed '/^$/q')
+    case $'\\n'"$header" in
+    *$'\\n'gpgsig' '*) signed="${signed:+$signed,}$sha" ;;
     esac
-  fi
+  done
+fi
 
-  base="${BASE_SHA:-}"
-  head="${HEAD_SHA:-}"
-  [ -n "$base" ] || base=$(git rev-parse --verify --quiet origin/main) || base=""
-  [ -n "$head" ] || head=$(git rev-parse --verify --quiet HEAD) || head=""
-  if [ -n "$base" ] && [ -n "$head" ]; then
-    for sha in $(git rev-list --no-merges "$base..$head" 2>/dev/null || true); do
-      header=$(git cat-file commit "$sha" 2>/dev/null | sed '/^$/q')
-      case $'\\n'"$header" in
-      *$'\\n'gpgsig' '*) printf 'signed %s\\n' "$(printf '%s' "$sha" | cut -c1-8)" ;;
-      esac
-    done
-  fi
-} | cargo run --quiet -p batten -- record named signing-posture
+cargo run --quiet -p batten -- record derive signing-posture \\
+  --input "signingkey=$key" --input "ssh-program=$prog" \\
+  --input "gpgsign=$gpgsign" --input "signed=$signed"
 """
 
 # THE WRITE, self-declared per house style §5 and kept a task because a module
@@ -2233,9 +2240,13 @@ git rev-parse --git-dir >/dev/null 2>&1 || {
   echo "::error:: signing-posture-repair: not a git repository" >&2
   exit 2
 }
-key=$(git config --get user.signingkey 2>/dev/null || true)
-prog=$(git config --get gpg.ssh.program 2>/dev/null || true)
-signer=$(python3 mise-tasks/signer_posture.py "$key" "$prog") || exit 2
+# ONE READING, ONE CALLER OF IT. This used to run the classification a second
+# time beside the record task; it now reads the posture off the record the
+# producer just wrote and printed, so the two can never disagree about a
+# checkout they both looked at (CLOUD-1717).
+recorded=$(mise run signing-posture-record) || exit 2
+signer=${recorded#*signer }
+signer=${signer%%$'\\n'*}
 case "$signer" in
 verifiable)
   echo "signing-posture: signer is verifiable, leaving signing on"

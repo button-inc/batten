@@ -550,6 +550,19 @@ declared_modules := {
 	# `record` call it without the producer's effects reaching the engine: the
 	# spawn stays in the task (house-style §5) and only the reading is here.
 	"probe_verdict",
+	# `signer_posture` arrived with CLOUD-1717, `probe_verdict`'s sibling and
+	# its class: it reaches NOTHING in this crate. It takes the two git config
+	# values as `&str` and never runs `git config` itself, which is what keeps
+	# the reading testable against a scratch path and a developer's real
+	# configuration out of the tests (CLOUD-591's boundary).
+	#
+	# It owns the RECORD'S SHAPE as well as the classification, and that is the
+	# placement rather than scope creep: the shape was a sequence of `printf`
+	# calls in a task body that nothing tested, including the truncation of each
+	# sha to eight characters — which is the difference between a pointer and a
+	# payload. The producer still gathers the facts, because `git config` and
+	# `git rev-list` are spawns §5 keeps outside; what they MEAN is composed here.
+	"signer_posture",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.

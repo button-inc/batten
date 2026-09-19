@@ -621,6 +621,22 @@ pub fn run_derive(
                 crate::probe_verdict::verdict(status, &log, test).token()
             )
         }
+        "signing-posture" => {
+            only_these_inputs(
+                &inputs,
+                family,
+                &["signingkey", "ssh-program", "gpgsign", "signed"],
+            )?;
+            let signingkey = required_input(&inputs, family, "signingkey")?;
+            let program = required_input(&inputs, family, "ssh-program")?;
+            // THE TWO ABSENT-MEANS-NOTHING INPUTS. A producer that found no
+            // conflict and no signed commit still sends both, empty; treating an
+            // omitted input as "no" here would make "the producer did not look"
+            // and "the producer looked and found none" the same record.
+            let conflict = required_input(&inputs, family, "gpgsign")? == "conflict";
+            let signed = required_input(&inputs, family, "signed")?;
+            crate::signer_posture::record(signingkey, program, conflict, signed)
+        }
         // AN UNKNOWN FAMILY IS A USAGE ERROR, never a record written under a name
         // nothing reads. A producer whose family was renamed would otherwise go on
         // writing happily into a key no module has looked at since.

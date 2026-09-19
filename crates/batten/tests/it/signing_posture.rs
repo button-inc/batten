@@ -16,8 +16,17 @@
 //! memberships — and one of them (`-s` alone being true for a directory) was a
 //! measured defect rather than a hypothetical.
 //!
-//! `mise-tasks/signer_posture.py` is the one authority on those branches, shared
-//! with `[tasks.signing-posture-record]` and `[tasks.signing-posture-repair]`.
+//! `crates/batten/src/signer_posture.rs` is the one authority on those branches
+//! and on the record's own shape. Its `#[cfg(test)] mod tests` asserts all seven
+//! arms against scratch paths, plus two the retired program never had — an unset
+//! key, and a signer merely NAMED `/tmpfoo`, which a prefix test without the
+//! separator would have called broken.
+//!
+//! What stays HERE is the half a unit test cannot reach: that the engine carries
+//! the reading through `record derive` into a record the real module refuses
+//! over. `[tasks.signing-posture-repair]` no longer classifies a second time —
+//! it reads the posture off the record the producer just wrote, so the two
+//! cannot disagree about a checkout they both looked at.
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
@@ -28,12 +37,12 @@
 // carried: "an unsigned range with the override in place passes" policy/signing-posture.rego kind:mechanism
 // carried: "signing with a verifiable signer is left alone" policy/signing-posture.rego kind:mechanism
 // carried: "a commit signed by a VERIFIABLE signer is left alone, header and all" policy/signing-posture.rego kind:mechanism
-// carried: "an empty signing key is what makes it unverifiable" policy/signing-posture.rego kind:mechanism
-// carried: "a signing key that is a directory is unverifiable" policy/signing-posture.rego kind:mechanism
-// carried: "a signing key this checkout cannot read is unverifiable" policy/signing-posture.rego kind:mechanism
-// carried: "a signing key naming a path that does not exist is unverifiable" policy/signing-posture.rego kind:mechanism
-// carried: "an inline public key is a literal, not a path, and is verifiable" policy/signing-posture.rego kind:mechanism
-// carried: "a signer under /tmp is unverifiable because the container reclaims it" policy/signing-posture.rego kind:mechanism
+// carried: "an empty signing key is what makes it unverifiable" crates/batten/src/signer_posture.rs kind:mechanism crates/batten/tests/it/signing_posture.rs
+// carried: "a signing key that is a directory is unverifiable" crates/batten/src/signer_posture.rs kind:mechanism crates/batten/tests/it/signing_posture.rs
+// carried: "a signing key this checkout cannot read is unverifiable" crates/batten/src/signer_posture.rs kind:mechanism crates/batten/tests/it/signing_posture.rs
+// carried: "a signing key naming a path that does not exist is unverifiable" crates/batten/src/signer_posture.rs kind:mechanism crates/batten/tests/it/signing_posture.rs
+// carried: "an inline public key is a literal, not a path, and is verifiable" crates/batten/src/signer_posture.rs kind:mechanism crates/batten/tests/it/signing_posture.rs
+// carried: "a signer under /tmp is unverifiable because the container reclaims it" crates/batten/src/signer_posture.rs kind:mechanism crates/batten/tests/it/signing_posture.rs
 // carried: "a signed commit in range is refused, and named by short sha" policy/signing-posture.rego kind:mechanism
 // carried: "repairing the config does not excuse a commit already signed" policy/signing-posture.rego kind:mechanism
 // carried: "a missing override is refused when the environment sets signing globally" policy/signing-posture.rego kind:mechanism
@@ -248,118 +257,138 @@ fn an_absent_record_says_nothing_rather_than_refusing() {
     );
 }
 
-// --- the signer classification -----------------------------------------------
+// --- the signer classification, over the real verb ---------------------------
 
-/// Run the REAL classification both tasks run.
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays, and it is the subject under test rather than a convenience: which configurations are unverifiable is what moved out of the dying program into `mise-tasks/signer_posture.py`, and a harness re-implementing the four file tests in Rust would be a second authority over the one question both the record and the repair turn on"
-)]
-fn posture(signingkey: &str, program: &str) -> String {
-    let done = std::process::Command::new("python3")
-        .arg("../../mise-tasks/signer_posture.py")
-        .arg(signingkey)
-        .arg(program)
-        .output()
-        .expect("the classification runs");
-    assert!(
-        done.status.success(),
-        "it completes: {}",
-        String::from_utf8_lossy(&done.stderr)
+/// Drive the REAL reading both tasks run, through the REAL verb.
+///
+/// `crates/batten/src/signer_posture.rs` is the one authority on which
+/// configurations are unverifiable, and its own `#[cfg(test)] mod tests`
+/// asserts all seven arms directly against scratch paths — plus two the retired
+/// program never had: an unset key, and a signer merely NAMED `/tmpfoo`, which
+/// a prefix test without the separator would have called broken.
+///
+/// What THIS tier adds is the half a unit test cannot reach: that the engine
+/// carries that reading, and the record's whole shape, into a record the real
+/// module then refuses over.
+fn derive(dir: &std::path::Path, signingkey: &str, program: &str, signed: &str) -> String {
+    let written = run_with_stdin(
+        dir,
+        &[
+            "record",
+            "derive",
+            "signing-posture",
+            "--input",
+            &format!("signingkey={signingkey}"),
+            "--input",
+            &format!("ssh-program={program}"),
+            "--input",
+            "gpgsign=none",
+            "--input",
+            &format!("signed={signed}"),
+        ],
+        "",
     );
-    String::from_utf8_lossy(&done.stdout).trim().to_owned()
-}
-
-#[test]
-fn an_empty_signing_key_is_what_makes_it_unverifiable() {
-    let dir = scratch("signer-empty");
-    write(&dir, "key.pub", "");
-    let said = posture(dir.join("key.pub").to_string_lossy().as_ref(), "");
-    assert!(said.starts_with("broken"), "an empty key is broken\n{said}");
-    assert!(said.contains("empty file"), "and says which test\n{said}");
-}
-
-#[test]
-fn a_signing_key_that_is_a_directory_is_unverifiable() {
-    // `-s` ALONE WAS THE TEST HERE AND IT IS TRUE FOR A DIRECTORY, which leaves
-    // the public half unreadable — the condition being named.
-    let dir = scratch("signer-dir");
-    write(&dir, "keydir/placeholder", "");
-    let said = posture(dir.join("keydir").to_string_lossy().as_ref(), "");
     assert!(
-        said.contains("not a regular file"),
-        "a directory is broken, and says so\n{said}"
+        written.status.success(),
+        "the derivation lands: {}",
+        String::from_utf8_lossy(&written.stderr)
     );
+    String::from_utf8_lossy(&written.stdout).into_owned()
 }
 
 #[test]
-fn a_signing_key_this_checkout_cannot_read_is_unverifiable() {
-    let dir = scratch("signer-unreadable");
-    write(&dir, "key.pub", "ssh-ed25519 AAAA");
-    let path = dir.join("key.pub");
-    let mut perms = std::fs::metadata(&path).expect("it exists").permissions();
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        perms.set_mode(0o000);
-    }
-    std::fs::set_permissions(&path, perms).expect("it is unreadable");
-
-    let said = posture(path.to_string_lossy().as_ref(), "");
-    // Running as root defeats the permission bit, so this asserts the branch it
-    // can reach rather than claiming one it cannot.
+fn the_verb_derives_a_broken_signer_into_a_record_the_module_refuses_over() {
+    let dir = repo("derive-broken");
+    let key = dir.join("key.pub");
+    std::fs::write(&key, "").expect("an empty key is the broken case");
+    let written = derive(
+        &dir,
+        key.to_string_lossy().as_ref(),
+        "",
+        "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d",
+    );
     assert!(
-        said.contains("cannot read") || said == "verifiable",
-        "an unreadable key is broken where the OS enforces it\n{said}"
+        written.contains("signer broken"),
+        "the reading reaches the record\n{written}"
     );
-}
-
-#[test]
-fn a_signing_key_naming_a_path_that_does_not_exist_is_unverifiable() {
-    let said = posture("/nowhere/at/all/key.pub", "");
     assert!(
-        said.contains("does not exist"),
-        "an absent path is broken, and says so\n{said}"
+        written.contains("signed 1a2b3c4d"),
+        "and so does the short sha\n{written}"
     );
-}
 
-#[test]
-fn an_inline_public_key_is_a_literal_not_a_path_and_is_verifiable() {
-    // A LITERAL IS THE MOST PUBLISHABLE FORM THERE IS — it is already the public
-    // half — so testing it as a file would report the healthiest possible
-    // configuration as broken.
+    let decided = run(&dir, &["check"]);
     assert_eq!(
-        posture("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5", ""),
-        "verifiable"
+        decided.status.code(),
+        Some(2),
+        "a signed commit under a broken signer is the finding\n{}",
+        String::from_utf8_lossy(&decided.stderr)
     );
-    assert_eq!(
-        posture("key::ssh-ed25519 AAAAC3NzaC1lZDI1NTE5", ""),
-        "verifiable"
-    );
-    assert_eq!(posture("sk-ssh-ed25519@openssh.com AAAA", ""), "verifiable");
 }
 
 #[test]
-fn a_signer_under_tmp_is_unverifiable_because_the_container_reclaims_it() {
-    // And it outranks the key test: a reproducible key behind an irreproducible
-    // signer is still not re-verifiable later.
-    let said = posture("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5", "/tmp/code-sign");
+fn the_verb_derives_a_verifiable_signer_into_silence() {
+    let dir = repo("derive-verifiable");
+    let written = derive(
+        &dir,
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample",
+        "/usr/bin/ssh-keygen",
+        "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d",
+    );
     assert!(
-        said.contains("/tmp"),
-        "a /tmp signer is broken whatever the key is\n{said}"
+        written.contains("signer verifiable"),
+        "an inline literal is the healthiest form there is\n{written}"
+    );
+
+    let quiet = run(&dir, &["check"]);
+    assert_eq!(
+        quiet.status.code(),
+        Some(0),
+        "a verifiable signer is left alone, signed commits and all\n{}",
+        String::from_utf8_lossy(&quiet.stderr)
     );
 }
 
+/// POINTER-ONLY THROUGH THE WHOLE PATH (rule 4): neither the key nor the signer
+/// path reaches the record, and neither does a full sha.
 #[test]
-fn a_signer_failing_neither_test_is_left_alone() {
-    // The anti-vacuity arm: without it every case above passes on a
-    // classification that returned `broken` unconditionally.
-    let dir = scratch("signer-healthy");
-    write(&dir, "key.pub", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5\n");
+fn no_key_signer_or_full_sha_reaches_the_record() {
+    let dir = repo("derive-quiet");
+    let full = "abcdef0123456789abcdef0123456789abcdef01";
+    let written = derive(&dir, "SECRET-KEY-MATERIAL", "/tmp/SECRET-SIGNER", full);
+    assert!(!written.contains("SECRET-KEY-MATERIAL"), "{written}");
+    assert!(!written.contains("SECRET-SIGNER"), "{written}");
+    assert!(!written.contains(full), "{written}");
+    assert!(written.contains("signed abcdef01"), "{written}");
+}
+
+/// A family reads only the inputs it declares, and a misspelling is a usage
+/// error rather than a reading that silently ran on a default.
+#[test]
+fn an_input_the_family_does_not_read_is_a_usage_error() {
+    let dir = repo("derive-unknown-input");
+    let refused = run_with_stdin(
+        &dir,
+        &[
+            "record",
+            "derive",
+            "signing-posture",
+            "--input",
+            "signingkey=",
+            "--input",
+            "ssh-program=",
+            "--input",
+            "gpgsign=none",
+            "--input",
+            "signed=",
+            "--input",
+            "signingkeys=oops",
+        ],
+        "",
+    );
     assert_eq!(
-        posture(
-            dir.join("key.pub").to_string_lossy().as_ref(),
-            "/usr/bin/ssh-keygen"
-        ),
-        "verifiable"
+        refused.status.code(),
+        Some(1),
+        "an unread input is a usage error\n{}",
+        String::from_utf8_lossy(&refused.stderr)
     );
 }
