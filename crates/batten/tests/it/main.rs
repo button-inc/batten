@@ -122,6 +122,7 @@ mod done_not_landed;
 mod egress_fencing;
 mod emission_census;
 mod enforce_journal;
+mod evaluator_closure;
 mod extension_surfaces;
 mod external_facts;
 mod extracted_facts;

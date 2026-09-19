@@ -5934,14 +5934,30 @@ severity = "warn"
 # `Cargo.lock` and `Cargo.toml`, not this file — the glob is what decides WHEN it
 # is worth asking, and asking on a change to the gate itself is the case that
 # must never be skipped.
+#
+# PORTED UNDER CLOUD-1717, AND THE ROW KEEPS ITS ID. `kind` moves from `command`
+# to `policy` because the program it spawned is gone: the `cargo metadata` call
+# and the graph walk are `[tasks.evaluator-closure-record]`'s, and the decision
+# over what that walk reached is `policy/evaluator-closure.rego`'s. The split is
+# forced — §5 makes `check` `read` and incapable of spawning, and a reachability
+# closure is not expressible in Rego at all (a self-referential rule is a compile
+# error and `graph.reachable` is not in this build's regorus feature set).
+#
+# `glob` is dropped with the program it named. A `policy` row over a declared
+# record is asked on every run rather than when one file changes, which is the
+# right cadence here: the drift this gate exists for arrives through feature
+# unification with no edit to any file a glob could name.
 [[rule]]
 id = "layer reach unsafe"
-kind = "command"
-glob = "mise-tasks/evaluator-closure-check.sh"
-check = "mise run evaluator-closure-check"
-severity = "deny"
+kind = "policy"
 scope = "tree"
+module = "policy/evaluator-closure.rego"
+severity = "deny"
 no_fix_reason = "an IO crate reaching the evaluator is closed where it was enabled, not here: `cargo tree -i <crate>` names who turned it on, and the `regorus` feature list in Cargo.toml is where the pin is stated rather than where it is decided"
+
+[[record]]
+record = "evaluator-closure"
+writer = "mise run evaluator-closure-record"
 
 # The contract half of the config deprecation grammar (CLOUD-360). A key that
 # leaves the published schema with no window breaks every consumer still carrying
@@ -12283,6 +12299,39 @@ releasing, which is itself reached by one.
 id = "workflow read first"
 kind = "document"
 target = ".github/workflows/release-assets.yml"
+
+[[verdict]]
+id = "layer carry unsafe"
+gloss = "an IO-bearing crate is reachable from the evaluator's node in the resolved dependency graph"
+class = """
+`crates/batten/src/policy.rs` admits consumer-authored code to the mediated call \
+on one claim — a policy module "cannot open a file, start a process, or reach the \
+network". This class is that claim failing. It does not mean somebody edited the \
+pin: Cargo unifies features across the graph, so a second crate in the workspace, \
+or any dependency, taking `regorus` with default features unions them back on with \
+no diff a reviewer of the pin would see. Close it where it was enabled.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/evaluator-closure.rego"
+
+[[verdict]]
+id = "layer read absent"
+gloss = "the graph resolved and carries no evaluator node, so the closure was never walked"
+class = """
+Could-not-look, and LOUD rather than silent. The producer resolved a graph and \
+found no node to start from, which means the question was not asked — reporting \
+"nothing found" there is the vacuous pass CLOUD-251 names. It is a different \
+answer from an absent record, which is the producer not having run at all and \
+which this rule reads as silence.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run evaluator-closure-record"
 
 [[verdict]]
 id = "task run unknown"
