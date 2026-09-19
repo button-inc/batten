@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.175](https://github.com/button-inc/batten/compare/v0.0.174...v0.0.175) - 2026-09-19
+
+### Fixed
+
+- *(admission)* a spent block rides the merge ref's second parent, where CI looks
+- *(hook)* a config that will not parse no longer denies the read that would show it
+
 ## [0.0.174](https://github.com/button-inc/batten/compare/v0.0.173...v0.0.174) - 2026-09-19
 
 ### Fixed
