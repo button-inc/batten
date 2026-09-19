@@ -111,7 +111,7 @@ fn record(dir: &std::path::Path, lines: &str) {
 /// explicitly empty one — the distinction the contract turns on.
 #[expect(
     clippy::disallowed_types,
-    reason = "CLOUD-320's inventory row, and the verdict is that this spawn IS the subject under test: the census moved out of the dying program into `mise-tasks/transcript_census.py` precisely so a compiled case could drive it, and a harness re-implementing the independence rules in Rust would be a second authority over what counts as a session"
+    reason = "stays, and it is the subject under test rather than a convenience: the census moved out of the dying program into `mise-tasks/transcript_census.py` precisely so a compiled case could drive it, and a harness re-implementing the independence rules in Rust would be a second authority over what counts as a session"
 )]
 fn census(
     root: &std::path::Path,
@@ -374,7 +374,7 @@ fn a_malformed_threshold_refuses_and_writes_nothing() {
 #[test]
 #[expect(
     clippy::disallowed_types,
-    reason = "CLOUD-320's inventory row: the arity contract belongs to the thing that takes the arguments, so asserting it means invoking the producer with the wrong arity"
+    reason = "stays: the arity contract belongs to the thing that takes the arguments, so asserting it means invoking the producer with the wrong arity"
 )]
 fn more_arguments_than_the_contract_names_refuses() {
     let held = root("arity", &[("a.jsonl", &authored("kappa"))]);

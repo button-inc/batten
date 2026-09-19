@@ -253,7 +253,7 @@ fn an_absent_record_says_nothing_rather_than_refusing() {
 /// Run the REAL classification both tasks run.
 #[expect(
     clippy::disallowed_types,
-    reason = "CLOUD-320's inventory row, and the verdict is that this spawn IS the subject under test: which configurations are unverifiable is what moved out of the dying program into `mise-tasks/signer_posture.py`, and a harness re-implementing the four file tests in Rust would be a second authority over the one question both the record and the repair turn on"
+    reason = "stays, and it is the subject under test rather than a convenience: which configurations are unverifiable is what moved out of the dying program into `mise-tasks/signer_posture.py`, and a harness re-implementing the four file tests in Rust would be a second authority over the one question both the record and the repair turn on"
 )]
 fn posture(signingkey: &str, program: &str) -> String {
     let done = std::process::Command::new("python3")
