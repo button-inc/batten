@@ -1730,6 +1730,49 @@ regex = '(^|/)tasks/[A-Za-z0-9._-]+\.output$'
 id = "egress-resolver-host"
 regex = 'api\.github\.com'
 
+# CLOUD-1717's four consumer facts, moved out of two `.py` siblings and NOT into
+# `crates/batten/src`. Non-negotiable rule 1: the core stays repo-agnostic, and a
+# `const IO_CRATES` in the engine would be a consumer identifier in it. The walk
+# that reads them is `crates/batten/src/cargo_graph.rs` and names no crate at all.
+#
+# They are also better here than they were in a script: a list in a `[[pattern]]`
+# row is reviewable data a gate reads, which is rule 3 as well as rule 1.
+
+# The package whose sub-closure `evaluator-closure` walks. Named ONCE: it is the
+# node the walk starts from AND the word the refusal uses, and two spellings of
+# it is how a rename turns that gate silent instead of red.
+[[pattern]]
+id = "evaluator-package"
+regex = '^regorus$'
+
+# `Cargo.toml`'s pin names. Not a heuristic and not "crates that look networky":
+# this is the list the manifest comment claims is absent, restated here as the
+# thing that is looked for.
+[[pattern]]
+id = "evaluator-io-crate"
+regex = '^(reqwest|jsonschema|hyper|rustls|openssl-sys|native-tls|ring|globset|glob)$'
+
+# Crates that pull in an Apple system framework. Extend as new ones are met — and
+# when you do, prefer proving it with a link (`darwin-link`) over trusting this
+# list.
+[[pattern]]
+id = "sdk-framework-crate"
+regex = '^(security-framework|security-framework-sys|core-foundation|core-foundation-sys|native-tls|openssl-sys|cocoa|objc|objc2|system-configuration|system-configuration-sys)$'
+
+# Crates whose `links` key names a library they VENDOR AND COMPILE THEMSELVES,
+# reaching no Apple system framework — so rule 1's proxy is wrong about them.
+#
+# ADDING A NAME HERE REQUIRES A LINK, never a reading of the crate. Measured
+# 2026-08-21: the gate refused `tree-sitter` and `tree-sitter-language`, and
+# `darwin-link` then linked the same tree with no SDK present. A gate that
+# refuses what the linker accepts is measuring something other than what it
+# names. The fail-safe is unchanged in the direction that matters: an UNKNOWN
+# `links` crate is still a finding, so this narrows the gate rather than opening
+# it.
+[[pattern]]
+id = "vendored-links-crate"
+regex = '^(tree-sitter|tree-sitter-language)$'
+
 [[pattern]]
 id = "release-tag"
 regex = '^v[0-9]+\.[0-9]+\.[0-9]+$'

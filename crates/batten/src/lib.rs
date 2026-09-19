@@ -24,6 +24,7 @@ pub mod bypass;
 pub mod capture;
 /// Declared reductions over responses the agent already captured.
 pub mod captured;
+pub mod cargo_graph;
 pub mod carry;
 pub mod checks_green;
 pub mod ci;

@@ -2469,6 +2469,28 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   the tests. Ported off `mise-tasks/signer_posture.py`; `signing-posture-repair`
   no longer classifies a second time but reads the posture off the record the
   producer just wrote.
+- `cargo_graph.rs` — the ACTIVATED dependency graph, read from a `cargo metadata`
+  document (CLOUD-1717). ONE WALK, TWO GATES, and that is the whole reason it
+  exists: `evaluator-closure` asks whether an IO-bearing crate is reachable from
+  one package's node, `macos-link` whether anything built needs a platform SDK to
+  link; the questions differ only in their ROOTS and in what they look for once
+  there. Both programs carried their own copy and both headers said so in prose —
+  _"if one is corrected, correct both"_ — which is a rule with no mechanism, and
+  this is the mechanism. THE ACTIVATION FILTER, never the whole resolve: `cargo
+metadata` lists every package the resolver CONSIDERED, so scanning it asks
+  "could some configuration reach X" where both callers mean "does this one".
+  Reverting that is the measured defect — an unactivated optional dependency
+  reaching no framework and never compiled made the link gate refuse a link
+  `darwin-link` then completed on the same tree. Three rules live here and
+  nowhere else: an optional dep is an edge only if activated; the weak form
+  `foo?/bar` is NOT an activation; a `dev`-only edge is dropped unless its owner
+  is a workspace member. A fourth is the fail-safe: an edge the manifest does not
+  explain is KEPT, because unexplained means unmeasured. NO CRATE NAME REACHES
+  IT — which package is the evaluator, which bear IO, which need an SDK and which
+  vendor what they link are consumer facts in `[[pattern]]` rows (rule 1), so
+  roots are chosen by a PREDICATE the caller supplies. Ported off
+  `mise-tasks/cargo_graph.py` and its two callers; carries the three `#MUTANT`
+  rows that used to be stated twice, now stated once over the code they mutate.
 - `probe_verdict.rs` — which of three things a probe build did, from its exit
   status and its log (CLOUD-418, CLOUD-1717). THE VERDICT IS THE HARNESS'S OWN
   LINE, NEVER THE EXIT CODE ALONE: `cargo test` exits non-zero for a compile

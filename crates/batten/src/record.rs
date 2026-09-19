@@ -207,7 +207,9 @@ pub fn run(
         crate::cli::RecordCommand::Plan => run_plan(),
         crate::cli::RecordCommand::Closes => run_closes(overrides),
         crate::cli::RecordCommand::Named { family } => run_named(&family),
-        crate::cli::RecordCommand::Derive { family, inputs } => run_derive(&family, &inputs, out),
+        crate::cli::RecordCommand::Derive { family, inputs } => {
+            run_derive(&family, &inputs, overrides, out)
+        }
         crate::cli::RecordCommand::Keyed { family, key } => run_keyed(&family, &key),
         crate::cli::RecordCommand::Journal { family } => run_journal(&family),
         crate::cli::RecordCommand::Show { family, key } => run_keyed_show(&family, &key, out),
@@ -588,6 +590,49 @@ fn only_these_inputs(
     Ok(())
 }
 
+/// One declared `[[pattern]]` row, compiled.
+///
+/// NON-NEGOTIABLE RULE 1 IS WHY THIS EXISTS. Which package is the evaluator,
+/// which crates bear IO, which need a platform SDK and which vendor what they
+/// link are all CONSUMER facts, and a `const` here would put a consumer
+/// identifier in the repo-agnostic core. They live in the one committed
+/// authority instead, exactly as `run_closes` resolves its key grammar — with
+/// the side benefit that the lists become reviewable data rather than constants
+/// compiled into a binary (rule 3).
+fn declared_pattern(
+    patterns: &[crate::pattern::NamedPattern],
+    family: &str,
+    id: &str,
+) -> Result<regex::Regex> {
+    let row = patterns.iter().find(|row| row.id == id).ok_or_else(|| {
+        UsageError::raise(format!(
+            "record derive {family}: no `[[pattern]]` row declares `{id}`"
+        ))
+    })?;
+    regex::Regex::new(&row.regex).map_err(|_| {
+        UsageError::raise(format!(
+            "record derive {family}: `[[pattern]]` row `{id}` will not compile"
+        ))
+        .into()
+    })
+}
+
+/// The `cargo metadata` document a graph-reading family takes on stdin.
+///
+/// COULD-NOT-LOOK IS A REFUSAL, NEVER AN EMPTY GRAPH. The producer writes
+/// nothing when the document will not parse, because an absent record means
+/// "the producer did not run" and must not be spelled the same way as a graph
+/// that resolved and found nothing.
+fn graph_on_stdin(family: &str) -> Result<crate::cargo_graph::Graph> {
+    let raw = verdict_lines()?;
+    let meta: serde_json::Value = serde_json::from_str(&raw).map_err(|_| {
+        UsageError::raise(format!(
+            "record derive {family}: stdin is not a `cargo metadata` document"
+        ))
+    })?;
+    Ok(crate::cargo_graph::Graph::from_metadata(&meta))
+}
+
 /// Derive one family's record from its input and write it.
 ///
 /// The engine applies the READING; the effects that produced the input stay in
@@ -602,6 +647,7 @@ fn only_these_inputs(
 pub fn run_derive(
     family: &str,
     inputs: &[String],
+    overrides: &Overrides,
     out: &mut dyn std::io::Write,
 ) -> Result<ExitCode> {
     let inputs = derive_inputs(inputs)?;
@@ -664,6 +710,82 @@ pub fn run_derive(
             let exclude = inputs.get("exclude").map(String::as_str);
             let sessions = crate::transcript::census(root, exclude);
             format!("sessions {sessions}\nthreshold {threshold}\n")
+        }
+        "evaluator-closure" => {
+            only_these_inputs(&inputs, family, &[])?;
+            let config = resolve::resolve(Path::new("."), overrides)?;
+            let evaluator = declared_pattern(&config.patterns, family, "evaluator-package")?;
+            let bears_io = declared_pattern(&config.patterns, family, "evaluator-io-crate")?;
+            let graph = graph_on_stdin(family)?;
+
+            // THE SCOPE IS THE EVALUATOR'S SUB-CLOSURE, NOT THE WORKSPACE'S, and
+            // that was measured before it was written because the obvious
+            // spelling is wrong: walking from the workspace members instead
+            // reached 281 packages, including two direct dependencies of the
+            // consumer itself entering by paths with nothing to do with the
+            // evaluator. The wider spelling fired on all five lockfile-touching
+            // commits reachable from HEAD and every firing was a false positive.
+            let roots = graph.roots_matching(|name| evaluator.is_match(name));
+            if roots.is_empty() {
+                // NOT A PASS. The evaluator vanishing from the graph means the
+                // question could not be asked, and reporting "nothing found"
+                // there is the vacuous pass this repository names CLOUD-251.
+                "absent\n".to_owned()
+            } else {
+                let reached = graph.reachable(roots);
+                let mut lines = format!("closure {}\n", reached.len());
+                let mut found: Vec<&str> = graph
+                    .named_in_order(&reached)
+                    .into_iter()
+                    .map(|(name, _)| name)
+                    .filter(|name| bears_io.is_match(name))
+                    .collect();
+                found.dedup();
+                for name in found {
+                    lines.push_str("crate ");
+                    lines.push_str(name);
+                    lines.push('\n');
+                }
+                lines
+            }
+        }
+        "macos-link" => {
+            only_these_inputs(&inputs, family, &[])?;
+            let config = resolve::resolve(Path::new("."), overrides)?;
+            let framework = declared_pattern(&config.patterns, family, "sdk-framework-crate")?;
+            let vendored = declared_pattern(&config.patterns, family, "vendored-links-crate")?;
+            let graph = graph_on_stdin(family)?;
+
+            // THE WALK STARTS AT THE WORKSPACE MEMBERS, because the question is
+            // about everything this tree builds — unlike `evaluator-closure`,
+            // whose question is about one package's sub-closure. That is the
+            // only difference between the two callers of this graph.
+            let built = graph.reachable(graph.member_roots());
+            let mut lines = format!("scanned {}\n", built.len());
+            for (name, id) in graph.named_in_order(&built) {
+                match graph.links_of(id) {
+                    // RULE 1's PROXY, minus the crates it is wrong about. A crate
+                    // that VENDORS AND COMPILES the library it names reaches no
+                    // platform framework — measured, after this gate refused a
+                    // tree the linker then built with no SDK present. An UNKNOWN
+                    // `links` crate is still a finding, so this narrows the gate
+                    // rather than opening it.
+                    Some(library) if !vendored.is_match(name) => {
+                        lines.push_str("links ");
+                        lines.push_str(name);
+                        lines.push(' ');
+                        lines.push_str(library);
+                        lines.push('\n');
+                    }
+                    _ if framework.is_match(name) => {
+                        lines.push_str("framework ");
+                        lines.push_str(name);
+                        lines.push('\n');
+                    }
+                    _ => {}
+                }
+            }
+            lines
         }
         // AN UNKNOWN FAMILY IS A USAGE ERROR, never a record written under a name
         // nothing reads. A producer whose family was renamed would otherwise go on

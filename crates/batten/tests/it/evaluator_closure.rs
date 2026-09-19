@@ -21,7 +21,7 @@
 //!
 //! Had the walk gone into the task body they would have become `// changed:` arms
 //! pointing at `mise.toml` with nothing asserting them. It is
-//! `mise-tasks/evaluator-closure.py` instead, and these cases run it, so all
+//! `crates/batten/src/cargo_graph.rs` instead, and these cases run it, so all
 //! eight CARRY. `.py` is outside `under_mise_tasks` (`shell-retirement.rego:159`)
 //! so that file adds no shell rule.
 //!
@@ -40,11 +40,11 @@
 // carried: "the repo's real graph is clean today" policy/evaluator-closure.rego kind:mechanism
 // carried: "an IO crate reachable from the evaluator is refused at exit 2" policy/evaluator-closure.rego kind:mechanism
 // carried: "an IO crate the workspace depends on directly, but the evaluator does not, is not the evaluator's" policy/evaluator-closure.rego kind:mechanism
-// carried: "an unactivated optional IO dependency of the evaluator is not reported" policy/evaluator-closure.rego kind:mechanism
-// carried: "the same optional dependency, activated, IS reported" policy/evaluator-closure.rego kind:mechanism
+// carried: "an unactivated optional IO dependency of the evaluator is not reported" crates/batten/src/cargo_graph.rs kind:mechanism crates/batten/tests/it/evaluator_closure.rs
+// carried: "the same optional dependency, activated, IS reported" crates/batten/src/cargo_graph.rs kind:mechanism crates/batten/tests/it/evaluator_closure.rs
 // carried: "no evaluator node at all is could-not-look, not a clean bill" policy/evaluator-closure.rego kind:mechanism
 // carried: "the refusal is pointer-only: the crate name, never the path that reached it" policy/evaluator-closure.rego kind:mechanism
-// carried: "a dev-dependency of the evaluator is not in the built closure" policy/evaluator-closure.rego kind:mechanism
+// carried: "a dev-dependency of the evaluator is not in the built closure" crates/batten/src/cargo_graph.rs kind:mechanism crates/batten/tests/it/evaluator_closure.rs
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -95,6 +95,18 @@ severity = "deny"
 [[record]]
 record = "evaluator-closure"
 writer = "mise run evaluator-closure-record"
+
+# THE TWO CONSUMER FACTS THE VERB RESOLVES, declared here rather than compiled
+# into the engine (non-negotiable rule 1). A fixture that omitted them would
+# make `record derive` refuse — which is itself asserted below, because a gate
+# whose consumer facts are undeclared must say so rather than answer over none.
+[[pattern]]
+id = "evaluator-package"
+regex = '^regorus$'
+
+[[pattern]]
+id = "evaluator-io-crate"
+regex = '^(reqwest|jsonschema|hyper|rustls|openssl-sys|native-tls|ring|globset|glob)$'
 "#,
     );
     init_repo(&dir);
@@ -113,36 +125,24 @@ fn record(dir: &std::path::Path, lines: &str) {
     );
 }
 
-/// Run the REAL walk over a `cargo metadata` document, exactly as the producer
-/// does. This is what keeps the four walk cases assertable after the port.
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays, and it is the subject under test rather than a convenience: the walk moved out of the dying program into `mise-tasks/evaluator-closure.py` precisely so a compiled case could drive it, and a harness that re-implemented it in Rust would be a second authority over the reachability the producer actually runs"
-)]
-fn walk(metadata: &str) -> String {
-    use std::io::Write as _;
-    use std::process::{Command, Stdio};
-
-    let mut child = Command::new("python3")
-        .arg("../../mise-tasks/evaluator-closure.py")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("the walk this tier exists for");
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin")
-        .write_all(metadata.as_bytes())
-        .expect("feed the graph");
-    let done = child.wait_with_output().expect("the walk completes");
+/// Drive the REAL walk over a `cargo metadata` document, through the REAL verb.
+///
+/// The activated-edge reachability itself lives in
+/// `crates/batten/src/cargo_graph.rs` and is asserted directly by that module's
+/// own `#[cfg(test)] mod tests` — one walk, shared with `macos-link`, so the two
+/// gates cannot drift apart the way their two copies did.
+///
+/// What THIS tier drives is the COMPOSITION: the roots the consumer's
+/// `evaluator-package` row selects, and the names its `evaluator-io-crate` row
+/// looks for once there. That composition is the gate, and it is per-consumer.
+fn walk(dir: &std::path::Path, metadata: &str) -> String {
+    let written = run_with_stdin(dir, &["record", "derive", "evaluator-closure"], metadata);
     assert!(
-        done.status.success(),
+        written.status.success(),
         "the walk reads its graph: {}",
-        String::from_utf8_lossy(&done.stderr)
+        String::from_utf8_lossy(&written.stderr)
     );
-    String::from_utf8_lossy(&done.stdout).into_owned()
+    String::from_utf8_lossy(&written.stdout).into_owned()
 }
 
 /// A graph where `batten` depends on `regorus`, and `regorus` on `edge`.
@@ -205,6 +205,7 @@ fn the_refusal_is_pointer_only_the_crate_name_never_the_path_that_reached_it() {
     // asserts the intermediate never appears.
     let dir = repo("pointer");
     let reached = walk(
+        &dir,
         r#"{
   "packages": [
     {"id": "batten", "name": "batten", "features": {}, "dependencies": [{"name": "regorus"}]},
@@ -243,6 +244,7 @@ fn no_evaluator_node_at_all_is_could_not_look_not_a_clean_bill() {
     // CLOUD-251's vacuous pass in the one place it would be least visible.
     let dir = repo("absent");
     let reached = walk(
+        &dir,
         r#"{"packages": [{"id": "batten", "name": "batten", "features": {}, "dependencies": []}],
             "workspace_members": ["batten"],
             "resolve": {"nodes": [{"id": "batten", "features": [], "deps": []}]}}"#,
@@ -279,7 +281,8 @@ fn an_absent_record_says_nothing_rather_than_passing() {
 
 #[test]
 fn an_io_crate_reachable_from_the_evaluator_is_refused_at_exit_2() {
-    let reached = walk(&chain("reqwest", "null", false, ""));
+    let dir = repo("walk-reaches");
+    let reached = walk(&dir, &chain("reqwest", "null", false, ""));
     assert!(
         reached.contains("crate reqwest"),
         "the walk reaches it\n{reached}"
@@ -294,7 +297,9 @@ fn an_io_crate_the_workspace_depends_on_directly_but_the_evaluator_does_not_is_n
     // direct dependencies of `batten` itself, entering by paths that have nothing
     // to do with the evaluator. It would deny on `main` forever. This fixture is
     // that exact topology and the walk must be silent on it.
+    let dir = repo("not-the-evaluators");
     let reached = walk(
+        &dir,
         r#"{
   "packages": [
     {"id": "batten", "name": "batten", "features": {},
@@ -326,7 +331,8 @@ fn an_unactivated_optional_io_dependency_of_the_evaluator_is_not_reported() {
     // `macos-link-check`'s `defmt` lesson applied here: an optional dependency
     // nobody enabled is in the resolve and is not in the build, and a gate that
     // fails on a crate the compiler never sees is not measuring what it names.
-    let reached = walk(&chain("reqwest", "null", true, r#""std""#));
+    let dir = repo("dormant");
+    let reached = walk(&dir, &chain("reqwest", "null", true, r#""std""#));
     assert!(
         !reached.contains("crate reqwest"),
         "an unactivated optional dep is dormant\n{reached}"
@@ -337,7 +343,8 @@ fn an_unactivated_optional_io_dependency_of_the_evaluator_is_not_reported() {
 fn the_same_optional_dependency_activated_is_reported() {
     // The other direction of the same filter. Without it the case above passes on
     // a walk that reports nothing at all.
-    let reached = walk(&chain("reqwest", "null", true, r#""std", "http""#));
+    let dir = repo("activated");
+    let reached = walk(&dir, &chain("reqwest", "null", true, r#""std", "http""#));
     assert!(
         reached.contains("crate reqwest"),
         "activating the feature reaches it\n{reached}"
@@ -349,7 +356,8 @@ fn a_dev_dependency_of_the_evaluator_is_not_in_the_built_closure() {
     // A dev-dependency of a DEPENDENCY is never built, so it is not in the
     // closure a policy module could reach. (A workspace member's dev-dependency
     // is built — the test binaries link — but that is the members' walk.)
-    let reached = walk(&chain("reqwest", r#""dev""#, false, ""));
+    let dir = repo("dev-edge");
+    let reached = walk(&dir, &chain("reqwest", r#""dev""#, false, ""));
     assert!(
         !reached.contains("crate reqwest"),
         "a dev edge is not in the built closure\n{reached}"
@@ -359,7 +367,7 @@ fn a_dev_dependency_of_the_evaluator_is_not_in_the_built_closure() {
 #[test]
 #[expect(
     clippy::disallowed_types,
-    reason = "stays: resolving the REAL graph is the whole of this case, and it is the only evidence that the fixtures above agree with the tree `Cargo.toml`'s pin comment makes its claim about"
+    reason = "stays: resolving the REAL graph is the whole of this case, and it is the only evidence that the fixtures above agree with the tree `Cargo.toml`'s pin comment makes its claim about. The spawn is `cargo metadata` — the producer's own effect, which house-style §5 keeps outside the engine — and never a reading this tier re-implements"
 )]
 fn the_repos_real_graph_is_clean_today() {
     // The anti-vacuity arm, against the tree as it actually resolves. Every case
@@ -372,7 +380,8 @@ fn the_repos_real_graph_is_clean_today() {
         .expect("cargo metadata runs");
     assert!(metadata.status.success(), "the lockfile is current");
 
-    let reached = walk(&String::from_utf8_lossy(&metadata.stdout));
+    let dir = repo("real-graph");
+    let reached = walk(&dir, &String::from_utf8_lossy(&metadata.stdout));
     assert!(
         reached.contains("closure "),
         "the evaluator is in the graph\n{reached}"
