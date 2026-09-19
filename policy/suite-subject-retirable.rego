@@ -193,13 +193,19 @@ exempt := {
 	"tests/install.bats": "install.sh",
 	"tests/lint-deno.bats": "mise.toml",
 	"tests/lint-rego.bats": "mise.toml",
-	# THE MEMBER A PREFIX SCAN MISSES, and the reason this table is derived from
-	# `retirable` rather than from "is it under `mise-tasks/`". A `.py` sibling
-	# LOOKS governed and is excluded by extension, so a census testing the prefix
-	# alone counts it retirable and drops the suite. That is exactly what happened
-	# on the first pass here: 18 suites, and `this_repository_is_clean_today` in
-	# `crates/batten/tests/suite_subjects.rs` returned the nineteenth.
-	"tests/replay.bats": "mise-tasks/replay-pointers.py — `.py` is excluded from `governed_when_deleted`",
+	# THE ROW THAT WAS HERE IS GONE BECAUSE ITS SUBJECT IS (CLOUD-1717).
+	#
+	# `tests/replay.bats` exempted itself over `mise-tasks/replay-pointers.py`,
+	# on the reasoning that a `.py` sibling LOOKS governed and is excluded by
+	# extension. Both files were retired; the row outlived them. This module
+	# tolerates a stale row by design — arm B fires only while the suite is
+	# present — so nothing went red, which is exactly why it sat here. A table
+	# entry is a claim about the tree, and the tree wins.
+	#
+	# The reasoning it carried did not die with it: `shell-retirement.rego`'s
+	# arm F now refuses an ADDED `.py` under `mise-tasks/` outright, so the
+	# "looks governed, is excluded" gap it described is a gate rather than a
+	# note in an exemption table.
 	"tests/release-tracking-check.bats": "workflow yaml — STRANDS mise-tasks/release-tracking-check.sh",
 	"tests/remedy-payload-source.bats": "batten.toml — STRANDS mise-tasks/board-payloads.sh",
 	"tests/session-start.bats": ".claude/hooks/session-start.sh",
