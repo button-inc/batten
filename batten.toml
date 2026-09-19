@@ -6019,6 +6019,58 @@ no_fix_reason = "a test that no longer discriminates is fixed in the test, not h
 record = "evaluator-io-probe"
 writer = "mise run evaluator-io-record"
 
+# CLOUD-669, ported under CLOUD-1717. The stand-in for a blind spot the
+# attribution gate structurally has: `Attribution` carries `identity_deny`,
+# `trailer_deny`, `body_deny`, `trailer_allow` and `identity` with NO signature
+# field, so `gpgsig` — the one commit field that was carrying a vendor-held key —
+# is invisible to it until CLOUD-440 lets the engine read a commit object.
+[[rule]]
+id = "commit grade unsafe"
+kind = "policy"
+scope = "tree"
+module = "policy/signing-posture.rego"
+severity = "deny"
+no_fix_reason = "a commit already signed cannot be unsigned in place: repair the checkout's config (`mise run signing-posture-repair`) and rewrite the range, or publish the key's public half so the signature becomes verifiable (CLOUD-591)"
+
+[[record]]
+record = "signing-posture"
+writer = "mise run signing-posture-record"
+
+[[verdict]]
+id = "config carry unsafe"
+gloss = "signing is on in this checkout with a signer whose key cannot be verified or reproduced"
+class = """
+NOT A VERDICT ABOUT SIGNING, which is good and which CLOUD-591 is working \
+toward. It is about a signature that LOOKS like provenance and carries none: a \
+key whose public half cannot be read, or a signer under `/tmp` that the container \
+reclaims. The refusal is the CONFLICT — something outside the checkout turns \
+signing on and nothing local answers it — never the mere absence of a local \
+override, because a CI runner has no launcher and an absent local value is \
+correct there.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run signing-posture-repair"
+
+[[verdict]]
+id = "commit carry unsafe"
+gloss = "a commit in range carries a gpgsig from a key this repository cannot verify or reproduce"
+class = """
+The posture already produced one. Config can be repaired AFTER a commit was \
+written, so a repaired checkout still carries what it signed before the repair — \
+and those are exactly what must not reach `main`. That is why this is a separate \
+class from the config one rather than the same finding twice: repairing the \
+config clears that arm and leaves this one firing, which is the distinction the \
+declared mutation exists to hold.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/signing-posture.rego"
+
 [[verdict]]
 id = "test judge never"
 gloss = "the IO-free evaluator test stayed green with regorus's http feature on, so it discriminates nothing"

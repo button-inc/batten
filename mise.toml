@@ -2153,6 +2153,102 @@ emit | cargo run --quiet -p batten -- record named timeout-drift
 #
 # POINTER-ONLY: one token. The probe log carries module bodies and paths, and no
 # byte of it reaches the record.
+# CLOUD-669's reading, ported off `mise-tasks/signing-posture.sh` under
+# CLOUD-1717. The things that are not decisions: the git config reads, the
+# filesystem tests behind them, and the range scan.
+#
+# THE SIGNER CLASSIFICATION IS `mise-tasks/signer_posture.py`, shared with
+# `crates/batten/tests/it/signing_posture.rs`, because seven of the dying suite's
+# cases are about exactly which configurations are unverifiable — an empty key, a
+# directory, an unreadable file, a path that does not exist, an inline literal, a
+# `/tmp` signer, and a healthy one. Those are the substance; the module's half is
+# two set memberships.
+#
+# THE CONFLICT, NEVER THE MERE ABSENCE OF A LOCAL KEY. `config conflict` is
+# recorded only where something OUTSIDE the checkout turns signing on and nothing
+# local answers it. A runner has no launcher and no global setting, so an absent
+# local value is correct there and nothing is recorded.
+#
+# RANGE, NEVER HISTORY: `origin/main..HEAD` by default, the range
+# `commit-attribution` and `commit-lint` already share.
+#
+# `git cat-file … | sed '/^$/q'` is captured and matched in the shell rather than
+# piped into `grep -q`: under `pipefail` a `grep -q` exits the moment it matches,
+# the producer takes SIGPIPE, and the pipeline reports FAILURE on a match — so
+# the signed commit this gate exists to catch would read as clean.
+# `pipefail-grep-check` caught what the retired suite could not.
+#
+# NOTHING IS WRITTEN OUTSIDE A GIT REPOSITORY — could not look, which the module
+# reads as silence rather than as a posture in force.
+[tasks.signing-posture-record]
+description = "Effect: record this checkout's signer posture and any signed commit in range, for `commit grade unsafe`"
+shell = "bash -c"
+run = """
+git rev-parse --git-dir >/dev/null 2>&1 || exit 0
+
+key=$(git config --get user.signingkey 2>/dev/null || true)
+prog=$(git config --get gpg.ssh.program 2>/dev/null || true)
+signer=$(python3 mise-tasks/signer_posture.py "$key" "$prog") || exit 0
+
+{
+  printf 'signer %s\\n' "$signer"
+
+  local_setting=$(git config --local --get commit.gpgsign 2>/dev/null || true)
+  inherited=$(git config --global --get commit.gpgsign 2>/dev/null || true)
+  if [ "$local_setting" != false ]; then
+    case "$inherited$local_setting" in
+    *true*) printf 'config conflict\\n' ;;
+    esac
+  fi
+
+  base="${BASE_SHA:-}"
+  head="${HEAD_SHA:-}"
+  [ -n "$base" ] || base=$(git rev-parse --verify --quiet origin/main) || base=""
+  [ -n "$head" ] || head=$(git rev-parse --verify --quiet HEAD) || head=""
+  if [ -n "$base" ] && [ -n "$head" ]; then
+    for sha in $(git rev-list --no-merges "$base..$head" 2>/dev/null || true); do
+      header=$(git cat-file commit "$sha" 2>/dev/null | sed '/^$/q')
+      case $'\\n'"$header" in
+      *$'\\n'gpgsig' '*) printf 'signed %s\\n' "$(printf '%s' "$sha" | cut -c1-8)" ;;
+      esac
+    done
+  fi
+} | cargo run --quiet -p batten -- record named signing-posture
+"""
+
+# THE WRITE, self-declared per house style §5 and kept a task because a module
+# cannot write. It fires ONLY against the broken configuration: disabling signing
+# unconditionally would also switch off a correctly configured signer, which is
+# the outcome CLOUD-591 is working toward.
+#
+# Local-only, NEVER `--global` — a developer's own unrelated repositories are not
+# this repo's business, the same boundary `attribution-identity` draws — and
+# local beats global, which matters because the launcher rewrites global every
+# session.
+[tasks.signing-posture-repair]
+description = "Write: switch signing off in THIS checkout when its signer cannot be verified or reproduced (CLOUD-669)"
+shell = "bash -c"
+run = """
+git rev-parse --git-dir >/dev/null 2>&1 || {
+  echo "::error:: signing-posture-repair: not a git repository" >&2
+  exit 2
+}
+key=$(git config --get user.signingkey 2>/dev/null || true)
+prog=$(git config --get gpg.ssh.program 2>/dev/null || true)
+signer=$(python3 mise-tasks/signer_posture.py "$key" "$prog") || exit 2
+case "$signer" in
+verifiable)
+  echo "signing-posture: signer is verifiable, leaving signing on"
+  exit 0
+  ;;
+esac
+if ! git config --local commit.gpgsign false; then
+  echo "::error:: signing-posture-repair: could not write commit.gpgsign to this checkout's config" >&2
+  exit 2
+fi
+echo "signing-posture: signing disabled in this checkout — ${signer#broken }"
+"""
+
 [tasks.evaluator-io-record]
 description = "Effect: record whether the IO-free evaluator test goes red under `probe-evaluator-io`, for `test judge never`"
 shell = "bash -c"
@@ -3840,7 +3936,7 @@ description = "Session start: put the not-signing posture into force, quietly �
 # `signing-posture: signing disabled in this checkout …` into every session's
 # advisory. Measured 2026-09-01 by dispatching the real rows. The retired script
 # `step`-wrapped this call, so that line was never a session's to read.
-run = "mise run signing-posture --repair >/tmp/session-start-signing.log 2>&1 || { echo '::error:: session-start: signing-posture failed — see /tmp/session-start-signing.log' >&2; tail -5 /tmp/session-start-signing.log >&2; exit 1; }"
+run = "mise run signing-posture-repair >/tmp/session-start-signing.log 2>&1 || { echo '::error:: session-start: signing-posture failed — see /tmp/session-start-signing.log' >&2; tail -5 /tmp/session-start-signing.log >&2; exit 1; }"
 
 [tasks."session:wiring"]
 description = "Session start: reclaim the hook surface from launcher-provisioned siblings — the third repair of the class `session:identity` and `session:signing` already close (CLOUD-1079)"
