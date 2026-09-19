@@ -3158,6 +3158,18 @@ fn run_checks(
             };
             ("pending", detail, ExitCode::Violation)
         }
+        // A FOURTH WORD, because the word is what the adapter reads (CLOUD-497).
+        // The code cannot carry this on its own: `Internal` is also what a reading
+        // that could not be taken exits, and those two want opposite things from
+        // the caller — one is worth another look, the other never will be.
+        checks_green::Verdict::DeadEnd(findings) => (
+            "dead-end",
+            format!(
+                "no verdict is coming; every required check is terminal and {}",
+                render_findings(findings)
+            ),
+            ExitCode::Internal,
+        ),
     };
 
     if json {
@@ -3169,11 +3181,21 @@ fn run_checks(
     // The annotation is the RED half only: a head that is merely not answered yet
     // is the ordinary state of a fresh SHA, and annotating it would spend
     // `::error::` on the common case until it stops meaning anything (CLOUD-245).
-    if matches!(verdict, checks_green::Verdict::Red(_)) {
-        writeln!(
-            err,
-            "::error:: CI is not green — {detail}. Reproduce and fix locally."
-        )?;
+    // A DEAD END JOINS THE RED HALF, and the reason the pending half is excluded
+    // is the reason this one is not (CLOUD-497): `::error::` is spent on states a
+    // reader must ACT on. A fresh SHA that has not answered yet is the ordinary
+    // case and annotating it would wear the annotation out; a closed set with a
+    // masked name is a stall that stays until someone pushes.
+    if matches!(
+        verdict,
+        checks_green::Verdict::Red(_) | checks_green::Verdict::DeadEnd(_)
+    ) {
+        let remedy = if matches!(verdict, checks_green::Verdict::DeadEnd(_)) {
+            "Push, or re-ready the pull request, to buy a fresh run."
+        } else {
+            "Reproduce and fix locally."
+        };
+        writeln!(err, "::error:: CI is not green — {detail}. {remedy}")?;
     }
     Ok(code)
 }
@@ -10551,6 +10573,15 @@ fn run_land_wait(
         // exception non-negotiable rule 5 forbids.
         land::Waited::Red { .. } => (land::answers(&sha, Some("red"), None), ExitCode::Violation),
         land::Waited::Unanswered => (land::answers(&sha, None, None), ExitCode::Internal),
+        // THE SAME CODE AS `Unanswered`, AND DELIBERATELY (CLOUD-497). Both are
+        // "could not get an answer"; they differ in whether one is coming, and
+        // that difference travels in the reading beside this code — which is
+        // exactly what the comment above says the stale and red arms do. The
+        // verdict token is what `land::progress_of` reads to stop instead of lap.
+        land::Waited::DeadEnd { .. } => (
+            land::answers(&sha, Some("dead-end"), None),
+            ExitCode::Internal,
+        ),
     };
     land::record_wait(root, branch, &answers)?;
     say_what_the_wait_saw(&waited, &sha, reference, asks, out, err)?;
@@ -10625,6 +10656,26 @@ fn say_what_the_wait_saw(
         }
         land::Waited::Unanswered => {
             writeln!(out, "land: no answer yet on {sha} after {asks} ask(s)")?;
+        }
+        // POINTERS AND A REMEDY, in the red arm's shape rather than the
+        // unanswered arm's (CLOUD-497). "No answer yet" is a status line because
+        // the next lap is the remedy; this needs a person, so it names the masked
+        // checks and what buys a fresh run. The remedy is deliberately NOT done
+        // here: a skip minted after a success means something else acted on this
+        // pull request, and acting back on it unattended is two actors on one head.
+        land::Waited::DeadEnd { findings } => {
+            writeln!(
+                err,
+                "::error:: land: no verdict is coming on {sha} — {} required check(s) terminal and masked",
+                findings.len()
+            )?;
+            for finding in findings {
+                writeln!(err, "  {finding}")?;
+            }
+            writeln!(
+                out,
+                "land: nothing further will be minted for {sha}, so the lap stops and the lease is released; push, or re-ready the pull request, to buy a fresh run"
+            )?;
         }
     }
     Ok(())

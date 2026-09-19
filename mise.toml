@@ -3862,12 +3862,24 @@ case "$rc" in
   *) exit 3 ;;
   esac
   ;;
+# A DEAD END AND A COULD-NOT-LOOK SHARE EXIT 3 FROM THE ENGINE (CLOUD-497), and
+# they want opposite things from this adapter's caller: one is worth another
+# look, the other never will be. So this arm reads the word off stdout, exactly
+# as the arm above reads red from not-yet, and keeps the shell's own four-code
+# table intact — a masked terminal set is "no answer yet" in that vocabulary,
+# which is 3, while anything else at this code is still "could not look".
+3)
+  case "$answer" in
+  *"checks green: dead-end"*) exit 3 ;;
+  *) exit 2 ;;
+  esac
+  ;;
 *) exit 2 ;;
 esac
 '''
 
 [tasks."ci-wait"]
-description = "Block until every required check on this SHA reaches a verdict (0 green / 1 red / 2 could not look)"
+description = "Block until every required check on this SHA reaches a verdict (0 green / 1 red / 2 could not look / 3 no verdict is coming)"
 shell = "bash -c"
 run = '''
 set -uo pipefail
@@ -3889,11 +3901,19 @@ args=(--sha "$sha"
 [[ -z "${BATTEN_TASK_PID:-}" ]] || args+=(--progress "batten task" --progress-id "$BATTEN_TASK_PID")
 batten pr watch "${args[@]}"
 rc=$?
-# No "not yet" arm: the poll does not return until the answer is in, which is the
-# whole difference between this verb and `checks green`.
+# NO "NOT YET" ARM, AND NOW ONE "NOT EVER" ARM (CLOUD-497). The claim that the
+# poll does not return until the answer is in was true of every state but one: a
+# required set that is fully terminal with a masked name mints nothing further,
+# so the poll would have returned only by being killed — measured at 48 minutes
+# on PR #378 over a head whose CI was green, holding the landing lease against a
+# queue the whole time. The engine now ends that wait at `Internal`, and this
+# passes it through as 3 rather than flattening it onto could-not-look, because
+# `land` must tell a closed question from an unread one: the first stops and
+# releases the lease, the second laps.
 case "$rc" in
 0) exit 0 ;;
 2) exit 1 ;;
+3) exit 3 ;;
 *) exit 2 ;;
 esac
 '''

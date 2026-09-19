@@ -288,9 +288,18 @@ fn a_red_head_names_the_check_that_failed() {
 }
 
 // ---------------------------------------------------------------------------
-// The states that must NOT terminate the poll. Each fixture's last response is
-// green, so a case that wrongly stops early fails on the code and a case that
-// wrongly holds open would hang — which is why the last response exists.
+// The states that must NOT be read as green, split by whether the poll survives
+// them. Where it must survive, the fixture's last response is green, so a case
+// that wrongly stops early fails on the code and a case that wrongly holds open
+// would hang — which is why that last response exists.
+//
+// SINCE CLOUD-497 THE TWO ARE NOT THE SAME QUESTION. A set that is still OPEN —
+// something running, or a required name yet to register — keeps polling exactly
+// as it did, unbounded and with no clock. A set that is CLOSED and carries a
+// masked required name mints nothing further, so a fixture that follows it with
+// a green response describes an event that cannot happen; those cases carry one
+// response and assert the stop. The section holds both because the difference
+// between them is the row's whole subject.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -320,53 +329,68 @@ fn a_draft_era_skip_set_with_third_party_successes_is_not_green() {
     // this repository is a draft-era `skipped`, and the workflows that are not
     // draft-gated graded on their own. The old predicate counted those two and
     // reported "all checks terminal and green".
+    //
+    // THE SIGN IS WHAT THIS CASE IS FOR, AND IT IS UNCHANGED: not green. What
+    // moved under CLOUD-497 is the second response — a fiction this fixture used
+    // to rely on. Every required name here is terminal, so nothing further will
+    // be minted for this sha and no amount of polling reaches that later green
+    // set. The poll now stops at `3` on the first reading instead, and the
+    // continuation is `land`'s re-fire (`buys_a_matrix` answers `Spend::Refire`
+    // on exactly this verdict), which is what mints the fresh runs that supersede
+    // these by name. The mechanism is preserved; it moved out of the poll.
     let fixture = Fixture::new(
         "ci-wait-draft-skips",
-        &[
-            response(
-                "W/\"a\"",
-                r#"{"check_runs":[
+        &[response(
+            "W/\"a\"",
+            r#"{"check_runs":[
                     {"status":"completed","conclusion":"success","name":"an external analyzer"},
                     {"status":"completed","conclusion":"skipped","name":"ci"},
                     {"status":"completed","conclusion":"skipped","name":"cross"},
                     {"status":"completed","conclusion":"skipped","name":"final"}]}"#,
-            ),
-            response("W/\"b\"", &all_green("")),
-        ],
+        )],
     );
-    let (code, stdout, _) = fixture.watch(&[]);
-    assert_eq!(code, 0, "{stdout}");
-    assert!(fixture.calls() >= 2);
-    // And it says what it is waiting on, as a pointer rather than a log.
-    assert!(stdout.contains("no verdict"), "{stdout}");
+    let (code, stdout, stderr) = fixture.watch(&[]);
+    assert_eq!(code, 3, "not green, and not worth another ask: {stderr}");
+    // And it says what it stopped on, as a pointer rather than a log, with the
+    // remedy — a reader who stops here has to do something.
+    assert!(stderr.contains("ci skipped"), "{stderr}");
+    assert!(stderr.contains("re-ready"), "{stderr}");
     assert!(stdout.contains("ci skipped"), "{stdout}");
 }
 
 #[test]
 #[cfg_attr(not(unix), ignore = "the stubbed client is a shebang script")]
-fn a_cancelled_set_holds_the_poll_open_instead_of_reporting_red() {
+fn a_cancelled_set_is_never_reported_red_and_stops_rather_than_polling() {
     // CLOUD-363, through the poll rather than the predicate: the supersession
     // that cancelled #293's landing run made the poll report red, the landing
-    // re-draft, and the branch wedge. The poll must outlive the cancellation,
-    // because the next lap re-fires the ready and the fresh run supersedes these
-    // check runs by name. `final` is the fan-in, so its failure here is
-    // MANUFACTURED by the cancellations rather than a verdict (CLOUD-900).
+    // re-draft, and the branch wedge. `final` is the fan-in, so its failure here
+    // is MANUFACTURED by the cancellations rather than a verdict (CLOUD-900), and
+    // NOT REPORTING RED is what this case exists for. That is unchanged.
+    //
+    // WHAT CHANGED IS THE OTHER HALF, AND IT WAS THE DEFECT (CLOUD-497). "The
+    // poll must outlive the cancellation, because the next lap re-fires the
+    // ready" names the right remedy and put it in the wrong place: the RE-FIRE is
+    // what supersedes these runs by name, and the poll cannot perform one. So
+    // polling a closed set only waited for an event this process would never
+    // cause — measured at 48 minutes on PR #378, holding the landing lease. The
+    // poll now hands the lap its `3`, `land` releases the lease and re-fires, and
+    // the fresh run arrives on a later invocation with a reading of its own.
     let fixture = Fixture::new(
         "ci-wait-cancelled",
-        &[
-            response(
-                "W/\"a\"",
-                r#"{"check_runs":[
+        &[response(
+            "W/\"a\"",
+            r#"{"check_runs":[
                     {"status":"completed","conclusion":"failure","name":"final"},
                     {"status":"completed","conclusion":"cancelled","name":"ci"},
                     {"status":"completed","conclusion":"cancelled","name":"cross"}]}"#,
-            ),
-            response("W/\"b\"", &all_green("")),
-        ],
+        )],
     );
-    let (code, stdout, _) = fixture.watch(&[]);
-    assert_eq!(code, 0, "{stdout}");
-    assert!(fixture.calls() >= 2);
+    let (code, stdout, stderr) = fixture.watch(&[]);
+    assert_eq!(code, 3, "a manufactured failure is still not red: {stderr}");
+    assert!(
+        !stderr.contains("CI is not green"),
+        "the fan-in's failure must not be promoted: {stderr}"
+    );
     assert!(stdout.contains("ci cancelled"), "{stdout}");
 }
 
