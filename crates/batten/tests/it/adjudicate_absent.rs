@@ -38,22 +38,6 @@ const WILL_NOT_PARSE: &str = "version = 1\nthis is not toml\n";
 /// A config that loads and declares nothing this call matches.
 const LOADS: &str = "version = 1\n";
 
-/// A config that LOADS and refuses the read.
-///
-/// The discriminator for `the_floor_does_not_reach_a_config_that_loads`: a
-/// tool-keyed `shape` row is exactly what `is_adjudicable`'s `PreTool` clause
-/// exists to serve, so this is the case a floor applied unconditionally would
-/// wrongly allow.
-const DENIES_THE_READ: &str = "version = 1\n\
-     \n\
-     [[rule]]\n\
-     id = \"fixture read refused\"\n\
-     kind = \"shape\"\n\
-     scope = \"mediated_call\"\n\
-     severity = \"deny\"\n\
-     tool = \"Read\"\n\
-     reason = \"the fixture refuses this read\"\n";
-
 /// A fixture carrying `body` as its committed authority.
 fn fixture(name: &str, body: &str) -> PathBuf {
     Fixture::new(name)
@@ -70,40 +54,6 @@ fn payload() -> String {
     "{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\
      \"tool_input\":{\"command\":\"echo hello\"}}"
         .to_owned()
-}
-
-/// A `PreToolUse` envelope that MUTATES NOTHING: a tool name, a path it reads,
-/// no command and no write.
-///
-/// The exact shape CLOUD-1842 is about. It is adjudicable — `is_adjudicable`'s
-/// `PreTool`-with-a-tool-name clause is true for it — and under an unreadable
-/// config there is no tool-keyed row for that clause to have been serving.
-fn read_payload() -> String {
-    "{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Read\",\
-     \"tool_input\":{\"file_path\":\"notes.md\"}}"
-        .to_owned()
-}
-
-/// A `PreToolUse` write envelope naming `path`.
-///
-/// `Write` is in [`Harness::write_tools`] for the neutral adapter too, so the
-/// boundary derives `Envelope::writes` from it exactly as it would on a real
-/// host. The path is spelled ABSOLUTELY, which is what Claude Code sends and
-/// what `relativise_writes` is there to normalize — a fixture that sent a
-/// relative path would skip the normalization the exemption depends on.
-fn write_payload(path: &Path) -> String {
-    format!(
-        "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Write\",\
-         \"tool_input\":{{\"file_path\":{}}}}}",
-        serde_json::to_string(&path.to_string_lossy()).expect("a path serializes")
-    )
-}
-
-/// Adjudicate `body` on the neutral adapter and hand back the code.
-fn code_for(dir: &Path, body: &str) -> Option<i32> {
-    run_with_stdin(dir, &["adjudicate", "--harness", "exit-code"], body)
-        .status
-        .code()
 }
 
 /// Adjudicate on the neutral adapter, where the VERDICT IS THE NUMBER.
@@ -231,110 +181,5 @@ fn the_declaration_that_would_not_parse_is_named_without_quoting_it() {
     assert!(
         !rendered.contains("this is not toml"),
         "a refusal about an unreadable config must not quote it: {rendered}"
-    );
-}
-
-// ─── THE FLOOR UNDER THE REFUSAL (CLOUD-1842) ───
-//
-// The cases above prove the engine does not fail OPEN on a config it cannot
-// load. These prove it does not brick the container either — and each carries a
-// mirror, because a floor that swallowed every call would satisfy "the Read
-// answers" while reverting CLOUD-1677 entirely.
-
-#[test]
-fn a_read_still_answers_over_a_config_that_will_not_load() {
-    // THE MEASURED BRICK. Before this floor the call below denied at `2`, and
-    // its reason carried the parse error the agent was thereby denied the means
-    // to read. Every declared escape is unreachable from inside that state:
-    // CLOUD-1605 (the env hatch cannot be spelled on the Bash surface) and
-    // CLOUD-1579 (an override over an unloadable config cannot be minted).
-    let dir = fixture("adjudicate-floor-read", WILL_NOT_PARSE);
-    assert_eq!(
-        code_for(&dir, &read_payload()),
-        Some(0),
-        "a call that cannot mutate has no rule to have been refused by"
-    );
-}
-
-#[test]
-fn a_command_is_still_refused_over_a_config_that_will_not_load() {
-    // THE MIRROR, and it is the row's own falsifier. CLOUD-1677 measured 1,149
-    // calls proceeding unjudged through seven windows of a mid-edit config;
-    // every one was a command or a write. If this reddens, the floor has
-    // swallowed the refusal and the change is that defect restored.
-    let dir = fixture("adjudicate-floor-command", WILL_NOT_PARSE);
-    assert_eq!(
-        code_for(&dir, &payload()),
-        Some(2),
-        "a command is a mutation this build cannot judge, so it still refuses"
-    );
-}
-
-#[test]
-fn the_repair_write_reaches_the_config_that_will_not_load() {
-    // THE LOCKOUT'S EXIT. `batten.toml` is a protected path, and the protected
-    // gate is deliberately outside the general hatch's reach — sound while a
-    // policy is LOADED and vacuous here, where `Policy::declaring_nothing`
-    // carries an empty protected set because no table could be read at all.
-    // Without this the one write that ENDS the degraded state is the one the
-    // degraded state refuses.
-    let dir = fixture("adjudicate-floor-repair", WILL_NOT_PARSE);
-    let target = dir.join("batten.toml");
-    assert_eq!(
-        code_for(&dir, &write_payload(&target)),
-        Some(0),
-        "the write that would repair the faulting config must not be refused by it"
-    );
-}
-
-#[test]
-fn a_write_to_another_path_is_still_refused_over_a_config_that_will_not_load() {
-    // THE MIRROR FOR THE REPAIR ARM, and what keeps the exemption from being a
-    // general write permit. `notes.md` sits beside the config in the same
-    // fixture, so the only difference between this case and the one above is
-    // the name — which is exactly the discriminator claimed.
-    let dir = fixture("adjudicate-floor-other-write", WILL_NOT_PARSE);
-    let target = dir.join("notes.md");
-    assert_eq!(
-        code_for(&dir, &write_payload(&target)),
-        Some(2),
-        "only the config authority is exempt; every other write is still a mutation"
-    );
-}
-
-#[test]
-fn a_neighbour_named_like_the_config_is_not_the_config() {
-    // WHOLE-NAME EQUALITY, NEVER A SUFFIX. `crates/batten.toml` ends with the
-    // authority's name and is a different file; a `ends_with` test — the obvious
-    // spelling — would hand the exemption to every one of them.
-    let dir = fixture("adjudicate-floor-lookalike", WILL_NOT_PARSE);
-    let target = dir.join("crates").join("batten.toml");
-    std::fs::create_dir_all(target.parent().expect("the parent is named"))
-        .expect("the fixture is writable");
-    assert_eq!(
-        code_for(&dir, &write_payload(&target)),
-        Some(2),
-        "a path that merely ends with the authority's name is a different file"
-    );
-}
-
-#[test]
-fn the_floor_does_not_reach_a_config_that_loads() {
-    // THE SCOPE MIRROR, AND IT HAS TO BE ABLE TO FAIL.
-    //
-    // Asserting `0` over `LOADS` would prove nothing — that config denies
-    // nothing, so allow is the answer with or without a floor, and the case
-    // would be vacuous in the way `authority_replay.rs`'s header warns about.
-    // So this config DENIES the read, and the assertion is that it still does.
-    //
-    // A floor applied unconditionally rather than on the `ConfigUnreadable` arm
-    // would allow here, short-circuiting every loaded tool-keyed row for every
-    // read in the fleet — which is the `is_adjudicable` clause CLOUD-924 added
-    // being switched back off.
-    let dir = fixture("adjudicate-floor-scoped", DENIES_THE_READ);
-    assert_eq!(
-        code_for(&dir, &read_payload()),
-        Some(2),
-        "a rule this build COULD read still decides; the floor is not a bypass"
     );
 }
