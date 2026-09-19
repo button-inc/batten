@@ -528,6 +528,34 @@ expression: stdout_of(&output)
       ]
     },
     {
+      "path": "ci",
+      "id": "ci",
+      "about": "Answer what this repository's continuous integration needs of a change",
+      "effect": "unclassified",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "ci slow-needed",
+          "id": "ci.slow-needed",
+          "about": "Decide whether a diff can move the slow tier, so a diff that cannot does not pay for it",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "base",
+              "short": null,
+              "long": "base",
+              "takes_value": true,
+              "positional": false,
+              "help": "The revision this checkout is diffed against"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "claim",
       "id": "claim",
       "about": "Whether the issue you are about to pull is actually unclaimed",
@@ -1050,6 +1078,24 @@ expression: stdout_of(&output)
               "takes_value": false,
               "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "doctor target",
+          "id": "doctor.target",
+          "about": "Make one rustup target installed, purging a half-installed one first, behind the toolchain's own lock",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "target",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The target triple to install, as `rustup target list` spells it"
             }
           ],
           "subcommands": []
@@ -3367,6 +3413,10 @@ expression: stdout_of(&output)
     {
       "id": "checks.green",
       "path": "checks green"
+    },
+    {
+      "id": "ci.slow-needed",
+      "path": "ci slow-needed"
     },
     {
       "id": "claim.keys",

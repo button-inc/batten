@@ -425,6 +425,15 @@ pub enum Command {
         /// The chosen sub-verb.
         command: HkCommand,
     },
+    /// What continuous integration needs of a change (CLOUD-398).
+    ///
+    /// APPENDED LAST, for the reason every enum here records: no `repr`, so a
+    /// variant beside its siblings shifts every later discriminant and
+    /// `mise run semver` reads that as a break the crate has to declare.
+    Ci {
+        /// The sub-verb selected.
+        command: CiCommand,
+    },
 }
 
 /// Subcommands of `hk`.
@@ -1547,6 +1556,17 @@ pub enum ConfigCommand {
 /// [`DoctorCommand::Diagnose`] is what a bare `batten doctor` selects, so adding
 /// a sub-verb did not turn the parent into a noun that refuses to answer — house
 /// style §8 promises bare `doctor` validates the resolved config, and
+/// The `ci` sub-verbs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CiCommand {
+    /// Whether a diff can move the hk slow tier.
+    SlowNeeded {
+        /// The revision this checkout is diffed against.
+        base: String,
+    },
+}
+
 /// `surface::is_noun` is what keeps that promise structural.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -1628,6 +1648,22 @@ pub enum DoctorCommand {
         manifest: String,
         /// Emit the classification as byte-stable JSON.
         json: bool,
+    },
+    /// Make one rustup target installed (CLOUD-1753).
+    ///
+    /// APPENDED LAST, for the reason its two neighbours above record: this enum
+    /// carries no `repr`, so a variant placed beside its siblings shifts every
+    /// later discriminant and `mise run semver` reads that as a break the crate
+    /// has to declare.
+    ///
+    /// **The one `doctor` sub-verb that WRITES**, and it is here rather than
+    /// under `target` because a rustup target is a property of the toolchain —
+    /// which is what every other `doctor` sub-verb answers about — where `target`
+    /// is this repository's build tree. See [`crate::doctor::run_target`] for why
+    /// the lock is the point rather than a precaution.
+    Target {
+        /// The target triple to install, as `rustup target list` spells it.
+        target: String,
     },
 }
 
@@ -1982,11 +2018,32 @@ fn doctor_of(matches: &ArgMatches) -> DoctorCommand {
                 .unwrap_or_default(),
             json: flag(matches, "json"),
         },
+        // The positional is REQUIRED, so clap rejects a bare `doctor target`
+        // before this runs and the `None` arm is unreachable. It falls back to the
+        // bare report rather than panicking because the lints forbid panicking on
+        // any path — and because answering a smaller question is the safe
+        // direction for a branch that cannot be reached.
+        Some(("target", matches)) => matches
+            .get_one::<String>("target")
+            .cloned()
+            .map_or(DoctorCommand::Diagnose { json: false }, |target| {
+                DoctorCommand::Target { target }
+            }),
         // The bare verb reads `-J` from its OWN matches, which is where clap put
         // it when no subcommand was given.
         _ => DoctorCommand::Diagnose {
             json: flag(matches, "json"),
         },
+    }
+}
+
+/// The  sub-verb a parse resolved to.
+fn ci_of(matches: &ArgMatches) -> Option<CiCommand> {
+    match matches.subcommand()? {
+        ("slow-needed", matches) => Some(CiCommand::SlowNeeded {
+            base: matches.get_one::<String>("base").cloned()?,
+        }),
+        _ => None,
     }
 }
 
@@ -2699,6 +2756,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "receipt" => receipt_of(matches).map(|command| Command::Receipt { command }),
         "state" => state_of(matches).map(|command| Command::State { command }),
         "record" => record_of(matches).map(|command| Command::Record { command }),
+        "ci" => ci_of(matches).map(|command| Command::Ci { command }),
         _ => None,
     }
 }
