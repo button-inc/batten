@@ -35,7 +35,7 @@
 //! CI logs. [`Finding`] has no field a body can occupy, so that is structural
 //! rather than a habit each call site keeps.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use regex::Regex;
@@ -1729,6 +1729,136 @@ pub fn adjudicate(
         (true, false) => 0,
     };
     Some((status, out))
+}
+
+/// The tracked paths an issue body NAMES (CLOUD-774), ported off
+/// `mise-tasks/board-diff-overlap.sh --named` under CLOUD-1716.
+///
+/// # POINTER-ONLY IS STRUCTURAL HERE, not careful
+///
+/// Only paths this repository TRACKS can reach the output, so a body's prose, a
+/// customer name or a pasted credential cannot (non-negotiable rule 4). That is
+/// a property of the resolution rather than of a scrubbing step somebody has to
+/// remember.
+///
+/// # BASENAMES RESOLVE, AND AN AMBIGUOUS ONE RESOLVES TO NOTHING
+///
+/// Bodies here write `git.rs:107`, not `crates/batten/src/git.rs`. Measured on
+/// the three rows the retired program was built from, exact path matching found
+/// ZERO and basename resolution found all three — so exact matching would ship a
+/// sensor blind to its own corpus. Where several tracked paths share a basename
+/// it resolves to NONE of them: guessing which file was meant is a wrong answer
+/// wearing a right one's shape.
+///
+/// # It decides nothing, and that is what keeps it out of rule 3
+///
+/// One fact: which tracked paths the body names. It scores no prose, compares no
+/// semantics and infers no intent. `filed-here` is the gate; this is the sensor
+/// it reads.
+///
+/// `None` is could-not-look — an unreadable payload, or a tree whose index will
+/// not open. An empty answer is the honest zero and renders as `0`.
+#[must_use]
+pub fn named_paths(payload: &serde_json::Value, root: &Path) -> Option<(i32, String)> {
+    let body = body_text(payload)?;
+    let tracked = crate::git::tracked_paths(root).ok()?;
+    if tracked.is_empty() {
+        return None;
+    }
+
+    // One basename to every tracked path carrying it, so ambiguity is a count
+    // rather than a second scan.
+    let mut by_base: BTreeMap<&str, Vec<&String>> = BTreeMap::new();
+    for path in &tracked {
+        by_base
+            .entry(path.rsplit('/').next().unwrap_or(path.as_str()))
+            .or_default()
+            .push(path);
+    }
+
+    let mut named: BTreeSet<String> = BTreeSet::new();
+    for token in tokens_in(&body, &by_base) {
+        let token = token.trim_end_matches(['.', ',', ';', ':']);
+        if tracked.contains(token) {
+            named.insert(token.to_owned());
+            continue;
+        }
+        let base = token.rsplit('/').next().unwrap_or(token);
+        // Exactly one candidate resolves. Several is ambiguous and resolves to
+        // none: 28 of 530 tracked basenames are ambiguous in this tree.
+        if let Some(candidates) = by_base.get(base) {
+            if let [only] = candidates.as_slice() {
+                named.insert((*only).clone());
+            }
+        }
+    }
+
+    let mut out = String::new();
+    if named.is_empty() {
+        out.push_str("0\n");
+    } else {
+        out.push_str(&named.len().to_string());
+        for path in &named {
+            out.push(' ');
+            out.push_str(path);
+        }
+        out.push('\n');
+    }
+    Some((0, out))
+}
+
+/// THREE SHAPES, because bodies here use all three.
+///
+/// A dotted path or filename; a backticked `mise-tasks/<task>`; and a bare
+/// backticked task name, tried as itself AND with `.sh`. The second form of the
+/// third shape is the load-bearing one: a task is INVOKED as `mise run land` and
+/// written up as `land`, while the file it resolves to is `land.sh`. Prose does
+/// not carry the extension and should not have to.
+fn tokens_in(body: &str, by_base: &BTreeMap<&str, Vec<&String>>) -> BTreeSet<String> {
+    let mut found: BTreeSet<String> = BTreeSet::new();
+    for word in body.split(|ch: char| ch.is_whitespace() || ch == '`') {
+        let word = word.trim_matches(['(', ')', '[', ']', '*', '"', '\'']);
+        if word.is_empty() {
+            continue;
+        }
+        // A dotted path or filename: something before a `.` and an extension
+        // after it, which is the shape the retired program's first pattern read.
+        if let Some((stem, extension)) = word.rsplit_once('.') {
+            if !stem.is_empty()
+                && !extension.is_empty()
+                && extension.chars().all(|ch| ch.is_ascii_alphanumeric())
+            {
+                found.insert(word.to_owned());
+            }
+        }
+        if word.starts_with("mise-tasks/") {
+            found.insert(word.to_owned());
+        }
+        // The bare backticked task name, tried as itself AND with `.sh`. The
+        // second form is the load-bearing one: a task is INVOKED as `mise run
+        // land` and written up as `land`, while the file it resolves to is
+        // `land.sh`. Both are admitted only where they RESOLVE, which is what
+        // stops an ordinary English word in backticks entering the token set.
+        for candidate in [word.to_owned(), format!("{word}.sh")] {
+            if by_base.contains_key(candidate.as_str()) {
+                found.insert(candidate);
+            }
+        }
+    }
+    found
+}
+
+/// The body text out of a tracker payload, whatever shape the result carries.
+fn body_text(payload: &serde_json::Value) -> Option<String> {
+    if let Some(text) = payload.as_str() {
+        return Some(text.to_owned());
+    }
+    for key in ["description", "body"] {
+        if let Some(text) = payload.get(key).and_then(serde_json::Value::as_str) {
+            return Some(text.to_owned());
+        }
+    }
+    None
 }
 
 /// This authority's verdict as the token a template renders.
