@@ -5959,6 +5959,56 @@ no_fix_reason = "an IO crate reaching the evaluator is closed where it was enabl
 record = "evaluator-closure"
 writer = "mise run evaluator-closure-record"
 
+# The macOS link gate, ported under CLOUD-1717 from `mise-tasks/macos-link-check.sh`
+# and from an `hk` step that spawned it. The release artifacts for macOS are
+# linked on Linux by zig with no Apple SDK present, and `cross-check` runs
+# `cargo check` — which stops at codegen-to-metadata and never links — so nothing
+# else in this tree can see a framework-linking dependency before a tag is cut.
+[[rule]]
+id = "workspace carry unsafe"
+kind = "policy"
+scope = "tree"
+module = "policy/macos-link.rego"
+severity = "deny"
+no_fix_reason = "a dependency needing a macOS SDK is not fixable by a rewrite here: either drop it, feature-gate it off the default build (a rustls-style alternative usually exists), or accept an SDK and revisit how macOS is built"
+
+[[record]]
+record = "macos-link"
+writer = "mise run macos-link-record"
+
+[[verdict]]
+id = "manifest carry unsafe"
+gloss = "a package in the built macOS graph declares a `links` key, so it needs a real SDK to find that library"
+class = """
+Rule 1, and it is the manifest's OWN statement rather than a guess: a `links` key \
+says the package links a native library. The exemption is a list of crates that \
+vendor and compile their own C, for which "links a native library" does not imply \
+"needs an SDK to find one" — and an UNKNOWN `links` crate is still a finding, so \
+the list narrows the gate rather than opening it. Adding a name to it requires a \
+link, never a reading of the crate.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/macos-link.rego"
+
+[[verdict]]
+id = "workspace reach unsafe"
+gloss = "a crate that links an Apple system framework from a build script is reachable in the built macOS graph"
+class = """
+Rule 2, and it is a LIST, so it is incomplete by construction: a crate nobody has \
+listed slips past. That residual gap is closed by actually linking the target, \
+which `darwin-link` does — this is the fast, specific, early half of that pair and \
+not a replacement for it. Prefer proving a new name with a link over adding it on \
+a reading.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/macos-link.rego"
+
 # The contract half of the config deprecation grammar (CLOUD-360). A key that
 # leaves the published schema with no window breaks every consumer still carrying
 # it, and breaks them SILENTLY: their config stops loading with an unknown-key

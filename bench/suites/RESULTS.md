@@ -6,8 +6,8 @@ runner measured it; the suite runs `--no-parallelize-within-files`, so a
 file's number is its own serial cost and is what an author adding a case
 to it pays.
 
-- suites: 98
-- serial total: 158.3s
+- suites: 97
+- serial total: 157.8s
 
 | seconds | share | suite |
 | ---: | ---: | --- |
@@ -64,7 +64,6 @@ to it pays.
 | 0.6 | 0.4% | `tests/mcp-attach-check.bats` |
 | 0.5 | 0.3% | `tests/duplicate-close-check.bats` |
 | 0.5 | 0.3% | `tests/suite-bench-check.bats` |
-| 0.5 | 0.3% | `tests/macos-link-check.bats` |
 | 0.4 | 0.3% | `tests/checksums.bats` |
 | 0.4 | 0.3% | `tests/publish-credential-check.bats` |
 | 0.4 | 0.3% | `tests/msrv-pin-agreement.bats` |
