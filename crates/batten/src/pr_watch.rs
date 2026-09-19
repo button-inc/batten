@@ -562,6 +562,30 @@ pub fn watch(
                 )?;
                 return Ok(ExitCode::Violation);
             }
+            // THE ARM THAT MAKES AN UNBOUNDED POLL SAFE (CLOUD-497). This loop is
+            // unbounded by design and stays so; what it lacked was a way to tell a
+            // wait from a hang. A closed required set with a masked name will
+            // never mint another run, so every further ask is a request against a
+            // guaranteed non-answer — the same shape as the credential bound
+            // above, reached by a different road.
+            //
+            // The remedy is real and belongs in the refusal: the head needs a NEW
+            // EVENT, which a push or a re-ready produces. Neither is something
+            // this loop may do unattended — a skip minted after a success means
+            // something else acted on the pull request, and acting back on it
+            // blind is how two actors fight over one head.
+            Verdict::DeadEnd(findings) => {
+                for judged in checks_green::judged(poll.runs(), roster) {
+                    writeln!(out, "{judged}")?;
+                }
+                let detail = render(&findings);
+                writeln!(
+                    err,
+                    "::error:: pr watch: no verdict is coming on {} — every required check is terminal and {detail}. Nothing further will be minted for this sha: push, or re-ready the pull request, to buy a fresh run.",
+                    config.sha
+                )?;
+                return Ok(ExitCode::Internal);
+            }
             Verdict::Pending(pending) => {
                 let line = describe(&pending);
                 poll.announce(&line, out)?;
@@ -752,8 +776,8 @@ fn sleep(seconds: f64) {
             reason = "the interval between conditional requests, and the interval is the SERVER'S: \
                       `interval_for` raises it to whatever `X-Poll-Interval` asked for and never \
                       lowers it. The loop exits on the required set reaching a verdict — \
-                      `Verdict::Green` or `Verdict::Red` both return — never on a clock \
-                      (CLOUD-1177)"
+                      `Verdict::Green`, `Verdict::Red` and `Verdict::DeadEnd` all return — never \
+                      on a clock (CLOUD-1177, CLOUD-497)"
         )]
         std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
     }
