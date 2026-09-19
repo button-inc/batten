@@ -1088,6 +1088,90 @@ fn a_spent_block_in_the_head_commit_admits_with_no_store() {
     );
 }
 
+/// Put `root` on a forge-shaped merge ref: HEAD is a merge commit carrying
+/// `message`, and its SECOND parent is a commit whose message is `carried`.
+///
+/// What `actions/checkout` hands a runner on a `pull_request` event, reduced to
+/// the two properties that decide this: the checked-out commit is synthesised by
+/// the forge, so its message is never an author's, and the branch head is its
+/// second parent. `ci.yml:252` already records that this is what CI checks out.
+fn merge_ref_over(root: &Path, carried: &str, message: &str) {
+    let base = common::git_in(root, &["rev-parse", "HEAD"]);
+    common::git_in(root, &["checkout", "-q", "-b", "pr"]);
+    common::git_in(root, &["commit", "-q", "--allow-empty", "-m", carried]);
+    common::git_in(root, &["checkout", "-q", &base]);
+    common::git_in(root, &["merge", "-q", "--no-ff", "-m", message, "pr"]);
+}
+
+#[test]
+fn a_spent_block_on_a_merge_refs_second_parent_admits() {
+    // CLOUD-1674's OWN SURFACE, which its fix did not reach. The block arm above
+    // reads HEAD, on the premise that HEAD is the commit carrying the admitted
+    // change. On the runner it is not: `actions/checkout` checks out the pull
+    // request's MERGE REF, so HEAD is a commit the forge synthesised whose
+    // message is `Merge <head> into <base>` and which structurally cannot carry
+    // a block. Measured on #984 — `batten-check` admitted the spend locally and
+    // refused the identical commit in CI, which is the exact asymmetry the block
+    // was introduced to end.
+    let root = admits_fixture("block-merge-ref");
+    let (address, block) = spend_block_for(&root, "a.rs", "the block must survive the merge ref");
+    forget_store(&root);
+
+    merge_ref_over(
+        &root,
+        &format!("carry\n\n{block}"),
+        "Merge deadbeef into cafef00d",
+    );
+
+    // The merge commit's OWN message carries nothing — if this arm ever passes
+    // because the block leaked into HEAD's message, the case is testing the arm
+    // above instead of this one.
+    let head = common::git_in(&root, &["log", "-1", "--format=%B"]);
+    assert!(
+        !head.contains("Admits:"),
+        "the merge commit must carry no block, or this case proves nothing: {head}"
+    );
+
+    let admitted = common::run(&root, &["check"]);
+    assert_eq!(
+        admitted.status.code(),
+        Some(batten::exit::ExitCode::Success.code()),
+        "the block on the merge ref's second parent admits: {}",
+        common::stderr(&admitted)
+    );
+    let reported = common::stderr(&admitted);
+    assert!(
+        reported.contains("admitted a.rs") && reported.contains(&address),
+        "the run names what it admitted and which record did it: {reported}"
+    );
+}
+
+#[test]
+fn a_merge_ref_whose_second_parent_carries_no_block_still_refuses() {
+    // THE ANTI-VACUITY ARM, and it is the load-bearing one: reading `HEAD^2` at
+    // all is only sound while it admits what that commit actually carries. A
+    // second parent with no block must leave the finding exactly where the store
+    // and the HEAD arm already left it — otherwise "look one commit further"
+    // has become "stop asking".
+    let root = admits_fixture("block-merge-ref-empty");
+    let (_, _) = spend_block_for(&root, "a.rs", "spent, then left off the commit");
+    forget_store(&root);
+
+    merge_ref_over(
+        &root,
+        "carry, with no block",
+        "Merge deadbeef into cafef00d",
+    );
+
+    let refused = common::run(&root, &["check"]);
+    assert_eq!(
+        refused.status.code(),
+        Some(batten::exit::ExitCode::Violation.code()),
+        "neither HEAD nor its second parent carries a block, so the finding stands: {}",
+        common::stderr(&refused)
+    );
+}
+
 #[test]
 fn a_tampered_block_in_the_head_commit_admits_nothing() {
     // THE TAMPER CHECK the store arm gets for free by owning its records, paid

@@ -18536,6 +18536,22 @@ fn apply_admissions(
     // and `land` replays exactly that commit. Resolved lazily — one read per
     // run, and none on a run the store answers or that has nothing to admit.
     let mut head_message: Option<Option<String>> = None;
+    // AND ITS SECOND PARENT, WHERE HEAD IS A MERGE THE FORGE MINTED (CLOUD-1674
+    // again, on the surface it was written for). A forge that checks a pull
+    // request out by its MERGE REF hands the runner a commit IT synthesised —
+    // parents (base, head), message `Merge <head> into <base>` — rather than the
+    // branch head. So the block arm above read the one commit that structurally
+    // cannot carry a block, and CLOUD-1674's whole "exit 0 here, exit 2 in CI"
+    // asymmetry survived its own fix. Measured: `batten-check` admitted a spend
+    // locally and refused the identical commit on the runner.
+    //
+    // `HEAD^2` AND NOT A RANGE WALK, which this function's own doc rejects for a
+    // reason that still holds: a walk would let an old block admit a later
+    // finding sharing its fingerprint. A merge's second parent is one commit,
+    // and on a forge-minted merge ref it is exactly the branch head `land`
+    // replays — the same commit the HEAD arm reads everywhere else. On a HEAD
+    // that is not a merge there is no such parent and nothing changes.
+    let mut merged_head_message: Option<Option<String>> = None;
 
     let mut kept = Vec::with_capacity(findings.len());
     for finding in findings {
@@ -18552,6 +18568,25 @@ fn apply_admissions(
         if admitted.is_none() {
             let message = head_message.get_or_insert_with(|| {
                 git::commit_record(root, "HEAD")
+                    .ok()
+                    .map(|record| record.body)
+            });
+            admitted = message.as_deref().and_then(|body| {
+                admission::admitted_by_block(
+                    body,
+                    &finding.rule,
+                    class,
+                    &finding.path,
+                    &anchor,
+                    &epoch,
+                )
+            });
+        }
+        //MUTANT-SUITE crates/batten/tests/it/admission.rs
+        //MUTANT merge-parent-arm-removed|s@^        if admitted.is_none() {$@        if false {@|a_spent_block_on_a_merge_refs_second_parent_admits
+        if admitted.is_none() {
+            let message = merged_head_message.get_or_insert_with(|| {
+                git::commit_record(root, "HEAD^2")
                     .ok()
                     .map(|record| record.body)
             });
