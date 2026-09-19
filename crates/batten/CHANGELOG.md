@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.176](https://github.com/button-inc/batten/compare/v0.0.175...v0.0.176) - 2026-09-19
+
+### Fixed
+
+- *(land)* [**breaking**] a closed check set with a masked name stops the wait instead of polling it
+
+### Other
+
+- *(verify)* admit an approximated lane, and take musl off the pre-ready gate
+
 ## [0.0.175](https://github.com/button-inc/batten/compare/v0.0.174...v0.0.175) - 2026-09-19
 
 ### Fixed
