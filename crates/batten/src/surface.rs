@@ -3090,6 +3090,24 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[SLOW_BASE],
     },
+    // WHICH suites a diff can move (CLOUD-886), ported out of
+    // `mise-tasks/suite-select.sh` under CLOUD-1716.
+    //
+    // `Read` and `EXITS_STANDARD` rather than `ci slow-needed`'s verdict table,
+    // because this ANSWERS rather than decides: the suite list is the payload, a
+    // caller runs what it names, and there is no yes-or-no for an exit code to
+    // carry. Could-not-look widens to every suite instead of refusing -- a
+    // selector that cannot answer must never narrow, which is the asymmetry
+    // `suites::select` is built around.
+    CommandDecl {
+        path: "ci suites",
+        id: "ci.suites",
+        about: "Name the bats suites a diff can move, or every suite where it cannot prove one inert",
+        data_channel: true,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[SLOW_BASE],
+    },
     CommandDecl {
         path: "config",
         id: "config",

@@ -3660,7 +3660,7 @@ export HOOKS_WIRING_DIAGNOSIS
 # WHICH SUITES, before how many cases (CLOUD-886). The glob that selects this
 # step is `mise-tasks/**`, so any byte under there ran all 151 suites — measured,
 # correcting one sentence in `land`'s lap-cap message bought a full matrix.
-# `suite-select` answers "which suites can this diff move" from the declared
+# `batten ci suites` answers "which suites can this diff move" from the declared
 # `# subject:` headers, and widens to everything on anything it cannot prove
 # inert. Its reason goes to stderr as a pointer.
 #
@@ -3676,7 +3676,7 @@ export HOOKS_WIRING_DIAGNOSIS
 # the emptiness check below then saw a non-empty value, and the fallback never
 # fired. A narrow run has no symptom, which is the asymmetry the fallback exists
 # to respect, so the guard has to read the status rather than the output.
-suites=$(./mise-tasks/suite-select.sh) || suites=""
+suites=$(cargo run --quiet -p batten -- ci suites --base "${BASE_SHA:-origin/main}") || suites=""
 if [ -z "$suites" ]; then
   echo "::error:: test:bats: the suite selector produced nothing, so falling back to every suite rather than narrowing on an answer it could not give." >&2
   suites=$(git ls-files --cached --others --exclude-standard -- 'tests/*.bats')
