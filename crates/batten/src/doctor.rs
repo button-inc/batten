@@ -31,7 +31,10 @@
 //! own provisioning (the bats submodule, rustup cross targets). That one is
 //! repo tooling; this is the product verb.
 
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use anyhow::Result;
 
 use crate::exit::ExitCode;
 use crate::rules::Rule;
@@ -519,6 +522,287 @@ impl Egress {
 impl crate::output::Line for Egress {
     fn line(&self) -> String {
         Egress::line(self).to_owned()
+    }
+}
+
+/// How one rustup target stands, from the toolchain's own on-disk bookkeeping
+/// (CLOUD-1753, ported off `mise-tasks/doctor-check.sh`).
+///
+/// # `rustup target add` is documented as idempotent and is not
+///
+/// A toolchain can carry a target's FILES — the lib directory, the per-component
+/// manifest, an entry in `components` — while `rustup target list --installed`
+/// still omits it. That is the shape a prebaked container image leaves behind,
+/// and in it `add` neither succeeds nor no-ops: it downloads, hits `detected
+/// conflict: lib/rustlib/<target>/lib/lib<x>.rlib`, and rolls back. Every task
+/// opening with `rustup target add` then fails for a reason that has nothing to
+/// do with the code under test.
+///
+/// # RUSTUP'S ANSWER DECIDES, NEVER THE FILES — the files are what lie
+///
+/// Which is why `installed` is an ARGUMENT here rather than a call this function
+/// makes. It is the whole reason the decision is separable from the effect that
+/// acts on it, and it is what lets every combination be driven against a fixture
+/// directory without a toolchain (the shell split for the same reason).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case", tag = "state")]
+pub enum RustupTarget {
+    /// rustup has it. Nothing to do — including when residue is present, because
+    /// residue WITH rustup's agreement is simply an installed target.
+    Installed,
+    /// No residue and rustup does not have it. A plain `add` works.
+    Missing,
+    /// Residue WITHOUT rustup having it: the conflict state. The residue must be
+    /// purged before `add` can succeed.
+    Stale,
+}
+
+impl RustupTarget {
+    /// The stable word this renders as, which is the shell's own vocabulary.
+    #[must_use]
+    pub const fn line(self) -> &'static str {
+        match self {
+            RustupTarget::Installed => "ok",
+            RustupTarget::Missing => "missing",
+            RustupTarget::Stale => "stale",
+        }
+    }
+
+    /// Whether the residue must be purged before `rustup target add` can work.
+    #[must_use]
+    pub const fn needs_purge(self) -> bool {
+        matches!(self, RustupTarget::Stale)
+    }
+}
+
+/// Classify one rustup target — the pure half of `batten doctor target`.
+///
+/// `rustlib` is the toolchain's `lib/rustlib` directory and `installed` is
+/// rustup's own answer for this target. **The order is the decision**: rustup
+/// having the target ends the question, so residue is only ever read for a target
+/// rustup denies. Reading residue first and rustup second would report a
+/// perfectly installed target as `Stale` on any toolchain that leaves its files
+/// where it put them, which is all of them.
+#[must_use]
+pub fn rustup_target(rustlib: &Path, target: &str, installed: bool) -> RustupTarget {
+    if installed {
+        return RustupTarget::Installed;
+    }
+    if residue(rustlib, target) {
+        RustupTarget::Stale
+    } else {
+        RustupTarget::Missing
+    }
+}
+
+/// Whether any on-disk trace of `target` survives under `rustlib`.
+///
+/// Three traces because the shell found three, and ANY of them is enough to
+/// collide with the next `add`. The `components` reading is a whole-line match
+/// rather than a substring: `rust-std-x86_64-unknown-linux-gnu` contains
+/// `rust-std-x86_64-unknown-linux-gn`, so a substring test would report residue
+/// for a target that merely prefixes an installed one.
+fn residue(rustlib: &Path, target: &str) -> bool {
+    if rustlib.join(target).is_dir() {
+        return true;
+    }
+    if rustlib.join(format!("manifest-rust-std-{target}")).exists() {
+        return true;
+    }
+    let component = format!("rust-std-{target}");
+    std::fs::read_to_string(rustlib.join("components"))
+        .is_ok_and(|text| text.lines().any(|line| line == component))
+}
+
+/// The lock file name inside the sysroot, so each toolchain queues on its own.
+///
+/// **Inside the sysroot it protects**, which is the shell's decision carried
+/// intact: the resource is the toolchain, every checkout on the machine shares
+/// it, and a lock keyed to a clone would let two clones collide on one rustup.
+/// A toolchain swap then cannot deadlock on a stale path either, because the path
+/// moved with the toolchain.
+const TARGET_LOCK: &str = ".batten-target-lock";
+
+/// One rustup invocation, captured.
+///
+/// Returns the merged output and whether it succeeded. A spawn that could not
+/// start at all is `None` — could-not-look, never "the target is absent", which
+/// is the reading that would make a broken toolchain look like a missing target.
+fn rustup(args: &[&str]) -> Option<(bool, String)> {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: whether rustup HAS a target is a fact about the container that no walk of the tree answers, which is `pinned`'s and `symbols`' argument on the spawn-adapters table. The purge and the add are this verb's own effect, and rustup is the only thing that can perform them"
+    )]
+    let spawned = std::process::Command::new("rustup")
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .ok()?;
+    let mut merged = String::from_utf8_lossy(&spawned.stdout).into_owned();
+    merged.push_str(&String::from_utf8_lossy(&spawned.stderr));
+    Some((spawned.status.success(), merged))
+}
+
+/// Whether rustup itself reports `target` installed.
+///
+/// A WHOLE-LINE match, for `residue`'s reason one function up: a triple can
+/// prefix another, and a substring test would report an uninstalled target as
+/// installed the moment a longer sibling arrived.
+fn rustup_has(target: &str) -> Option<bool> {
+    let (ok, text) = rustup(&["target", "list", "--installed"])?;
+    ok.then(|| text.lines().any(|line| line.trim() == target))
+}
+
+/// The toolchain's `lib/rustlib`, from rustc's own sysroot.
+fn rustlib_dir() -> Option<PathBuf> {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: the sysroot is the toolchain's own answer for where it put its files, and reading it from anywhere else would be a second authority over the directory this verb purges"
+    )]
+    let spawned = std::process::Command::new("rustc")
+        .args(["--print", "sysroot"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .ok()?;
+    spawned.status.success().then(|| {
+        PathBuf::from(String::from_utf8_lossy(&spawned.stdout).trim().to_owned())
+            .join("lib")
+            .join("rustlib")
+    })
+}
+
+/// Drop every on-disk trace of `target` under `rustlib`.
+///
+/// Residue is a partial install of a component rustup does not consider
+/// installed, **so nothing can be depending on it** — which is what makes
+/// dropping it safe rather than destructive, and why this arm is reached only
+/// from [`RustupTarget::Stale`]. `rustup target remove` is asked first and its
+/// failure ignored on purpose: it is the tidy path, and the whole premise here is
+/// that rustup's bookkeeping disagrees with the disk.
+fn purge(rustlib: &Path, target: &str) {
+    drop(rustup(&["target", "remove", target]));
+    drop(std::fs::remove_dir_all(rustlib.join(target)));
+    drop(std::fs::remove_file(
+        rustlib.join(format!("manifest-rust-std-{target}")),
+    ));
+    let components = rustlib.join("components");
+    if let Ok(text) = std::fs::read_to_string(&components) {
+        let component = format!("rust-std-{target}");
+        let kept: Vec<&str> = text.lines().filter(|line| *line != component).collect();
+        // REWRITTEN ONLY WHEN A LINE WENT. A rewrite that changed nothing would
+        // still rewrite the file, and this file belongs to rustup.
+        if kept.len() != text.lines().count() {
+            let mut body = kept.join("\n");
+            body.push('\n');
+            drop(std::fs::write(&components, body));
+        }
+    }
+}
+
+/// `batten doctor target <triple>`: make one rustup target installed, or say why
+/// it is not (CLOUD-1753).
+///
+/// Retires `mise-tasks/target-ensure.sh`, `doctor-check.sh` and `with-lock.sh`
+/// together, because the three were one capability split across three files by
+/// the shell's own limits rather than by the problem.
+///
+/// # The lock is the point, not a precaution
+///
+/// rustup has no cross-process lock. Two concurrent `target add` calls each see
+/// the other's half-written component tree, both report `detected conflict`, and
+/// both roll back — the target ends up NOT installed and a gate goes red on a
+/// clean tree (CLOUD-220). Serialising here, in the one effect every call site
+/// routes through, is what makes target installation behave like the idempotent
+/// operation rustup documents.
+///
+/// **The classification happens INSIDE the critical section**, which is the whole
+/// reason the shell re-exec'd itself under the lock rather than wrapping a block:
+/// a caller that queued behind the winner must re-read fresh state and no-op,
+/// not install a target the winner just installed. Holding the guard across the
+/// read is that property without the re-exec.
+///
+/// # Errors
+///
+/// Propagates a write failure on either channel.
+pub fn run_target(target: &str, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+    let Some(rustlib) = rustlib_dir() else {
+        writeln!(
+            err,
+            "::error:: doctor target: rustc could not name its sysroot, so there is no toolchain to install into"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    drop(std::fs::create_dir_all(&rustlib));
+
+    let want = crate::exec::Lock {
+        place: crate::exec::LockPlace::Path(rustlib.join(TARGET_LOCK)),
+        attempts: crate::exec::LOCK_ATTEMPTS_DEFAULT,
+        label: format!("the toolchain lock ({target})"),
+    };
+    // HELD ACROSS EVERYTHING BELOW. The binding is the lifetime: `HeldLock::drop`
+    // releases it on every exit path, including the error ones.
+    let _held = match crate::exec::hold(Some(&want), err)? {
+        crate::exec::LockOutcome::Refused(code) => return Ok(code),
+        held => held,
+    };
+
+    let Some(installed) = rustup_has(target) else {
+        writeln!(
+            err,
+            "::error:: doctor target: rustup could not list its installed targets, so whether {target} is present is unknown"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    match rustup_target(&rustlib, target, installed) {
+        RustupTarget::Installed => {
+            writeln!(out, "doctor target: {target} already installed")?;
+            return Ok(ExitCode::Success);
+        }
+        RustupTarget::Stale => {
+            writeln!(
+                out,
+                "doctor target: {target} is half-installed — purging the residue before reinstalling"
+            )?;
+            purge(&rustlib, target);
+        }
+        RustupTarget::Missing => writeln!(out, "doctor target: {target} missing — installing")?,
+    }
+
+    // THE LAST LINE OF rustup's OWN OUTPUT, never the backtrace: a pointer to
+    // what went wrong rather than the payload (non-negotiable rule 4).
+    match rustup(&["target", "add", target]) {
+        Some((true, _)) => {}
+        Some((false, text)) => {
+            let last = text.lines().next_back().unwrap_or("rustup said nothing");
+            writeln!(
+                err,
+                "::error:: doctor target: could not install {target} — {last}"
+            )?;
+            return Ok(ExitCode::Usage);
+        }
+        None => {
+            writeln!(
+                err,
+                "::error:: doctor target: rustup could not be run, so {target} was not installed"
+            )?;
+            return Ok(ExitCode::Internal);
+        }
+    }
+
+    // THE POST-CONDITION IS ASSERTED, not assumed. `add` reporting success while
+    // the target is still absent is the exact shape CLOUD-220 measured, and a
+    // verb that trusted the exit code would report the failure as a success.
+    if rustup_has(target) == Some(true) {
+        writeln!(out, "doctor target: {target} installed")?;
+        Ok(ExitCode::Success)
+    } else {
+        writeln!(
+            err,
+            "::error:: doctor target: {target} still absent after add"
+        )?;
+        Ok(ExitCode::Usage)
     }
 }
 
@@ -2473,6 +2757,93 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+
+    /// A rustlib directory with the residue the case names present.
+    fn rustlib(name: &str, traces: &[&str]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("batten-rustup-{name}"));
+        drop(std::fs::remove_dir_all(&dir));
+        std::fs::create_dir_all(&dir).expect("the fixture rustlib");
+        for trace in traces {
+            match *trace {
+                "dir" => std::fs::create_dir_all(dir.join(TRIPLE)).expect("the target dir"),
+                "manifest" => std::fs::write(
+                    dir.join(format!("manifest-rust-std-{TRIPLE}")),
+                    "manifest\n",
+                )
+                .expect("the manifest"),
+                "components" => std::fs::write(
+                    dir.join("components"),
+                    format!("rustc\nrust-std-{TRIPLE}\ncargo\n"),
+                )
+                .expect("the components file"),
+                // A components file naming a DIFFERENT target, so the case can
+                // show the whole-line match is doing the work.
+                "components-other" => std::fs::write(
+                    dir.join("components"),
+                    format!("rustc\nrust-std-{TRIPLE}-musl\n"),
+                )
+                .expect("the components file"),
+                other => unreachable!("unknown trace {other}"),
+            }
+        }
+        dir
+    }
+
+    /// The triple every case below classifies.
+    const TRIPLE: &str = "x86_64-unknown-linux-gnu";
+
+    #[test]
+    fn rustup_having_the_target_ends_the_question_whatever_is_on_disk() {
+        // THE ORDER IS THE DECISION. Residue WITH rustup's agreement is simply an
+        // installed target, and a classifier that read the disk first would call
+        // every properly installed target stale.
+        let dir = rustlib("installed-with-residue", &["dir", "manifest", "components"]);
+        assert_eq!(
+            rustup_target(&dir, TRIPLE, true),
+            RustupTarget::Installed,
+            "residue with rustup's agreement is an installed target"
+        );
+    }
+
+    #[test]
+    fn no_residue_and_no_rustup_is_missing_rather_than_stale() {
+        let dir = rustlib("missing", &[]);
+        assert_eq!(rustup_target(&dir, TRIPLE, false), RustupTarget::Missing);
+        assert!(!rustup_target(&dir, TRIPLE, false).needs_purge());
+    }
+
+    #[test]
+    fn each_trace_alone_is_enough_to_read_as_stale() {
+        // ANY of the three, because any of them is enough to collide with the
+        // next `add` — which is the state `rustup target add` cannot recover
+        // from on its own (CLOUD-220).
+        for trace in ["dir", "manifest", "components"] {
+            let dir = rustlib(&format!("stale-{trace}"), &[trace]);
+            assert_eq!(
+                rustup_target(&dir, TRIPLE, false),
+                RustupTarget::Stale,
+                "a {trace} trace alone is residue"
+            );
+            assert!(rustup_target(&dir, TRIPLE, false).needs_purge());
+        }
+    }
+
+    #[test]
+    fn a_components_entry_for_a_longer_triple_is_not_this_targets_residue() {
+        // The whole-line match earning its keep: `rust-std-<triple>` is a prefix
+        // of `rust-std-<triple>-musl`, so a substring test would report residue
+        // for a target that merely prefixes an installed one — and the verb would
+        // then purge a target nothing is wrong with.
+        let dir = rustlib("prefix", &["components-other"]);
+        assert_eq!(rustup_target(&dir, TRIPLE, false), RustupTarget::Missing);
+    }
+
+    #[test]
+    fn the_three_states_render_the_shells_own_vocabulary() {
+        assert_eq!(RustupTarget::Installed.line(), "ok");
+        assert_eq!(RustupTarget::Missing.line(), "missing");
+        assert_eq!(RustupTarget::Stale.line(), "stale");
+    }
     use std::fs;
 
     use super::*;

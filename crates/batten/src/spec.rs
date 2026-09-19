@@ -833,6 +833,13 @@ mod tests {
             "doctor mediator".to_owned(),
             "doctor session".to_owned(),
             "doctor toolchain".to_owned(),
+            // The one `doctor` sub-verb that writes (CLOUD-1753): it purges a
+            // half-installed rustup target and adds it. Declared here like any
+            // other row and ABSENT from the read-only allowlist above by
+            // construction, which is the §5 derivation working rather than an
+            // omission — the allowlist is `effect == read`, and this reaches the
+            // network.
+            "doctor target".to_owned(),
             "enforce".to_owned(),
             "exec".to_owned(),
             // The schema is emitted by `generate`, not `config`: it is a

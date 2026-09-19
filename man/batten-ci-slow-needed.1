@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-ci-slow-needed 1  batten 
+.SH NAME
+batten\-ci\-slow\-needed \- Decide whether a diff can move the slow tier, so a diff that cannot does not pay for it
+.SH SYNOPSIS
+\fBbatten ci slow\-needed\fR [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-base\fR> 
+.SH DESCRIPTION
+Decide whether a diff can move the slow tier, so a diff that cannot does not pay for it
+.SH OPTIONS
+.TP
+\fB\-\-base\fR
+The revision this checkout is diffed against
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

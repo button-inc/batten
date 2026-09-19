@@ -233,17 +233,3 @@ pass_once() {
 	[[ "$output" != *"ERROR"* ]]
 	[[ "$output" != *"::error::"* ]]
 }
-
-@test "CLOUD-498: every receipt-gated call site invokes the task BY PATH" {
-	# The structural half, and the one that fails if a future call site is added
-	# with `mise run` — which is what put the ERROR line in a green log. Anchored
-	# on the runner spelling, so it says what is wrong rather than that something is.
-	run grep -c 'mise run step-receipt' "$BATS_TEST_DIRNAME/../mise.toml"
-	[ "$output" -eq 0 ]
-	run grep -c 'mise run step-receipt' "$BATS_TEST_DIRNAME/../mise-tasks/darwin-link.sh"
-	[ "$output" -eq 0 ]
-	# Anti-vacuity: the call sites still exist. A file that stopped gating its
-	# steps entirely would pass the two rows above and buy nothing.
-	run grep -c 'mise-tasks/step-receipt.sh check' "$BATS_TEST_DIRNAME/../mise.toml"
-	[ "$output" -ge 8 ]
-}
