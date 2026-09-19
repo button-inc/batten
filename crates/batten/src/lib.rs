@@ -13309,8 +13309,24 @@ fn run_hook(
     // the file is not TOML, so no row is readable and none can be enforced. Then
     // the refusal is the only signal available, and the hatch below is how the
     // container gets back.
+    //
+    // THE REFUSAL HAS A FLOOR, AND THE FLOOR IS NOT A WEAKENING (CLOUD-1842).
+    //
+    // Without it this arm refused EVERY call. Measured on a scratch fixture
+    // carrying a `batten.toml` that will not parse: a `Read` envelope denied at
+    // exit `2`, its reason carrying the parse position the agent was thereby
+    // denied the means to look at. A container in that state cannot look, cannot
+    // edit, cannot diagnose and cannot report, and each declared escape is
+    // unreachable from inside it — the env hatch above cannot be spelled on the
+    // Bash surface that advertises it (CLOUD-1605), and an override over a
+    // config that will not load cannot be minted (CLOUD-1579).
+    //
+    // [`recoverable_without_rules`] carries the argument for which two shapes
+    // pass and why every other one still refuses.
     //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
     //MUTANT unloadable-config-allows|s@            Err(unreadable) if unreadable_declaration(\&unreadable) => {@            Err(unreadable) if false \&\& unreadable_declaration(\&unreadable) => {@|a_config_this_build_cannot_load_denies_rather_than_failing_open
+    //MUTANT floor-swallows-the-refusal|s@                if recoverable_without_rules(\&envelope) {@                if true {@|a_command_is_still_refused_over_a_config_that_will_not_load
+    //MUTANT floor-removed|s@                if recoverable_without_rules(\&envelope) {@                if false {@|a_read_still_answers_over_a_config_that_will_not_load
     let (policy, waivers) = if adjudicable {
         match load_policy(overrides, harness) {
             Ok(loaded) => loaded,
@@ -13318,7 +13334,17 @@ fn run_hook(
             // meeting a newer config leaves a container recoverable, not bricked.
             Err(_) if bypass => (hook::Policy::declaring_nothing(harness), Vec::new()),
             Err(unreadable) if unreadable_declaration(&unreadable) => {
-                return deny_unadjudicable(harness, &envelope, &unreadable, mode, out, err);
+                if recoverable_without_rules(&envelope) {
+                    // THE SAME EMPTY POLICY THE HATCH HANDS BACK, and for the
+                    // same reason: there is no rule to apply, so there is
+                    // nothing for a gate to do. `declaring_nothing` carries
+                    // `protected: PathSet::empty()`, which is what lets the
+                    // repair write reach the file that is faulting — the
+                    // protected gate is not SUPPRESSED here, it has no table.
+                    (hook::Policy::declaring_nothing(harness), Vec::new())
+                } else {
+                    return deny_unadjudicable(harness, &envelope, &unreadable, mode, out, err);
+                }
             }
             // EVERY OTHER FAULT KEEPS ITS OLD BEHAVIOUR, deliberately. Today that
             // is still a whole-file refusal at exit `1`, which is the outcome the
@@ -13664,6 +13690,159 @@ fn unreadable_declaration(err: &anyhow::Error) -> bool {
     err.downcast_ref::<UsageError>()
         .and_then(|usage| usage.verdict)
         .is_some_and(|class| class == verdict::Native::ConfigUnreadable)
+}
+
+/// Can this call proceed with no rules at all, because no rule could have had
+/// anything to say about it? (CLOUD-1842)
+///
+/// The floor under [`deny_unadjudicable`], and the reason a `batten.toml` that
+/// will not parse no longer ends the container. Read ONLY on the
+/// [`verdict::Native::ConfigUnreadable`] arm: everywhere else a policy exists
+/// and this question is not asked.
+///
+/// # This is not the fail-open [`unreadable_declaration`] exists to refuse
+///
+/// The distinction that whole boundary turns on is between GUESSING about a call
+/// and having read an authority that says it cannot be enforced — stdin that
+/// would not read is the first, an unloadable declaration the second, and only
+/// the second denies. This adds a third case belonging with neither: the
+/// authority is unreadable AND the call carries nothing any rule could decide.
+///
+/// # THE OPERATION IS ASKED, NOT INFERRED FROM AN ABSENCE
+///
+/// A first attempt read `command.is_empty() && writes.is_none()` and called that
+/// "cannot mutate". **It is not.** [`hook::Harness::operation_of`] maps an MCP
+/// call to [`hook::Operation::Mcp`], a subagent spawn to `Subagent` and an
+/// unrecognised tool to `Other` — and every one of those carries an empty
+/// command and no write, exactly as [`is_adjudicable`]'s own doc says. Measured
+/// on a scratch fixture before the correction: `mcp__serena__write_memory`,
+/// whose target is a **protected** path, was allowed at exit `0` over an
+/// unreadable config, and so was a `Task` spawn. That is the class CLOUD-1677
+/// measured, reintroduced by the change meant to put a floor under it.
+///
+/// So the predicate NAMES the operations it admits and refuses everything else,
+/// which is the direction [`hook::Operation::Other`]'s own doc demands: it is
+/// *"something specific was seen and not recognized"* — could-not-look — and
+/// reading a could-not-look as "harmless" is the inference this engine exists to
+/// refuse.
+///
+/// **Two exemptions, each an absence rather than a permission.**
+///
+/// * **A classified READ.** [`hook::Operation::Read`] with nothing written. Such
+///   an envelope reaches [`is_adjudicable`] only through its
+///   `PreTool`-with-a-tool-name clause, whose own doc says it exists so
+///   *tool-keyed rows* can match. Under an unreadable config the row count is
+///   zero, so that clause is answering a question with nothing on either side of
+///   it. The cost of refusing anyway is total: the `Read` that would show the
+///   agent the parse error is the very call denied.
+/// * **A write to the config authority itself.** The one mutation whose whole
+///   effect is on the file that is faulting, and therefore the only mutation
+///   that can END the degraded state. Refusing it makes the fault permanent,
+///   which is CLOUD-1579's lockout reached by a second route.
+///
+/// # What is NOT exempt
+///
+/// Any command, any MCP call, any subagent spawn, any unclassified tool, and any
+/// write naming anything else. A shell command that happens to target the config
+/// is refused too — its argv is not decidable from the envelope, the same
+/// undecidability `batten.toml`'s `protected_readers` comment records for an
+/// interpreter, and the direction that must refuse rather than pass.
+///
+/// # Two bounds on the read half, stated rather than discovered
+///
+/// `Grep` and `Glob` are `Other` on every host, so they refuse here too. And
+/// `operation_of`'s `GeminiCli | CopilotCli` arm returns `Other` for every
+/// non-writer tool, so **no call on those two hosts ever yields `Read`** and
+/// this exemption is inert there — the repair-write half still works, because
+/// `write_tools` is consulted before the per-host arm. Both are inherited from
+/// CLOUD-209's unsurveyed hosts rather than introduced here, and CLOUD-1855
+/// carries the fix.
+///
+/// # The path test is equality, never a glob
+///
+/// [`hook::Envelope::writes`] is already repository-relative at this boundary
+/// (`relativise_writes`), so the comparison is against the two file names this
+/// crate owns — never a consumer string, which would be non-negotiable rule 1.
+//MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
+//MUTANT floor-admits-everything|s@        _ => false,@        _ => true,@|a_command_is_still_refused_over_a_config_that_will_not_load
+//MUTANT floor-admits-an-unclassified-call|s@        (hook::Operation::Read, None) => true,@        (_, None) => true,@|a_mutating_mcp_call_is_still_refused_over_a_config_that_will_not_load
+//MUTANT floor-admits-any-write|s@        (hook::Operation::Write, Some(path)) => names_the_config_authority(path),@        (hook::Operation::Write, Some(_)) => true,@|a_write_to_another_path_is_still_refused_over_a_config_that_will_not_load
+fn recoverable_without_rules(envelope: &hook::Envelope) -> bool {
+    // NO `command.is_empty()` GUARD, AND ITS ABSENCE IS THE DECISION. A `Bash`
+    // envelope is `Operation::Execute` with no write, so it lands on `_ => false`
+    // whether or not such a guard runs — and no envelope can carry a command
+    // while classifying as `Read` or `Write`, because those tools' inputs have
+    // no `command` key. A guard here would be unreachable for the deny
+    // direction, so its declared mutation could never die: a dead gate in a
+    // module the census enforces, which is what CLOUD-418 refuses.
+    match (&envelope.operation, envelope.writes.as_deref()) {
+        // A classified read with nothing written: no mutation for a rule to
+        // have refused.
+        (hook::Operation::Read, None) => true,
+        // The repair, and only onto the file that is faulting.
+        (hook::Operation::Write, Some(path)) => names_the_config_authority(path),
+        // EVERY OTHER SHAPE REFUSES, `Execute`, `Mcp`, `Subagent` and `Other`
+        // among them. An operation this build could not classify is
+        // could-not-look, and a could-not-look that mutates is the one thing
+        // this arm must not admit.
+        _ => false,
+    }
+}
+
+/// The repository's `[hook]` table, or `None` where there is none to read.
+///
+/// One reader for [`fire_actions`] and [`dispatch_handlers`], which carried the
+/// same four lines each. Both want the REPOSITORY's authority rather than the
+/// cwd's (CLOUD-824), and both want an absent table to mean "nothing declared".
+///
+/// # An unreadable declaration is `None` here, and that is CLOUD-1842's floor
+///
+/// This resolve used to propagate, and it is the SECOND config read on the
+/// boundary — so a `batten.toml` that will not parse raised a [`UsageError`]
+/// here even for a call `run_hook` had already exempted from the refusal.
+/// Measured: the exempt `Read` answered exit `1` instead of `0`, which is the
+/// brick surviving one layer along. The early return on `bypass` in both callers
+/// is why the declared hatch never met it and no case caught it.
+///
+/// **Narrow, and to the same class.** Only [`unreadable_declaration`] is
+/// swallowed. Every other fault still propagates, because those leave the rest
+/// of the file readable and a table this build merely misunderstands is not the
+/// same claim as one that is not TOML at all.
+///
+/// **And it is not a fail-open**, for [`recoverable_without_rules`]'s reason: a
+/// handler or action table nobody could read declares no handler and no action
+/// this build can honour. Refusing the whole call over that is the same collapse
+/// `run_hook`'s arm exists to stop, reached through a different function.
+fn hook_table(overrides: &Overrides) -> Result<Option<crate::action::HookConfig>> {
+    let here = hook_authority_root();
+    if !here.join(config::CONFIG_FILE).exists() {
+        return Ok(None);
+    }
+    match resolve::resolve(here, overrides) {
+        Ok(resolved) => Ok(resolved.hook),
+        Err(unreadable) if unreadable_declaration(&unreadable) => Ok(None),
+        Err(other) => Err(other),
+    }
+}
+
+/// Is this repository-relative path one of the two files the config is read
+/// from? (CLOUD-1842)
+///
+/// Whole-name equality after the one normalization that preserves identity: `\`
+/// folded to `/`, because a host spelling the same file either way means the
+/// same file. **No `trim()`** — `" batten.toml"` and `"batten.toml "` are
+/// different files on a POSIX filesystem, and trimming would hand the exemption
+/// to them. The first draft borrowed the trim from [`crate::bypass`], where it
+/// is right because that code compares two CALLS to each other and surrounding
+/// whitespace is transcription noise; here the comparison is an identity check
+/// against a constant, where whitespace is part of the name.
+///
+/// No glob, no prefix test, no path resolution: `crates/batten.toml` ends with
+/// the authority's name and is a different file.
+fn names_the_config_authority(path: &str) -> bool {
+    let normalized = path.replace('\\', "/");
+    let name = normalized.strip_prefix("./").unwrap_or(&normalized);
+    name == config::CONFIG_FILE || name == resolve::LOCAL_CONFIG_FILE
 }
 
 /// Refuse a call whose rules this build could not load (CLOUD-1677).
@@ -14310,11 +14489,7 @@ fn dispatch_handlers(
     // `fire_actions`' reading, for `fire_actions`' reason: a handler table is a
     // per-repository declaration, so it comes from the REPOSITORY's authority
     // rather than the cwd's (CLOUD-824).
-    let here = hook_authority_root();
-    if !here.join(config::CONFIG_FILE).exists() {
-        return Ok(None);
-    }
-    let Some(hook_config) = resolve::resolve(here, overrides)?.hook else {
+    let Some(hook_config) = hook_table(overrides)? else {
         return Ok(None);
     };
     // CLOUD-460's narrowing, and the reason `pre-tool` is affordable at all: a
@@ -14565,11 +14740,7 @@ fn fire_actions(
     // checkout would fire a different set depending on which ref that worktree
     // sits on. Resolved after the two refusals above, so a bypassed or pre-tool
     // call still pays nothing.
-    let here = hook_authority_root();
-    if !here.join(config::CONFIG_FILE).exists() {
-        return Ok(());
-    }
-    let Some(hook_config) = resolve::resolve(here, overrides)?.hook else {
+    let Some(hook_config) = hook_table(overrides)? else {
         return Ok(());
     };
     action::fire(
