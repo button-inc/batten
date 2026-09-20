@@ -261,7 +261,7 @@ fn a_land_with_no_registry_entry_publishes_nothing() {
 /// disarming it.
 #[test]
 fn a_stalled_holder_is_stealable_once_its_beat_has_published() {
-    use batten::lease::{Body, Observed, Terms, Turn, turn};
+    use batten::lease::{Body, Observed, Reading, Recent, Terms, Turn, turn};
 
     let terms = Terms::default();
     let stall = 60;
@@ -281,14 +281,11 @@ fn a_stalled_holder_is_stealable_once_its_beat_has_published() {
     };
 
     let took = turn(
-        &terms,
-        &observed("1700000000.1700000030"),
-        "clone-b",
-        stalled_for,
-        stalled_for,
-        stall,
-        1_999_999,
-    );
+&terms,
+&observed("1700000000.1700000030"),
+"clone-b",
+Reading { held_for: stalled_for, progress_for: stalled_for, stall_beats: stall, now: 1_999_999, recent: Recent::Clean },
+);
     assert!(
         matches!(took, Turn::Take(_)),
         "a live-but-stalled holder is stealable: {took:?}"
@@ -296,14 +293,11 @@ fn a_stalled_holder_is_stealable_once_its_beat_has_published() {
 
     // THE DISARMED SHAPE, which is what every lease in the fleet looked like.
     let waited = turn(
-        &terms,
-        &observed(""),
-        "clone-b",
-        stalled_for,
-        stalled_for,
-        stall,
-        1_999_999,
-    );
+&terms,
+&observed(""),
+"clone-b",
+Reading { held_for: stalled_for, progress_for: stalled_for, stall_beats: stall, now: 1_999_999, recent: Recent::Clean },
+);
     assert_eq!(
         waited,
         Turn::Wait,

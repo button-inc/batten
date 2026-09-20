@@ -2134,6 +2134,44 @@ impl Local {
     ///
     /// A first sighting is `0`, and a value this clone cannot record is `0` too —
     /// a corroboration clock that cannot be kept has corroborated nothing.
+    /// Remember that this clone released the lease because its run went RED.
+    ///
+    /// **Here rather than on the lease body, and per CLONE rather than per
+    /// process**, which are two separate constraints and both bind. The body has
+    /// no field-addition discipline (CLOUD-1769) so a "why" on the tombstone
+    /// would split a mixed fleet; and `acquire` runs as a different process from
+    /// the lap that went red, so a value held in memory would be gone by the time
+    /// the question is asked. This directory is exactly the surface that spans
+    /// both — the same one `held_for`'s corroboration clock already uses.
+    ///
+    /// Silent on failure, like every write here: a clone that cannot record its
+    /// own red re-acquires as it always did, which is the behaviour this replaces
+    /// rather than a new hazard.
+    pub fn record_red(&self) {
+        let _ = std::fs::create_dir_all(&self.dir);
+        let _ = std::fs::write(self.dir.join("released-red"), "1\n");
+    }
+
+    /// Forget it — this clone has taken the lease again, or landed cleanly.
+    ///
+    /// **The backoff is one turn, never a sentence.** A clone that stood aside
+    /// once has paid it; leaving the mark would have a single red exclude the
+    /// clone from every future acquisition, which is a fleet down one worker for
+    /// the life of the checkout.
+    pub fn clear_red(&self) {
+        let _ = std::fs::remove_file(self.dir.join("released-red"));
+    }
+
+    /// What this clone did with the lease it last held.
+    #[must_use]
+    pub fn recent(&self) -> Recent {
+        if self.dir.join("released-red").exists() {
+            Recent::ReleasedRed
+        } else {
+            Recent::Clean
+        }
+    }
+
     #[must_use]
     pub fn held_for(&self, name: &str, token: &str, now: i64) -> i64 {
         let path = self.dir.join(name);
@@ -2168,6 +2206,54 @@ pub enum Turn {
     Wait,
 }
 
+/// What this clone did with the lease it last held.
+///
+/// **A CALLER'S READING, NEVER A FIELD ON THE BODY**, and the distinction is a
+/// constraint rather than a preference. The obvious spelling is a "why" on the
+/// tombstone — but the lease body has no field-addition discipline (CLOUD-1769),
+/// so the first new field either splits a mixed fleet or is silently unreadable
+/// to older clones. Nothing here needs one: the clone that must back off is the
+/// same process that went red, so it already knows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Recent {
+    /// Nothing to answer for: a first acquisition, or a clean release.
+    #[default]
+    Clean,
+    /// This clone released the lease because its run went RED.
+    ///
+    /// Taking the lease is a promise to go green. Going red breaks it, and
+    /// every waiter that speculated on this branch has to re-bet — so the
+    /// clone that broke it stands aside rather than winning the race it just
+    /// lost.
+    ReleasedRed,
+}
+
+/// Everything [`turn`] needs that is not the lease itself.
+///
+/// **A STRUCT BECAUSE `clippy::too_many_arguments` SAID SO, and collecting them
+/// is the fix that lint is for** — `hook.rs`'s own note says as much, and this
+/// file's neighbours record an `#[expect]` arguing an arity was fine being
+/// rejected in review. Five loose numbers of which three are durations on
+/// different clocks is exactly the call the lint exists to make unreadable.
+///
+/// They belong together on their own terms too: every field is a reading THIS
+/// CLONE took before asking, never a fact off the lease body. That is the
+/// property that keeps [`turn`] a pure function over readings, and the reason
+/// none of these may be derived from the lease's own `expires`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Reading {
+    /// How long this clone has seen the lease's sha unchanged, on ITS clock.
+    pub held_for: i64,
+    /// How long the holder's progress token has been unchanged, on ITS clock.
+    pub progress_for: i64,
+    /// How many beats of no progress make a beating holder stealable.
+    pub stall_beats: i64,
+    /// This clone's now.
+    pub now: i64,
+    /// What this clone did with the lease it last held.
+    pub recent: Recent,
+}
+
 /// Decide a [`Turn`] over one observation.
 ///
 /// **`held_for` and `progress_for` are DURATIONS ON THIS CLOCK**, measured by
@@ -2185,16 +2271,23 @@ pub enum Turn {
 ///   every holder that cannot see its own progress. Releasing a lease wrongly
 ///   costs its holder one lap; stealing one wrongly puts two holders on the same
 ///   trunk.
+///
+/// # `recent` IS THE ONLY ARM THAT DECLINES A LEASE THIS CLONE COULD HAVE
+///
+/// Every other reading here asks whether taking the lease is PERMITTED.
+/// [`Recent::ReleasedRed`] asks whether it is decent: the lease is genuinely
+/// free and this clone is genuinely allowed it, and it stands aside anyway
+/// because it just broke the promise the lease represents. It is bounded by an
+/// admitted `next` precisely so that it cannot become a deadlock — see the arm.
 #[must_use]
-pub fn turn(
-    terms: &Terms,
-    observed: &Observed,
-    holder: &str,
-    held_for: i64,
-    progress_for: i64,
-    stall_beats: i64,
-    now: i64,
-) -> Turn {
+pub fn turn(terms: &Terms, observed: &Observed, holder: &str, reading: Reading) -> Turn {
+    let Reading {
+        held_for,
+        progress_for,
+        stall_beats,
+        now,
+        recent,
+    } = reading;
     // GARBAGE IS WAIT, and it is the one place this differs from `authorises`:
     // taking a ref nobody can read means overwriting whatever a stray push put
     // there, and a well-meant fix that races a real holder is worse than waiting
@@ -2216,6 +2309,27 @@ pub fn turn(
         return Turn::Mine;
     }
     if body.released() {
+        // BACKING OFF AFTER OUR OWN RED, and this is the arm that makes `next`
+        // buy ORDERING rather than only overlap.
+        //
+        // `authorises` has always read `next` — a reserved successor may spend
+        // the overlapping matrix — but nothing read it when the lease actually
+        // freed, so `turn` was first-CAS-wins and the branch that had just gone
+        // red was as likely to win as anyone. Measured: eight `land` runs and
+        // ~3h of a held lease, re-acquired by the same clone every lap.
+        //
+        // THE BACKOFF LAPSES WHEN THE POOL IS EMPTY, which is the half that
+        // keeps this from being a deadlock: with no `next` admitted there is
+        // nobody to stand aside FOR, and a single-clone fleet that redded must
+        // still be able to take its own lease back and fix the thing. Standing
+        // aside forever for nobody would stop the fleet to punish one branch.
+        //
+        // `next != holder` because a clone reserved as its own successor is not
+        // somebody else, and reading it as one would be the same deadlock by a
+        // longer route.
+        if recent == Recent::ReleasedRed && !body.next.is_empty() && body.next != holder {
+            return Turn::Wait;
+        }
         return Turn::Take(format!("took the lease {} released", body.holder));
     }
     if body.expired(now) && held_for >= terms.beat {
@@ -3661,7 +3775,12 @@ mod tests {
             why: String::from("the ref carries no lease body"),
         };
         assert_eq!(
-            turn(&Terms::default(), &garbage, "me", 10_000, 10_000, 60, 1000),
+            turn(
+&Terms::default(),
+&garbage,
+"me",
+Reading { held_for: 10_000, progress_for: 10_000, stall_beats: 60, now: 1000, recent: Recent::Clean },
+),
             Turn::Wait
         );
     }
@@ -3892,7 +4011,12 @@ mod tests {
     fn an_absent_lease_is_taken_without_corroboration() {
         // A statement rather than a deduction, so no clock and no beat.
         assert!(matches!(
-            turn(&Terms::default(), &Observed::Absent, "me", 0, 0, 60, 100),
+            turn(
+&Terms::default(),
+&Observed::Absent,
+"me",
+Reading { held_for: 0, progress_for: 0, stall_beats: 60, now: 100, recent: Recent::Clean },
+),
             Turn::Take(_)
         ));
     }
@@ -3900,7 +4024,12 @@ mod tests {
     #[test]
     fn a_released_lease_is_taken_without_corroboration() {
         assert!(matches!(
-            turn(&Terms::default(), &body("them", 0, ""), "me", 0, 0, 60, 100),
+            turn(
+&Terms::default(),
+&body("them", 0, ""),
+"me",
+Reading { held_for: 0, progress_for: 0, stall_beats: 60, now: 100, recent: Recent::Clean },
+),
             Turn::Take(_)
         ));
     }
@@ -3913,18 +4042,20 @@ mod tests {
         let terms = Terms::default();
         assert_eq!(
             turn(
-                &terms,
-                &body("them", 100, ""),
-                "me",
-                terms.beat - 1,
-                0,
-                60,
-                200
-            ),
+&terms,
+&body("them", 100, ""),
+"me",
+Reading { held_for: terms.beat - 1, progress_for: 0, stall_beats: 60, now: 200, recent: Recent::Clean },
+),
             Turn::Wait
         );
         assert!(matches!(
-            turn(&terms, &body("them", 100, ""), "me", terms.beat, 0, 60, 200),
+            turn(
+&terms,
+&body("them", 100, ""),
+"me",
+Reading { held_for: terms.beat, progress_for: 0, stall_beats: 60, now: 200, recent: Recent::Clean },
+),
             Turn::Take(_)
         ));
     }
@@ -3937,14 +4068,11 @@ mod tests {
         let terms = Terms::default();
         assert!(matches!(
             turn(
-                &terms,
-                &body("them", 100_000, "1.2"),
-                "me",
-                0,
-                60 * terms.beat,
-                60,
-                200
-            ),
+&terms,
+&body("them", 100_000, "1.2"),
+"me",
+Reading { held_for: 0, progress_for: 60 * terms.beat, stall_beats: 60, now: 200, recent: Recent::Clean },
+),
             Turn::Take(_)
         ));
     }
@@ -3959,14 +4087,11 @@ mod tests {
         let terms = Terms::default();
         assert_eq!(
             turn(
-                &terms,
-                &body("them", 100_000, ""),
-                "me",
-                0,
-                1_000_000,
-                60,
-                200
-            ),
+&terms,
+&body("them", 100_000, ""),
+"me",
+Reading { held_for: 0, progress_for: 1_000_000, stall_beats: 60, now: 200, recent: Recent::Clean },
+),
             Turn::Wait
         );
     }
@@ -3975,16 +4100,99 @@ mod tests {
     fn a_live_lease_of_this_clones_own_is_not_re_taken() {
         assert_eq!(
             turn(
-                &Terms::default(),
-                &body("me", 100_000, ""),
-                "me",
-                0,
-                0,
-                60,
-                200
-            ),
+&Terms::default(),
+&body("me", 100_000, ""),
+"me",
+Reading { held_for: 0, progress_for: 0, stall_beats: 60, now: 200, recent: Recent::Clean },
+),
             Turn::Mine
         );
+    }
+
+    /// A body carrying an admitted successor.
+    fn with_next(holder: &str, expires: i64, next: &str) -> Observed {
+        let Observed::Held { sha, mut body } = body(holder, expires, "") else {
+            unreachable!("`body` builds a held observation")
+        };
+        body.next = String::from(next);
+        Observed::Held { sha, body }
+    }
+
+    /// **A CLONE THAT WENT RED STANDS ASIDE FOR THE ADMITTED SUCCESSOR.**
+    ///
+    /// Taking the lease is a promise to go green. Breaking it makes every waiter
+    /// that speculated on this branch re-bet, so winning the very race it just
+    /// lost is the behaviour that cost eight `land` runs and ~3h of held lease
+    /// in one measured session. `next` has always been read by `authorises` for
+    /// OVERLAP; this is the first thing that reads it for ORDERING (CLOUD-1043).
+    #[test]
+    fn a_clone_that_released_on_red_does_not_immediately_re_take() {
+        assert_eq!(
+            turn(
+&Terms::default(),
+&with_next("me", 0, "them"),
+"me",
+Reading { held_for: 0, progress_for: 0, stall_beats: 60, now: 100, recent: Recent::ReleasedRed },
+),
+            Turn::Wait,
+            "the clone that broke the promise must not win the race it just lost"
+        );
+    }
+
+    /// **THE ANTI-DEADLOCK MIRROR, and without it this is a fleet outage.**
+    ///
+    /// With no successor admitted there is nobody to stand aside FOR, and a
+    /// single-clone fleet that went red must still be able to take its own lease
+    /// back and fix the thing. Standing aside for nobody would stop the fleet in
+    /// order to punish one branch — strictly worse than the stall being fixed.
+    #[test]
+    fn a_red_clone_still_takes_a_lease_nobody_else_is_waiting_for() {
+        assert!(
+            matches!(
+                turn(
+&Terms::default(),
+&body("me", 0, ""),
+"me",
+Reading { held_for: 0, progress_for: 0, stall_beats: 60, now: 100, recent: Recent::ReleasedRed },
+),
+                Turn::Take(_)
+            ),
+            "an empty pool means the backoff has nobody to defer to"
+        );
+    }
+
+    /// A clone reserved as its OWN successor is not somebody else.
+    ///
+    /// Reading it as one would be the same deadlock by a longer route: the clone
+    /// stands aside for itself, forever, and the lease is never taken again.
+    #[test]
+    fn a_red_clone_reserved_as_its_own_successor_still_takes_the_lease() {
+        assert!(matches!(
+            turn(
+&Terms::default(),
+&with_next("me", 0, "me"),
+"me",
+Reading { held_for: 0, progress_for: 0, stall_beats: 60, now: 100, recent: Recent::ReleasedRed },
+),
+            Turn::Take(_)
+        ));
+    }
+
+    /// **AND A CLEAN CLONE IS UNAFFECTED**, which is what keeps the arm from
+    /// being a general slowdown. Identical inputs, `Recent::Clean`: the lease is
+    /// taken exactly as it always was. Without this case the backoff is
+    /// satisfied by a `turn` that waits on every released lease.
+    #[test]
+    fn a_clean_clone_takes_a_released_lease_with_a_successor_admitted() {
+        assert!(matches!(
+            turn(
+&Terms::default(),
+&with_next("them", 0, "them"),
+"me",
+Reading { held_for: 0, progress_for: 0, stall_beats: 60, now: 100, recent: Recent::Clean },
+),
+            Turn::Take(_)
+        ));
     }
 
     #[test]
@@ -3993,7 +4201,12 @@ mod tests {
         // TTL must re-take rather than carry on believing it holds one.
         let terms = Terms::default();
         assert!(matches!(
-            turn(&terms, &body("me", 100, ""), "me", terms.beat, 0, 60, 200),
+            turn(
+&terms,
+&body("me", 100, ""),
+"me",
+Reading { held_for: terms.beat, progress_for: 0, stall_beats: 60, now: 200, recent: Recent::Clean },
+),
             Turn::Take(_)
         ));
     }

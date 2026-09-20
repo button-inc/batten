@@ -6726,7 +6726,10 @@ fn run_land(
             // the gate this tree carries no borrowed range while it does.
             let mut standing = speculation::Bet::default();
             let _ = speculation::recover(root, &mut standing);
-            run_land_verify(root, &standing, &branch, None, out, err)
+            // `&mut` CARRIES NOTHING HERE, and that is the point: a hand-run
+            // verify has no suspicion outstanding, so the discrimination arms
+            // are inert and this stays the read-only verb it reads as.
+            run_land_verify(root, &mut standing, &branch, None, out, err)
         }
         cli::LandCommand::FastForward => run_land_fast_forward(root, &branch, out, err),
         cli::LandCommand::Replay { reference, resolve } => {
@@ -7297,7 +7300,7 @@ fn run_land_lap(
                 // driver instead of through a flag.
                 land::Step::Replay => run_land_replay(root, url, reference, branch, &[], out)?,
                 land::Step::Verify => {
-                    run_land_verify(root, &bet, branch, Some(reference), out, err)?
+                    run_land_verify(root, &mut bet, branch, Some(reference), out, err)?
                 }
                 land::Step::Lease => run_land_lease(root, branch, out, err)?,
                 land::Step::Ready => run_land_ready(root, branch, &mut ledger, out, err)?,
@@ -7562,6 +7565,22 @@ fn unwind_lap(
             pipeline::Compensation::ReleaseLease => match (&holder, lease::terms(root)) {
                 (Some(holder), Ok(terms)) => {
                     lease_hand_back(root, &terms, holder, now);
+                    // THIS ARM IS THE RED ONE, AND THAT IS WHY THE MARK GOES
+                    // HERE RATHER THAN IN `lease_hand_back`.
+                    //
+                    // Both release paths call that function; only this one is an
+                    // UNWIND — a lap that took the lease, promised to go green,
+                    // and did not. The landing path releases the same way and
+                    // must not be marked, or every clean landing would make its
+                    // own clone stand aside next time.
+                    //
+                    // Taking the lease is a promise. Breaking it means every
+                    // waiter that speculated on this branch has to re-bet, so
+                    // the clone that broke it backs off and lets the admitted
+                    // successor in (CLOUD-1043).
+                    if let Ok(git_dir) = git::git_dir(root) {
+                        lease::Local::under(&git_dir).record_red();
+                    }
                     writeln!(out, "land: undo — the landing lease is handed back")?;
                 }
                 // Not an error: a lap that never took the lease owes nothing, and
@@ -7666,6 +7685,12 @@ fn settle_the_bet(
             "land: adopting an unsettled speculation left by an earlier run; settling it before anything is pushed"
         )?;
     }
+    // BEFORE the `live()` guard, and that is the point of it being a separate
+    // call (CLOUD-1306). A judgement about a poisoned base is most worth having
+    // when no bet is outstanding, because that is exactly when `place_the_bet`
+    // is about to ask `would_rebet` whether to borrow it again. Loading it only
+    // on the speculating path would have the memory die every time it mattered.
+    speculation::recall_refusal(root, bet);
     if !bet.live() {
         return Ok(None);
     }
@@ -7715,6 +7740,23 @@ fn settle_the_bet(
         // nothing to unwind.
         speculation::Settle::Pending | speculation::Settle::Nothing => Ok(None),
         speculation::Settle::Lost => unwind_the_bet(root, url, branch, bet, reference, out, err),
+        // POISONED (CLOUD-1306): the holder is still winning and its tree will
+        // not go green, so this branch cannot land behind it however long it
+        // waits. The UNWIND IS THE SAME ONE `Lost` takes — that is the whole
+        // shape of the fix, a second caller for an arm that already exists
+        // rather than new machinery.
+        //
+        // What differs is only what is said and what is kept: the base stays in
+        // `bet.refused` and on `REFUSED_REF`, so `speculate` will not borrow it
+        // again on the next lap or in the next invocation.
+        speculation::Settle::Poisoned => {
+            writeln!(
+                out,
+                "land: the speculation is POISONED — {} will not pass the gate, so this branch cannot land behind it; unwinding onto {tracking} and not betting on it again",
+                short(&base)
+            )?;
+            unwind_the_bet(root, url, branch, bet, reference, out, err)
+        }
     }
 }
 
@@ -8236,6 +8278,13 @@ fn landed_for_real(root: &Path, url: &str, branch: &str, out: &mut dyn Write) ->
             // best-effort either way, and doing it first means a slow remote
             // delete cannot widen the window another branch waits through.
             hand_back_the_lease(root, branch, out);
+            // AND THE PROMISE WAS KEPT, so nothing is owed to the pool. Clearing
+            // here as well as on the next acquisition is belt and braces on the
+            // one path that definitively earns it: a clone that lands must never
+            // be carrying a stand-aside from an earlier lap.
+            if let Ok(git_dir) = git::git_dir(root) {
+                lease::Local::under(&git_dir).clear_red();
+            }
             // THE BRANCH HAS DONE ITS WHOLE JOB (CLOUD-349, CLOUD-1471). Only
             // here, never on a stop: an abandoned branch is evidence and has to
             // survive, while a landed one left behind is how a short-lived branch
@@ -8636,7 +8685,11 @@ fn run_land_replay(
 /// `prune`'s deletes. A consumer needing that writes a script and names it.
 fn run_land_verify(
     root: &Path,
-    bet: &speculation::Bet,
+    // `&mut` FOR THE DISCRIMINATION, and for nothing else (CLOUD-1306). The gate
+    // is the one reading that can tell a poisoned base from this branch's own
+    // defect, so it is the one place a suspicion can be raised or settled. A
+    // shared borrow here is what kept the verdict inside the lap that found it.
+    bet: &mut speculation::Bet,
     branch: &str,
     reference: Option<&str>,
     out: &mut dyn Write,
@@ -8686,6 +8739,25 @@ fn run_land_verify(
     match verified {
         land::Verified::Clean(head) => {
             writeln!(out, "land: {head} passed the configured gate")?;
+            // THE DISCRIMINATION, AND IT COST NO EXTRA GATE RUN (CLOUD-1306).
+            //
+            // A base under suspicion was refused on the BORROWED tree; this gate
+            // just ran on a tree that no longer carries it. Green here is the
+            // second half of the predicate the row states — "the same failure
+            // does not reproduce off the borrowed base" — so the failure was the
+            // holder's and the suspicion becomes a judgement.
+            //
+            // The ref is written only HERE, on a reading that actually
+            // discriminated. A suspicion recorded at the refusal would name every
+            // holder a branch with its own defect ever waited behind.
+            if let Some(confirmed) = bet.confirm_refusal() {
+                let _ = gitwrite::set_ref(root, speculation::REFUSED_REF, &confirmed);
+                writeln!(
+                    out,
+                    "land: this tree passes off {}'s base, so that failure was the holder's; not speculating on it again",
+                    short(&confirmed)
+                )?;
+            }
             Ok(ExitCode::Success)
         }
         // A REFUSAL IS A VERDICT ABOUT THE REPOSITORY, so `2`. The gate's own
@@ -8742,10 +8814,26 @@ fn run_land_verify(
                 // holds this branch unborrowed.
                 land::Refusal::Tree => {
                     if let Some(base) = bet.published() {
+                        let base = base.to_owned();
+                        // RAISE THE SUSPICION, WHICH IS WHAT ENDS THE STALL.
+                        //
+                        // The predecessor stopped here and told a human to run
+                        // the discriminating re-verify by hand — and following
+                        // that advice exactly put the waiter back into the same
+                        // bet, because nothing recorded that THIS base had been
+                        // tried. The diagnosis was per-invocation; the bet is
+                        // per-lease. Recording it is the difference.
+                        //
+                        // Still `Violation` below: this lap stops exactly as it
+                        // did before, because the failure genuinely might be
+                        // ours and nothing has discriminated it yet. What
+                        // changes is that the NEXT lap settles `Poisoned`,
+                        // unwinds, and does not re-borrow the same head.
+                        bet.suspect(&base);
                         writeln!(
                             err,
                             "::error:: land: this tree is SPECULATIVE — it carries {} borrowed from {base}, so the failure may not be yours.",
-                            short(base)
+                            short(&base)
                         )?;
                         // THE BASE REF IS THE LAP'S AND A HAND-DRIVEN VERIFY HAS
                         // NONE, so it is `Option` rather than a guess. `batten
@@ -8771,6 +8859,20 @@ fn run_land_verify(
                             "  If it still fails off the borrowed base, it is yours."
                         )?;
                     } else {
+                        // NO BET, AND THE GATE IS STILL RED — SO IT IS OURS.
+                        //
+                        // The anti-vacuity half (CLOUD-1306). This is the lap
+                        // after an unwind: the borrowed range is gone and the
+                        // same failure reproduced, which is the row's own
+                        // "red again ⇒ the failure is the waiter's" and the case
+                        // its acceptance names — *a waiter whose own tree is red
+                        // still stops.*
+                        //
+                        // Dropping the suspicion rather than promoting it is
+                        // what stops a branch with a genuine defect accumulating
+                        // a refusal against every holder it ever waited behind
+                        // and quietly giving up speculation altogether.
+                        bet.clear_suspicion();
                         writeln!(err, "::error:: land: reproduce and fix locally.")?;
                     }
                 }
@@ -10446,10 +10548,13 @@ fn run_lease_acquire(
         terms,
         &observed,
         &holder,
-        held_for,
-        progress_for,
-        lease_stall_beats(),
-        now,
+        lease::Reading {
+            held_for,
+            progress_for,
+            stall_beats: lease_stall_beats(),
+            now,
+            recent: local.recent(),
+        },
     ) {
         lease::Turn::Mine => {
             writeln!(out, "lease: already held by this clone")?;
@@ -10498,6 +10603,12 @@ fn run_lease_acquire(
             match lease::cas(terms, &observed, &body, now) {
                 Ok(lease::Outcome::Applied) => {
                     lease_receipt(root, branch, now + terms.ttl);
+                    // THE BACKOFF IS ONE TURN AND IT IS SPENT HERE. Holding the
+                    // mark past a successful acquisition would exclude this
+                    // clone from every future lease over one red run — a fleet
+                    // permanently down a worker, which is a worse failure than
+                    // the one the backoff fixes.
+                    local.clear_red();
                     writeln!(out, "lease: {why}")?;
                     Ok(ExitCode::Success)
                 }

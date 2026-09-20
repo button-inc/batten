@@ -8,22 +8,31 @@
 //! be already correct when it lands. The second is the bet, and the whole of the
 //! machinery below exists because a bet can be wrong.
 //!
-//! # THIS IS A CONSERVING PORT, AND ONE KNOWN DEFECT TRAVELS WITH IT
+//! # A BET CAN BE LOST, AND IT CAN ALSO BE POISONED
 //!
-//! `settle` has THREE outcomes — the holder landed, the bet is still open, the
-//! bet lost — and **no arm for a base whose tree is poisoned**: one that will
-//! not pass `verify`. CLOUD-1306 is that gap, and it is deliberately NOT fixed
-//! here. A port that improved behaviour could not be shown to conserve it, and
-//! being able to say "this does what the bash did" is the whole discipline that
-//! makes a 4,700-line retirement reviewable.
+//! `settle` has FOUR outcomes: the holder landed, the bet is still open, the bet
+//! lost — and the base is **poisoned**, meaning its tree will not pass `verify`.
+//! The port that created this module conserved the bash's three and carried the
+//! fourth as a declared gap so the retirement stayed reviewable as a port;
+//! CLOUD-1306 is that gap and this is its close.
 //!
-//! What the gap costs, so nobody reads its absence as completeness: a waiter
+//! What it cost while it was open, recorded because the shape recurs: a waiter
 //! linearizes onto a head that cannot go green, `settle` reads the bet as still
-//! open every lap (the holder is still there and `main` has not moved, which is
-//! exactly what "pending" looks like), and [`Bet::would_rebet`] bets on the same
-//! holder again. Every waiter behind that holder stalls together. The fix is
-//! CLOUD-1306's and belongs in one change that can be reviewed as a behaviour
-//! change rather than smuggled into a port.
+//! open every lap — the holder is still there and `main` has not moved, which is
+//! exactly what "pending" looks like — and [`Bet::would_rebet`] bets on the same
+//! holder again. Every waiter behind that holder stalls together. Measured over
+//! three consecutive invocations on PR #815, all three exited identically.
+//!
+//! **The discriminator is the re-verify off the borrowed base**, and it is the
+//! one the error message already told a human to run by hand: red on the
+//! borrowed tree and green on our own means the failure is the holder's, so the
+//! bet is poisoned rather than merely open. Red on both is OURS and stops the
+//! lap exactly as before — [`Settle::Poisoned`] is an arm, never a hatch.
+//!
+//! **A poisoned base is REMEMBERED on a ref** ([`REFUSED_REF`]), not merely in
+//! this process. The measured stall was three separate `land` invocations, so a
+//! memory that died with the process would have unwound the first lap and
+//! re-bet on the same refused head at the start of the next one.
 //!
 //! # Every failure is a FALLBACK, never a stop
 //!
@@ -37,6 +46,13 @@
 //! [`Live::decide`] fails CLOSED: an unreadable lease, an unfetchable branch and
 //! an unknown ancestry are all *stale*, because failing open there would make a
 //! network blip the thing that lands somebody else's work.
+
+// CLOUD-1306's own Ready block names both of these, and they are the two
+// directions the arm can fail in: forgetting the judgement (the stall returns)
+// and applying it to everything (a waiter with its own defect never stops).
+//MUTANT-SUITE crates/batten/src/speculation.rs
+//MUTANT poisoned-bet-rebet|s@        if self.refused.as_deref() == Some(candidate) {@        if false {@|forgetting_a_bet_keeps_the_base_that_would_not_go_green
+//MUTANT own-red-tree-unwinds|s@    if bet.refused.as_deref() == Some(base) {@    if true {@|a_waiter_whose_own_tree_is_red_still_settles_pending
 
 use std::path::Path;
 
@@ -58,6 +74,20 @@ pub const BASE_REF: &str = "refs/batten-spec/base";
 /// while answering a question about it.
 pub const LIVE_REF: &str = "refs/batten-spec/live";
 
+/// The ref a base KNOWN to fail `verify` is remembered under.
+///
+/// A THIRD ref, and it outlives the bet it refused. [`BASE_REF`] records a bet
+/// that exists and is deleted the moment one settles; this records a judgement
+/// about a commit, which stays true after the bet built on it is gone. Reusing
+/// either of the other two would delete the memory at exactly the point it
+/// starts being useful.
+///
+/// A ref rather than a field alone because the measured stall (CLOUD-1306, PR
+/// #815) was three separate `land` invocations. [`Bet::refused`] is this
+/// process's copy; without the ref, lap one unwinds and the next invocation bets
+/// on the same refused head again — which is the stall, one process later.
+pub const REFUSED_REF: &str = "refs/batten-spec/refused";
+
 /// The variable a bet is published to the child process under.
 ///
 /// `verify` runs `claim-race-check`, which reads `claimed-keys`, which cannot
@@ -78,14 +108,27 @@ pub enum Settle {
     /// Undecided. The holder is still landing and this branch is already behind
     /// it, so the tree is kept.
     ///
-    /// **This is the arm CLOUD-1306's poisoned base hides in.** A base that will
-    /// never go green is indistinguishable here from one that simply has not
-    /// landed yet, and the module header says why that is conserved rather than
-    /// fixed.
+    /// **A base that will never go green USED TO HIDE HERE**, indistinguishable
+    /// from one that simply has not landed yet. It no longer does — but only
+    /// because something took the discriminating reading and recorded it. With
+    /// no such reading this arm is still the honest answer, which is why a
+    /// re-verify that cannot run settles `Pending` rather than [`Self::Poisoned`].
     Pending,
     /// The bet cannot come true: the holder is gone, or `main` moved and took
     /// something else. The borrowed range is dropped.
     Lost,
+    /// The bet is still live and its base is KNOWN not to go green (CLOUD-1306).
+    ///
+    /// **APPENDED, NEVER INSERTED.** This enum carries no `repr` and its
+    /// discriminants are compared across builds by anything that stores one, so
+    /// a variant placed mid-enum silently renumbers every variant after it —
+    /// `verdict::Native` paid for that lesson in this same branch.
+    ///
+    /// Distinct from [`Self::Lost`] because the action differs in one way that
+    /// matters: a lost bet's base may be bet on again the moment the holder is
+    /// back, and a poisoned one must not be until the tree that refused it
+    /// moves. Both unwind; only this one is remembered ([`REFUSED_REF`]).
+    Poisoned,
 }
 
 /// Whether the bet is still on the branch that is about to land.
@@ -168,6 +211,44 @@ pub struct Bet {
     /// it, and reading it as "no more bets at all" would give up speculating for
     /// the rest of the landing over one bad candidate.
     pub conflicts: Option<String>,
+    /// The holder's base that is KNOWN to fail `verify` (CLOUD-1306).
+    ///
+    /// **`conflicts`'s sibling, and the pair is not one field.** A base that
+    /// conflicts cannot be replayed onto at all; a base that is poisoned replays
+    /// perfectly and then refuses the gate. They are learned at different
+    /// moments — the replay and the verify — and a branch can hit either without
+    /// the other, so collapsing them would make each answer the other's question.
+    ///
+    /// Survives [`Bet::forget`] for `conflicts`' own stated reason: it records a
+    /// judgement about a COMMIT, which stays true of that commit after the bet
+    /// built on it settles. Forgetting it is what made CLOUD-369's refusal
+    /// unreachable, and the same forgetting here would re-bet on the refused
+    /// head on the very next lap.
+    ///
+    /// An `Option<String>` rather than a `bool` for the same reason `conflicts`
+    /// is: refusing to re-bet needs to know WHICH base. A flag cannot tell the
+    /// poisoned holder from the one that replaced it, and reading it as "no more
+    /// bets at all" would abandon speculation for the rest of the landing over
+    /// one bad candidate.
+    pub refused: Option<String>,
+    /// A base the gate refused ON THE BORROWED TREE, not yet discriminated.
+    ///
+    /// **THE THIRD CONJUNCT OF CLOUD-1306's PREDICATE, AND IT COSTS NO EXTRA
+    /// GATE RUN.** The row states the reading as "replay onto `origin/main` and
+    /// re-run"; run literally that would buy a second full gate inside a lap
+    /// that has just spent one — measured at ~25 minutes on this container.
+    ///
+    /// The NEXT LAP'S verify is that same re-run. So a refusal on a speculative
+    /// tree records the base here and unwinds, and the lap that follows decides
+    /// it: green off our own base means the failure was the holder's and this is
+    /// promoted to [`Bet::refused`]; red again means it was ours all along and
+    /// this is dropped without ever becoming a judgement.
+    ///
+    /// **[`Bet::would_rebet`] refuses a suspect as firmly as a refused base**,
+    /// and it must: re-borrowing the head under suspicion on the very next lap
+    /// would re-poison the tree and destroy the reading that was about to
+    /// discriminate it.
+    pub suspect: Option<String>,
 }
 
 impl Bet {
@@ -191,25 +272,66 @@ impl Bet {
     ///
     /// `false` for the same candidate twice — the one-outstanding-bet rule above.
     ///
-    /// **AND `true` AGAIN ONCE THE BET IS FORGOTTEN, WHICH IS CLOUD-1306's OTHER
-    /// HALF.** A poisoned base settles as [`Settle::Pending`] and is never
-    /// forgotten, so this correctly answers `false` and the waiter sits. Where
-    /// the bet IS dropped, nothing here remembers that this candidate was already
-    /// tried, so the next lap bets on the same holder again. Conserved; the fix
-    /// is CLOUD-1306's.
-    ///
-    /// **A base known to CONFLICT is a different question and this now answers
-    /// it** (review of #848). That one is not about a tree that will not go
-    /// green — it is a replay this clone already attempted and watched fail, so
+    /// **A base known to CONFLICT is a different question and this answers it**
+    /// (review of #848). That one is not about a tree that will not go green —
+    /// it is a replay this clone already attempted and watched fail, so
     /// re-attempting it is guaranteed waste rather than a gamble whose odds
-    /// changed. [`Bet::conflicts`] records which base, and it is the one thing
-    /// here that survives the bet not being placed.
+    /// changed. [`Bet::conflicts`] records which base.
+    ///
+    /// **AND A BASE KNOWN TO BE POISONED IS A THIRD** (CLOUD-1306). Once the bet
+    /// on it is unwound, `base` no longer names it, so without
+    /// [`Bet::refused`] this would answer `true` on the very next lap and
+    /// re-borrow the tree that just refused the gate. That is the stall the whole
+    /// arm exists to end, and it reappears the moment this stops consulting it.
+    ///
+    /// Both memories survive the bet not being placed, which is what makes them
+    /// useful here rather than merely recorded.
     #[must_use]
     pub fn would_rebet(&self, candidate: &str) -> bool {
         if self.conflicts.as_deref() == Some(candidate) {
             return false;
         }
+        if self.refused.as_deref() == Some(candidate) {
+            return false;
+        }
+        // A SUSPECT IS REFUSED AS FIRMLY AS A JUDGEMENT, and for a sharper
+        // reason: re-borrowing the head that is currently under suspicion would
+        // put the borrowed range back into the tree and destroy the very reading
+        // — the next lap's own verify — that was about to discriminate it.
+        if self.suspect.as_deref() == Some(candidate) {
+            return false;
+        }
         self.base.as_deref() != Some(candidate)
+    }
+
+    /// The borrowed tree was refused: hold this base pending discrimination.
+    ///
+    /// Records nothing if some other base is already under suspicion — one
+    /// outstanding question at a time, for [`Bet`]'s own one-bet reason.
+    pub fn suspect(&mut self, base: &str) {
+        if self.suspect.is_none() {
+            self.suspect = Some(base.to_owned());
+        }
+    }
+
+    /// The next lap went GREEN off our own base: the suspicion was the holder's.
+    ///
+    /// Returns the base to remember, so the caller writes [`REFUSED_REF`] only
+    /// where a judgement was actually reached.
+    pub fn confirm_refusal(&mut self) -> Option<String> {
+        let confirmed = self.suspect.take()?;
+        self.refused = Some(confirmed.clone());
+        Some(confirmed)
+    }
+
+    /// The next lap was red off our own base too: the failure is OURS.
+    ///
+    /// **The anti-vacuity half, and dropping it is what would make every stop
+    /// look like a poisoning.** A branch with a genuine defect refuses the gate
+    /// on every base, so without this it would accumulate a refusal against each
+    /// holder it ever waited behind and stop speculating altogether.
+    pub fn clear_suspicion(&mut self) {
+        self.suspect = None;
     }
 
     /// Drop the bet's own bookkeeping. The REF is the caller's to delete.
@@ -225,6 +347,16 @@ impl Bet {
     /// base KNOWN to conflict, which stays true of that base after the bet built
     /// on some other one is settled. Forgetting it is what made CLOUD-369's
     /// mechanism unreachable.
+    ///
+    /// **`refused` survives for the identical reason** (CLOUD-1306), and it is
+    /// the field with the most to lose by not doing so: a poisoned bet is
+    /// settled by UNWINDING it, so this runs on the exact path that would
+    /// otherwise erase the judgement one line before the next lap re-bets on it.
+    ///
+    /// **`suspect` survives too, and its case is sharper still.** Suspicion is
+    /// RAISED on the unwind path — this function's own caller — so clearing it
+    /// here would delete the question in the same breath as asking it, and the
+    /// next lap would have nothing to discriminate.
     pub fn forget(&mut self) {
         self.base = None;
         self.undo = None;
@@ -234,7 +366,12 @@ impl Bet {
     }
 
     #[cfg(test)]
-    /// A settled bet carries nothing forward but the base it will not re-bet on.
+    /// A settled bet carries nothing forward but the bases it will not re-bet on.
+    ///
+    /// Both memories are excluded here rather than asserted absent: `conflicts`
+    /// and `refused` are judgements about commits, and the cases beside this one
+    /// assert each SURVIVES. A spelling that required them cleared would make the
+    /// two suites contradict each other.
     fn is_forgotten(&self) -> bool {
         self.base.is_none()
             && self.undo.is_none()
@@ -283,7 +420,7 @@ impl Bet {
 /// gone.
 #[must_use]
 pub fn settle(bet: &Bet, main_now: Option<&str>, base_on_main: bool, live: Live) -> Settle {
-    let Some(_) = bet.base.as_deref() else {
+    let Some(base) = bet.base.as_deref() else {
         return Settle::Nothing;
     };
 
@@ -293,6 +430,27 @@ pub fn settle(bet: &Bet, main_now: Option<&str>, base_on_main: bool, live: Live)
     // moved and call it lost.
     if base_on_main {
         return Settle::Landed;
+    }
+
+    // POISONED (CLOUD-1306), and its position between `Landed` and the liveness
+    // arms is the whole of its correctness.
+    //
+    // AFTER `Landed`, because a base the trunk has already taken is not poisoned
+    // whatever a stale judgement says — the tree that refused it is now `main`'s
+    // problem and unwinding off it would drop commits we are already correctly
+    // linearized on.
+    //
+    // BEFORE the liveness arms, because every one of them reads a live holder
+    // that has not moved `main` as [`Settle::Pending`] — which is exactly what a
+    // poisoned holder looks like, and precisely the arm this used to hide in.
+    //
+    // The judgement is the CALLER's reading, taken by re-verifying off the
+    // borrowed base and recorded on [`REFUSED_REF`]. This function only asks
+    // whether the bet outstanding is the one that was refused; a re-verify that
+    // could not run records nothing and falls through to `Pending`, which is the
+    // could-not-look direction the module header requires.
+    if bet.refused.as_deref() == Some(base) {
+        return Settle::Poisoned;
     }
 
     // An ADOPTED bet has no `main_at_bet` — the process that recorded it is gone
@@ -366,6 +524,24 @@ pub fn carries(dir: &Path, candidate: &str, tip: &str) -> bool {
     crate::gitwrite::carries(dir, candidate, tip)
 }
 
+/// Load the refused-base judgement this clone recorded in an earlier process.
+///
+/// **Separate from [`recover`], and not folded into it, because the two answer
+/// different questions.** `recover` asks whether a BET is outstanding and
+/// returns early when one is; a judgement about a poisoned base is worth reading
+/// whether or not this process is speculating, and is most worth reading when it
+/// is not — that is the moment [`Bet::would_rebet`] is about to be asked.
+///
+/// Fail-open and silent, like every other reading in this module: a ref store
+/// that will not answer leaves the memory empty, which costs a wasted lap rather
+/// than a wrong verdict.
+pub fn recall_refusal(dir: &Path, bet: &mut Bet) {
+    if bet.refused.is_some() {
+        return;
+    }
+    bet.refused = crate::git::resolve_ref(dir, REFUSED_REF).ok().flatten();
+}
+
 /// Adopt a bet this process did not place.
 ///
 /// Runs BEFORE the ordinary settle, so the settle that follows is the ordinary
@@ -421,6 +597,8 @@ mod tests {
             recovered: true,
             pushed: true,
             conflicts: Some(String::from("feedface")),
+            refused: Some(String::from("baddecaf")),
+            suspect: Some(String::from("d15ea5e0")),
         };
         bet.forget();
         assert!(bet.is_forgotten(), "a settled bet carried state forward");
@@ -440,6 +618,30 @@ mod tests {
         assert!(
             !bet.would_rebet("feedface"),
             "a base known to conflict is still known to conflict after the bet settles"
+        );
+    }
+
+    /// **AND SO DOES THE POISONED ONE, WHICH IS THE FIELD WITH THE MOST TO LOSE**
+    /// (CLOUD-1306). A poisoned bet is settled BY unwinding it, so `forget` runs
+    /// on the exact path that would otherwise erase the judgement one line before
+    /// the next lap re-bets on the same refused head — the measured stall,
+    /// reproduced one process later.
+    #[test]
+    fn forgetting_a_bet_keeps_the_base_that_would_not_go_green() {
+        let mut bet = Bet {
+            base: Some(String::from(HOLDER)),
+            refused: Some(String::from(HOLDER)),
+            ..Bet::default()
+        };
+        bet.forget();
+        assert_eq!(bet.refused.as_deref(), Some(HOLDER));
+        assert!(
+            !bet.would_rebet(HOLDER),
+            "a base that would not go green is still refused after the bet unwinds"
+        );
+        assert!(
+            bet.would_rebet(MOVED),
+            "one poisoned candidate must not abandon speculation altogether"
         );
     }
 
@@ -694,5 +896,93 @@ mod tests {
              PR the bet was placed on"
         );
         assert!(!bet.live());
+    }
+
+    /// A bet whose base was recorded as refused settles POISONED.
+    ///
+    /// The inputs are deliberately the ones that spell a healthy `Pending`: the
+    /// holder is live, `main` has not moved, and the base is not on the trunk.
+    /// That is the whole defect — a poisoned holder is indistinguishable from a
+    /// winning one on every reading EXCEPT the recorded judgement, so a case
+    /// that varied anything else would pass against the old code too.
+    #[test]
+    fn a_base_recorded_as_refused_settles_poisoned() {
+        let bet = Bet {
+            refused: Some(String::from(HOLDER)),
+            ..placed()
+        };
+        assert_eq!(
+            settle(&bet, Some(MAIN), false, Live::Yes),
+            Settle::Poisoned,
+            "a live holder whose tree will not go green is not merely pending"
+        );
+    }
+
+    /// **THE ANTI-VACUITY MIRROR, and without it the arm above is satisfied by a
+    /// `settle` that answers `Poisoned` to everything.**
+    ///
+    /// The waiter's OWN tree being red records nothing — the re-verify off the
+    /// borrowed base reproduces the failure, so the judgement is never written —
+    /// and the identical inputs must still settle `Pending` and stop the lap
+    /// exactly as before. CLOUD-1306's acceptance names this case in as many
+    /// words: *a waiter whose own tree is red still stops.*
+    #[test]
+    fn a_waiter_whose_own_tree_is_red_still_settles_pending() {
+        assert_eq!(
+            settle(&placed(), Some(MAIN), false, Live::Yes),
+            Settle::Pending,
+            "nothing was recorded against this base, so the failure is the waiter's"
+        );
+    }
+
+    /// A judgement about a DIFFERENT base does not poison this bet.
+    ///
+    /// The memory outlives the bet it refused, so a stale entry naming a holder
+    /// that has since been replaced would unwind a perfectly good speculation
+    /// every lap — the `Option<String>` earning its keep over a `bool`.
+    #[test]
+    fn a_refusal_recorded_against_another_base_leaves_this_bet_alone() {
+        let bet = Bet {
+            refused: Some(String::from(MOVED)),
+            ..placed()
+        };
+        assert_eq!(
+            settle(&bet, Some(MAIN), false, Live::Yes),
+            Settle::Pending,
+            "the refused base is not the one this bet is on"
+        );
+    }
+
+    /// **A POISONED BASE THAT LANDED ANYWAY IS `Landed`, NOT `Poisoned`.**
+    ///
+    /// The trunk taking the base settles the question whatever a stale judgement
+    /// says, and this is why the arm sits AFTER `Landed` rather than before it.
+    /// Reversed, this would unwind a branch off commits it is already correctly
+    /// linearized on — dropping landed work to honour an obsolete opinion.
+    #[test]
+    fn a_refused_base_that_reached_the_trunk_still_settles_landed() {
+        let bet = Bet {
+            refused: Some(String::from(HOLDER)),
+            ..placed()
+        };
+        assert_eq!(
+            settle(&bet, Some(MAIN), true, Live::Yes),
+            Settle::Landed,
+            "the trunk took it, so the judgement is history rather than a reason to unwind"
+        );
+    }
+
+    /// With no bet outstanding a recorded refusal decides nothing.
+    ///
+    /// `refused` survives `forget`, so it is routinely populated while `base` is
+    /// `None`. Reading it before the `Nothing` guard would have this answer
+    /// `Poisoned` for a branch that is not speculating at all.
+    #[test]
+    fn a_recorded_refusal_with_no_bet_is_still_nothing() {
+        let bet = Bet {
+            refused: Some(String::from(HOLDER)),
+            ..Bet::default()
+        };
+        assert_eq!(settle(&bet, Some(MAIN), false, Live::Yes), Settle::Nothing);
     }
 }
