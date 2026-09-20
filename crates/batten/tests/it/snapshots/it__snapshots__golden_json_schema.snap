@@ -586,7 +586,7 @@ expression: stdout_of(&output)
           "id": "ci.suites",
           "about": "Name the bats suites a diff can move, or every suite where it cannot prove one inert",
           "effect": "read",
-          "data_channel": true,
+          "data_channel": false,
           "flags": [
             {
               "name": "base",
@@ -2155,7 +2155,7 @@ expression: stdout_of(&output)
           "id": "perf.measure",
           "about": "Measure this binary's invocation cost on every path and print one record per path",
           "effect": "unclassified",
-          "data_channel": true,
+          "data_channel": false,
           "flags": [],
           "subcommands": []
         },

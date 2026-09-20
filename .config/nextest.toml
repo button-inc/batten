@@ -139,7 +139,34 @@ setup = "clear-scratch"
 # row would assert a bound it no longer sets. CLOUD-1641 still owns
 # `agentic_record`'s real cost and is NOT closed by this: the override went away
 # because the floor rose, not because the case got fast.
+# FAIL-FAST IS A POSTURE, AND IT WAS NEVER DECLARED (review of #928).
+#
+# This file bounded a hang and isolated one timing case and said nothing about
+# fail-fast, so the posture was `cargo nextest`'s own default — which is `true`,
+# unlike `cargo test`'s. A decision nobody wrote down is the thing this
+# repository exists to refuse, and inheriting it cost a night: every `verify`
+# lap reported exactly ONE failure, so eleven defects were found and fixed
+# strictly one at a time, each behind a full rebuild.
+#
+# THE TWO SURFACES WANT OPPOSITE ANSWERS, which is why one setting was always
+# going to be wrong for one of them:
+#
+#   LOCALLY, a run is free (`mem:workflow` — "local execution costs nothing,
+#   which is what makes verifying exhaustively before CI discipline"). The
+#   expensive thing is the LAP, so the run that stops at the first failure
+#   spends a whole rebuild to tell you a fraction of what it already knew.
+#   Every failure, every time.
+#
+#   IN CI, a run is metered minutes on a matrix of six runners. A suite that is
+#   already red has delivered its verdict — the head may not land — and the
+#   remaining cases buy detail nobody acts on before the fix. First failure,
+#   stop.
+#
+# The runaway-output case this raises is already bounded and NOT by this key:
+# `slow-timeout` marks a case at 10s and kills it at 20 minutes, so a test
+# writing forever is terminated whichever posture is in force.
 [profile.default]
+fail-fast = false
 slow-timeout = { period = "10s", terminate-after = 120 }
 # EVERY RUN REPORTS EVERY FAILURE. nextest's default fail-fast stops scheduling
 # at the first failure, so a leg reports one defect per CI round: the macos job
@@ -148,6 +175,16 @@ slow-timeout = { period = "10s", terminate-after = 120 }
 # here, once, it covers every invocation that reads this file — including one
 # added later that never heard of the flag.
 fail-fast = false
+
+# CI's half. `test:cargo` selects it from `$CI`, so the choice is made once, at
+# the task that runs the suite, rather than per workflow step where a new job
+# would have to remember it.
+#
+# INHERITS `slow-timeout` AND THE OVERRIDE BELOW: a nextest profile falls back to
+# `default` for every key it does not set, so the hang guard and the timing
+# case's isolation apply here unchanged and cannot drift apart from it.
+[profile.ci]
+fail-fast = true
 
 [[profile.default.overrides]]
 filter = 'test(deleting_six_governed_paths_costs_a_flat_multiple_of_the_floor)'

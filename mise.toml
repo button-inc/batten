@@ -329,6 +329,20 @@ uv = "0.12.5"                                       # fast Rust installer the pi
 
 [env]
 CARGO_TERM_COLOR = "always"
+# WHICH NEXTEST PROFILE APPLIES, and therefore whether the suite stops at the
+# first failure (review of #928). `.config/nextest.toml` states both halves and
+# why they differ; this decides which one is in force, once, for every leg that
+# goes through mise — `mise run test:cargo` and the two `mise exec -- cargo
+# nextest` lines the foreign runners use.
+#
+# HERE RATHER THAN IN THE TASK BODY, because the task's cargo statement is read
+# byte-for-byte by `ci-local-parity`'s property 16 and a `--profile` flag breaks
+# it; and HERE RATHER THAN IN EACH WORKFLOW, because a new job would have to
+# remember it and a forgotten one silently runs the wrong posture on metered
+# minutes.
+#
+# `$CI` is the discriminator every forge runner sets and no local shell does.
+NEXTEST_PROFILE = "{% if env.CI %}ci{% else %}default{% endif %}"
 # bats comes from the tests/bats submodule, not a mise tool, and this is what
 # puts it on PATH. A tool pin would be the obvious choice and is the wrong one:
 # the published package is a GitHub *source archive*, and those are not
@@ -1245,6 +1259,14 @@ description = "Run the Rust workspace test suite"
 # that passed.
 run = '''
 if ./mise-tasks/step-receipt.sh check test:cargo; then exit 0; fi
+# THE CARGO STATEMENT STAYS BARE, and property 16 of `ci-local-parity` is why
+# (CLOUD-662): it reads this task's single cargo statement and requires a
+# foreign CI leg's line to be `mise exec -- ` plus exactly that statement. A
+# `--profile` flag here was refused by that property at
+# `.github/workflows/rust.yml:900` and `:1057`, and rightly — two spellings is
+# the drift it exists to catch. The fail-fast posture rides on
+# `NEXTEST_PROFILE` in `[env]` instead, which nextest reads natively and which
+# every leg through mise inherits, foreign ones included.
 if ! cargo nextest run --workspace; then exit 1; fi
 ./mise-tasks/step-receipt.sh record test:cargo || true
 '''
