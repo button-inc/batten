@@ -100,7 +100,34 @@ declared_publish contains value if {
 	startswith(trim_space(line), "publish")
 	contains(line, "=")
 	trim_space(substring(line, 0, indexof(line, "="))) == "publish"
-	value := trim_space(substring(line, indexof(line, "=") + 1, -1))
+	value := trim_space(without_comment(substring(line, indexof(line, "=") + 1, -1)))
+}
+
+# A TOML value with its trailing comment removed.
+#
+# **THE GATE WAS REFUSING ITS OWN REPOSITORY** (review of #928), and it could not
+# have been seen before: this module was silently discarded by the
+# `eval_conflict_error` the comment above records, so its first run on a real
+# tree was the run that fixed that. `release-plz.toml` carries
+# `publish = false           # do not publish to any cargo registry` — the
+# ordinary annotated spelling — and the value read as
+# `false           # do not publish to any cargo registry`, which is not the
+# string `false`, so `publishes` held and the workflow was refused for lacking a
+# grant it has no reason to carry.
+#
+# SPLIT AT THE FIRST `#`, which is safe for this key and only this key: the value
+# is a bare boolean, so no `#` can be inside a string. A general TOML value would
+# need the parser, and this module deliberately does not have one.
+#
+# AN EMPTY REMAINDER STAYS FAIL-CLOSED. `publish = # note` is malformed, and the
+# empty string is not `"false"` — so it reads as publishing, which is the
+# direction every ambiguous case in this module takes.
+without_comment(text) := trim_space(substring(text, 0, indexof(text, "#"))) if {
+	indexof(text, "#") >= 0
+}
+
+without_comment(text) := text if {
+	indexof(text, "#") == -1
 }
 
 # PUBLISHING IS THE FAIL-CLOSED READING OF EVERY AMBIGUOUS CASE, and the three
@@ -148,6 +175,26 @@ violation contains {
 } if {
 	publishes
 	not input.tree.lines[release_workflow]
+}
+
+# THE SHAPE THIS REPOSITORY COMMITS, and the one the gate refused. A trailing
+# comment on the declaration does not turn `false` into something else.
+test_a_declaration_with_a_trailing_comment_is_still_false if {
+	count(violation) == 0 with input as {"tree": {"lines": {
+		"release-plz.toml": ["publish = false           # do not publish to any cargo registry"],
+		".github/workflows/release-plz.yml": ["permissions: {}"],
+	}}}
+}
+
+# AND THE COMMENT MAY NOT SUPPLY THE VALUE. A declaration whose only `false` is
+# inside the comment still reads as publishing, which is the fail-closed
+# direction.
+test_a_declaration_whose_false_is_only_in_the_comment_still_publishes if {
+	some v in violation with input as {"tree": {"lines": {
+		"release-plz.toml": ["publish = true  # was false until CLOUD-205"],
+		".github/workflows/release-plz.yml": ["permissions: {}"],
+	}}}
+	v.verdict == "lane grant missing"
 }
 
 # --- the load-time tier ------------------------------------------------------
