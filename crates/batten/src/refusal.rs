@@ -210,6 +210,59 @@ impl Fix {
     }
 }
 
+/// The canonical subject an admission binds to, chosen from a refusal's pointers.
+///
+/// **A PATH FIRST, THEN AN ARTIFACT, AND NEVER A COUNT** (CLOUD-1823's second
+/// half). This read paths only, and the omission made CLOUD-1823's repair INERT
+/// ON THE ONE CLASS IT WAS WRITTEN FOR. `receipt_refusal` names its pointers as
+/// `Artifact` — the check name, and the word for what the receipt is keyed to —
+/// because neither is a path in the tree. So `Refusal::subject` was `None` for
+/// every receipt refusal, and `admit_mediated` returns the decision unchanged the
+/// moment it is: the class advertised `articulate the stale receipt`,
+/// `admission::questions_for` asked its three questions, `override request` minted
+/// a real record and `override spend` marked it spent — and the write was still
+/// refused.
+///
+/// That is strictly WORSE than before the route was declared, because
+/// `Policy::honours_hatch` reads the same field: declaring the route is what stops
+/// `BATTEN_HOOK_BYPASS` working, so the class went from a password exit to NO EXIT
+/// — the wall CLOUD-1357 refuses. `mediated_admission.rs` is the tier that exists
+/// to catch exactly this, and it covered only the path-shaped class, where the
+/// defect cannot appear.
+///
+/// AN ARTIFACT IS A LEGITIMATE BINDING AND A COUNT IS NOT, which is why this is a
+/// fallback rather than a widening to everything. A `Path` and an `Artifact` both
+/// NAME something — a file, a check, a task — that a reader can look up and an
+/// author can state in `--subject`. The binding is an identity string, and on the
+/// mediated path the anchor is the HEAD rather than the tree, so there is nothing
+/// for it to be compared against the tree the way a `Finding` anchor is. A `Count`
+/// names no thing at all: two unrelated refusals that both measured 3 would share
+/// a binding, so admitting one would admit the other. It stays excluded for that
+/// reason rather than for tidiness.
+///
+/// THIS WIDENS NO CLASS'S REACHABILITY. `verdict::validate` already refuses a
+/// class whose ONLY route is an override, and an admission still costs the class's
+/// declared precondition answered in the author's own words. What changes is that
+/// a declared route stops being a promise the boundary cannot keep.
+fn subject_of(subjects: &[crate::verdict::Subject]) -> Option<String> {
+    let named = |subject: &crate::verdict::Subject| match subject {
+        crate::verdict::Subject::Path { path } | crate::verdict::Subject::Line { path, .. } => {
+            Some(path.clone())
+        }
+        crate::verdict::Subject::Artifact { .. } | crate::verdict::Subject::Count { .. } => None,
+    };
+    let artifact = |subject: &crate::verdict::Subject| match subject {
+        crate::verdict::Subject::Artifact { artifact } => Some(artifact.clone()),
+        crate::verdict::Subject::Path { .. }
+        | crate::verdict::Subject::Line { .. }
+        | crate::verdict::Subject::Count { .. } => None,
+    };
+    subjects
+        .iter()
+        .find_map(named)
+        .or_else(|| subjects.iter().find_map(artifact))
+}
+
 /// `Fix::Run` is a string and `Fix::None` is `null` — never an absent key.
 ///
 /// Hand-written rather than derived because serde's enum representations all
@@ -483,15 +536,7 @@ impl Refusal {
             verdict: Some(token.to_owned()),
             reason: crate::verdict::render_line(registry, token, subjects),
             fix,
-            subject: subjects.iter().find_map(|subject| match subject {
-                crate::verdict::Subject::Path { path }
-                | crate::verdict::Subject::Line { path, .. } => Some(path.clone()),
-                // A count or an artifact is not a path, so an admission bound to
-                // it would name something the store cannot compare against the
-                // tree. Skipping rather than rendering keeps "no subject" honest.
-                crate::verdict::Subject::Count { .. }
-                | crate::verdict::Subject::Artifact { .. } => None,
-            }),
+            subject: subject_of(subjects),
         }
     }
 
