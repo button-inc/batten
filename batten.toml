@@ -843,7 +843,12 @@ it is `batten land replay <ref> --resolve <path>`: merge each conflicted path in
 the worktree, then name it, and the replay re-runs from its base using your \
 bytes for that path. A path conflicting at more than one commit takes \
 `--resolve <path>=<file>`, one file per commit. The stop itself prints both \
-spellings and every conflicted path. This row denies rather than warns because a \
+spellings and every conflicted path. THE CONFLICT EXITS ARE LEFT ALONE BY THE \
+PATTERN AND STILL CANNOT APPLY HERE: the replay is STATELESS, so nothing is ever \
+half-replayed, there is no rebase in progress, and `--continue`, `--abort` and \
+`--skip` have nothing to act on — a reader who reaches for one concludes the \
+loop is defective and cherry-picks around it, which completes the replay while \
+writing no lap record at all. This row denies rather than warns because a \
 warn row on this surface reaches nobody."""
 
 # The toolchain pin, given a mechanism (CLOUD-271). AGENTS.md has said "never a
