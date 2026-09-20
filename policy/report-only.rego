@@ -87,13 +87,53 @@ violation contains {
 # question — and it is the one the predecessor's `COVERAGE_OUT_DIR` case is
 # about: the invocation is what makes it a gate, so the spelling that counts is
 # `mise run <task>` rather than the bare name.
+# **THE TASK NAME IS MATCHED WHOLE** (review of #928). Both clauses below used a
+# bare `contains(..., "mise run <task>")`, so `mise run coverage-report-check`
+# read as `mise run coverage` and a gate that judges was reported as a report that
+# does not — a false violation on a `deny` row, which is the direction that gets
+# a gate switched off rather than fixed.
+#
+# The terminator set, not a character class: the `[[pattern]]` rule refuses an
+# inline regex and a pattern row cannot carry a needle that is a different task
+# every iteration. These are what actually follow a task name in this tree — an
+# argument, the end of a shell string, a chained command, a subshell close — and
+# a name ENDING the text is the other arm, for the reason `dead-capability`'s
+# `reached` now carries.
+TASK_TAIL := {" ", "\"", "'", "`", ";", "&", ")", "\n"}
+
+invokes_task(text, task) if {
+	some tail in TASK_TAIL
+	contains(text, concat("", ["mise run ", task, tail]))
+}
+
+invokes_task(text, task) if {
+	endswith(trim_space(text), concat("", ["mise run ", task]))
+}
+
+# **EVERY FORM OF THE TRIGGER** (review of #928). `doc.on.pull_request` matches
+# only the MAPPING form, because the YAML parser renders a mapping as an object,
+# a sequence as an array and a scalar as a string. So `on: [push, pull_request]`
+# and `on: pull_request` each ran a report on the landing path with nothing said.
+#
+# `pull_request_target` is deliberately NOT accepted: this rule is scoped to
+# `pull_request` by the module's own header, and the two triggers differ in what
+# they grant rather than in when they fire.
+on_pull_request(doc) if doc.on.pull_request
+
+on_pull_request(doc) if {
+	is_array(doc.on)
+	"pull_request" in doc.on
+}
+
+on_pull_request(doc) if doc.on == "pull_request"
+
 violation contains {
 	"rule": "gate report silent",
 	"verdict": "task judge silent",
 	"subjects": [{"path": manifest}],
 } if {
 	some task in reports
-	contains(verify.run, sprintf("mise run %s", [task]))
+	invokes_task(verify.run, task)
 }
 
 # The other way onto the landing path, and the one `verify` cannot see.
@@ -104,11 +144,11 @@ violation contains {
 } if {
 	some path, doc in input.tree.documents
 	startswith(path, ".github/workflows/")
-	doc.on.pull_request
+	on_pull_request(doc)
 	some _, job in doc.jobs
 	some step in job.steps
 	some task in reports
-	contains(step.run, sprintf("mise run %s", [task]))
+	invokes_task(step.run, task)
 }
 
 # --- the load-time tier ------------------------------------------------------
@@ -117,6 +157,26 @@ verify_task(task) := {"tree": {"documents": {"mise.toml": {"tasks": {"verify": t
 
 test_a_clean_manifest_passes if {
 	count(violation) == 0 with input as verify_task({"depends": ["ci"], "run": "mise run land-divergence"})
+}
+
+# **A LONGER NAME IS A DIFFERENT TASK** (review of #928). `mise run coverage`
+# used to match inside `mise run coverage-report-check`, so a gate that judges
+# was reported as a report that does not. Both clauses are covered: the manifest
+# one here and the workflow one below.
+test_a_longer_task_name_is_not_the_report if {
+	count(violation) == 0 with input as verify_task({"depends": [], "run": "mise run coverage-report-check"})
+}
+
+test_the_report_itself_is_still_refused_in_the_run if {
+	some v in violation with input as verify_task({"depends": [], "run": "mise run coverage"})
+	v.verdict == "task judge silent"
+}
+
+# AND A NAME ENDING THE STRING IS STILL A CALL, which is the other unbounded
+# position — the residue `dead-capability`'s `reached` paid for three times.
+test_a_report_ending_the_run_string_is_refused if {
+	some v in violation with input as verify_task({"depends": [], "run": "cd x && mise run scorecard"})
+	v.verdict == "task judge silent"
 }
 
 test_a_report_in_verifys_depends_is_refused if {
@@ -152,12 +212,41 @@ test_a_report_run_on_pull_request_is_refused if {
 	v.verdict == "task judge silent"
 }
 
+# **THE LIST AND SCALAR TRIGGER FORMS** (review of #928). The parser renders a
+# mapping as an object, a sequence as an array and a scalar as a string, and only
+# the first matched — so these two ran a report on the landing path with nothing
+# said.
+test_a_report_run_on_a_pull_request_listed_in_a_sequence_is_refused if {
+	some v in violation with input as workflow(["push", "pull_request"], "mise run coverage")
+	v.verdict == "task judge silent"
+}
+
+test_a_report_run_on_a_bare_pull_request_scalar_is_refused if {
+	some v in violation with input as workflow("pull_request", "mise run coverage")
+	v.verdict == "task judge silent"
+}
+
+# AND A SEQUENCE THAT DOES NOT NAME IT IS STILL NOT THE LANDING PATH, so the two
+# arms above widen the trigger reading without widening the verdict.
+test_a_sequence_without_pull_request_is_not_refused if {
+	count(violation) == 0 with input as workflow(["push", "workflow_dispatch"], "mise run coverage")
+}
+
+# THE WORKFLOW CLAUSE GETS THE NAME BOUNDARY TOO, not just the manifest one.
+test_a_longer_task_name_in_a_workflow_step_is_not_the_report if {
+	count(violation) == 0 with input as workflow({"pull_request": {}}, "mise run coverage-report-check")
+}
+
 # A SCHEDULED workflow running a report is the whole point of the report.
 test_a_report_run_on_a_schedule_is_the_point_not_a_violation if {
 	count(violation) == 0 with input as workflow({"schedule": [{"cron": "0 0 * * 0"}]}, "mise run coverage")
 }
 
 #MUTANT-SUITE crates/batten/tests/it/report_only.rs
-#MUTANT report-on-pull-request-passes|s@workflow.on.pull_request@true@|a_report_run_on_a_schedule_is_the_point_not_a_violation
+# THE TARGET NAMED A PATTERN THIS MODULE DOES NOT CONTAIN (review of #928): the
+# arm reads `doc.on`, never `workflow.on`, so the sed matched nothing and the
+# mutation was a no-op reported as caught — a survivor wearing a pass. The
+# catcher is the case that actually reddens when the trigger test stops deciding.
+#MUTANT report-on-pull-request-passes|s@^\ton_pull_request(doc)$@\ttrue@|a_report_run_on_a_schedule_is_the_point_not_a_violation
 #MUTANT report-in-depends-unread|s@named == task@false@|a_report_in_verifys_depends_is_refused_over_the_binary
 #MUTANT report-no-verify-unread|s@not verify$@false@|no_verify_task_is_could_not_look

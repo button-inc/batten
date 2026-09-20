@@ -65,29 +65,52 @@ candidate contains [path, index, line] if {
 	regex.match(data.batten.patterns["pipe-into-grep"], line)
 }
 
-# What follows the LAST `| grep` on the line — the flags of the grep being piped
-# into, rather than of some earlier one.
-piped_flags(line) := tail if {
-	parts := split(line, "| grep")
-	count(parts) > 1
-	tail := parts[count(parts) - 1]
+# **THE SEGMENT IS BOUNDED BY THE PIPE ITSELF** (review of #928), which is what
+# makes this read grep's flags and only grep's.
+#
+# This was `split(line, "| grep")` and took everything after the last match to
+# the END OF LINE, so `producer | grep pattern | wc -l` handed `flag_tokens` the
+# text ` pattern | wc -l` and `-l` — `wc`'s flag — read as an early-exit grep
+# flag. A false violation on a `deny` row, which is the direction that gets a
+# gate switched off.
+#
+# It also missed `producer |  grep -q thing`: splitting on the literal `"| grep"`
+# cannot see two spaces, while `pipe-into-grep` — the pattern that decides
+# whether a line is a candidate at all — accepts any whitespace. So `candidate`
+# fired, `piped_flags` went undefined, and the violation silently did not.
+# Splitting on `|` and testing each stage fixes both with one predicate.
+stages(line) := split(line, "|")
+
+# The LAST stage that invokes grep. Last rather than first for the reason the old
+# comment gave: an earlier `grep` in the pipeline has its own flags, and it is
+# the one being piped INTO whose early exit breaks the producer.
+#
+# THE RESIDUE IS A PIPE INSIDE A QUOTED STRING, named rather than silent: a
+# pattern like `grep 'a|b'` splits here into stages that are not stages. It lands
+# in the UNDER-deny direction — the fragment does not start with `grep`, so it is
+# not read as one — which is the same direction the module's `-- ` clause below
+# already chooses.
+grep_stage(line) := stage if {
+	found := [candidate_stage |
+		some candidate_stage in stages(line)
+		invokes_grep(candidate_stage)
+	]
+	count(found) > 0
+	stage := found[count(found) - 1]
 }
 
-piped_flags(line) := tail if {
-	not contains(line, "| grep")
-	parts := split(line, "|grep")
-	count(parts) > 1
-	tail := parts[count(parts) - 1]
-}
+invokes_grep(stage) if startswith(trim_space(stage), "grep ")
+
+invokes_grep(stage) if trim_space(stage) == "grep"
 
 # The tokens before `--`, which ends the flags: `grep -- -q` searches for the
 # literal `-q`.
 flag_tokens(line) := tokens if {
-	tail := piped_flags(line)
-	before := split(tail, " -- ")[0]
+	before := split(grep_stage(line), " -- ")[0]
 	tokens := [token |
 		some token in split(before, " ")
 		token != ""
+		token != "grep"
 	]
 }
 
@@ -145,6 +168,34 @@ test_long_names_are_the_same_hazard if {
 
 test_a_grep_that_consumes_its_whole_input_is_not_the_hazard if {
 	count(violation) == 0 with input as scan(["producer | grep thing"])
+}
+
+# **A LATER STAGE'S FLAGS ARE NOT GREP'S** (review of #928). The segment used to
+# run to the end of the line, so `wc -l` here supplied an `-l` that read as an
+# early-exit grep flag — a false violation on a `deny` row, which is the
+# direction that gets a gate switched off rather than fixed.
+test_a_flag_belonging_to_a_later_stage_is_not_greps if {
+	count(violation) == 0 with input as scan(["producer | grep thing | wc -l"])
+}
+
+# AND THE GREP BEING PIPED INTO IS STILL JUDGED when a later stage follows it, so
+# the bound above is not a way to pass by appending one.
+test_an_early_exit_is_still_caught_with_a_later_stage if {
+	count(violation) == 1 with input as scan(["producer | grep -q thing | wc -l"])
+}
+
+# WHITESPACE AFTER THE PIPE IS WHITESPACE. `pipe-into-grep` accepts it when
+# deciding a line is a candidate, so a segment reader that could not see it made
+# the candidate decide nothing — fired, then went undefined, then reported clean.
+test_extra_space_after_the_pipe_is_still_a_pipe_into_grep if {
+	count(violation) == 1 with input as scan(["producer |  grep -q thing"])
+}
+
+# THE EARLIER GREP IS NOT THE ONE THAT MATTERS: its own early exit breaks the
+# stage before it, but the hazard this rule names is the LAST one, whose exit
+# SIGPIPEs the producer the caller is reading.
+test_the_last_grep_is_the_one_judged if {
+	count(violation) == 0 with input as scan(["producer | grep -q first | grep second"])
 }
 
 # `||` IS NOT A PIPE, and this is the case the predecessor's own scan failed:
