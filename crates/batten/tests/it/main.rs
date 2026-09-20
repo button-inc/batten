@@ -58,6 +58,7 @@ mod authority_replay;
 mod awk_regex;
 mod baseline;
 mod bats_invocation;
+mod bench_tokens;
 mod board_receipts;
 mod board_record;
 mod board_state_claim;

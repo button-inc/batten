@@ -256,6 +256,34 @@ expression: stdout_of(&output)
       "subcommands": []
     },
     {
+      "path": "bench",
+      "id": "bench",
+      "about": "Measure what a capability costs an agent's context",
+      "effect": "unclassified",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "bench tokens",
+          "id": "bench.tokens",
+          "about": "Measure the token economics of the Batten-wrapped path against the raw tool, from committed fixtures",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "check",
+              "short": null,
+              "long": "check",
+              "takes_value": false,
+              "positional": false,
+              "help": "Diff a fresh run against the committed table instead of writing it"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "capture",
       "id": "capture",
       "about": "Captured command output: navigate what `exec` already ran, without running it again",

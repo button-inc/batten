@@ -2007,6 +2007,20 @@ const LANDED_BY: FlagDecl = FlagDecl {
 /// against the parent" — it is a caller that has not said what the change is
 /// relative to, and answering from a guess is how a tier gets skipped over a
 /// comparison nobody made.
+const BENCH_CHECK: FlagDecl = FlagDecl {
+    id: "check",
+    long: Some("check"),
+    short: None,
+    help: "Diff a fresh run against the committed table instead of writing it",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
 const SLOW_BASE: FlagDecl = FlagDecl {
     id: "base",
     long: Some("base"),
@@ -2719,6 +2733,33 @@ pub const SURFACE: &[CommandDecl] = &[
     // It refuses to run any rule kind that spawns a process
     // (`rules::run_static`), which is what keeps this `read` honest and this
     // path off the process-spawning surface.
+    // CLOUD-119's benchmark, ported out of `mise-tasks/token-bench.sh` and the
+    // drift half of `mise-tasks/token-bench-check.sh` under CLOUD-1753.
+    //
+    // A NOUN THAT ONLY DISPATCHES, on `ci`'s reading: the noun decides nothing,
+    // so it is `Unclassified` rather than `Read`.
+    CommandDecl {
+        path: "bench",
+        id: "bench",
+        about: "Measure what a capability costs an agent's context",
+        data_channel: false,
+        exits: EXITS_DISPATCHES,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // `Unclassified`, and not optimistically `Write`: the arms it prices are the
+    // CONSUMER's declared step sequences, so its reach is whatever they reach.
+    // It writes the published table, and under `--check` it writes nothing and
+    // compares — a gate that rewrote the tree it judges could not fail twice.
+    CommandDecl {
+        path: "bench tokens",
+        id: "bench.tokens",
+        about: "Measure the token economics of the Batten-wrapped path against the raw tool, from committed fixtures",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Unclassified,
+        flags: &[BENCH_CHECK],
+    },
     CommandDecl {
         path: "check",
         id: "check",

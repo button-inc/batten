@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-bench-tokens 1  batten 
+.SH NAME
+batten\-bench\-tokens \- Measure the token economics of the Batten\-wrapped path against the raw tool, from committed fixtures
+.SH SYNOPSIS
+\fBbatten bench tokens\fR [\fB\-\-check\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Measure the token economics of the Batten\-wrapped path against the raw tool, from committed fixtures
+.SH OPTIONS
+.TP
+\fB\-\-check\fR
+Diff a fresh run against the committed table instead of writing it
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

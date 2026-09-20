@@ -441,6 +441,13 @@ pub enum Command {
         /// The sub-verb selected.
         command: ReleaseCommand,
     },
+    /// What a capability costs an agent's context (CLOUD-119).
+    ///
+    /// APPENDED LAST, for the reason above.
+    Bench {
+        /// The sub-verb selected.
+        command: BenchCommand,
+    },
 }
 
 /// Subcommands of `hk`.
@@ -1571,6 +1578,18 @@ pub enum ConfigCommand {
     },
 }
 
+/// The `bench` sub-verbs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BenchCommand {
+    /// Measure the token economics of the wrapped path against the raw tool.
+    Tokens {
+        /// Compare a fresh run against the committed table instead of writing
+        /// it.
+        check: bool,
+    },
+}
+
 /// The `release` sub-verbs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -2074,6 +2093,16 @@ fn doctor_of(matches: &ArgMatches) -> DoctorCommand {
         _ => DoctorCommand::Diagnose {
             json: flag(matches, "json"),
         },
+    }
+}
+
+/// The `bench` sub-verb a parse resolved to.
+fn bench_of(matches: &ArgMatches) -> Option<BenchCommand> {
+    match matches.subcommand()? {
+        ("tokens", matches) => Some(BenchCommand::Tokens {
+            check: flag(matches, "check"),
+        }),
+        _ => None,
     }
 }
 
@@ -2809,6 +2838,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "record" => record_of(matches).map(|command| Command::Record { command }),
         "ci" => ci_of(matches).map(|command| Command::Ci { command }),
         "release" => release_of(matches).map(|command| Command::Release { command }),
+        "bench" => bench_of(matches).map(|command| Command::Bench { command }),
         _ => None,
     }
 }
