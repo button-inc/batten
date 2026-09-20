@@ -9,31 +9,31 @@ batten\-pr\-watch \- Poll a head\*(Aqs check runs until the required set answers
 Poll a head\*(Aqs check runs until the required set answers, then report the verdict
 .SH OPTIONS
 .TP
-\fB\-\-sha\fR
+\fB\-\-sha\fR \fI<sha>\fR
 The commit whose check runs to read
 .TP
-\fB\-\-repo\fR
+\fB\-\-repo\fR \fI<repo>\fR
 The repository to read, in the forge client\*(Aqs own spelling
 .TP
-\fB\-\-interval\fR
+\fB\-\-interval\fR \fI<interval>\fR
 Seconds between requests; a server\-requested floor raises it and nothing lowers it
 .TP
-\fB\-\-progress\fR
+\fB\-\-progress\fR \fI<progress>\fR
 Program to record the poll\*(Aqs tick and reading\-change signals
 .TP
-\fB\-\-progress\-id\fR
+\fB\-\-progress\-id\fR \fI<progress_id>\fR
 The identity the progress recorder keys its entries on
 .TP
-\fB\-\-required\fR
+\fB\-\-required\fR \fI<required>\fR
 Comma\-separated check names that carry a verdict about this repository
 .TP
-\fB\-\-absent\-ok\fR
+\fB\-\-absent\-ok\fR \fI<absent_ok>\fR
 Comma\-separated check names for which having no run at all is a legitimate reading
 .TP
-\fB\-\-answered\fR
+\fB\-\-answered\fR \fI<answered>\fR
 Comma\-separated conclusions that constitute an answer; anything else is not yet one
 .TP
-\fB\-\-fanin\fR
+\fB\-\-fanin\fR \fI<fanin>\fR
 The fan\-in check whose failure a cancelled sibling can manufacture
 .TP
 \fB\-h\fR, \fB\-\-help\fR

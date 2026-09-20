@@ -15,22 +15,22 @@ Store the child\*(Aqs streams and report their handles instead of passing the by
 \fB\-\-tee\fR
 Copy the child\*(Aqs streams onto Batten\*(Aqs own, as well as capturing them
 .TP
-\fB\-\-jobs\fR
+\fB\-\-jobs\fR \fI<jobs>\fR
 How many of a `:::` bundle\*(Aqs commands run at once
 .TP
 \fB\-\-continue\-on\-error\fR
 Run the rest of a `:::` bundle after a command fails
 .TP
-\fB\-\-lock\fR
+\fB\-\-lock\fR \fI<lock>\fR
 Hold this clone\*(Aqs named singleton lock for the child\*(Aqs lifetime
 .TP
-\fB\-\-lock\-path\fR
+\fB\-\-lock\-path\fR \fI<lock_path>\fR
 Hold the lock at this path, for a resource the clone does not own
 .TP
-\fB\-\-lock\-attempts\fR
+\fB\-\-lock\-attempts\fR \fI<lock_attempts>\fR
 How many times to ask for the lock before reporting it held
 .TP
-\fB\-\-lock\-label\fR
+\fB\-\-lock\-label\fR \fI<lock_label>\fR
 What the wait is for, named by the caller for the refusal line
 .TP
 \fB\-\-format\fR [default: human]

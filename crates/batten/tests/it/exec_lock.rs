@@ -62,6 +62,88 @@ fn repo(name: &str) -> std::path::PathBuf {
     dir
 }
 
+/// **A KEY MAY NOT LEAVE THE LOCK DIRECTORY** (review of #928).
+///
+/// `Path::join` discards the prefix for an absolute operand and honours `..`, so
+/// each of these resolved OUTSIDE `$GIT_DIR` — serialising a resource the caller
+/// did not name and erasing the distinction from `--lock-path`, which exists to
+/// say "outside the repository, deliberately".
+///
+/// Exit 1 rather than 2: a key the flag cannot express is the caller's mistake,
+/// not a verdict about the tree.
+#[test]
+fn a_lock_key_that_leaves_the_lock_directory_is_refused() {
+    let dir = repo("exec-lock-escape");
+    for key in ["/tmp/shared", "../../escape", "a/../../b"] {
+        let output = common::run(&dir, &["exec", "--lock", key, "--", "true"]);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "`--lock {key}` must be refused: {}",
+            common::stderr(&output)
+        );
+        assert!(
+            common::stderr(&output).contains("--lock-path"),
+            "and the refusal must name the flag that does express it: {}",
+            common::stderr(&output)
+        );
+    }
+}
+
+/// AND AN ORDINARY KEY STILL WORKS, so the guard narrows the spelling without
+/// narrowing the capability. A nested name under the lock directory is fine —
+/// what is refused is LEAVING it.
+#[test]
+fn an_ordinary_key_is_unaffected_by_the_escape_guard() {
+    let dir = repo("exec-lock-ordinary");
+    let output = common::run(&dir, &["exec", "--lock", "toolchain/aarch64", "--", "true"]);
+    assert_eq!(output.status.code(), Some(0), "{}", common::stderr(&output));
+}
+
+/// **A LOCK OPTION WITH NO LOCK IS A CALLER BUG** (review of #928).
+///
+/// `exec_lock` returned before either option was read, so this ran UNLOCKED and
+/// discarded the wait the caller asked for — silently, at exactly the moment the
+/// caller believed they were queuing.
+#[test]
+fn lock_options_without_a_lock_selector_are_refused() {
+    let dir = repo("exec-lock-orphan-options");
+    for args in [
+        vec!["exec", "--lock-attempts", "40", "--", "true"],
+        vec!["exec", "--lock-label", "the toolchain", "--", "true"],
+    ] {
+        let output = common::run(&dir, &args);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{args:?} must be refused: {}",
+            common::stderr(&output)
+        );
+    }
+}
+
+/// AND THEY ARE ACCEPTED WITH ONE, which is what keeps the refusal above from
+/// being a ban on the options themselves.
+#[test]
+fn lock_options_are_accepted_alongside_a_selector() {
+    let dir = repo("exec-lock-with-selector");
+    let output = common::run(
+        &dir,
+        &[
+            "exec",
+            "--lock",
+            "k",
+            "--lock-attempts",
+            "40",
+            "--lock-label",
+            "the toolchain",
+            "--",
+            "true",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", common::stderr(&output));
+}
+
 #[test]
 fn the_wrapped_exit_code_survives_the_lock() {
     // The whole product of a wrapper. The shell names losing it as the defect

@@ -9,16 +9,16 @@ batten\-landed\-check \- Refuse a board column that contradicts main\*(Aqs histo
 Refuse a board column that contradicts main\*(Aqs history or a declined key
 .SH OPTIONS
 .TP
-\fB\-\-claimed\fR
+\fB\-\-claimed\fR \fI<claimed>\fR
 `<CLOUD\-id>` lines a commit on origin/main closes, from `claimed\-keys \-\-closing\-only`
 .TP
-\fB\-\-merged\-prs\fR
+\fB\-\-merged\-prs\fR \fI<merged_prs>\fR
 `<CLOUD\-id><TAB><pr\-number>` lines, one per closing key in a MERGED pull request
 .TP
-\fB\-\-landed\-by\fR
+\fB\-\-landed\-by\fR \fI<landed_by>\fR
 `<CLOUD\-id><TAB><ref>` lines the caller asserts carry the work
 .TP
-\fB\-\-declined\fR
+\fB\-\-declined\fR \fI<declined>\fR
 `<CLOUD\-id>` lines a pull request body declined with DO\-NOT\-CLOSE
 .TP
 \fB\-h\fR, \fB\-\-help\fR
