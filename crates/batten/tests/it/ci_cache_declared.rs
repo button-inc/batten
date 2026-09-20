@@ -293,6 +293,80 @@ fn a_cargo_job_with_no_cache_step_is_refused() {
     );
 }
 
+/// A `depends` chain FIVE hops from cargo, which is past the three levels the
+/// closure used to be expanded to by hand (CLOUD-1863).
+const DEEP_MANIFEST: &str = r#"
+[tasks.build]
+run = "cargo run --quiet -p batten -- enforce"
+
+[tasks.deep5]
+depends = ["build"]
+
+[tasks.deep4]
+depends = ["deep5"]
+
+[tasks.deep3]
+depends = ["deep4"]
+
+[tasks.deep2]
+depends = ["deep3"]
+
+[tasks.deep1]
+depends = ["deep2"]
+"#;
+
+#[test]
+fn a_cargo_reach_deeper_than_the_old_bound_is_seen() {
+    // THE REGRESSION CASE FOR CLOUD-1863, over the compiled binary.
+    //
+    // The closure was written out to three levels, so a chain five hops from
+    // cargo resolved to "reaches no cargo" and this job passed UNCACHED — a
+    // dead gate and a clean tree being byte-identical on the decision surface.
+    // Measured over a depth-10 chain before the change: the unrolled form
+    // answered four nodes where `graph.reachable` answers ten.
+    //
+    // This tier rather than the module's own `test_` rules, because the engine
+    // half is the half that was never in question: the predicate has to read a
+    // task table the boundary built from a DIFFERENT document in a different
+    // format, and a `with input as` case fabricates exactly that.
+    let uncached = READER
+        .split_once("      - uses: Swatinem/rust-cache")
+        .expect("the fixture carries a cache step")
+        .0
+        .replace("mise run lint", "mise run deep1");
+    let root = tree(
+        "deep",
+        DEEP_MANIFEST,
+        &[("warm.yml", WARM), ("pr.yml", &uncached)],
+    );
+    let found = findings(&root);
+    assert!(
+        !found.is_empty(),
+        "a chain five hops from cargo should still be refused: {found:?}"
+    );
+}
+
+#[test]
+fn a_cyclic_depends_chain_terminates_and_invents_no_reach() {
+    // A fixpoint must terminate where a hand expansion never met a cycle, and
+    // must not invent a cargo reach that is not there. A walk that hung would
+    // never report; one that reported would refuse a job touching no cargo.
+    let cyclic = r#"
+[tasks.loop_a]
+depends = ["loop_b"]
+
+[tasks.loop_b]
+depends = ["loop_a"]
+"#;
+    let reader = READER.replace("mise run lint", "mise run loop_a");
+    let root = tree("cyclic", cyclic, &[("warm.yml", WARM), ("pr.yml", &reader)]);
+    let found = findings(&root);
+    assert!(
+        found.is_empty(),
+        "a cyclic chain reaching no cargo should be clean: {found:?}"
+    );
+}
+
 #[test]
 fn the_engine_resolves_cargo_through_the_manifests_depends() {
     // THE CASE THIS TIER EXISTS FOR. The fixture's job runs `mise run lint`,
