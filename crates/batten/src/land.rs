@@ -161,6 +161,19 @@ pub fn conflict_stop(branch: &str, reference: &str, commit: &str, paths: &[Strin
     for path in &named {
         said.push(format!("land: {path}"));
     }
+    // WHY THE REBASE-IN-PROGRESS EXITS CANNOT APPLY, said here rather than left
+    // for the reader to discover. Measured on this branch: the stop named the
+    // commit and the paths, the `patch run loose` row named `--continue`,
+    // `--abort` and `--skip` as the spellings it leaves alone, and a session
+    // followed both, concluded the loop was defective, and was one step from
+    // cherry-picking around it — which completes the replay while writing no lap
+    // record, so `replay halt conflict` would read clean over a conflict that
+    // happened. The sentence is what stops that, and it is owed on the pathless
+    // reading too.
+    said.push(String::from(
+        "land: the replay is STATELESS — nothing is half-replayed, so there is no rebase in \
+         progress and --continue, --abort and --skip have nothing to act on",
+    ));
     if let Some(first) = named.first() {
         said.push(format!(
             "land: merge each path above in the worktree, then: batten land replay {reference} --resolve {first}"

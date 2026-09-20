@@ -694,13 +694,18 @@ fn no_pull_request_to_ask_is_could_not_look_and_never_a_refusal() {
 /// `crates/batten/tests/it/rebase.rs` already owns the mechanism end to end.
 #[test]
 fn the_conflict_stop_and_its_gate_name_a_route_that_exists() {
-    let verb = std::fs::read_to_string(common::at_root("crates/batten/src/lib.rs"))
-        .expect("the boundary is readable");
-    let after = verb
-        .split_once("land::Replay::Conflicted")
-        .expect("the conflict arm is where the message lives")
+    // THE MESSAGE MOVED, AND THIS FOLLOWS IT. It was written inline in the
+    // dispatch arm when this case was; `land::conflict_stop` owns it now,
+    // precisely so a case that cannot stand up a serving remote can still assert
+    // the text. Reading the arm would leave this asserting about a `writeln!`
+    // loop and passing for nothing.
+    let source = std::fs::read_to_string(common::at_root("crates/batten/src/land.rs"))
+        .expect("the module is readable");
+    let after = source
+        .split_once("pub fn conflict_stop")
+        .expect("the function that renders the stop is where the message lives")
         .1;
-    let arm = &after[..after.find("land::Replay::Current").unwrap_or(after.len())];
+    let arm = &after[..after.find("\nfn ").unwrap_or(after.len())];
 
     assert!(
         arm.contains("--resolve"),
