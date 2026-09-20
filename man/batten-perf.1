@@ -16,6 +16,12 @@ Print help
 batten\-perf\-pair(1)
 Measure this branch and its merge base back to back on one machine, and print both arms as paired records
 .TP
+batten\-perf\-measure(1)
+Measure this binary\*(Aqs invocation cost on every path and print one record per path
+.TP
+batten\-perf\-record(1)
+Append a measurement to the trunk\*(Aqs invocation\-cost series, read as `perf measure` records on stdin
+.TP
 batten\-perf\-compare(1)
 Decide whether a paired measurement read on stdin regressed past the threshold
 .TP

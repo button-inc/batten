@@ -6,19 +6,19 @@ runner measured it; the suite runs `--no-parallelize-within-files`, so a
 file's number is its own serial cost and is what an author adding a case
 to it pays.
 
-- suites: 63
-- serial total: 139.8s
+- suites: 62
+- serial total: 138.7s
 
 | seconds | share | suite |
 | ---: | ---: | --- |
-| 20.7 | 14.8% | `tests/graph-check.bats` |
-| 8.3 | 5.9% | `tests/ready-lint.bats` |
-| 8.0 | 5.7% | `tests/token-bench.bats` |
-| 7.3 | 5.2% | `tests/board-sweep.bats` |
-| 6.9 | 4.9% | `tests/released.bats` |
-| 5.9 | 4.2% | `tests/in-progress-drain.bats` |
+| 20.7 | 14.9% | `tests/graph-check.bats` |
+| 8.3 | 6.0% | `tests/ready-lint.bats` |
+| 8.0 | 5.8% | `tests/token-bench.bats` |
+| 7.3 | 5.3% | `tests/board-sweep.bats` |
+| 6.9 | 5.0% | `tests/released.bats` |
+| 5.9 | 4.3% | `tests/in-progress-drain.bats` |
 | 5.7 | 4.1% | `tests/release-tracking-check.bats` |
-| 5.5 | 3.9% | `tests/release-assets-check.bats` |
+| 5.5 | 4.0% | `tests/release-assets-check.bats` |
 | 5.0 | 3.6% | `tests/mcp-allow-check.bats` |
 | 4.7 | 3.4% | `tests/sbom.bats` |
 | 4.0 | 2.9% | `tests/step-receipt.bats` |
@@ -26,19 +26,18 @@ to it pays.
 | 3.6 | 2.6% | `tests/land-divergence.bats` |
 | 3.5 | 2.5% | `tests/ntia-check.bats` |
 | 3.5 | 2.5% | `tests/ready-cites-check.bats` |
-| 3.0 | 2.1% | `tests/lint-rego.bats` |
+| 3.0 | 2.2% | `tests/lint-rego.bats` |
 | 2.8 | 2.0% | `tests/hk-selection.bats` |
 | 2.6 | 1.9% | `tests/install.bats` |
 | 1.8 | 1.3% | `tests/finding-sink-check.bats` |
 | 1.8 | 1.3% | `tests/lint-deno.bats` |
 | 1.7 | 1.2% | `tests/reclaim-census.bats` |
-| 1.6 | 1.1% | `tests/spec-ref-check.bats` |
-| 1.6 | 1.1% | `tests/deferral-check.bats` |
+| 1.6 | 1.2% | `tests/spec-ref-check.bats` |
+| 1.6 | 1.2% | `tests/deferral-check.bats` |
 | 1.5 | 1.1% | `tests/signing-posture.bats` |
 | 1.5 | 1.1% | `tests/ready-lint-deferral.bats` |
 | 1.3 | 0.9% | `tests/spawn-census.bats` |
 | 1.2 | 0.9% | `tests/verify.bats` |
-| 1.1 | 0.8% | `tests/perf-record.bats` |
 | 1.1 | 0.8% | `tests/land-divergence-assert.bats` |
 | 1.1 | 0.8% | `tests/nonverdict-scan.bats` |
 | 1.1 | 0.8% | `tests/linear-check.bats` |

@@ -331,6 +331,27 @@ impl std::fmt::Display for Record {
     }
 }
 
+impl Record {
+    /// The record line WITHOUT the `arm=` field, which is `perf`'s own shape.
+    ///
+    /// **The reader is `record tool perf-p95`, and it is a contract.** An
+    /// absolute measurement has one arm, so an `arm=` field on it would name a
+    /// distinction that does not exist — and `perf-assert` budgets by `path`.
+    /// Same units, same rounding and the same field order as the paired form, so
+    /// a reader of either sees one convention.
+    #[must_use]
+    pub fn measurement(&self) -> String {
+        format!(
+            "path={} p50={} p95={} mean={} runs={}",
+            self.path,
+            round2(self.p50),
+            round2(self.p95),
+            round2(self.mean),
+            self.runs
+        )
+    }
+}
+
 fn round2(ms: f64) -> f64 {
     (ms * 100.0).round() / 100.0
 }
@@ -847,6 +868,239 @@ fn measure(repo: &Path, options: Options, base_sha: &str) -> Result<Vec<Record>>
 /// config made the base binary exit 1 on "unknown field", hyperfine abort on its
 /// first warmup, and the whole gate answer could-not-look — produced by the
 /// gate's own setup, on exactly the class of change it exists to judge.
+/// The fixture every arm runs against, staged once.
+///
+/// **FIXTURES ARE REUSED, NOT INVENTED.** The check path materialises
+/// `tests/fixtures/repos/forbid-clean` and the hook paths feed
+/// `tests/fixtures/hooks/*` — the same bytes the Rust suite already pins against
+/// drift. A second corpus maintained only for the benchmark would drift from the
+/// one the tests assert on, and the published number would then describe an
+/// input nothing else uses.
+fn stage(repo: &Path, out: &Path) -> Result<(PathBuf, PathBuf)> {
+    let fixture = repo.join("crates/batten/tests/fixtures/repos/forbid-clean");
+    let hooks = repo.join("crates/batten/tests/fixtures/hooks");
+    let check_repo = out.join("check-repo");
+    std::fs::create_dir_all(&check_repo).context("perf: could not stage the fixture")?;
+    for (from, to) in [("batten.toml.in", "batten.toml"), ("lib.rs.in", "lib.rs")] {
+        std::fs::copy(fixture.join(from), check_repo.join(to))
+            .with_context(|| format!("perf: could not stage {to}"))?;
+    }
+    Ok((check_repo, hooks))
+}
+
+/// One absolute measurement per invocation path (CLOUD-207), ported off
+/// `mise-tasks/perf.sh` under CLOUD-1753.
+///
+/// # This MEASURES; it does not decide
+///
+/// The verdict is `perf-assert`'s, over the `perf-p95` tool record this feeds
+/// through `record tool`. A measurement needs a quiet machine, a release build
+/// and a couple of minutes; a decision needs none of those, so keeping them
+/// apart is what lets the decision run on every commit while the measurement
+/// runs where it can be trusted.
+///
+/// # THE SIX PATHS, and why each is here
+///
+/// `noop` is the floor — process start, clap tree, render, no config and no git
+/// — so a regression there is a regression in every path at once. `check` adds
+/// config load, trust resolution and a tree walk. `hook` is the path that runs
+/// per mediated call. `passthrough` is the call no rule selects, which under
+/// match-all is the COMMON case and must cost what looking costs and nothing
+/// more. `posttool` prices the per-call capture write. `wired` is what the
+/// settings file actually invokes, launcher and all.
+///
+/// # Errors
+///
+/// A build that fails, a missing fixture, a binary that will not answer, or an
+/// arm that will not run. **A failed arm writes no records at all** — a number
+/// computed from a broken run is a misleading measurement rather than a missing
+/// one.
+pub fn invocation(repo: &Path) -> Result<Vec<Record>> {
+    let repo = &repo
+        .canonicalize()
+        .with_context(|| format!("perf: could not resolve {}", repo.display()))?;
+
+    // WHY A RELEASE BUILD: the published figure is about the binary users
+    // install. A debug build's startup is dominated by unoptimised code and is
+    // not the number being defended, so measuring one would publish a claim
+    // about an artifact that ships nowhere.
+    build(repo, None, "head")?;
+    let head_bin = repo.join("target/release/batten");
+    if !head_bin.is_file() {
+        bail!(
+            "perf: {} is missing after a successful build — refusing to measure something else.",
+            head_bin.display()
+        );
+    }
+
+    let out = perf_dir(repo);
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).context("perf: could not create the output directory")?;
+    let (check_repo, hooks) = stage(repo, &out)?;
+    let state = out.join("state");
+    let state_text = state.to_string_lossy().into_owned();
+
+    let head = head_bin.to_string_lossy().into_owned();
+    let verb = mediation_verb(&head_bin)?;
+    let hook_argv = || {
+        vec![
+            head.clone(),
+            verb.clone(),
+            String::from("--harness"),
+            String::from("claude-code"),
+        ]
+    };
+
+    // DERIVED FROM THE SETTINGS FILE BY NAME, never hardcoded and never by
+    // position. The measurement must not describe a wiring the repository no
+    // longer has, and under match-all the file carries more than one command —
+    // a positional read would publish a latency figure for a command nobody
+    // waits on, which is the failure this path exists to prevent.
+    let wired = wired_command(repo, &head_bin)?;
+
+    let plan: Vec<(&str, Option<PathBuf>, Vec<String>, &Path)> = vec![
+        (
+            "noop",
+            None,
+            vec![head.clone(), String::from("--help")],
+            repo.as_path(),
+        ),
+        (
+            "check",
+            None,
+            vec![head.clone(), String::from("check")],
+            check_repo.as_path(),
+        ),
+        (
+            "hook",
+            Some(hooks.join("claude-code.json")),
+            hook_argv(),
+            repo.as_path(),
+        ),
+        (
+            "passthrough",
+            Some(hooks.join("claude-code-passthrough.json")),
+            hook_argv(),
+            repo.as_path(),
+        ),
+        (
+            "posttool",
+            Some(hooks.join("claude-code-posttool.json")),
+            hook_argv(),
+            repo.as_path(),
+        ),
+        (
+            "wired",
+            Some(hooks.join("claude-code.json")),
+            wired,
+            repo.as_path(),
+        ),
+    ];
+
+    let mut records = Vec::new();
+    for (id, input, cmd, dir) in plan {
+        records.push(measure_arm(
+            dir,
+            &out,
+            id,
+            input.as_deref(),
+            &cmd,
+            &state_text,
+        )?);
+    }
+    Ok(records)
+}
+
+/// The ref the invocation-cost series lives on.
+///
+/// **Its own ref, not `refs/notes/commits`.** The default notes ref is what
+/// `git notes` writes with no argument and what a contributor is most likely to
+/// have local edits on, and a series is not a comment.
+const NOTES_REF: &str = "perf";
+
+/// The branch a measurement is allowed to describe.
+const TRUNK_VAR: &str = "BENCH_TRUNK";
+
+/// What produced the numbers, stamped into every record.
+const METRIC_VAR: &str = "BENCH_METRIC";
+
+/// Which runner produced them.
+const RUNNER_VAR: &str = "BENCH_RUNNER";
+
+/// Whether a measurement may be recorded from this checkout.
+///
+/// # MAIN ONLY, and this is a refusal rather than a convention
+///
+/// A branch's numbers are not the trunk's: a branch may be mid-rebase, carrying
+/// unlanded work, or built from a different base entirely, and a series mixing
+/// the two cannot be read at all — the reader has no way to tell a step change
+/// from a branch switch.
+///
+/// # Errors
+///
+/// A checkout whose branch cannot be resolved.
+pub fn on_trunk(repo: &Path) -> Result<Option<String>> {
+    let trunk = env_or(TRUNK_VAR, "main");
+    let branch = crate::git::current_branch(repo)?;
+    Ok(match branch {
+        Some(ref name) if *name == trunk => None,
+        Some(name) => Some(name),
+        None => Some(String::from("a detached HEAD")),
+    })
+}
+
+/// Append one measurement to the trunk's series (CLOUD-172), ported off
+/// `mise-tasks/perf-record.sh` under CLOUD-1753.
+///
+/// # THE LABEL IS LOAD-BEARING
+///
+/// CLOUD-172 asked for instruction counts with wall clock as the fallback "where
+/// valgrind is unavailable". Measured: `mise registry valgrind` reports the tool
+/// is not in the registry, so it cannot be pinned, and `no-source-built-tool`
+/// refuses compiling it. Wall clock is therefore the metric EVERYWHERE rather
+/// than situationally — which makes saying so in the record mandatory, since a
+/// later reader comparing a wall-clock series against an instruction-count one
+/// would read the instrument change as a regression.
+///
+/// # Errors
+///
+/// Records that are not records, or a note that will not land.
+pub fn record_series(repo: &Path, records: &str) -> Result<String> {
+    // ONLY RECORDS. A stray line would enter the series as a datum nothing can
+    // parse, and the series is read by machine as well as by eye.
+    let body: Vec<&str> = records
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    if body.is_empty() {
+        bail!(
+            "perf record: stdin is empty — redirect `batten perf measure` to a file and read it \
+             back. Nothing written."
+        );
+    }
+    if let Some(stray) = body.iter().find(|line| !line.starts_with("path=")) {
+        bail!(
+            "perf record: stdin carries a line that is not a record ({stray}), so the series would \
+             take a datum nothing can parse. Nothing written."
+        );
+    }
+
+    let commit = crate::git::head_commit(repo)?;
+    let metric = env_or(METRIC_VAR, "wall-clock");
+    let runner = std::env::var(RUNNER_VAR).unwrap_or_else(|_| String::from("unknown-runner"));
+    let note = format!("metric={metric} runner={runner}\n{}", body.join("\n"));
+
+    crate::git::append_note(repo, NOTES_REF, &commit, &note)?;
+
+    // A POINTER, NEVER THE PAYLOAD (rule 4): the ref and the commit, so a reader
+    // knows where to look. The numbers are in the note.
+    Ok(format!(
+        "perf record: appended a {metric} measurement to refs/notes/{NOTES_REF} for {}",
+        short(&commit)
+    ))
+}
+
 fn arms(
     repo: &Path,
     out: &Path,
@@ -854,14 +1108,7 @@ fn arms(
     head_bin: &Path,
     base_tree: &Path,
 ) -> Result<Vec<Record>> {
-    let fixture = repo.join("crates/batten/tests/fixtures/repos/forbid-clean");
-    let hooks = repo.join("crates/batten/tests/fixtures/hooks");
-    let check_repo = out.join("check-repo");
-    std::fs::create_dir_all(&check_repo).context("perf-pair: could not stage the fixture")?;
-    for (from, to) in [("batten.toml.in", "batten.toml"), ("lib.rs.in", "lib.rs")] {
-        std::fs::copy(fixture.join(from), check_repo.join(to))
-            .with_context(|| format!("perf-pair: could not stage {to}"))?;
-    }
+    let (check_repo, hooks) = stage(repo, out)?;
 
     // A HERMETIC STATE ROOT, mandatory rather than tidy: the post-tool arm
     // writes, and this task runs the BASE and HEAD binaries against one tree, so
@@ -968,6 +1215,50 @@ fn hyperfine(
     head_cmd: &[String],
     state: &str,
 ) -> Result<Vec<Record>> {
+    bench(
+        dir,
+        out,
+        id,
+        input,
+        &[("base", base_cmd.to_vec()), ("head", head_cmd.to_vec())],
+        state,
+    )
+}
+
+/// One arm, measured the way a pair's arms are.
+///
+/// **The single-arm caller exists so there is not a second invocation.** `perf`
+/// publishes an absolute figure and `perf pair` publishes a ratio, but both want
+/// the same warmup, the same run count, the same `--shell=none` argv handling and
+/// the same percentile reduction. Arity is the only difference, so arity is the
+/// parameter.
+fn measure_arm(
+    dir: &Path,
+    out: &Path,
+    id: &str,
+    input: Option<&Path>,
+    cmd: &[String],
+    state: &str,
+) -> Result<Record> {
+    let mut records = bench(dir, out, id, input, &[("head", cmd.to_vec())], state)?;
+    records
+        .pop()
+        .ok_or_else(|| anyhow::anyhow!("perf: the {id} arm produced no record."))
+}
+
+/// `hyperfine` over N labelled commands, in one invocation.
+///
+/// One invocation rather than one per arm, because arms measured back to back in
+/// a single process share a machine state that separate runs do not — which for
+/// a ratio is the whole point, and for an absolute figure costs nothing.
+fn bench(
+    dir: &Path,
+    out: &Path,
+    id: &str,
+    input: Option<&Path>,
+    arms: &[(&'static str, Vec<String>)],
+    state: &str,
+) -> Result<Vec<Record>> {
     let json = out.join(format!("{id}.json"));
     let mut args: Vec<String> = vec![
         String::from("--warmup"),
@@ -985,27 +1276,30 @@ fn hyperfine(
         args.push(input.to_string_lossy().into_owned());
     }
 
-    let (base_cmd, head_cmd) = if id == "posttool" {
+    let arms: Vec<(&'static str, Vec<String>)> = if id == "posttool" {
         // ONE STATE ROOT PER ARM, AND EMPTY BEFORE EVERY RUN. This is the only
         // arm whose binaries WRITE, and both would otherwise share the store: the
         // head arm's capture would then be a blob the base arm's run already
         // created, and the log both arms read would carry the other's rows. Two
         // order-dependencies at once, and neither divides out of a ratio — which
         // is the one thing `perf-compare` reads.
-        let base_state = format!("{state}-base");
-        let head_state = format!("{state}-head");
+        let roots: Vec<String> = arms
+            .iter()
+            .map(|(label, _)| format!("{state}-{label}"))
+            .collect();
         args.push(String::from("--prepare"));
-        args.push(format!("rm -rf {base_state} {head_state}"));
-        (
-            state_prefixed(&base_state, base_cmd),
-            state_prefixed(&head_state, head_cmd),
-        )
+        args.push(format!("rm -rf {}", roots.join(" ")));
+        arms.iter()
+            .zip(&roots)
+            .map(|((label, cmd), root)| (*label, state_prefixed(root, cmd)))
+            .collect()
     } else {
-        (base_cmd.to_vec(), head_cmd.to_vec())
+        arms.to_vec()
     };
 
-    args.push(base_cmd.join(" "));
-    args.push(head_cmd.join(" "));
+    for (_, cmd) in &arms {
+        args.push(cmd.join(" "));
+    }
 
     let env = vec![
         (String::from("XDG_DATA_HOME"), state.to_owned()),
@@ -1025,14 +1319,13 @@ fn hyperfine(
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| anyhow::anyhow!("perf-pair: the {id} pair carried no results."))?;
 
-    ["base", "head"]
-        .iter()
+    arms.iter()
         .enumerate()
-        .map(|(index, arm)| {
+        .map(|(index, (label, _))| {
             let result = results.get(index).ok_or_else(|| {
-                anyhow::anyhow!("perf-pair: the {id} pair is missing its {arm} arm.")
+                anyhow::anyhow!("perf: the {id} measurement is missing its {label} arm.")
             })?;
-            record(arm, id, result)
+            record(label, id, result)
         })
         .collect()
 }
@@ -1976,33 +2269,26 @@ fn measure_one(
     out: &Path,
     binary: &Path,
 ) -> Result<Record> {
-    let json = out.join(format!("{id}.json"));
-    let args: Vec<String> = vec![
-        String::from("--warmup"),
-        env_or(WARMUP_VAR, DEFAULT_WARMUP),
-        String::from("--runs"),
-        env_or(RUNS_VAR, DEFAULT_RUNS),
-        String::from("--shell=none"),
-        String::from("--export-json"),
-        json.to_string_lossy().into_owned(),
-        String::from("--style"),
-        String::from("none"),
-        format!("{} check", binary.display()),
-    ];
-    if !run(tree, "hyperfine", &args, &[])? {
-        bail!("perf-acquire: measuring arm {id} failed. No records.");
-    }
-
-    let text = std::fs::read_to_string(&json)
-        .with_context(|| format!("perf-acquire: could not read arm {id}. No measurement."))?;
-    let parsed: serde_json::Value = serde_json::from_str(&text)
-        .with_context(|| format!("perf-acquire: arm {id} did not parse. No measurement."))?;
-    let result = parsed
-        .get("results")
-        .and_then(serde_json::Value::as_array)
-        .and_then(|results| results.first())
-        .ok_or_else(|| anyhow::anyhow!("perf-acquire: arm {id} carried no results."))?;
-    record(arm, id, result)
+    // THROUGH `bench`, WHICH IS WHY THERE IS ONE HYPERFINE INVOCATION. This
+    // function used to build its own argv — the same warmup, run count,
+    // `--shell=none` and export flags, spelled a second time — which is exactly
+    // what this module's header says sharing exists to prevent. The two could
+    // drift on any of those, and the records would look comparable while being
+    // measured differently.
+    //
+    // The arm's own label is kept rather than `bench`'s default, because a
+    // sweep's records are read by arm name.
+    let mut records = bench(
+        tree,
+        out,
+        id,
+        None,
+        &[(arm, vec![format!("{} check", binary.display())])],
+        "",
+    )?;
+    records
+        .pop()
+        .ok_or_else(|| anyhow::anyhow!("perf-acquire: measuring arm {id} produced no record."))
 }
 
 // ---------------------------------------------------------------------------

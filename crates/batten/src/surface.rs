@@ -3660,6 +3660,38 @@ pub const SURFACE: &[CommandDecl] = &[
     // oblige a `--json` flag (`every_data_emitting_verb_declares_the_json_flag`),
     // which would be a second rendering of the same decision with no caller
     // asking for it: `verify` and the `perf` CI job both test for zero.
+    // The absolute measurement (CLOUD-207), ported out of `mise-tasks/perf.sh`
+    // under CLOUD-1753.
+    //
+    // `Unclassified` and NOT `Read`, for `perf pair`'s reason: it builds a
+    // release binary and runs the benchmark runner over it, so its reach is
+    // whatever those have. It emits one record per path on stdout, which is the
+    // data channel `record tool perf-p95` reads.
+    CommandDecl {
+        path: "perf measure",
+        id: "perf.measure",
+        about: "Measure this binary's invocation cost on every path and print one record per path",
+        data_channel: true,
+        exits: EXITS_STANDARD,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // The trunk's invocation-cost series (CLOUD-172), ported out of
+    // `mise-tasks/perf-record.sh` under CLOUD-1753.
+    //
+    // `Write`, and it is the only `perf` arm that is: it appends a git note.
+    // `EXITS_VERDICT` because refusing off trunk is a VIOLATION rather than an
+    // error — a branch's numbers are not the trunk's, and the caller is being
+    // told its request was wrong rather than that the engine broke.
+    CommandDecl {
+        path: "perf record",
+        id: "perf.record",
+        about: "Append a measurement to the trunk's invocation-cost series, read as `perf measure` records on stdin",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Write,
+        flags: &[],
+    },
     CommandDecl {
         path: "perf compare",
         id: "perf.compare",

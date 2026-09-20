@@ -2123,6 +2123,15 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "perf measure",
+          "id": "perf.measure",
+          "about": "Measure this binary's invocation cost on every path and print one record per path",
+          "effect": "unclassified",
+          "data_channel": true,
+          "flags": [],
+          "subcommands": []
+        },
+        {
           "path": "perf pair",
           "id": "perf.pair",
           "about": "Measure this branch and its merge base back to back on one machine, and print both arms as paired records",
@@ -2138,6 +2147,15 @@ expression: stdout_of(&output)
               "help": "Measure HEAD against itself, so the ratio is the noise floor rather than a comparison"
             }
           ],
+          "subcommands": []
+        },
+        {
+          "path": "perf record",
+          "id": "perf.record",
+          "about": "Append a measurement to the trunk's invocation-cost series, read as `perf measure` records on stdin",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [],
           "subcommands": []
         }
       ]

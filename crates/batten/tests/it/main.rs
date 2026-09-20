@@ -215,6 +215,7 @@ mod outcome_advice;
 mod perf_assert;
 mod perf_compare;
 mod perf_pair;
+mod perf_series;
 mod pinned_programs;
 mod pipefail_grep;
 mod pipeline_shapes;

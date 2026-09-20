@@ -2127,6 +2127,31 @@ fi
 #
 # A REDUCTION, NEVER THE REPORT (non-negotiable rule 4). One number per path
 # reaches the record; hyperfine's own output stays on the terminal.
+# CLOUD-207's measurement, ported onto `perf measure` under CLOUD-1753.
+#
+# THE TASK SURVIVES THE PROGRAM. `.github/workflows/perf.yml` names
+# `mise run perf`, and mise auto-discovered that name from the file; deleting the
+# file alone would retire the program and the NAME together, breaking a workflow
+# this campaign has no business editing.
+#
+# A ONE-LINE WRAPPER, `tree-clean`'s shape and its reason:
+# `inline-task-bodies-not-growing` ratchets the multi-line form, and a wrapper
+# that needs one line must not spend a real body's budget.
+[tasks."perf"]
+description = "Measure batten's invocation cost on every path and print one byte-stable record per path"
+run = "cargo run --quiet -p batten -- perf measure"
+
+# CLOUD-172's series, ported onto `perf record` under CLOUD-1753. Same reason the
+# task above is declared: `perf.yml` names it.
+#
+# THE SERIES IS APPENDED IN PROCESS. The retired program shelled to
+# `git notes append`; `git::append_note` writes the blob, the tree and the commit
+# through gix, so a notes ref is not a reason for the engine to hold a child
+# process it otherwise does not need.
+[tasks."perf-record"]
+description = "Append a measurement to the trunk's invocation-cost series in git notes (reads `perf` records on stdin; refuses to run off main)"
+run = "cargo run --quiet -p batten -- perf record"
+
 [tasks.record-perf]
 description = "Effect: reduce `perf` records to a p95 per path and record them where `batten check` reads them (reads `perf` records on stdin)"
 run = '''
