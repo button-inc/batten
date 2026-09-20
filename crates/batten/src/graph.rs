@@ -362,11 +362,11 @@ mod tests {
         }
     }
 
-    fn registered() -> Option<Until> {
-        Some(Until::Has {
+    fn registered() -> Until {
+        Until::Has {
             key: "registered".to_owned(),
             value: "true".to_owned(),
-        })
+        }
     }
 
     const ROOMY: Bounds = Bounds {
@@ -382,7 +382,7 @@ mod tests {
             .edge("entry", "warrant", &["record"])
             .edge("record", "warrant", &["capture"])
             .prop("capture", "registered", "true");
-        match walk("entry", registered(), ROOMY).run(&graph) {
+        match walk("entry", Some(registered()), ROOMY).run(&graph) {
             Outcome::Reached { at, path } => {
                 assert_eq!(at, "capture");
                 assert_eq!(path, vec!["entry", "record", "capture"]);
@@ -400,7 +400,7 @@ mod tests {
             &["orphan"],
         );
         assert!(matches!(
-            walk("entry", registered(), ROOMY).run(&graph),
+            walk("entry", Some(registered()), ROOMY).run(&graph),
             Outcome::Exhausted { .. }
         ));
     }
@@ -412,7 +412,7 @@ mod tests {
             .edge("a", "warrant", &["b"])
             .edge("b", "warrant", &["a"]);
         assert!(matches!(
-            walk("a", registered(), ROOMY).run(&graph),
+            walk("a", Some(registered()), ROOMY).run(&graph),
             Outcome::Exhausted { visited: 2 }
         ));
     }
@@ -432,7 +432,7 @@ mod tests {
             max_depth: 16,
         };
         assert!(matches!(
-            walk("a", registered(), tight).run(&graph),
+            walk("a", Some(registered()), tight).run(&graph),
             Outcome::BoundExceeded {
                 bound: Bound::Visits,
                 ..
@@ -453,7 +453,7 @@ mod tests {
             max_depth: 1,
         };
         assert!(matches!(
-            walk("a", registered(), shallow).run(&graph),
+            walk("a", Some(registered()), shallow).run(&graph),
             Outcome::BoundExceeded {
                 bound: Bound::Depth,
                 ..
@@ -471,7 +471,7 @@ mod tests {
             max_depth: 1,
         };
         assert!(matches!(
-            walk("a", registered(), shallow).run(&graph),
+            walk("a", Some(registered()), shallow).run(&graph),
             Outcome::Exhausted { .. }
         ));
     }
@@ -482,7 +482,7 @@ mod tests {
         let graph = Fixture::new()
             .edge("entry", "warrant", &["record"])
             .unreadable("record");
-        match walk("entry", registered(), ROOMY).run(&graph) {
+        match walk("entry", Some(registered()), ROOMY).run(&graph) {
             Outcome::CouldNotLook { at } => assert_eq!(at, "record"),
             other => panic!("expected CouldNotLook, got {other:?}"),
         }
@@ -493,7 +493,7 @@ mod tests {
     #[test]
     fn a_seed_that_already_satisfies_the_stop_reaches_at_depth_zero() {
         let graph = Fixture::new().prop("entry", "registered", "true");
-        match walk("entry", registered(), ROOMY).run(&graph) {
+        match walk("entry", Some(registered()), ROOMY).run(&graph) {
             Outcome::Reached { at, path } => {
                 assert_eq!(at, "entry");
                 assert_eq!(path, vec!["entry"]);
@@ -532,7 +532,7 @@ mod tests {
             asked: RefCell::new(Vec::new()),
         };
         assert!(matches!(
-            walk("entry", registered(), ROOMY).run(&graph),
+            walk("entry", Some(registered()), ROOMY).run(&graph),
             Outcome::Reached { .. }
         ));
         let asked = graph.asked.borrow().clone();
@@ -552,7 +552,7 @@ mod tests {
             .edge("mid", "warrant", &["target"])
             .edge("short", "warrant", &["target"])
             .prop("target", "registered", "true");
-        match walk("a", registered(), ROOMY).run(&graph) {
+        match walk("a", Some(registered()), ROOMY).run(&graph) {
             Outcome::Reached { path, .. } => assert_eq!(path, vec!["a", "short", "target"]),
             other => panic!("expected Reached, got {other:?}"),
         }
