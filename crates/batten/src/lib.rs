@@ -9391,36 +9391,8 @@ fn run_land_replay(
 ) -> Result<ExitCode> {
     match land::replay(root, url, reference, branch, resolve)? {
         land::Replay::Conflicted { commit, paths } => {
-            writeln!(
-                out,
-                "land: replay of {branch} onto {reference} conflicted at {commit} in {} path(s)",
-                paths.len()
-            )?;
-            // SORTED, because the merge's own order is not a fact a caller can
-            // rely on and this text is read between runs.
-            let mut named: Vec<&str> = paths.iter().map(String::as_str).collect();
-            named.sort_unstable();
-            for path in &named {
-                writeln!(out, "land: {path}")?;
-            }
-            // THE ROUTE, BECAUSE THE STOP HAD NONE (CLOUD-1537). `--resolve` has
-            // existed since v0.0.153 and its only mention anywhere in the crate
-            // was its own flag doc, so an author who reached the loop's one human
-            // stop was told where it happened and nothing about what to do —
-            // while `patch run loose` denied the `git rebase` they would reach for
-            // next. A remedy nobody can find is the same as no remedy.
-            //
-            // POINTER-ONLY still holds (non-negotiable rule 4): paths and a
-            // command, never a hunk and never a conflict marker.
-            if let Some(first) = named.first() {
-                writeln!(
-                    out,
-                    "land: merge each path above in the worktree, then: batten land replay {reference} --resolve {first}"
-                )?;
-                writeln!(
-                    out,
-                    "land: a path conflicting at more than one commit takes --resolve <path>=<file>, one file per commit"
-                )?;
+            for line in land::conflict_stop(branch, reference, &commit, &paths) {
+                writeln!(out, "{line}")?;
             }
             Ok(ExitCode::Violation)
         }

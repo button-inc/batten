@@ -125,6 +125,53 @@ impl Replay {
     }
 }
 
+/// What a conflicted replay says to the author it stopped (CLOUD-1537).
+///
+/// **The loop's one human stop had no route in it.** `--resolve` has been the way
+/// past a conflicted replay since v0.0.153 and its only mention anywhere in the
+/// crate was its own flag doc, so a stopped author was told where the conflict
+/// was and nothing about what to do — while `patch run loose` denied the
+/// `git rebase` they would reach for next. A remedy nobody can find is the same
+/// as no remedy.
+///
+/// **Every path, not a count and the first.** The defect this replaces printed
+/// `in N path(s); first is X`, which is unusable as a work list: `--resolve` takes
+/// each path, so naming one of three leaves the author to discover the rest by
+/// re-running.
+///
+/// **Sorted**, because the merge's own order is not a fact a caller can rely on
+/// and this text is compared between runs.
+///
+/// **Pointer-only** (non-negotiable rule 4): paths and a command, never a hunk and
+/// never a conflict marker — which is the whole of what a conflict consists of and
+/// exactly what a reader must not be handed here.
+///
+/// A function rather than inline `writeln!`s because the caller reaches it only
+/// after a fetch, and a case that had to stand up a serving remote could not
+/// assert this text at all.
+#[must_use]
+pub fn conflict_stop(branch: &str, reference: &str, commit: &str, paths: &[String]) -> Vec<String> {
+    let mut named: Vec<&str> = paths.iter().map(String::as_str).collect();
+    named.sort_unstable();
+
+    let mut said = vec![format!(
+        "land: replay of {branch} onto {reference} conflicted at {commit} in {} path(s)",
+        named.len()
+    )];
+    for path in &named {
+        said.push(format!("land: {path}"));
+    }
+    if let Some(first) = named.first() {
+        said.push(format!(
+            "land: merge each path above in the worktree, then: batten land replay {reference} --resolve {first}"
+        ));
+        said.push(String::from(
+            "land: a path conflicting at more than one commit takes --resolve <path>=<file>, one file per commit",
+        ));
+    }
+    said
+}
+
 /// One column's worth of `value`: whitespace collapsed so it cannot become two.
 ///
 /// The record is space-separated with a fixed column count, and its readers

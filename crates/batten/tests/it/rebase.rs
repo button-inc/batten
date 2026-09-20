@@ -75,6 +75,7 @@
 #MUTANT-SUITE crates/batten/tests/it/rebase.rs
 #MUTANT same-path-offer-collapses|s@        *used.entry(path).or_insert(0) += 1;@        *used.entry(path).or_insert(0) += 0;@|a_chain_of_conflicts_at_the_same_path_resolves_with_one_entry_each
 #MUTANT use-now-local-or-utc-in-gitwrite|s@        time: crate::git::utc_at(who.time.seconds),@        time: who.time,@|a_replayed_committer_is_stamped_in_utc
+#MUTANT conflict-stop-names-no-route|s@        said.push(format!("land: {path}"));@        let _ = path;@|the_conflict_stop_names_every_path_and_the_route_out
 */
 
 #![cfg(unix)]
@@ -327,6 +328,64 @@ fn offset_in(raw: &str, field: &str) -> String {
         .next_back()
         .expect("an offset token")
         .to_owned()
+}
+
+/// The conflict stop names every conflicted path and the route out (CLOUD-1537).
+///
+/// **Over the extracted renderer, because the verb cannot be reached from a
+/// fixture.** `batten land replay` fetches the base reference before it can
+/// conflict, and the fetch path speaks the wire protocol — a local repository
+/// named as a `file://` remote is refused, measured here. So the binary route
+/// cannot produce this text in a suite at all, and `land::conflict_stop` is the
+/// decision extracted to where a case can reach it, exactly as `rules/rust.md`
+/// prescribes where the environment cannot create the condition.
+///
+/// **Two paths, not one**, because the defect this replaces printed a count and
+/// the FIRST path only — so a single-path fixture would pass over the old
+/// behaviour and discriminate nothing.
+///
+/// **What it does not assert:** that `run_land_replay` actually writes these
+/// lines. That wiring is one `writeln!` per returned line and is not reachable
+/// from here for the reason above; a change that dropped the call would pass this
+/// case.
+#[test]
+fn the_conflict_stop_names_every_path_and_the_route_out() {
+    let paths = vec![String::from("beta.txt"), String::from("alpha.txt")];
+    let said = batten::land::conflict_stop("work", "refs/heads/main", "abc1234", &paths);
+    let whole = said.join("\n");
+
+    assert!(
+        whole.contains("alpha.txt") && whole.contains("beta.txt"),
+        "every conflicted path is named, not a count and the first\n{whole}"
+    );
+    assert!(
+        whole.contains("--resolve"),
+        "the stop names the route out of it\n{whole}"
+    );
+    assert!(
+        whole.contains("batten land replay refs/heads/main --resolve"),
+        "the route is a command a reader can run, with the base already in it\n{whole}"
+    );
+    assert!(
+        whole.contains("<path>=<file>"),
+        "the repeatable form is named, or a path conflicting twice is a dead end\n{whole}"
+    );
+
+    // SORTED, so the text is comparable between runs. The fixture hands them in
+    // reverse on purpose: an implementation that echoed the merge's own order
+    // would pass every assertion above and fail this one.
+    assert!(
+        whole.find("alpha.txt") < whole.find("beta.txt"),
+        "the paths are sorted, not echoed in the order the merge produced\n{whole}"
+    );
+
+    // ANTI-VACUITY: a conflict with no paths still says what happened, and names
+    // no route it cannot spell.
+    let empty = batten::land::conflict_stop("work", "refs/heads/main", "abc1234", &[]).join("\n");
+    assert!(
+        empty.contains("0 path(s)") && !empty.contains("--resolve"),
+        "a pathless conflict names no route\n{empty}"
+    );
 }
 
 /// **The case the design exists for.** Two sides edit one path, and the replay

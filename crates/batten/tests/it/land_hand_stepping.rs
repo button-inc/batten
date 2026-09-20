@@ -151,6 +151,60 @@ fn not_refused_by_the_row(command: &str) {
     );
 }
 
+/// The refusal names the route out of a conflict (CLOUD-1537).
+///
+/// **This row's `reason` is the one text a stopped author is guaranteed to
+/// read**, and it is what a denied `git rebase origin/main` prints. `--resolve`
+/// has been the way past a conflicted replay since v0.0.153, and for a while the
+/// reason ended at "a limit this row names rather than one it can soften" —
+/// naming the stop and no way out, while the engine's own conflict line had
+/// started printing the route. One repository, two answers, at the moment someone
+/// is most stuck.
+///
+/// **Asserted over the committed policy, not a fixture**, for the reason this
+/// file's header gives: a fixture policy tests the engine and says nothing about
+/// the TABLE, so deleting or gutting the row would break none of it.
+///
+/// **The slug `reason-claims-warn` is historical and deliberately kept.** It was
+/// named for a second defect — the reason claiming it "warns rather than denies"
+/// while its severity is `deny` — which was already fixed on `main` before this
+/// work started. `obligations-bound` binds on the slug the Ready block declares,
+/// so renaming it here without renaming it there would unbind the promise. The
+/// case discriminates what is left: that the reason names the route.
+#[test]
+fn the_refusal_names_the_route_out_of_a_conflict() {
+    // Still a deny, so this case cannot pass over a row that stopped refusing.
+    let document = decision("git rebase origin/main");
+    assert!(
+        document.contains("\"deny\"") && document.contains(ROW),
+        "the row must still refuse a fresh rebase\n{document}"
+    );
+
+    // THE REASON REACHES A READER THROUGH `policy rule`, NOT THROUGH THE HOOK
+    // DOCUMENT. `adjudicate --harness claude-code` emits
+    // `"call name refused patch run loose"` and nothing else — pointer-only, by
+    // design — so asserting the route against that document would be asserting
+    // against the wrong surface and would fail over a perfectly good reason.
+    let out = stdout(&run_with_stdin_at_real_root(
+        &root(),
+        &["policy", "rule", ROW],
+        "",
+    ));
+
+    assert!(
+        out.contains("--resolve"),
+        "the refusal must name the route, not only the stop\n{out}"
+    );
+    assert!(
+        out.contains("batten land replay"),
+        "the route is a command a reader can run, spelled out\n{out}"
+    );
+    assert!(
+        out.contains("<path>=<file>"),
+        "the repeatable form is named too, or a path conflicting twice is a dead end\n{out}"
+    );
+}
+
 // --- the severity itself, pinned as a case rather than as a comment ----------
 
 /// THE SEVERITY IS THE ASSERTION HERE, not the predicate.
@@ -333,4 +387,5 @@ is not; naming that here keeps the declaration from reading as coverage it does
 not have.
 
 #MUTANT fresh-rebase-allowed|s@"git rebase --continue"@"git rebase origin/main"@|continuing_a_conflicted_rebase_is_left_alone
+#MUTANT reason-claims-warn|s@--resolve <path>`: merge each conflicted path in@is left unstated in@|the_refusal_names_the_route_out_of_a_conflict
 */
