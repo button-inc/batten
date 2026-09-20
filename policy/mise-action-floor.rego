@@ -101,7 +101,7 @@ pin contains {"path": path, "line": i + 1, "sha": sha} if {
 
 	# **AN ANCHORED `uses:` COORDINATE, NEVER A MENTION** (review of #928). This
 	# was a bare `contains(line, marker)`, so a comment carrying the full
-	# `jdx/mise-action@<sha>` coordinate — which is exactly how a superseded pin
+	# action-and-sha coordinate — which is exactly how a superseded pin
 	# gets recorded next to the live one — was read as a pin, and a stale-pin
 	# violation then NAMED THE COMMENT LINE. A refusal pointing at prose is the
 	# wrong pointer in its most confusing form, and it is the direction that gets

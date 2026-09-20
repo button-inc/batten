@@ -284,6 +284,7 @@ violation contains {
 	not only_drops_a_retired_reference(path)
 	not only_rewrites_a_renamed_id(path)
 	not only_supplies_the_successors_precondition(path)
+	not only_repoints_at_a_program_this_change_retires(path)
 }
 
 # THE SECOND ADMITTED EDIT, and it is CLOUD-1051's arm one surface further out.
@@ -340,6 +341,107 @@ only_supplies_the_successors_precondition(path) if {
 		some line in added
 		supplies_a_precondition(line)
 	}) == count(added)
+}
+
+# THE THIRD ADMITTED EDIT, and it is measured rather than argued (review of #928).
+#
+# THE WALL, AS A PAIR OF REFUSALS. `mise-tasks/landed-check.sh` was retired onto
+# `batten landed check` in this change, and `mise-tasks/in-progress-drain.sh` --
+# a governed caller the retirement does not touch -- invoked it by path. Both
+# states of that caller were refused, and the measurement is the argument:
+#
+#   * LEFT AS IT WAS: `program resolve missing`, because the line names a program
+#     the tree no longer has. Verified by reverting the file to `origin/main` and
+#     re-running `batten enforce`.
+#   * REPOINTED: `shell edit refused`, under the three arms above.
+#
+# There is no tree both rules admit, so the campaign could not complete a
+# retirement this module itself mandated -- which is the SAME structural gap the
+# two arms above each record, one surface further out again. A gate with no
+# satisfying tree is not a ratchet, it is a stop.
+#
+# WHY THE REJECTED SHAPE IS NOT THIS ONE. The note below `supplies_a_precondition`
+# records a draft that admitted an ADDED line naming the successor's invocation,
+# and refuses it because every repoint manufactures such a line. The precondition
+# here is on a REMOVED line naming a path in `delta.deleted`: an author cannot
+# produce that without actually retiring that governed program in this same
+# change. So this arm is unreachable from maintenance -- the move it exists to
+# refuse -- and reachable only from a retirement.
+#
+# AND IT MAY NOT ADD SHELL COUPLING. Every added line is free to carry the
+# successor's contract (its exit table, its rendering, the arguments it now takes)
+# because that contract is exactly what the repoint forces -- but naming ANOTHER
+# governed program is a new dependency rather than a carried one, and that stays
+# refused. Without this conjunct the arm would admit a retirement that quietly
+# grew the corpus's internal coupling while reporting it shrank.
+only_repoints_at_a_program_this_change_retires(path) if {
+	base := delta["base-lines"][path]
+	base_set := {line | some line in base}
+	head := {line | some line in input.tree.lines[path]}
+	removed := {line | some line in base_set; not line in head}
+	added := {line | some line in head; not line in base_set}
+
+	count(removed) > 0
+	count(added) > 0
+
+	# A REMOVED LINE NAMED A GOVERNED PROGRAM THIS CHANGE DELETES. The conjunct
+	# that makes the arm a retirement's and nobody else's.
+	some line in removed
+	some gone in delta.deleted
+	governed_when_deleted(gone)
+	names_the_retired_program(line, gone)
+
+	# AND THE EDIT REACHES THE ENGINE, so the repoint went to the successor rather
+	# than to some other program. `arms_for(gone)` is the retirement's own ledger
+	# row, which is what says the predicate landed at all.
+	count(arms_for(gone)) > 0
+	count({l | some l in added; contains(l, "batten ")}) > 0
+
+	# NO ADDED CODE LINE REACHES INTO THE CORPUS.
+	count({l |
+		some l in added
+		reaches_the_corpus(l)
+	}) == 0
+}
+
+# Whether a removed line invoked the program this change retires.
+#
+# BY REPOSITORY PATH **OR** BY FILE NAME, and the second arm is measured rather
+# than defensive: `mise-tasks/in-progress-drain.sh` invoked its sibling as
+# `"$here/landed-check.sh"`, where `$here` is the script's own directory. A
+# caller inside `mise-tasks/` names its siblings that way as a rule, so a path-only
+# match would have left this arm unreachable for exactly the callers a retirement
+# breaks — the gate answering "no such edit exists" about the edit it was written
+# for.
+#
+# THE FILE NAME IS DISTINCTIVE ENOUGH, and the bound is `gone`'s own: it is
+# already constrained to a path this change DELETES and that
+# `governed_when_deleted` accepts, so the name matched is a retired program's and
+# not an arbitrary word.
+names_the_retired_program(line, gone) if {
+	contains(line, gone)
+}
+
+names_the_retired_program(line, gone) if {
+	parts := split(gone, "/")
+	contains(line, parts[count(parts) - 1])
+}
+
+# An added line that names the shell corpus, for the conjunct above.
+#
+# BY DIRECTORY RATHER THAN BY PATH, and by substring rather than by word. A
+# governed path appears inside a command substitution, a variable assignment or a
+# quoted argument — `extra=$(./mise-tasks/still-here.sh)` is ONE whitespace token
+# carrying three kinds of punctuation — so tokenising and trimming a cutset misses
+# it, which is how the first spelling of this let its own deny case pass.
+#
+# A COMMENT IS EXEMPT, for `supplies_a_precondition`'s reason: it cannot change
+# what the program does, and a repoint's comment naming the program it moved off
+# is exactly the record this module wants written.
+reaches_the_corpus(line) if {
+	not startswith(trim_space(line), "#")
+	some directory in ["mise-tasks/", "tests/"]
+	contains(line, directory)
 }
 
 # A comment cannot change what the suite exercises, so it carries the reason.
@@ -1909,6 +2011,80 @@ test_an_edit_that_also_adds_a_line_is_refused if {
 		},
 		"lines": {
 			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "echo something new"],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
+		},
+	}}
+	v.verdict == "shell edit refused"
+}
+
+# THE WALL, AS A CASE. A governed caller invoked the program this change retires;
+# repointing it at the successor and carrying that successor's exit table is the
+# only tree `program resolve missing` also admits.
+test_repointing_a_caller_at_this_changes_successor_is_admitted if {
+	count(violation) == 0 with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["mise-tasks/wiring.sh"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "report=$(./mise-tasks/old-gate.sh)", "case $? in", "0 | 1) ;;"]},
+		},
+		"lines": {
+			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "report=$(batten old gate)", "case $? in", "0 | 2) ;;"],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
+		},
+	}}
+}
+
+# THE MEASURED INVOCATION SHAPE. A caller inside `mise-tasks/` reaches its
+# sibling through the script's own directory, so the removed line carries the file
+# name and never the repository path.
+test_a_sibling_invoked_through_its_directory_is_recognised if {
+	count(violation) == 0 with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["mise-tasks/wiring.sh"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "report=$(\"$here/old-gate.sh\")"]},
+		},
+		"lines": {
+			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "report=$(batten old gate)"],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
+		},
+	}}
+}
+
+# ANTI-VACUITY, AND IT IS THE HOLE THE REJECTED DRAFT HAD. An added line naming
+# the successor is not enough: the REMOVED line has to name a path this change
+# retires, or every repoint-shaped edit walks through.
+test_naming_the_engine_without_retiring_anything_is_still_refused if {
+	some v in violation with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["mise-tasks/wiring.sh"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "report=$(./mise-tasks/still-here.sh)"]},
+		},
+		"lines": {
+			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "report=$(batten still here)"],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
+		},
+	}}
+	v.verdict == "shell edit refused"
+}
+
+# AND THE REPOINT MAY NOT GROW THE CORPUS'S COUPLING. The edit carries the
+# successor's contract AND picks up a second governed program that survives this
+# change, which is a new shell dependency wearing a retirement's clothes.
+test_a_repoint_that_adds_another_governed_program_is_refused if {
+	some v in violation with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["mise-tasks/wiring.sh"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "report=$(./mise-tasks/old-gate.sh)"]},
+		},
+		"lines": {
+			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "report=$(batten old gate)", "extra=$(./mise-tasks/still-here.sh)"],
 			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
 		},
 	}}
