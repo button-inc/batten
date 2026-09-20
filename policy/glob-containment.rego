@@ -192,12 +192,44 @@ comment_line(line) if {
 	startswith(trim_space(line), "//")
 }
 
+# **AN INLINE COMMENT IS STRIPPED BEFORE THE SPANS ARE READ** (review of #928).
+# `comment_line` excludes only a line that STARTS with `//`, but a Pkl line
+# comment runs to the end of the line wherever it begins — so a trailing
+# `// see "crates/**"` put `crates/**` into `covered` and this gate passed while
+# `batten-check` did not actually run for that glob. A containment check
+# satisfied by a comment about the glob is the fail-open shape in its purest
+# form.
+#
+# THE CUT IS QUOTE-AWARE, because `//` also occurs inside a string: a `"https://"`
+# entry would otherwise be truncated and its own containment lost. The first
+# `//` whose preceding text has BALANCED quotes starts the comment; anything
+# earlier is inside a span. Counting quotes by splitting is the spelling this
+# corpus already uses — an inline regex is refused at load and a `[[pattern]]`
+# row cannot carry a cumulative count.
+balanced(text) if {
+	count(split(text, "\"")) % 2 == 1
+}
+
+comment_cuts(line) := [i |
+	some i, _ in split(line, "//")
+	i > 0
+	balanced(concat("//", array.slice(split(line, "//"), 0, i)))
+]
+
+code_of(line) := concat("//", array.slice(split(line, "//"), 0, min(comment_cuts(line)))) if {
+	count(comment_cuts(line)) > 0
+}
+
+code_of(line) := line if {
+	count(comment_cuts(line)) == 0
+}
+
 covered contains entry if {
 	some j, line in hooks_lines
 	j >= glob_start
 	j <= glob_end
 	not comment_line(line)
-	some quoted in regex.find_n(data.batten.patterns["md-quoted-span"], line, -1)
+	some quoted in regex.find_n(data.batten.patterns["md-quoted-span"], code_of(line), -1)
 	entry := unquoted(quoted)
 	entry != ""
 }
@@ -264,6 +296,38 @@ test_a_listed_glob_is_clean if {
 	count(violation) == 0 with input as tree(
 		["[[rule]]", "glob = \"crates/**/*.rs\""],
 		step(["    glob = List(\"crates/**/*.rs\")"]),
+	)
+}
+
+# **A COMMENT ABOUT A GLOB DOES NOT COVER IT** (review of #928). A Pkl line
+# comment runs to the end of the line wherever it begins, and `comment_line`
+# excluded only lines that START with `//` — so the quoted text of a trailing
+# comment joined `covered` and this gate passed over a glob `batten-check` never
+# ran for.
+test_a_glob_named_only_in_a_trailing_comment_is_not_covered if {
+	some v in violation with input as tree(
+		["[[rule]]", "glob = \"crates/**/*.rs\""],
+		step(["    glob = List(\"docs/**\") // also \"crates/**/*.rs\""]),
+	)
+	v.verdict == "step cover missing"
+}
+
+# AND THE CODE HALF OF THAT SAME LINE STILL COUNTS, so the cut removes the
+# comment rather than the entry.
+test_the_entry_before_a_trailing_comment_is_still_covered if {
+	count(violation) == 0 with input as tree(
+		["[[rule]]", "glob = \"docs/**\""],
+		step(["    glob = List(\"docs/**\") // not \"crates/**\""]),
+	)
+}
+
+# **A `//` INSIDE A QUOTED SPAN IS NOT A COMMENT**, which is why the cut counts
+# quotes: truncating there would drop a legitimate entry and lose its
+# containment.
+test_a_double_slash_inside_a_quoted_entry_is_not_a_comment if {
+	count(violation) == 0 with input as tree(
+		["[[rule]]", "glob = \"https://example.test/**\""],
+		step(["    glob = List(\"https://example.test/**\")"]),
 	)
 }
 

@@ -60,7 +60,11 @@ assigned contains [path, index, line, name] if {
 		line,
 		-1,
 	)
-	name := capture[1]
+
+	# GROUP 2, because `awk-v-assignment` carries a left-boundary group ahead of
+	# the name (review of #928): without it `-v` matched inside `--verbose=1` and
+	# the capture was `erbose`. The row's own comment states the coupling.
+	name := capture[2]
 }
 
 # The identifier a fragment starts with, or undefined where it starts with
@@ -123,6 +127,28 @@ test_a_value_printed_is_fine if {
 
 test_an_inline_regex_is_the_recommended_form if {
 	count(violation) == 0 with input as scan("awk '$0 ~ /^ISSUE-[0-9]+$/'")
+}
+
+# **A LONGER FLAG IS NOT A `-v` ASSIGNMENT** (review of #928). Without the left
+# boundary `-v` matched inside `--verbose=1` — a `-`, then `-v`, then `erbose`,
+# then `=` — and the capture was `erbose`, so this module reported a name nobody
+# wrote. A false finding whose pointer names a variable that does not exist is
+# the shape that gets a gate switched off.
+test_a_longer_flag_is_not_a_v_assignment if {
+	count(violation) == 0 with input as scan("awk --verbose=1 '$0 ~ /x/'")
+}
+
+# AND THE REAL ASSIGNMENT IS STILL READ when a longer flag sits beside it, so the
+# boundary narrows the match without narrowing the verdict.
+test_a_real_assignment_beside_a_longer_flag_is_still_refused if {
+	some v in violation with input as scan("awk --verbose=1 -v re=\"$p\" '$0 ~ re'")
+	v.verdict == "pattern carry unsafe"
+}
+
+# AND ONE AT THE START OF THE LINE, which is the boundary's other alternative.
+test_an_assignment_opening_the_line_is_refused if {
+	some v in violation with input as scan("-v re=\"$p\" awk '$0 ~ re'")
+	v.verdict == "pattern carry unsafe"
 }
 
 # THE PREFIX CASE, and the one the whole-identifier comparison exists for.

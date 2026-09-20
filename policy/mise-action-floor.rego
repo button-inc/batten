@@ -98,7 +98,27 @@ marker := sprintf("%s@", [action])
 pin contains {"path": path, "line": i + 1, "sha": sha} if {
 	some path, lines in input.tree.lines
 	some i, line in lines
-	contains(line, marker)
+
+	# **AN ANCHORED `uses:` COORDINATE, NEVER A MENTION** (review of #928). This
+	# was a bare `contains(line, marker)`, so a comment carrying the full
+	# `jdx/mise-action@<sha>` coordinate — which is exactly how a superseded pin
+	# gets recorded next to the live one — was read as a pin, and a stale-pin
+	# violation then NAMED THE COMMENT LINE. A refusal pointing at prose is the
+	# wrong pointer in its most confusing form, and it is the direction that gets
+	# a gate switched off.
+	#
+	# Two conjuncts rather than one: a whole-line comment is dropped, and on any
+	# other line the coordinate must FOLLOW a `uses:` key — so a coordinate in
+	# prose, in a `with:` value or in a `run:` body is not a pin either.
+	#
+	# A TRAILING COMMENT ON A REAL STEP IS ALREADY HANDLED and needs no third
+	# conjunct: `indexof` takes the FIRST coordinate after `uses:`, which is the
+	# one in force, so a superseded `# was @<old>` later on the same line is never
+	# the sha this reads.
+	not startswith(trim_space(line), "#")
+	uses_at := indexof(line, "uses:")
+	uses_at >= 0
+	indexof(line, marker) > uses_at
 	sha := substring(line, indexof(line, marker) + count(marker), 40)
 
 	# A FLOATING REF IS NOT A PIN THIS MODULE CAN JUDGE. `@v4` carries no sha, so
@@ -150,6 +170,29 @@ test_a_forward_pin_is_clean if {
 test_a_pre_retry_pin_is_refused if {
 	some v in violation with input as workflows({".github/workflows/ci.yml": ["jobs:", bad]})
 	v.verdict == "version pin stale"
+}
+
+# **A COORDINATE IN A COMMENT IS NOT A PIN** (review of #928). Recording a
+# superseded coordinate next to the live one is exactly how this pin gets
+# documented, and a bare `contains` read it as in force — so a stale-pin
+# violation NAMED THE COMMENT LINE. The tree here carries the denied coordinate
+# in prose and nothing else, so it must be could-not-look rather than a refusal.
+test_a_denied_coordinate_in_a_comment_is_not_a_pin if {
+	some v in violation with input as workflows({".github/workflows/ci.yml": [
+		"jobs:",
+		"        # superseded: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654",
+	]})
+	v.verdict == "version pin unread"
+}
+
+# AND THE LIVE PIN ON A LINE THAT ALSO CARRIES ONE IN A TRAILING COMMENT IS THE
+# ONE JUDGED: the first coordinate after `uses:` is in force, so a forward pin
+# stays clean even when a denied one is recorded beside it.
+test_a_trailing_comment_does_not_override_the_live_pin if {
+	count(violation) == 0 with input as workflows({".github/workflows/ci.yml": [
+		"jobs:",
+		concat("", [good, " # was jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654"]),
+	]})
 }
 
 test_a_tree_with_no_pin_of_this_action_is_could_not_look if {

@@ -40,7 +40,7 @@ fn awk_repo(name: &str, program: &str) -> PathBuf {
             "version = 1\n\n\
              [[pattern]]\n\
              id = \"awk-v-assignment\"\n\
-             regex = '-v[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)='\n\n\
+             regex = '(^|[^A-Za-z0-9_-])-v[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)='\n\n\
              [[pattern]]\n\
              id = \"leading-identifier\"\n\
              regex = '^[A-Za-z_][A-Za-z0-9_]*'\n\n\
