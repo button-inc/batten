@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.180](https://github.com/button-inc/batten/compare/v0.0.179...v0.0.180) - 2026-09-20
+
+### Fixed
+
+- *(harness)* publish the scratch count without BSD wc's padding
+
+### Other
+
+- *(harness)* collect the scratch parent once per run
+- reserve an update slot a frozen pull request cannot consume
+
 ## [0.0.179](https://github.com/button-inc/batten/compare/v0.0.178...v0.0.179) - 2026-09-20
 
 ### Fixed
