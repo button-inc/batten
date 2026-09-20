@@ -428,7 +428,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // anything the config does not already declare (CLOUD-1265).
         Some(Command::Record { command }) => record::run(command, &overrides, out, err),
         Some(Command::Ci { command }) => run_ci(&command, &overrides, out, err),
-        Some(Command::Release { command }) => run_release(&command, out, err),
+        Some(Command::Release { command }) => run_release(&command, &overrides, out, err),
         Some(Command::Bench { command }) => run_bench(command, out, err),
     }
 }
@@ -659,6 +659,7 @@ fn release_survey(
 /// report a contract it never checked.
 fn run_release(
     command: &cli::ReleaseCommand,
+    overrides: &Overrides,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -675,8 +676,28 @@ fn run_release(
         })
     };
 
-    let workflow_path = std::env::var("BATTEN_RELEASE_WORKFLOW")
-        .unwrap_or_else(|_| String::from(".github/workflows/release-artifacts.yml"));
+    // THE WORKFLOW IS THE CONSUMER'S (rule 1, review of #928). The engine knows
+    // that a release matrix names targets; WHICH file declares one is a fact
+    // about this lane, so it comes off `[ci] release_workflow`. The environment
+    // override stays for the suite, which points the verb at a fixture.
+    let workflow_path = match std::env::var("BATTEN_RELEASE_WORKFLOW") {
+        Ok(path) => path,
+        Err(_) => {
+            let declared = resolve::resolve(Path::new("."), overrides)?
+                .ci
+                .and_then(|ci| ci.release_workflow);
+            let Some(path) = declared else {
+                writeln!(
+                    err,
+                    "::error:: release install: `[ci] release_workflow` declares no workflow, so \
+                     the build matrix cannot be read. A guessed path that does not exist reads as \
+                     no matrix, and a gate that checks nothing must not report green."
+                )?;
+                return Ok(ExitCode::Internal);
+            };
+            path
+        }
+    };
     let matrix = install::matrix_targets(&read(&workflow_path)?);
     if matrix.is_empty() {
         writeln!(
@@ -20722,7 +20743,7 @@ fn run_ci(
 ) -> Result<ExitCode> {
     match *command {
         cli::CiCommand::SlowNeeded { ref base } => run_ci_slow_needed(base, overrides, out, err),
-        cli::CiCommand::Suites { ref base } => run_ci_suites(base, out, err),
+        cli::CiCommand::Suites { ref base } => run_ci_suites(base, overrides, out, err),
     }
 }
 
@@ -20740,10 +20761,22 @@ fn run_ci(
 ///
 /// Propagates a write failure on either channel. Nothing about the tree is an
 /// error; the widest answer is always available.
-fn run_ci_suites(base: &str, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+fn run_ci_suites(
+    base: &str,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
     let root = git::repo_root(Path::new("."))?;
     let root = Path::new(&root);
     let suites = bats_suites(root);
+    // The consumer's own shared inputs (rule 1). An unresolvable config is
+    // could-not-look like every other failure in this verb, and could-not-look
+    // widens.
+    let shared = resolve::resolve(Path::new("."), overrides)
+        .ok()
+        .and_then(|resolved| resolved.ci.map(|ci| ci.suite_shared))
+        .unwrap_or_default();
 
     let widest = |why: &str, out: &mut dyn Write, err: &mut dyn Write| -> Result<ExitCode> {
         writeln!(err, "ci suites: running every suite — {why}")?;
@@ -20777,7 +20810,7 @@ fn run_ci_suites(base: &str, out: &mut dyn Write, err: &mut dyn Write) -> Result
         subjects.insert(suite.clone(), rules::declared_subject(&text, "# subject:"));
     }
 
-    let selection = suites::select(&changed, &suites, &subjects);
+    let selection = suites::select(&changed, &suites, &subjects, &shared);
     if let Some(ref why) = selection.widened {
         return widest(why, out, err);
     }

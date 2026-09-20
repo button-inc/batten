@@ -105,7 +105,16 @@ const INSTALL_HARDCODED: &str = "#!/usr/bin/env bash\nset -u\n\
 /// A repository fixture carrying the four files the contract is written in.
 fn fixture(name: &str, install: &str, workflow: &str) -> PathBuf {
     let repo = scratch(&format!("release-install-{name}"));
-    write(&repo, "batten.toml", "version = 1\n");
+    // THE WORKFLOW IS DECLARED, not guessed (rule 1). `[ci] release_workflow`
+    // is what tells the verb which file carries the build matrix; without it the
+    // verb answers could-not-look rather than reaching for a path this engine
+    // has no business knowing.
+    write(
+        &repo,
+        "batten.toml",
+        "version = 1\n[ci]\nrequired_checks = [\"final\"]\n\
+         release_workflow = \".github/workflows/release-artifacts.yml\"\n",
+    );
     write(&repo, ".github/workflows/release-artifacts.yml", workflow);
     write(&repo, "crates/batten/Cargo.toml", MANIFEST);
     write(&repo, "Cargo.toml", WORKSPACE);
@@ -212,6 +221,26 @@ fn a_hardcoded_version_is_refused() {
 
 /// A WORKFLOW DECLARING NO MATRIX IS COULD-NOT-LOOK. A gate that checks nothing
 /// must not report green.
+/// AND A TREE THAT DECLARES NO WORKFLOW IS COULD-NOT-LOOK, never a guess. A
+/// guessed path that does not exist reads as "no matrix", and this verb's own
+/// refusal for that case says a gate which checks nothing must not report green
+/// — so the two would be indistinguishable.
+#[test]
+fn a_tree_that_declares_no_release_workflow_is_could_not_look() {
+    let repo = fixture("undeclared-workflow", INSTALL_AGREEING, WORKFLOW);
+    write(&repo, "batten.toml", "version = 1\n");
+    let output = run(&repo);
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "could not look, not a verdict"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("release_workflow"),
+        "the refusal names the key that would answer it"
+    );
+}
+
 #[test]
 fn a_workflow_with_no_matrix_is_could_not_look() {
     let repo = fixture(

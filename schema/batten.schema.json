@@ -1011,6 +1011,13 @@
             "type": "string"
           }
         },
+        "release_workflow": {
+          "description": "The workflow whose matrix names the targets a release builds.\n\nCONSUMER DATA (rule 1): `release install` compares three authorities that\nagree on an asset NAME, and which file declares the build matrix is a\nfact about this repository's lane rather than about the comparison.\nAbsent is could-not-look — the verb refuses rather than guessing a path,\nbecause a guessed path that does not exist reads as \"no matrix\" and a\ngate that checks nothing must not report green.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "required_checks": {
           "description": "Exact check-run names the host requires, sorted and unique.\n\nRequired when the table is present: a `[ci]` declaring no checks is the\nhalf-change rule 2 refuses — it looks like the contract is recorded when\nnothing is.",
           "type": "array",
@@ -1020,6 +1027,13 @@
         },
         "slow_inert": {
           "description": "Paths proven INERT to the hk slow tier, as prefixes (CLOUD-398).\n\n**A deny-list, and the inversion is the design.** `rust-paths-check`\njudges an allow-list because its four jobs decide a pure function of the\nRust tree. The slow tier is not enumerable that way — `cargo-clippy`\ndeclares no glob at all and `batten-check` declares `**` — so any list of\n\"what the slow tier reads\" is wrong the moment somebody adds a step. This\ninverts the default: the tier runs unless EVERY changed path is on a short\nlist proven inert to it, so a wrong entry is the only way to lose a\nverdict, and the list is the whole review surface.\n\nCONSUMER DATA, which is why it is config and not a constant (rule 1): the\npaths a given repository can prove inert are that repository's, and the\nengine knows only the RELATIONSHIP — an entry ending `/` covers a\ndirectory, anything else is an exact path.\n\nEmpty means nothing is inert, so the tier always runs. That is the safe\ndirection and the honest reading of an undeclared list.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "suite_shared": {
+          "description": "Paths a bats suite can be moved by without naming them (CLOUD-1716).\n\n**CONSUMER DATA for `slow_inert`'s reason, and it arrived here as a\nconstant** (review of #928). `suites::select` carried a literal list —\nthis repository's task runner, gate config, lockfile and harness settings\n— inside `crates/batten`, which non-negotiable rule 1 refuses: the core\nknows the RELATIONSHIP (a path every suite depends on widens the run) and\nthe consumer knows which of its paths those are.\n\nSame spelling as `slow_inert`: an entry ending `/` covers a directory,\nanything else is an exact path.\n\n**Empty WIDENS, where `slow_inert` empty narrows**, and the asymmetry is\nthe one `suites::select` is built around: a selection that is too wide\ncosts money and shows up in the bill, while one that is too narrow has no\nsymptom at all — the suites simply do not run and a regression lands\ngreen. So an undeclared list is read as \"this tree has not said what its\nshared inputs are\", and the answer is every suite.",
           "type": "array",
           "items": {
             "type": "string"
