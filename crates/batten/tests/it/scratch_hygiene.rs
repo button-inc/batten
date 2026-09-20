@@ -70,7 +70,13 @@ fn the_collector_ran_for_this_run() {
     // ANTI-VACUITY. A variable set to anything would satisfy a presence check, so
     // the published value must be the shape the script actually writes: a count.
     // This is what fails if the `$NEXTEST_ENV` line is reduced to a bare marker.
-    reading.parse::<u64>().unwrap_or_else(|_| {
+    //
+    // `trim` BECAUSE A COUNT IS THE CONTRACT AND ITS PADDING IS NOT. BSD `wc -l`
+    // pads to a fixed width where GNU `wc -l` does not, so this read `"       0"`
+    // on macos and `"0"` on the two Linux lanes — one red case out of 5007, on the
+    // one lane whose libc differs. The collector now normalises it, and trimming
+    // here keeps the assertion about the VALUE rather than about which `wc` ran.
+    reading.trim().parse::<u64>().unwrap_or_else(|_| {
         panic!("{COLLECTED} should be the entry count the collector found, got {reading:?}")
     });
 }
