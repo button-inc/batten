@@ -102,3 +102,82 @@ violation contains {
 } if {
 	not declared
 }
+
+# --- the module's own tier ---------------------------------------------------
+#
+# These pin the PREDICATE and were owed from the commit that landed the module.
+# `crates/batten/tests/it/ci_slow_needed.rs` is the tier that proves the ENGINE
+# builds `input.tree.documents["batten.toml"]` with a `ci.slow_inert` array at
+# all -- a `with input as` case fabricates the very shape the engine may be
+# unable to produce, which is how a dead clause survives a green suite.
+#
+# BOTH DIRECTIONS ARE EXERCISED, because a one-sided suite cannot see the failure
+# that costs money. A list that admits a live path loses a verdict silently; a
+# list narrowed to nothing loses only the saving, and its only symptom is the
+# bill.
+
+authority(entries) := {"tree": {"documents": {"batten.toml": {"ci": {"slow_inert": entries}}}}}
+
+# The list this repository actually ships.
+landed := [".serena/memories/", ".coderabbit.yaml"]
+
+test_the_landed_list_is_clean if {
+	count(violation) == 0 with input as authority(landed)
+}
+
+# A DIRECTORY ENTRY COVERS ITS CONTENTS and an exact entry does not cover a
+# prefix, which is the engine's own rule restated here so a change to either side
+# reddens rather than diverges quietly.
+test_a_directory_entry_covers_what_is_under_it if {
+	count(violation) == 0 with input as authority([".serena/memories/", ".coderabbit.yaml"])
+}
+
+test_an_entry_without_a_slash_must_match_exactly if {
+	findings := violation with input as authority([".serena/memories", ".coderabbit.yaml"])
+	some finding in findings
+	finding.verdict == "path list dropped"
+}
+
+# THE OVER-DENY DIRECTION: a list wide enough to swallow a path that can move the
+# tier is the failure with no symptom, so it is named by the path it admits.
+test_a_list_admitting_the_engine_source_is_refused if {
+	findings := violation with input as authority(["crates/", ".serena/memories/", ".coderabbit.yaml"])
+	some finding in findings
+	finding.verdict == "path admit unsafe"
+	finding.subjects[0].path == "crates/batten/src/lib.rs"
+}
+
+test_a_list_admitting_the_authority_itself_is_refused if {
+	findings := violation with input as authority(["batten.toml", ".serena/memories/", ".coderabbit.yaml"])
+	some finding in findings
+	finding.verdict == "path admit unsafe"
+}
+
+test_a_list_admitting_the_workflow_is_refused if {
+	findings := violation with input as authority([".github/", ".serena/memories/", ".coderabbit.yaml"])
+	some finding in findings
+	finding.verdict == "path admit unsafe"
+}
+
+# THE UNDER-DENY DIRECTION: an empty list is legal TOML and buys nothing, and
+# nothing else in the set would say so.
+test_an_empty_list_is_refused_for_what_it_no_longer_covers if {
+	findings := violation with input as authority([])
+	some finding in findings
+	finding.verdict == "path list dropped"
+}
+
+# COULD-NOT-LOOK IS ITS OWN CLASS. An authority carrying no list at all is not a
+# list that covers nothing: the remedy is to declare one, and reporting it as a
+# narrow list would send the reader to widen something that is not there.
+test_an_authority_with_no_list_is_could_not_look if {
+	findings := violation with input as {"tree": {"documents": {"batten.toml": {}}}}
+	some finding in findings
+	finding.verdict == "config read unread"
+}
+
+test_an_unreadable_authority_is_could_not_look_too if {
+	findings := violation with input as {"tree": {"documents": {}}}
+	some finding in findings
+	finding.verdict == "config read unread"
+}
