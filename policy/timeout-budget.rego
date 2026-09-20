@@ -121,6 +121,31 @@ timeout contains {"path": path, "line": i, "job": owning_job(path, i).job, "decl
 	declared := to_number(split(split(value, " ")[0], "#")[0])
 }
 
+# A JOB-LEVEL TIMEOUT THE MODULE CANNOT PLACE IS REPORTED, NEVER DROPPED
+# (review of #928). `timeout` above binds `owning_job(path, i).job`, so a
+# four-space `timeout-minutes` with no recognised job key above it makes the
+# whole object undefined: no row is produced, and every timer verdict below then
+# skips the line in silence. A malformed or unsupported workflow layout passed
+# this gate by being unparseable, which is could-not-look wearing a clean answer.
+#
+# `timer parse unclear` is its class rather than a new token: the module CAN see
+# the line and cannot resolve what it belongs to, which is exactly what that
+# verdict already names one arm along.
+orphan_timeout contains {"path": path, "line": i} if {
+	some path in workflow_paths
+	some i, line in lines_of(path)
+	regex.match(data.batten.patterns["job-timeout-line"], line)
+	not owning_job(path, i)
+}
+
+violation contains {
+	"rule": "job bind missing",
+	"verdict": "timer parse unclear",
+	"subjects": [{"artifact": sprintf("%s:%d no owning job", [row.path, row.line + 1])}],
+} if {
+	some row in orphan_timeout
+}
+
 comment_of(line) := trim_space(substring(line, indexof(line, "#"), -1)) if {
 	contains(line, "#")
 }
@@ -251,6 +276,21 @@ violation contains {
 # tier.
 
 flow(jobs) := {"tree": {"lines": {".github/workflows/ci.yml": array.concat(["on: push", "jobs:"], jobs)}}}
+
+# THE SHAPE THAT USED TO BE DROPPED (review of #928). A four-space
+# `timeout-minutes` with no recognised job key above it made `owning_job`
+# undefined, so no `timeout` row existed and every verdict below skipped the line
+# in silence — a malformed layout passing by being unparseable.
+#
+# Built without `flow`, which prepends a `jobs:` header and a job key; the whole
+# point is a timeout with neither above it.
+test_a_job_timeout_with_no_owning_job_is_refused if {
+	some v in violation with input as {"tree": {"lines": {".github/workflows/ci.yml": [
+		"on: push",
+		"    timeout-minutes: 15 # budget: grandfathered measured=2026-08-01",
+	]}}}
+	v.verdict == "timer parse unclear"
+}
 
 test_a_grandfathered_budget_is_clean if {
 	count(violation) == 0 with input as flow([

@@ -3713,9 +3713,6 @@ pub const SURFACE: &[CommandDecl] = &[
     // release binary and runs the benchmark runner over it, so its reach is
     // whatever those have. It emits one record per path on stdout, which is the
     // data channel `record tool perf-p95` reads.
-    // unreached: "perf measure" CLOUD-1753 `[tasks."perf"]` invokes it in mise.toml, but the
-    // call ENDS the line, so the space-bounded needle this arm reads with cannot see
-    // it -- the residue `reached`'s own header names.
     CommandDecl {
         path: "perf measure",
         id: "perf.measure",
@@ -3732,9 +3729,6 @@ pub const SURFACE: &[CommandDecl] = &[
     // `EXITS_VERDICT` because refusing off trunk is a VIOLATION rather than an
     // error — a branch's numbers are not the trunk's, and the caller is being
     // told its request was wrong rather than that the engine broke.
-    // unreached: "perf record" CLOUD-1753 `[tasks."perf-record"]` invokes it in mise.toml, but the
-    // call ENDS the line, so the space-bounded needle this arm reads with cannot see
-    // it -- the residue `reached`'s own header names.
     CommandDecl {
         path: "perf record",
         id: "perf.record",
@@ -5004,9 +4998,6 @@ pub const SURFACE: &[CommandDecl] = &[
     // `read` in §5's strong sense: it counts what `git status` reports and writes
     // nothing, which is what lets `verify` ask it without the ask itself becoming
     // a reason the answer changes.
-    // unreached: "receipt clean" CLOUD-1716 `[tasks."tree-clean"]` invokes it at
-    // mise.toml:3783, but the call ENDS the line, so the space-bounded needle this
-    // arm reads with cannot see it — the residue `reached`'s own header names.
     CommandDecl {
         path: "receipt clean",
         id: "receipt.clean",
@@ -5681,8 +5672,6 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_VERDICT,
         flags: &[LEASE_HEAD, LEASE_BRANCH, LEASE_RUN],
     },
-    // unreached: "lease check" CLOUD-1338 the workflow-side precondition runs `lease guard`; this arm is the local mirror;
-    // nothing in the tree invokes it yet.
     CommandDecl {
         path: "lease check",
         id: "lease.check",
