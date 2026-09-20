@@ -2623,6 +2623,41 @@ regex = '^\s*(?:"[a-z_]+",\s*)+$'
 id = "shell-task-subcommand"
 regex = '^([[:space:]]+[a-z0-9][a-z0-9-]*)*$'
 
+# CLOUD-1776's pair, and they are TWO rows because one of them measurably
+# over-matches on its own.
+#
+# The predicate is a call to THIS engine whose status is then thrown away —
+# `$(batten <verb> … 2>/dev/null || true)` — where an empty result is three unlike
+# states collapsed into one and then read as a confident negative. `2>/dev/null ||
+# true` alone is NOT the defect: 30-odd sites spell it over `git`, `jq`, `rm` and
+# `printf`, where an empty result genuinely is the answer.
+#
+# THE TRAILING `[[:space:]]` IS LOAD-BEARING, not tidiness. Without it this also
+# matches `batten-receipts` inside a PATH (`graph-check.sh:924`), because the word
+# appears in this repository's own directory names. Requiring the callee to be
+# followed by whitespace is what tells an invocation from a path segment.
+#
+# WHAT IT CANNOT SEE, declared rather than left for a reader to discover: the
+# callee must appear as a bare word, so variable indirection
+# (`"${batten_bin[@]}"`, live at `mcp-allow-check.sh:228`) and a quote-terminated
+# path (`…/target/debug/batten"`) both evade it. Widening the callee alternation
+# was tried and re-admitted the path case every time.
+[[pattern]]
+id = "swallowed-resolver-call"
+regex = '\bbatten[[:space:]][^|]*\|\|[[:space:]]*true'
+
+# THE ONE SWALLOWING SPELLING THAT IS CORRECT, excluded by its own row rather than
+# by narrowing the one above.
+#
+# `command -v batten` asks whether the binary resolves at all. There an empty
+# answer IS the answer and forcing success is how the question is spelled, so the
+# module negates this rather than reporting `payload-field.sh:72`. Every attempt
+# to fold the exclusion into `swallowed-resolver-call` cost one of the three real
+# sites or re-admitted the path case.
+[[pattern]]
+id = "resolver-existence-probe"
+regex = 'command[[:space:]]+-v[[:space:]]+batten'
+
 # THE OTHER HALF of the same span, and it is two rows for the reason the two
 # script-directory rows above are: they decide different questions. That one
 # decides what may FOLLOW the name; this decides what may PRECEDE it.
@@ -6109,6 +6144,37 @@ delta_sources = ["**"]
 # arriving inside the fix for a dead route.
 line_sources = ["mise-tasks/*.sh", "crates/batten/tests/**/*.rs", "tests/**/*.bats"]
 module = "policy/shell-retirement.rego"
+severity = "deny"
+
+# CLOUD-1776, and it is the retirement above's own fallout rather than a
+# neighbour. A retired sibling script could not be UNRESOLVABLE — it was a path
+# that existed or did not, and its absence was loud. `batten claim keys` can be
+# unresolvable in a new way: present binary, absent subcommand. So the
+# `2>/dev/null || true` that was harmless before the port launders a
+# could-not-look into a measured negative after it, and the campaign has ~130
+# remaining retirements each moving a decider behind the same resolver.
+#
+# A DELTA RATCHET RATHER THAN A STATE RULE, and the choice is forced. Three
+# instances are live on `main` — `closing-key-check.sh:193,195` and
+# `deferral-check.sh:117` — and none is repairable, because `mise-tasks/**` is
+# governed by `shell edit refused`, whose landable shapes are retire-whole or
+# leave-alone. A state-scoped row would be red on landing day with no spelling
+# that could make it green; reading the delta grandfathers the three and refuses
+# the fourth.
+#
+# `line_sources` MATCHES `delta_sources` HERE, unlike the row above, because this
+# module reads lines for exactly the paths it governs and no others. The row above
+# carries three globs because its arms read documents its delta selector does not
+# select; this one has no such arm, and a glob that selected more would hand the
+# module files it never judges.
+[[rule]]
+id = "gate run unsafe"
+kind = "policy"
+scope = "tree"
+base = "origin/main"
+delta_sources = ["mise-tasks/*.sh"]
+line_sources = ["mise-tasks/*.sh"]
+module = "policy/could-not-look-laundered.rego"
 severity = "deny"
 
 # CLOUD-827, ported off `mise-tasks/prose-only-check.sh` under CLOUD-1051. A
@@ -10728,6 +10794,33 @@ gloss = "declared and spent nowhere"
 [[vocabulary.condition]]
 word = "wrong"
 gloss = "does not match the declared shape"
+
+[[verdict]]
+id = "gate run unsafe"
+gloss = "a call to this engine discards its status, so a could-not-look is read as a measured negative"
+class = """
+`$(batten <verb> … 2>/dev/null || true)` collapses three unlike states into one
+empty string: the leaf answered nothing, the leaf failed, and this binary has no
+such subcommand. The caller then reads empty as a real negative, and the findings
+it manufactures are SPECIFIC and PLAUSIBLE — which is what makes this worse than
+a fail-open, because nothing about the output looks wrong.
+
+The unresolvable case is new and is the retirement campaign's own fallout. A
+sibling script could not be unresolvable: it was a path that existed or did not,
+and its absence was loud. A subcommand of a present binary is silent. Measured
+twice, independently: 21 commits and then 28 reported as claiming no issue while
+every one carried a well-formed `Refs:` trailer, the second measurement surviving
+the repoint meant to fix the first.
+
+A RATCHET OVER THE CHANGE, not the state. Three instances are live and none is
+repairable in place, because `mise-tasks/**` admits only retire-whole or
+leave-alone. An existing occurrence is grandfathered; a new one is refused.
+"""
+
+[[verdict.route]]
+id = "gate fix now"
+kind = "document"
+target = "mise-tasks/landed-check.sh"
 
 [[verdict]]
 id = "prose declare missing"
