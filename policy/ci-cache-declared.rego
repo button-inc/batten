@@ -44,6 +44,7 @@
 #MUTANT cargo-reach-may-go-uncached|s@not declares_a_cache(path, name)@false@|a_cargo_job_with_no_cache_step_is_refused
 #MUTANT warmed-family-may-be-written|s@not reads_only(step)@false@|a_pull_request_writer_of_a_warmed_family_is_refused
 #MUTANT orphaned-reader-may-pass|s@not [shared_key(step), arch(runner(path, name))] in warmed@false@|a_read_only_consumer_of_an_unwarmed_family_is_refused
+#MUTANT cargo-reach-unbounded|s@\tsome reached in graph.reachable(task_graph, \[name\])@\tsome reached in [name]@|a_cargo_reach_deeper_than_the_old_bound_is_seen
 #MUTANT scheduled-writer-may-not-warm|s@trunk_writer(path) if _ := triggers(path).schedule@trunk_writer(path) if false@|a_scheduled_trunk_writer_warms_the_family
 
 # METADATA
@@ -696,6 +697,34 @@ test_a_cargo_reach_through_depends_is_seen if {
 	finding.rule == "cargo carry missing"
 }
 
+# THE REGRESSION CASE FOR CLOUD-1863, and the one the hand-expansion failed.
+# Five hops is past the three levels the closure used to be written to, so the
+# unrolled form answered "reaches no cargo" here and this job passed uncached.
+test_a_cargo_reach_deeper_than_the_old_bound_is_seen if {
+	some finding in violation with input as tree(warm_writer, deep_reader)
+	finding.rule == "cargo carry missing"
+}
+
+# A fixpoint must TERMINATE on a cycle rather than diverge, and must not invent a
+# cargo reach that is not there. Both halves matter: a walk that hung would never
+# report, and one that reported would refuse a job whose chain touches no cargo.
+test_a_cyclic_depends_chain_terminates_and_reaches_no_cargo if {
+	count(violation) == 0 with input as tree(warm_writer, cyclic_reader)
+}
+
+# The null guard. `graph.reachable` RAISES on a null graph rather than evaluating
+# to undefined, and CLOUD-1049 measured that one faulting expression stops every
+# other predicate in the same module. So a manifest whose `tasks` is null must
+# leave this module DECIDING — the workflow arm below still speaks.
+test_a_null_task_table_does_not_fault_the_module if {
+	some finding in violation with input as {"tree": {
+		"documents": {"mise.toml": {"tasks": null}, ".github/workflows/w.yml": {"jobs": {}}},
+		"lines": {},
+		"missing": {".github/workflows/broken.yml": "Unparsed"},
+	}}
+	finding.verdict == "workflow read unread"
+}
+
 test_an_unparsed_workflow_is_could_not_look if {
 	some finding in violation with input as {"tree": {
 		"documents": {"mise.toml": {"tasks": {}}, ".github/workflows/w.yml": {"jobs": {}}},
@@ -711,6 +740,18 @@ tasks := {
 	"build": {"run": "cargo run --quiet -p batten -- enforce"},
 	"lint": {"depends": ["build"]},
 	"inert": {"run": "echo nothing"},
+	# A chain FIVE hops from cargo, which is past the three levels this module
+	# used to expand by hand (CLOUD-1863). Under the unrolled walk `deep1`
+	# resolved to "reaches no cargo" and the job needed no cache — a clean tree
+	# and a dead gate being byte-identical on the decision surface.
+	"deep1": {"depends": ["deep2"]},
+	"deep2": {"depends": ["deep3"]},
+	"deep3": {"depends": ["deep4"]},
+	"deep4": {"depends": ["deep5"]},
+	"deep5": {"depends": ["build"]},
+	# A cycle, which a fixpoint must terminate on and a hand-expansion never met.
+	"loop_a": {"depends": ["loop_b"]},
+	"loop_b": {"depends": ["loop_a"]},
 }
 
 warm_writer := warm_writer_on("ubuntu-latest")
@@ -760,6 +801,10 @@ uncached_reader := {"on": {"pull_request": {"types": ["opened"]}}, "jobs": {"rea
 indirect_reader := {"on": {"pull_request": {"types": ["opened"]}}, "jobs": {"reader": {"steps": [{"run": "mise run lint"}]}}}
 
 inert_reader := {"on": {"pull_request": {"types": ["opened"]}}, "jobs": {"reader": {"steps": [{"run": "mise run inert"}]}}}
+
+deep_reader := {"on": {"pull_request": {"types": ["opened"]}}, "jobs": {"reader": {"steps": [{"run": "mise run deep1"}]}}}
+
+cyclic_reader := {"on": {"pull_request": {"types": ["opened"]}}, "jobs": {"reader": {"steps": [{"run": "mise run loop_a"}]}}}
 
 tree(writer, reader) := {"tree": {
 	"documents": {
