@@ -20,6 +20,24 @@
 //! cases are about. Without it a fixture whose `protected` glob silently matched
 //! nothing would pass the admission case for the wrong reason — the gate never
 //! fired, so nothing needed admitting.
+//!
+//! # ONE CLASS IS NOT THE PROPERTY, AND THAT GAP SHIPPED A WEDGE
+//!
+//! Everything here is `path write refused`, whose pointers are `Subject::Path`.
+//! `Refusal::subject` used to read that shape ONLY, so this suite could be green
+//! over the one class where the defect it exists to catch cannot appear — and it
+//! was, for the whole of CLOUD-1823's life, while `receipt read other` advertised
+//! a route, answered its questions, minted and spent a real record, and refused
+//! the write anyway (CLOUD-1880). A suite that pins a mechanism on one instance
+//! of it is pinning the instance.
+//!
+//! The predicate is now where it can be TOTAL rather than sampled:
+//! `refusal::tests::every_subject_shape_yields_a_binding` walks the `Subject`
+//! variants exhaustively, so a fifth shape breaks that case instead of quietly
+//! joining the set that binds to nothing. The end-to-end half lives per class —
+//! here for the path shape, and `punt_receipt::a_spent_admission_clears_a_superseded_receipt`
+//! for the artifact one — because what a unit case cannot say is whether the
+//! BOUNDARY consults the store, which is the layer the wedge was in.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

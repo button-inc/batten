@@ -277,7 +277,20 @@ fn the_class_declares_the_route_that_makes_the_wedge_escapable() {
     // remedy, re-running the named check, cannot change its answer when that check
     // is red for reasons only a write repairs, and the write is what is refused.
     // An `override` route carrying a precondition is what `admission::questions_for`
-    // reads, so its presence IS the exit existing.
+    // reads, so its presence is NECESSARY for the exit to exist.
+    //
+    // **AND NOT SUFFICIENT, WHICH THIS CASE USED TO CLAIM** (CLOUD-1880). The
+    // sentence above ended "so its presence IS the exit existing", and that
+    // inference is a membership check standing in for a predicate — the exact
+    // substitution this repository's own rules name. It was false for the whole of
+    // CLOUD-1823's life: the route was declared, this case was green, and spending
+    // the route did not admit the write, because a receipt refusal named no
+    // subject for the admission to bind to.
+    //
+    // `a_spent_admission_clears_a_superseded_receipt` is the sufficiency half and
+    // the two must travel together. This one stays because it localises the
+    // failure: green here and red there says the registry is fine and the boundary
+    // is not, which is a different repair from the route having been dropped.
     let entry = batten::verdict::vendored()
         .into_iter()
         .find(|entry| entry.id == "receipt read other")

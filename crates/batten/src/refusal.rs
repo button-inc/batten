@@ -212,55 +212,74 @@ impl Fix {
 
 /// The canonical subject an admission binds to, chosen from a refusal's pointers.
 ///
-/// **A PATH FIRST, THEN AN ARTIFACT, AND NEVER A COUNT** (CLOUD-1823's second
-/// half). This read paths only, and the omission made CLOUD-1823's repair INERT
-/// ON THE ONE CLASS IT WAS WRITTEN FOR. `receipt_refusal` names its pointers as
+/// **TOTAL OVER THE VARIANTS, AND THAT IS THE WHOLE POINT** (CLOUD-1880). Every
+/// pointer a refusal can name yields a binding, so a refusal that names anything
+/// at all is admissible through whatever route its class declares.
+///
+/// # What a partial version cost
+///
+/// This read `Path` and `Line` only. `receipt_refusal` names its pointers as
 /// `Artifact` — the check name, and the word for what the receipt is keyed to —
-/// because neither is a path in the tree. So `Refusal::subject` was `None` for
-/// every receipt refusal, and `admit_mediated` returns the decision unchanged the
-/// moment it is: the class advertised `articulate the stale receipt`,
-/// `admission::questions_for` asked its three questions, `override request` minted
-/// a real record and `override spend` marked it spent — and the write was still
-/// refused.
+/// because neither is a path in the tree, so `Refusal::subject` was `None` for
+/// EVERY receipt refusal. `admit_mediated` opens by requiring a subject and
+/// returns the decision untouched without one, so `receipt read other`'s
+/// `articulate the stale receipt` route was advertised, answered, minted and
+/// spent — and the write was still refused.
 ///
-/// That is strictly WORSE than before the route was declared, because
-/// `Policy::honours_hatch` reads the same field: declaring the route is what stops
-/// `BATTEN_HOOK_BYPASS` working, so the class went from a password exit to NO EXIT
-/// — the wall CLOUD-1357 refuses. `mediated_admission.rs` is the tier that exists
-/// to catch exactly this, and it covered only the path-shaped class, where the
-/// defect cannot appear.
+/// That is strictly WORSE than not declaring the route, because
+/// `Policy::honours_hatch` reads the same field: declaring it is what stops
+/// `BATTEN_HOOK_BYPASS` working, so the class went from a password exit to NO
+/// EXIT — the wall CLOUD-1357 refuses.
 ///
-/// AN ARTIFACT IS A LEGITIMATE BINDING AND A COUNT IS NOT, which is why this is a
-/// fallback rather than a widening to everything. A `Path` and an `Artifact` both
-/// NAME something — a file, a check, a task — that a reader can look up and an
-/// author can state in `--subject`. The binding is an identity string, and on the
-/// mediated path the anchor is the HEAD rather than the tree, so there is nothing
-/// for it to be compared against the tree the way a `Finding` anchor is. A `Count`
-/// names no thing at all: two unrelated refusals that both measured 3 would share
-/// a binding, so admitting one would admit the other. It stays excluded for that
-/// reason rather than for tidiness.
+/// # Why a count is a legitimate binding after all
+///
+/// The first repair admitted `Artifact` and kept `Count` out, on the reasoning
+/// that "two unrelated refusals that both measured 3 would share a binding". THAT
+/// REASONING WAS WRONG and it is recorded rather than quietly dropped, because it
+/// is the same partial-coverage mistake one variant along — a fix that repairs
+/// the instance in hand and leaves the class standing.
+///
+/// An admission binds `{rule, verdict, subject, anchor, epoch}`, not the subject
+/// alone (`admission::Binding`). Two refusals that both measured 3 are confusable
+/// only when they share the rule, the class, the head AND the config generation —
+/// at which point they are the SAME refusal, which is exactly what one admission
+/// is meant to cover. So there is no variant left whose exclusion is defensible,
+/// and being total is what makes the next class added on a pointer shape nobody
+/// anticipated reachable by construction rather than by remembering this.
+///
+/// A refusal with NO pointers at all is unaffected and needs no route: that is
+/// [`Refusal::new`]'s consumer-composed shape, which declares no class, so there
+/// is no token an admission could bind and nothing is being promised.
 ///
 /// THIS WIDENS NO CLASS'S REACHABILITY. `verdict::validate` already refuses a
-/// class whose ONLY route is an override, and an admission still costs the class's
-/// declared precondition answered in the author's own words. What changes is that
-/// a declared route stops being a promise the boundary cannot keep.
+/// class with no route and one whose only route is an override, and an admission
+/// still costs the class's declared precondition answered in the author's own
+/// words. What changes is that a declared route stops being a promise the
+/// boundary cannot keep.
 fn subject_of(subjects: &[crate::verdict::Subject]) -> Option<String> {
-    let named = |subject: &crate::verdict::Subject| match subject {
+    // PATHS FIRST, and that ordering is what keeps this repair from moving any
+    // binding that already worked. A path is what a reader acts on and what
+    // `--subject` is spelled with at every landed call site, so preferring one
+    // leaves every existing admission byte-identical — the function became total
+    // without relocating a single subject that already bound.
+    //
+    // THE FALLBACK IS `Subject::render`, NOT A SECOND SPELLING OF IT. That method
+    // already owns how every variant becomes one line, and a `match` here would be
+    // a second authority over the same mapping — free to drift, and drifting is
+    // how a binding minted by `override request` stops matching the one the
+    // boundary computes. The bare path arm above is the one deliberate difference:
+    // a `Line` binds to its FILE rather than to `path:line`, so an admission over
+    // a finding survives the edit that moves it.
+    let path = |subject: &crate::verdict::Subject| match subject {
         crate::verdict::Subject::Path { path } | crate::verdict::Subject::Line { path, .. } => {
             Some(path.clone())
         }
         crate::verdict::Subject::Artifact { .. } | crate::verdict::Subject::Count { .. } => None,
     };
-    let artifact = |subject: &crate::verdict::Subject| match subject {
-        crate::verdict::Subject::Artifact { artifact } => Some(artifact.clone()),
-        crate::verdict::Subject::Path { .. }
-        | crate::verdict::Subject::Line { .. }
-        | crate::verdict::Subject::Count { .. } => None,
-    };
     subjects
         .iter()
-        .find_map(named)
-        .or_else(|| subjects.iter().find_map(artifact))
+        .find_map(path)
+        .or_else(|| subjects.first().map(crate::verdict::Subject::render))
 }
 
 /// `Fix::Run` is a string and `Fix::None` is `null` — never an absent key.
@@ -747,6 +766,118 @@ fn sentence(text: &str) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// EVERY POINTER SHAPE BINDS, which is the property CLOUD-1880 turns into a
+    /// mechanism rather than a habit.
+    ///
+    /// Written over the variants EXHAUSTIVELY and asserted as a set, so adding a
+    /// fifth `Subject` shape breaks this case rather than silently joining the set
+    /// that does not bind. That direction is the whole point: the defect was never
+    /// that `Artifact` specifically was missed, it was that the function was
+    /// PARTIAL and nothing said which shapes were covered.
+    #[test]
+    fn every_subject_shape_yields_a_binding() {
+        use crate::verdict::Subject;
+        let shapes = [
+            Subject::Path {
+                path: "a/b.rs".to_owned(),
+            },
+            Subject::Line {
+                path: "a/b.rs".to_owned(),
+                line: 7,
+            },
+            Subject::Artifact {
+                artifact: "verify".to_owned(),
+            },
+            Subject::Count { count: 3 },
+        ];
+        for shape in &shapes {
+            assert!(
+                subject_of(std::slice::from_ref(shape)).is_some(),
+                "a refusal naming {shape:?} must be admissible through whatever \
+                 route its class declares; a shape that binds to nothing makes \
+                 that route a promise the boundary cannot keep"
+            );
+        }
+    }
+
+    /// A LINE BINDS TO ITS FILE, never to `path:line`.
+    ///
+    /// The one deliberate difference from `Subject::render`, and it is what lets
+    /// an admission over a finding survive the edit that moves it. Pinned because
+    /// collapsing the two would look like tidying.
+    #[test]
+    fn a_line_subject_binds_to_the_file_rather_than_the_citation() {
+        use crate::verdict::Subject;
+        assert_eq!(
+            subject_of(&[Subject::Line {
+                path: "a/b.rs".to_owned(),
+                line: 7,
+            }]),
+            Some("a/b.rs".to_owned())
+        );
+    }
+
+    /// A PATH IS PREFERRED OVER ANY OTHER SHAPE THE SITE LISTED.
+    ///
+    /// This is what made the repair non-breaking: every landed binding was a path,
+    /// so making the function total had to leave those exactly where they were. A
+    /// version that took the first subject outright would have moved them all.
+    #[test]
+    fn a_path_outranks_the_other_shapes_whatever_order_they_are_in() {
+        use crate::verdict::Subject;
+        assert_eq!(
+            subject_of(&[
+                Subject::Count { count: 3 },
+                Subject::Artifact {
+                    artifact: "verify".to_owned(),
+                },
+                Subject::Path {
+                    path: "a/b.rs".to_owned(),
+                },
+            ]),
+            Some("a/b.rs".to_owned())
+        );
+    }
+
+    /// NO POINTERS AT ALL IS THE ONE HONEST `None`, and it promises nothing.
+    ///
+    /// `Refusal::new` composes from consumer prose and declares no class, so there
+    /// is no token an admission could bind and no route being advertised. The
+    /// absence is correct there and nowhere else.
+    #[test]
+    fn a_refusal_naming_nothing_binds_to_nothing() {
+        assert_eq!(subject_of(&[]), None);
+    }
+
+    /// THE REGRESSION, END TO END OVER THE CONSTRUCTOR.
+    ///
+    /// `receipt_refusal` composes exactly these two pointers — the check name and
+    /// the word for what the receipt is keyed to — and this is the shape that was
+    /// inert: `subject()` was `None`, so `admit_mediated` returned before it ever
+    /// looked for the spent admission.
+    #[test]
+    fn a_receipt_shaped_refusal_names_a_subject_an_admission_can_bind() {
+        let refusal = Refusal::declared(
+            "turn mint ahead",
+            crate::verdict::Native::ReceiptSuperseded,
+            &[
+                crate::verdict::Subject::Artifact {
+                    artifact: "verify".to_owned(),
+                },
+                crate::verdict::Subject::Artifact {
+                    artifact: "commit".to_owned(),
+                },
+            ],
+            Fix::None,
+        );
+        assert_eq!(
+            refusal.subject(),
+            Some("verify"),
+            "the check name is the binding, and `admit_mediated` needs one to \
+             consult the store at all"
+        );
+    }
 
     #[test]
     fn the_payload_carries_an_explicit_null_rather_than_dropping_the_key() {
