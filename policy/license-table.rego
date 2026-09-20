@@ -51,9 +51,16 @@ cells(line) := parts if {
 	parts := split(trimmed, "|")
 }
 
-# One adopted tool's row: its name, the license cell and the verdict cell.
-row contains [tool, license, compat] if {
-	some line in input.tree.lines[doc]
+# One adopted tool's row: its LINE, its name, the license cell and the verdict
+# cell.
+#
+# **THE LINE INDEX IS CARRIED** (review of #928). Without it both row-dependent
+# arms emitted the same path-only subject, so several unresolved or invalid rows
+# COLLAPSED INTO ONE finding — the gate still exited 2, and the diagnostic could
+# not say which row to fix. That is the pointer contract broken by the gate that
+# enforces it elsewhere: `path:line`, never a file and a guess.
+row contains [index + 1, tool, license, compat] if {
+	some index, line in input.tree.lines[doc]
 	parts := cells(line)
 	count(parts) > 5
 	tool := trim_space(parts[1])
@@ -70,9 +77,9 @@ resolved_verdict := {"✅", "❌"}
 violation contains {
 	"rule": "tool grade unclear",
 	"verdict": "tool grade unclear",
-	"subjects": [{"path": doc}],
+	"subjects": [{"path": doc, "line": line}],
 } if {
-	some [_, license, _] in row
+	some [line, _, license, _] in row
 	unresolved_license(license)
 }
 
@@ -83,9 +90,9 @@ unresolved_license(license) if contains(license, "to confirm")
 violation contains {
 	"rule": "tool grade unclear",
 	"verdict": "tool grade unclear",
-	"subjects": [{"path": doc}],
+	"subjects": [{"path": doc, "line": line}],
 } if {
-	some [_, license, compat] in row
+	some [line, _, license, compat] in row
 	not unresolved_license(license)
 	not compat in resolved_verdict
 }
@@ -124,6 +131,37 @@ test_an_unresolved_license_fails if {
 
 test_a_resolved_license_with_an_unresolved_verdict_still_fails if {
 	count(violation) == 1 with input as table([header, sep, "| hk | hooks | MIT | _to confirm_ |"])
+}
+
+# **TWO BAD ROWS ARE TWO FINDINGS, EACH NAMING ITS OWN LINE** (review of #928).
+# Both row-dependent arms emitted the same path-only subject, so every unresolved
+# row in a table collapsed into ONE finding: the gate exited 2 and the diagnostic
+# could not say which row to fix.
+test_each_unresolved_row_is_named_separately if {
+	found := violation with input as table([
+		header,
+		sep,
+		"| hk | hooks | _to confirm_ | ✅ |",
+		"| thing | x | _to confirm_ | ✅ |",
+	])
+	count(found) == 2
+	count({subject.line |
+		some v in found
+		some subject in v.subjects
+	}) == 2
+}
+
+# AND THE LINE IS THE ROW'S OWN, counted from the top of the file rather than
+# from the first row — a reader opens `CONTRIBUTING.md:4` and finds it.
+test_the_line_is_where_the_row_actually_is if {
+	some v in violation with input as table([
+		header,
+		sep,
+		"| hk | hooks | MIT | ✅ |",
+		"| thing | x | _to confirm_ | ✅ |",
+	])
+	some subject in v.subjects
+	subject.line == 4
 }
 
 # THE CLOSED SET. "Some other marker" is how an unresolved row slips past a
