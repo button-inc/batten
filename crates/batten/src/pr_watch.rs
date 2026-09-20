@@ -68,11 +68,36 @@ pub const DEFAULT_INTERVAL: u64 = 1;
 ///
 /// This endpoint returns a check-run PER EVENT per name (CLOUD-436), so a
 /// nine-name roster over a head that has been readied, re-drafted and re-readied
-/// clears the default page without anything unusual happening — and nothing here
-/// fetches page 2. Under CLOUD-337 a truncated name reads as ABSENT, so the
-/// failure mode is a stall rather than a false green; it was a false green
-/// before that landed, which is how it survived unnoticed.
+/// clears the default page without anything unusual happening. Under CLOUD-337 a
+/// truncated name reads as ABSENT, so the failure mode is a stall rather than a
+/// false green; it was a false green before that landed, which is how it survived
+/// unnoticed.
+///
+/// **"And nothing here fetches page 2" used to end that paragraph, and it was the
+/// defect (CLOUD-1870).** `$CI_REQUIRED_CHECKS` is 23 names now rather than the
+/// nine this estimate was sized against, so `opened` + `synchronize` +
+/// `ready_for_review` clears the page on its own. Measured on PR #968: the
+/// draft-era skips were on page one and the live `ready_for_review` matrix was
+/// not, so the lap read five terminal non-answers, called the head
+/// terminal-and-masked, and wedged the sha — twice, because `cancelled` is not an
+/// answered conclusion either. [`read`] walks the pages now.
 const PER_PAGE: u32 = 100;
+
+/// How many pages [`read`] walks before it stops asking.
+///
+/// **A bound rather than a `Link`-header walk**, because the walk has to terminate
+/// against a forge that keeps answering, and because the header parser this module
+/// used to carry was deleted on purpose — see [`read`]'s own note on the second
+/// authority that split did not survive.
+///
+/// Ten pages is 1,000 runs, against a measured worst case of 23 names × 3 events =
+/// 69. It costs nothing in the ordinary case: the walk stops at the first short
+/// page, so a head inside one page is still exactly one request.
+///
+/// **Reaching it is a truncated reading again**, which CLOUD-337 makes a stall
+/// rather than a false green. Named here so the bound is a known limit rather than
+/// a silent one.
+const MAX_PAGES: u32 = 10;
 
 /// How many requests may go unanswered FROM THE START before the poll refuses.
 ///
@@ -658,15 +683,82 @@ fn render(findings: &[checks_green::Finding]) -> String {
 /// module then parsed itself for the status, the `ETag` and `X-Poll-Interval` —
 /// a second header parser beside [`crate::rest::Answer`]'s, which is exactly the
 /// second authority that split does not survive.
+/// # The walk, and why it keeps the conditional economy (CLOUD-1870)
+///
+/// **The validator rides page one alone, and that is what makes the common case
+/// free.** A `304` answers with no body and no later page is asked for, so an
+/// unchanged reading still costs one conditional round trip — the pace
+/// [`DEFAULT_INTERVAL`] is reasoned about. Only a `200` walks, and only while each
+/// page comes back FULL: a head whose runs fit in one page asks once, exactly as
+/// before.
+///
+/// **The pages are folded into one body rather than one `Vec<Run>`**, so
+/// [`Poll::absorb`], [`runs_from_body`] and [`signature`] are untouched and there
+/// is no second projection of a check-run to disagree with the first. The fold is
+/// deterministic given the same runs, which is what keeps the signature a change
+/// detector rather than a source of spurious movement.
 #[must_use]
 pub fn read(config: &Config, etag: Option<&str>) -> Option<crate::rest::Answer> {
-    crate::rest::get(
-        &format!(
-            "repos/{}/commits/{}/check-runs?per_page={PER_PAGE}",
-            config.repo, config.sha
-        ),
-        etag,
+    let mut answer = crate::rest::get(&page(config, 1), etag)?;
+    // A `304` carries no body and a refusal carries an error document; neither is
+    // a reading, so neither is walked. `is_reading()` is the same guard `absorb`
+    // applies for the same reason.
+    if !answer.is_reading() {
+        return Some(answer);
+    }
+    let mut rows = check_runs_in(&answer.body);
+    let full = usize::try_from(PER_PAGE).unwrap_or(usize::MAX);
+    let mut taken = rows.len();
+    let mut number = 1;
+    while taken == full && number < MAX_PAGES {
+        number += 1;
+        // A page that cannot be taken ends the walk rather than the poll: what was
+        // read so far is still a better reading than page one alone, and the next
+        // poll asks again. Losing the whole reading here would re-create the
+        // could-not-look-overwrites-a-good-reading shape `absorb` documents.
+        let Some(next) = crate::rest::get(&page(config, number), None) else {
+            break;
+        };
+        if !next.is_reading() {
+            break;
+        }
+        let page_rows = check_runs_in(&next.body);
+        taken = page_rows.len();
+        rows.extend(page_rows);
+    }
+    answer.body = serde_json::json!({ "check_runs": rows }).to_string();
+    Some(answer)
+}
+
+/// One page of this head's check runs.
+///
+/// Public because it is the half of [`read`] a case can reach: the walk itself
+/// needs a forge answering two pages, and the `page=` parameter is what page one
+/// alone never asked for.
+#[must_use]
+pub fn page(config: &Config, number: u32) -> String {
+    format!(
+        "repos/{}/commits/{}/check-runs?per_page={PER_PAGE}&page={number}",
+        config.repo, config.sha
     )
+}
+
+/// The `check_runs` array of one page, or nothing it can use.
+///
+/// Deliberately the same shape [`runs_from_body`] tolerates: a body that will not
+/// parse, or carries no array, yields no rows rather than an error. A page the
+/// forge answered with something unexpected ends the walk at the caller, and the
+/// poll survives to ask again.
+fn check_runs_in(body: &str) -> Vec<serde_json::Value> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|document| {
+            document
+                .get("check_runs")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+        })
+        .unwrap_or_default()
 }
 
 /// Push both progress signals, ignoring every failure.

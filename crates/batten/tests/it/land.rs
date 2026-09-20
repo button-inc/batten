@@ -24,6 +24,11 @@
 //! binary; what is untested until here is the join between what a lap RECORDS and
 //! what a module READS.
 
+/*
+#MUTANT-SUITE crates/batten/tests/it/land.rs
+#MUTANT a-truncated-reading-reads-as-closed|s@        "repos/{}/commits/{}/check-runs?per_page={PER_PAGE}&page={number}",@        "repos/{}/commits/{}/check-runs?per_page={PER_PAGE}",@|a_truncated_reading_is_not_read_as_closed
+*/
+
 #![cfg(unix)]
 
 use crate::common;
@@ -55,6 +60,114 @@ fn repo(name: &str) -> std::path::PathBuf {
         .git()
         .base_commit()
         .build()
+}
+
+/// A truncated check-runs reading is not read as a closed set (CLOUD-1870).
+///
+/// **The measured wedge, reproduced at the two points a case can reach.** Landing
+/// PR #968: the draft-era skip set for a sha sat on page one, the live
+/// `ready_for_review` matrix for the SAME sha did not, and `land` called the head
+/// terminal-and-masked and exited 3 — twice, because its undo cancels the matrix
+/// and `cancelled` is not an answered conclusion either. Only a new sha escaped.
+///
+/// **Two halves, because the walk itself needs a forge answering two pages.**
+///
+/// 1. *The request.* `page=` is what page one alone never asked for. Without it
+///    the second request is the first request and no walk can exist, whatever the
+///    fold does — so this is the half the mutation kills.
+/// 2. *The decision.* Fed only page one the real `decide` returns `DeadEnd`; fed
+///    the rows both pages carry it returns `Pending`. That is the whole of what
+///    the extra request buys, asserted over the engine's own predicate rather
+///    than over a reading this file typed on both sides.
+///
+/// **The anti-vacuity mirror is the first assertion of (2)**, and it is not
+/// decoration: a fix that made every masked set wait would trade the wedge for an
+/// unbounded poll, which is the failure `LAND_ANSWER_MAX_UNKNOWNS` exists to
+/// bound and which this row's own Acceptance names. Page one alone must still be
+/// a dead end.
+///
+/// **What it does not assert:** that `read` actually walks. Reaching that needs a
+/// forge serving two pages, which would make the case a test of the network — the
+/// same reason this file's header gives for driving the writer rather than
+/// `land::replay`.
+#[test]
+fn a_truncated_reading_is_not_read_as_closed() {
+    use batten::checks_green::{Roster, Run, Verdict, decide};
+
+    // A PLACEHOLDER OWNER AND NAME, never this repository's own (non-negotiable
+    // rule 1: a grep for a consumer identifier under `crates/batten` returns
+    // zero). The subject is the query string's SHAPE, so a real slug would put a
+    // consumer fact in the core for no assertion's benefit.
+    let config = batten::pr_watch::Config {
+        repo: String::from("owner/repo"),
+        sha: String::from("5374523121128495cf20583d75bc04aeae573d86"),
+        interval: 1,
+        progress: None,
+    };
+    let second = batten::pr_watch::page(&config, 2);
+    assert!(
+        second.contains("page=2"),
+        "the walk must ask for a page one alone never requested, got {second}"
+    );
+    assert!(
+        second.contains("per_page=100"),
+        "the page size rides every request, or page two is a different reading: {second}"
+    );
+
+    let roster = Roster {
+        required: vec![String::from("ci"), String::from("final")],
+        answered: [
+            "success",
+            "neutral",
+            "failure",
+            "timed_out",
+            "action_required",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect(),
+        absent_ok: Vec::new(),
+        fanin: Some(String::from("final")),
+    };
+
+    // Page one: the draft-era skips, exactly what `land` judged on #968.
+    let skip = |name: &str, id: u64| Run {
+        status: String::from("completed"),
+        conclusion: String::from("skipped"),
+        name: String::from(name),
+        started_at: String::from("2026-09-20T04:26:37Z"),
+        completed_at: String::from("2026-09-20T04:26:27Z"),
+        id,
+    };
+    let truncated = vec![skip("ci", 1), skip("final", 2)];
+    let closed = decide(&truncated, &roster).expect("the roster is well formed");
+    assert!(
+        matches!(closed, Verdict::DeadEnd(_)),
+        "page one alone is a closed set, and must stay one, got {closed:?}"
+    );
+
+    // Page two: the live `ready_for_review` matrix for the same sha.
+    let live = |name: &str, id: u64| Run {
+        status: String::from("in_progress"),
+        conclusion: String::from("-"),
+        name: String::from(name),
+        started_at: String::from("2026-09-20T04:50:12Z"),
+        completed_at: String::new(),
+        id,
+    };
+    let mut whole = truncated.clone();
+    whole.push(live("ci", 3));
+    whole.push(live("final", 4));
+
+    let verdict = decide(&whole, &roster).expect("the roster is well formed");
+    assert!(
+        !matches!(verdict, Verdict::DeadEnd(_)),
+        "the rows page two carries are what make the set open, got {verdict:?}"
+    );
+    assert!(
+        matches!(verdict, Verdict::Pending(_)),
+        "a live matrix for this sha is pending, never terminal, got {verdict:?}"
+    );
 }
 
 /// The branch the fixture is on, read rather than assumed.
