@@ -85,7 +85,17 @@ violation contains {
 # --- rule 2: publishing implies OIDC -----------------------------------------
 #
 # Read off the config rather than assumed.
-declared_publish := value if {
+#
+# **A SET, NEVER A COMPLETE RULE** (CLOUD-1880, PR #928). This was
+# `declared_publish := value`, and a manifest may legitimately carry more than
+# one `publish =` line — `[workspace.package]` and `[package]` is the ordinary
+# shape. Two lines with DIFFERENT values bind a complete rule twice, which
+# regorus raises as `eval_conflict_error` AT EVALUATION; `policy_rule` discards
+# the whole document on a fault, so every other predicate in this module —
+# including rule 1's credential scan, which has nothing to do with publishing —
+# stops deciding, silently, at exit 0. That is CLOUD-1049's fault class, and a
+# gate that goes quiet on a shape the repository can hold is worse than no gate.
+declared_publish contains value if {
 	some line in config_lines
 	startswith(trim_space(line), "publish")
 	contains(line, "=")
@@ -93,15 +103,25 @@ declared_publish := value if {
 	value := trim_space(substring(line, indexof(line, "=") + 1, -1))
 }
 
+# PUBLISHING IS THE FAIL-CLOSED READING OF EVERY AMBIGUOUS CASE, and the three
+# arms below are one sentence: this crate publishes unless every declaration it
+# carries says otherwise.
+#
+# A single `publish = true`, a mix of `true` and `false`, and a value this does
+# not recognise all land here. The risk being gated is a publishing lane with no
+# OIDC grant, so the expensive mistake is reading a manifest as non-publishing
+# and staying quiet; demanding a grant from a crate that turns out not to publish
+# costs a reviewer one line.
 publishes if {
-	declared_publish == "true"
+	some value in declared_publish
+	value != "false"
 }
 
 # THE DEFAULT IS TO PUBLISH. A config that says nothing publishes, and reading
 # silence as `false` would make this silent in exactly the case it exists for.
 publishes if {
 	config_lines
-	not declared_publish
+	count(declared_publish) == 0
 }
 
 carries_oidc if {
@@ -169,6 +189,34 @@ test_publishing_on_with_oidc_is_clean if {
 	count(violation) == 0 with input as tree({
 		"release-plz.toml": ["[workspace]", "publish = true"],
 		".github/workflows/release-plz.yml": oidc_job,
+	})
+}
+
+# THE SHAPE THAT USED TO KILL THE MODULE (CLOUD-1880). Two `publish` lines with
+# DIFFERENT values — `[workspace.package]` and `[package]`, the ordinary way a
+# workspace overrides itself — bound the old complete rule twice and raised
+# `eval_conflict_error`, taking every predicate in this module down with it.
+#
+# The assertion is that a VERDICT comes back at all. A module that faults returns
+# no violations, so `count(violation) == 0` would have passed on the corpse; this
+# requires the OIDC arm to have actually decided.
+test_two_disagreeing_publish_keys_still_yield_a_verdict if {
+	some v in violation with input as tree({
+		"release-plz.toml": ["[workspace.package]", "publish = true", "[package]", "publish = false"],
+		".github/workflows/release-plz.yml": plain_job,
+	})
+	v.verdict == "lane grant missing"
+}
+
+# AND THE FAIL-CLOSED DIRECTION IS THE ONE CHOSEN, stated as its own case because
+# the opposite reading is defensible and was rejected. A mixed declaration asks
+# for the grant: the expensive mistake is a publishing lane with no OIDC, and
+# demanding a grant from a crate that turns out not to publish costs a reviewer
+# one line.
+test_every_declaration_saying_false_is_the_only_non_publishing_case if {
+	count(violation) == 0 with input as tree({
+		"release-plz.toml": ["[workspace.package]", "publish = false", "[package]", "publish = false"],
+		".github/workflows/release-plz.yml": plain_job,
 	})
 }
 
