@@ -355,8 +355,8 @@ fn the_lock_is_a_directory_rather_than_a_flock_file() {
 // carried: "THE ACCEPTANCE CASE: a second acquire is refused while the first is alive, and names the live pid" crates/batten/tests/it/singleton.rs
 // carried: "the refusal names the holder's phase when the registry knows it" crates/batten/tests/it/singleton.rs
 // carried: "a missing registry entry still refuses — the lock is the authority, not the registry" crates/batten/tests/it/singleton.rs
-// carried: "a lock whose holder is dead is reclaimed, not waited out" crates/batten/tests/it/singleton.rs
-// carried: "AN EMPTY PID FILE IS HELD, NEVER FREE — absence of evidence is not evidence" crates/batten/tests/it/singleton.rs
+// carried: "singleton.bats::a lock whose holder is dead is reclaimed, not waited out" crates/batten/tests/it/singleton.rs
+// carried: "singleton.bats::AN EMPTY PID FILE IS HELD, NEVER FREE — absence of evidence is not evidence" crates/batten/tests/it/singleton.rs
 // carried: "a lock directory with no pid file at all is held too" crates/batten/tests/it/singleton.rs
 // carried: "TWO SIGHTINGS: a lock that changed hands under the reclaim is not stolen" crates/batten/src/task.rs kind:mechanism
 // carried: "release frees the lock for the next caller" crates/batten/tests/it/singleton.rs

@@ -22,6 +22,16 @@
 //
 // carried: mise-tasks/perf.sh crates/batten/src/perf.rs kind:verb crates/batten/tests/it/perf_series.rs runs:mise+run+perf
 // carried: tests/perf-record.bats crates/batten/src/perf.rs kind:verb crates/batten/tests/it/perf_series.rs runs:mise+run+perf-record
+//
+// carried: "a measurement on the trunk lands in the notes, keyed to the commit" crates/batten/tests/it/perf_series.rs
+// carried: "the record names its metric and its runner" crates/batten/tests/it/perf_series.rs
+// carried: "a branch is refused, and nothing is written" crates/batten/tests/it/perf_series.rs
+// carried: "the trunk's name is configurable, so the refusal is not hardcoded to main" crates/batten/src/perf.rs kind:mechanism
+// carried: "a second measurement of the same commit appends rather than overwrites" crates/batten/tests/it/perf_series.rs
+// changed: "empty stdin is could-not-look, and writes nothing" crates/batten/src/perf.rs the corpus INVERTS the engine's exit table: this was exit 2 in the shell and is `Internal` (3) on the engine, because the engine could not look rather than the caller asking for something wrong
+// changed: "a line that is not a record is could-not-look, and writes nothing" crates/batten/src/perf.rs the corpus INVERTS the engine's exit table: this was exit 2 in the shell and is `Internal` (3) on the engine, because the engine could not look rather than the caller asking for something wrong
+// carried: "the series lands on its own ref, leaving the default notes ref alone" crates/batten/tests/it/perf_series.rs
+// carried: "output is a pointer — the ref and the commit, never the numbers" crates/batten/tests/it/perf_series.rs
 // carried: mise-tasks/perf-record.sh crates/batten/src/perf.rs kind:verb crates/batten/tests/it/perf_series.rs runs:mise+run+perf-record
 //
 // carried: "MAIN ONLY, and this is a refusal rather than a convention" crates/batten/src/perf.rs kind:verb crates/batten/tests/it/perf_series.rs runs:mise+run+perf-record
@@ -85,6 +95,14 @@ fn record(dir: &Path, input: &str) -> Output {
 }
 
 /// The note this repository carries for HEAD, or `None`.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays — the ORACLE must be git itself. This asserts that `batten perf \
+              record` wrote a note real git can read on the ref it named, and reading \
+              it back through the same gix code that wrote it would test the backend \
+              against itself. `lease_record.rs` is the precedent; test-only, so no \
+              shipped path spawns here."
+)]
 fn note(dir: &Path) -> Option<String> {
     let head = String::from_utf8(
         std::process::Command::new("git")
@@ -221,6 +239,14 @@ fn the_metric_and_runner_are_stamped_into_the_record() {
 /// The series lives on its OWN ref: the default notes ref is what a contributor
 /// is most likely to have local edits on, and a series is not a comment.
 #[test]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays — the ORACLE must be git itself. This asserts that `batten perf \
+              record` wrote a note real git can read on the ref it named, and reading \
+              it back through the same gix code that wrote it would test the backend \
+              against itself. `lease_record.rs` is the precedent; test-only, so no \
+              shipped path spawns here."
+)]
 fn the_series_is_not_written_to_the_default_notes_ref() {
     let dir = repo("own-ref");
     assert_eq!(record(&dir, RECORDS).status.code(), Some(0));

@@ -29,7 +29,29 @@
 // carried: mise-tasks/token-bench.sh crates/batten/src/tokens.rs kind:verb crates/batten/tests/it/bench_tokens.rs runs:mise+run+token-bench
 // carried: mise-tasks/token-bench-check.sh crates/batten/src/tokens.rs kind:verb crates/batten/tests/it/bench_tokens.rs runs:mise+run+token-bench-check
 // carried: tests/token-bench.bats crates/batten/src/tokens.rs kind:verb crates/batten/tests/it/bench_tokens.rs
+//
+// carried: "a committed table that reproduces exits 0" crates/batten/tests/it/bench_tokens.rs
+// carried: "an edited figure is reported as drift with a pointer" crates/batten/tests/it/bench_tokens.rs
+// carried: "a figure with no method line is refused" crates/batten/src/tokens.rs kind:mechanism
+// carried: "a figure with no baseline is refused" crates/batten/src/tokens.rs kind:mechanism
+// carried: "a not-measured capability with no stated reason is refused" crates/batten/src/tokens.rs kind:mechanism
+// carried: "a not-measured capability WITH a reason passes, so the rule is not just a ban" crates/batten/src/tokens.rs kind:mechanism
+// carried: "a missing table is a violation, never a quiet pass" crates/batten/tests/it/bench_tokens.rs
+// carried: "the drift report is pointer-only — no fixture bytes echoed" crates/batten/tests/it/bench_tokens.rs
+// carried: "a fixture file missing its .in suffix is an error, not a silent skip" crates/batten/src/tokens.rs kind:mechanism
+// carried: "an arm that is not byte-stable reports not measured rather than an average" crates/batten/src/tokens.rs kind:mechanism
+// carried: "the harness refuses to run without its declared method" crates/batten/src/tokens.rs kind:mechanism
 // carried: tests/token-bench-check.bats crates/batten/src/tokens.rs kind:verb crates/batten/tests/it/bench_tokens.rs
+//
+// carried: "a missing table is refused, and named — never a pass for want of anything to read" crates/batten/tests/it/bench_tokens.rs
+// carried: "THE DEFECT: a figure with no question is unmethodical, and the section is named" crates/batten/src/tokens.rs kind:mechanism
+// carried: "a figure with no baseline is unmethodical" crates/batten/src/tokens.rs kind:mechanism
+// carried: "a figure with no method or run count is unmethodical" crates/batten/src/tokens.rs kind:mechanism
+// carried: "THE SILENT GAP: no figure and no stated reason is the worst of the three" crates/batten/src/tokens.rs kind:mechanism
+// carried: "a stated reason stands in for a figure — the marker alone does not" crates/batten/src/tokens.rs kind:mechanism
+// carried: "every unmethodical section is reported, not just the first" crates/batten/src/tokens.rs kind:mechanism
+// carried: "a section closed by the next H2 is still judged" crates/batten/src/tokens.rs kind:mechanism
+// carried: "output is pointer-only — no published prose reaches the log" crates/batten/tests/it/bench_tokens.rs
 //
 // carried: "it bakes in no price, no divisor, no re-run coefficient and no workload" crates/batten/src/tokens.rs
 // carried: "the arithmetic is over BYTES, which are exact; a ratio is independent of the divisor" crates/batten/src/tokens.rs
@@ -96,11 +118,14 @@ fn an_unmethodical_table_is_refused() {
     let root = repo();
     let published = root.join("bench/tokens/RESULTS.md");
     let original = std::fs::read_to_string(&published).expect("the committed table");
-    let stripped: String = original
+    let mut stripped = String::new();
+    for line in original
         .lines()
         .filter(|line| !line.starts_with("**Baseline**"))
-        .map(|line| format!("{line}\n"))
-        .collect();
+    {
+        stripped.push_str(line);
+        stripped.push('\n');
+    }
     assert_ne!(stripped, original, "the fixture must actually differ");
 
     std::fs::write(&published, &stripped).expect("perturb the table");

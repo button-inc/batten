@@ -23,8 +23,33 @@
 // carried: mise-tasks/mcp-timeout-budget.sh policy/mcp-timeout-budget.rego kind:module crates/batten/tests/it/mcp_timeout_budget.rs runs:mise+run+batten-check
 // carried: tests/mcp-timeout-budget.bats policy/mcp-timeout-budget.rego kind:module crates/batten/tests/it/mcp_timeout_budget.rs
 //
+// carried: "the committed budget passes" crates/batten/tests/it/mcp_timeout_budget.rs
+// carried: "a value below the floor is refused, and both numbers are named" crates/batten/tests/it/mcp_timeout_budget.rs
+// carried: "exactly the floor passes — the bound is inclusive" crates/batten/tests/it/mcp_timeout_budget.rs
+// carried: "one millisecond under the floor is refused" crates/batten/tests/it/mcp_timeout_budget.rs
+// carried: "an absent key is refused — the host default is not a measured budget" crates/batten/tests/it/mcp_timeout_budget.rs
+// carried: "a non-numeric value is refused rather than compared" crates/batten/tests/it/mcp_timeout_budget.rs
+// changed: "an unreadable settings file is exit 2, never a silent pass" policy/mcp-timeout-budget.rego kind:module the corpus INVERTS the engine's exit table: this was exit 2 in the shell and is `Internal` (3) on the engine, because the engine could not look rather than the caller asking for something wrong
+// changed: "settings that are not JSON are exit 2, never a silent pass" policy/mcp-timeout-budget.rego kind:module the corpus INVERTS the engine's exit table: this was exit 2 in the shell and is `Internal` (3) on the engine, because the engine could not look rather than the caller asking for something wrong
+// carried: "the refusal echoes no other settings content" crates/batten/tests/it/mcp_timeout_budget.rs
+// withdrawn: "--settings with no value is refused, and does not hang" the flag is gone with the process: the successor is a policy module bound to the tree surface, which reads `.claude/settings.json` by name and takes no arguments, so there is no value to omit
+// withdrawn: "--settings with an empty value is refused rather than silently defaulted" the flag is gone with the process: the successor is a policy module bound to the tree surface, which reads `.claude/settings.json` by name and takes no arguments, so there is no value to omit
+// withdrawn: "a budget the client actually used passes, and says it is in force" the runtime-log half is NOT ported. The module decides over the DECLARED budget alone, because a log is a fact about one session's machine rather than about the tree, and a gate whose verdict depends on which sessions happened to run is not reproducible from a checkout
+// withdrawn: "an observed budget below the declared one is refused" the runtime-log half is NOT ported. The module decides over the DECLARED budget alone, because a log is a fact about one session's machine rather than about the tree, and a gate whose verdict depends on which sessions happened to run is not reproducible from a checkout
+// withdrawn: "the refusal names both numbers and no log line" the runtime-log half is NOT ported. The module decides over the DECLARED budget alone, because a log is a fact about one session's machine rather than about the tree, and a gate whose verdict depends on which sessions happened to run is not reproducible from a checkout
+// withdrawn: "an absent log tree is not a live session, so the declaration is all there is" the runtime-log half is NOT ported. The module decides over the DECLARED budget alone, because a log is a fact about one session's machine rather than about the tree, and a gate whose verdict depends on which sessions happened to run is not reproducible from a checkout
+// withdrawn: "a live tree whose log records no budget is exit 2, never a pass" the runtime-log half is NOT ported. The module decides over the DECLARED budget alone, because a log is a fact about one session's machine rather than about the tree, and a gate whose verdict depends on which sessions happened to run is not reproducible from a checkout
+// withdrawn: "the NEWEST log decides, so a stale passing attempt cannot vouch for this one" the runtime-log half is NOT ported. The module decides over the DECLARED budget alone, because a log is a fact about one session's machine rather than about the tree, and a gate whose verdict depends on which sessions happened to run is not reproducible from a checkout
+// withdrawn: "a server enabled but never logged is not judged — absence is not a low budget" the runtime-log half is NOT ported. The module decides over the DECLARED budget alone, because a log is a fact about one session's machine rather than about the tree, and a gate whose verdict depends on which sessions happened to run is not reproducible from a checkout
+// withdrawn: "an observed budget ABOVE the declared one is not a refusal" the runtime-log half is NOT ported. The module decides over the DECLARED budget alone, because a log is a fact about one session's machine rather than about the tree, and a gate whose verdict depends on which sessions happened to run is not reproducible from a checkout
+// withdrawn: "--logs with no value is refused, and does not hang" the runtime-log half is NOT ported. The module decides over the DECLARED budget alone, because a log is a fact about one session's machine rather than about the tree, and a gate whose verdict depends on which sessions happened to run is not reproducible from a checkout
+// carried: "a floor equal to its declared basis passes" crates/batten/tests/it/mcp_timeout_budget.rs
+// carried: "a floor raised without moving its basis is refused, and both numbers are named" policy/mcp-timeout-budget.rego kind:module
+// carried: "a basis moved without the floor is refused — drift in either direction" policy/mcp-timeout-budget.rego kind:module
+// withdrawn: "a malformed budget comment is refused rather than parsed loosely" the basis is no longer a comment somebody parses: `worst_ms`, `multiplier` and `floor_ms` are literals in the module and `test_the_floor_agrees_with_its_declared_basis` recomputes the arithmetic over them, so there is no malformed spelling left to refuse
+// carried: "the arithmetic is refused even when the declared budget clears the floor" policy/mcp-timeout-budget.rego kind:module
+//
 // carried: "no env.MCP_TIMEOUT is the host default, which is not a measured budget" policy/mcp-timeout-budget.rego
-// carried: "a value below the floor is refused, and both numbers are named" policy/mcp-timeout-budget.rego
 // carried: "env.MCP_TIMEOUT that is not a whole number of milliseconds is refused" policy/mcp-timeout-budget.rego
 // carried: "the floor disagrees with the basis it declares" policy/mcp-timeout-budget.rego
 // carried: "a gate that cannot look must not report a budget it did not check" policy/mcp-timeout-budget.rego
