@@ -2466,9 +2466,13 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   calls in a task body that nothing tested. It reaches NOTHING and never runs
   `git config`: the two values arrive as `&str`, which keeps the reading
   testable against a scratch path and a developer's real configuration out of
-  the tests. Ported off `mise-tasks/signer_posture.py`; `signing-posture-repair`
+  the tests. Ported off `mise-tasks/signing-posture.sh`; `signing-posture-repair`
   no longer classifies a second time but reads the posture off the record the
-  producer just wrote.
+  producer just wrote. **It never passed through a `.py`, whatever this entry
+  said first**: that sibling was created and deleted inside the same branch, so
+  naming it here recorded branch-internal churn as provenance. The detour is
+  real and belongs on `shell-retirement.rego`'s arm F, which now refuses it —
+  not in the module's own history.
 - `cargo_graph.rs` — the ACTIVATED dependency graph, read from a `cargo metadata`
   document (CLOUD-1717). ONE WALK, TWO GATES, and that is the whole reason it
   exists: `evaluator-closure` asks whether an IO-bearing crate is reachable from
@@ -2489,8 +2493,11 @@ metadata` lists every package the resolver CONSIDERED, so scanning it asks
   IT — which package is the evaluator, which bear IO, which need an SDK and which
   vendor what they link are consumer facts in `[[pattern]]` rows (rule 1), so
   roots are chosen by a PREDICATE the caller supplies. Ported off
-  `mise-tasks/cargo_graph.py` and its two callers; carries the three `#MUTANT`
+  `mise-tasks/evaluator-closure-check.sh` and `macos-link-check.sh`, the two
+  callers that each carried a copy of the walk; carries the three `#MUTANT`
   rows that used to be stated twice, now stated once over the code they mutate.
+  A `cargo_graph.py` sibling existed for part of that branch and never reached
+  `main` — the detour belongs to `shell-retirement.rego`'s arm F, not here.
 - `probe_verdict.rs` — which of three things a probe build did, from its exit
   status and its log (CLOUD-418, CLOUD-1717). THE VERDICT IS THE HARNESS'S OWN
   LINE, NEVER THE EXIT CODE ALONE: `cargo test` exits non-zero for a compile
@@ -2503,9 +2510,10 @@ metadata` lists every package the resolver CONSIDERED, so scanning it asks
   one total function to a three-valued enum, where a log it cannot make sense of
   is `Unread` — the could-not-look the caller already handles, so a `Result`
   would add a state with no distinct handling. Ported off
-  `mise-tasks/probe_verdict.py`, which was the campaign to delete bash routing a
-  reading into another interpreter; `shell-retirement.rego`'s arm F now refuses
-  that shape. Its caller is `record derive`, which SPAWNS NOTHING — the probe
+  `mise-tasks/evaluator-io-check.sh`. A `probe_verdict.py` sibling stood between
+  the two for part of that branch and never reached `main`: that was the
+  campaign to delete bash routing a reading into another interpreter, and
+  `shell-retirement.rego`'s arm F now refuses the shape. Its caller is `record derive`, which SPAWNS NOTHING — the probe
   build stays in the producer task (§5) and the log arrives on stdin.
 - `prune.rs` — the build tree's reclaim and its disk floor (CLOUD-766/861/1030),
   retired out of `mise-tasks/target-prune.sh` under CLOUD-1059.

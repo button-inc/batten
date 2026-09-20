@@ -49,7 +49,7 @@
 // carried: "a missing override is NOT a finding when nothing sets signing globally" policy/signing-posture.rego kind:mechanism
 // carried: "a local override set to true is refused when the signer is broken" policy/signing-posture.rego kind:mechanism
 // carried: "the refusal echoes no part of the signature block" policy/signing-posture.rego kind:mechanism
-// changed: "--repair leaves a verifiable signer alone rather than switching signing off" mise.toml the write is the WRITE, which a module cannot be, so it stayed a task — `[tasks.signing-posture-repair]` — and its guard is the same shared `signer_posture.py` reading this tier drives. `an_inline_public_key_is_a_literal_not_a_path_and_is_verifiable` pins the branch the guard turns on
+// changed: "--repair leaves a verifiable signer alone rather than switching signing off" mise.toml the write is the WRITE, which a module cannot be, so it stayed a task — `[tasks.signing-posture-repair]` — and its guard is the same shared `crates/batten/src/signer_posture.rs` reading this tier drives. `an_inline_public_key_is_a_literal_not_a_path_and_is_verifiable` pins the branch the guard turns on
 // changed: "--repair writes the override, local only" mise.toml the same split: the write and its scope are the task's, and `git config --local` is the one line that states it
 // changed: "--repair is idempotent" mise.toml idempotence is a property of `git config --local commit.gpgsign false`, which is the task's single write
 // changed: "--repair never writes global config" mise.toml the same boundary `attribution-identity` draws, and it is stated where the write is — a developer's own unrelated repositories are not this repo's business

@@ -2103,15 +2103,19 @@ cargo run --quiet -p batten -- record named timeout-drift <"$census"
 # CLOUD-1717. The two things that are not decisions: the `cargo metadata` spawn,
 # and the graph walk.
 #
-# THE WALK IS A `.py` SIBLING RATHER THAN A BODY HERE, and that is what keeps it
-# under test. Four of the dying suite's eight cases are about the WALK — an
-# unactivated optional dependency, the same one activated, a dev-dependency, and
-# a crate the workspace reaches but the evaluator does not — and they are the
+# THE WALK IS NOT A BODY HERE, AND THAT IS WHAT KEEPS IT UNDER TEST. Four of the
+# dying suite's eight cases are about the WALK — an unactivated optional
+# dependency, the same one activated, a dev-dependency, and a crate the
+# workspace reaches but the evaluator does not — and they are the
 # security-critical half. Inlined here they would be assertable by nothing;
-# beside the module they are `crates/batten/tests/it/evaluator_closure.rs`'s to
-# drive. `mise-tasks/replay-pointers.py` is the precedent and
-# `shell-retirement.rego:159-163` is why it is admissible: `.py` is excluded from
-# `under_mise_tasks`, so this adds no shell rule.
+# in `crates/batten/src/cargo_graph.rs` they are
+# `crates/batten/tests/it/evaluator_closure.rs`'s to drive.
+#
+# IT WAS A `.py` SIBLING FOR PART OF THIS BRANCH, and that detour is recorded
+# rather than quietly dropped: `.py` is excluded from `under_mise_tasks`, so the
+# ratchet counted the program gone while every line of its reading stayed in the
+# tree one interpreter over. `shell-retirement.rego`'s arm F refuses that shape
+# now, and the walk is Rust the engine tests.
 #
 # `--locked` because the question is about the COMMITTED resolution. A gate
 # allowed to update the lockfile answers "what would upstream give me today",
