@@ -2796,7 +2796,12 @@ pub const SURFACE: &[CommandDecl] = &[
         // own with the child's bytes. The pointer surface over captured output is
         // CLOUD-162's, on stderr.
         data_channel: false,
-        exits: EXITS_STANDARD,
+        // `EXITS_VERDICT`, because a lock refusal IS a verdict (review of #928).
+        // `exec::hold` hands a held lock to `task::report_claim`, which returns
+        // `ExitCode::Violation`, and the CLI census refuses any observed code
+        // the row does not declare. The row said `EXITS_STANDARD`, which omits
+        // 2 — so the one outcome `--lock` exists to produce was undeclared.
+        exits: EXITS_VERDICT,
         effect: Effect::Unclassified,
         flags: &[
             // Declared BEFORE the trailing argv: `trailing_var_arg` swallows
@@ -3952,7 +3957,13 @@ pub const SURFACE: &[CommandDecl] = &[
         id: "verdict",
         about: "Fold a run's findings and blind spots into this tool's exit code",
         data_channel: false,
-        exits: EXITS_STANDARD,
+        // `EXITS_VERDICT`, because folding findings into an exit code is the
+        // whole verb (review of #928). It calls `ExitCode::combine`, which
+        // returns `Violation` the moment `findings > 0`, and the CLI census
+        // refuses any observed code the row does not declare. Measured on the
+        // shipped binary: `--findings 1` exits 2 and `--unjudgeable 1` exits 3,
+        // against a row declaring neither 2 nor a reason it could not.
+        exits: EXITS_VERDICT,
         effect: Effect::Read,
         flags: &[VERDICT_FINDINGS, VERDICT_UNJUDGEABLE],
     },
