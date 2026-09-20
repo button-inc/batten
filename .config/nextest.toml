@@ -1,3 +1,53 @@
+# THE SCRATCH PARENT IS COLLECTED ONCE PER RUN (CLOUD-1879).
+#
+# `common::scratch` wipes its OWN path before writing, always — `common/mod.rs`'s
+# header is emphatic about it, and that is what keeps one case from inheriting
+# another's leftovers. Nothing wiped the PARENT, so every run left its fixtures
+# behind and the next run paid for them.
+#
+# MEASURED on this container, same commit, same profile, same binary, idle box.
+# The only variable is how many stale directories `target/tmp` held at the start:
+#
+#   entries at start   wall      summed    agentic_record   shell_retirement
+#   0                  194.5s    741.0s      8.7s             77.7s
+#   ~1250              203.7s    777.8s     10.8s             74.6s
+#   3750               220.9s    846.3s     93.5s             74.8s
+#
+# +13.5% wall clock, monotonic, and one run creates 3248 entries / ~300 MB.
+# `shell_retirement` is flat across all three, so the effect is specific rather
+# than ambient noise. `agentic_record` swings 10.7x on sibling count ALONE —
+# uniformly across every case in the file, including
+# `a_tree_with_no_records_at_all_is_silent`, a synthetic empty-tree fixture, at
+# 0.20s -> 4.51s. A 22x slowdown on a case with nothing to read is not that
+# case's work.
+#
+# WHY A SETUP SCRIPT AND NOT `scratch` COLLECTING SIBLINGS. nextest runs each case
+# in its own process, concurrently; a fixture deleting a sibling's directory is
+# exactly the "one case deleting another's `.git` mid-run" failure
+# `common/mod.rs` records being repaired one file at a time. A setup script runs
+# ONCE, before any test process exists, so it cannot race one.
+#
+# WHY NOT IN `[tasks."test:cargo"]`. That task is one door — `verify`, `ci` and
+# `mise run test` all reach the suite through it — but `windows`, `macos` and
+# `musl` call `mise exec -- cargo nextest run --workspace` directly and would be
+# uncovered. Those run on fresh runners where nothing accumulates, so the gap is
+# harmless today and would be silent the day it is not.
+#
+# WIPE AT START, NEVER AT END, which is `cargo-test-support`'s property and worth
+# keeping: a failing case leaves its tree on disk to `cd` into. Collection here is
+# the previous run's, never this one's.
+#
+# The guard is not decoration: this removes a directory tree, so it refuses any
+# path that is not the scratch parent rather than trusting the expansion.
+experimental = ["setup-scripts"]
+
+[scripts.setup.clear-scratch]
+command = """sh -c 'd="${CARGO_TARGET_DIR:-target}/tmp"; case "$d" in */tmp) ;; *) echo "clear-scratch: refusing $d" >&2; exit 1 ;; esac; n=$(ls -1 "$d" 2>/dev/null | wc -l); rm -rf "$d" && mkdir -p "$d" && echo "BATTEN_SCRATCH_COLLECTED=$n" >> "$NEXTEST_ENV"'"""
+
+[[profile.default.scripts]]
+filter = "all()"
+setup = "clear-scratch"
+
 # A WALL-CLOCK CASE MUST NOT SHARE THE BOX WITH THE SUITE (CLOUD-1444).
 #
 # `crates/batten/tests/it/shell_retirement_cost.rs` decides a step-change — is the
