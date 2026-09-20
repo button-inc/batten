@@ -13,6 +13,20 @@
 //! and `closing-key-check` passed. At the merge second CLOUD-1110 and CLOUD-985
 //! — both explicitly declined — moved to In Review anyway.
 
+//
+// carried: mise-tasks/landed-check.sh crates/batten/src/landed.rs kind:verb crates/batten/tests/it/landed_check.rs runs:batten+landed+check
+// carried: tests/landed-check.bats crates/batten/src/landed.rs kind:verb crates/batten/tests/it/landed_check.rs
+//
+// carried: "landedness is a DISJUNCTION and each half exists because the other alone is wrong" crates/batten/src/landed.rs
+// carried: "a commit reachable from origin/main CLAIMS the id — claimed-keys is the authority, consulted rather than copied" crates/batten/src/landed.rs kind:verb crates/batten/tests/it/landed_check.rs runs:batten+landed+check
+// carried: "a PR must be MERGED — an open PR is live work" crates/batten/src/landed.rs kind:verb crates/batten/tests/it/landed_check.rs runs:batten+landed+check
+// carried: "the asserted arm is REPORTED SEPARATELY and the ref travels with it" crates/batten/src/landed.rs kind:verb crates/batten/tests/it/landed_check.rs runs:batten+landed+check
+// carried: "absent evidence is exit 2, never a short sweep — at 3% commit-keyword coverage clean would be the answer almost always" crates/batten/src/landed.rs kind:verb crates/batten/tests/it/landed_check.rs runs:batten+landed+check
+// carried: "membership is a whole-line match, never a substring, which is how CLOUD-17 would match CLOUD-179" crates/batten/src/landed.rs kind:verb crates/batten/tests/it/landed_check.rs runs:batten+landed+check
+// carried: "agents fetch, gates decide — the evidence comes from the caller, not from gh" crates/batten/src/landed.rs
+// carried: "pointer-only output; byte-stable ordering" crates/batten/src/landed.rs kind:verb crates/batten/tests/it/landed_check.rs runs:batten+landed+check
+// carried: "this does not claim the work is COMPLETE — that is the release question" crates/batten/src/landed.rs
+// changed: "exit 0 pass / 1 the board is behind / 2 could not read the input" crates/batten/src/landed.rs the shell corpus INVERTS the engine's table, so the port answers `0` Success, `2` Violation and `3` Internal; carrying the inversion across is the hazard CLOUD-1716 names, and a CI caller keying on the old numbers would read a refusal as an error
 use crate::common;
 
 /// A fixture repository that has DECLARED THE BOARD it is judged against
