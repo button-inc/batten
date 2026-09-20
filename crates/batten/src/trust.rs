@@ -707,6 +707,16 @@ pub enum WeakeningKind {
     /// An `[[exec_pattern]]` row is gone, so a lying exit `0` carrying it stops
     /// being promoted (CLOUD-117).
     ExecPatternRemoved,
+    /// A `[[traversal]]` row is gone, so every module reading its answer goes
+    /// quiet (CLOUD-1866).
+    ///
+    /// `PatternRemoved`'s shape exactly, and for its reason: the key resolves to
+    /// undefined, Rego reads undefined as "does not hold", so the predicate
+    /// loads clean, evaluates clean, and gates nothing. Removing one row can
+    /// silence several predicates at once, since a declared walk is shared by
+    /// design. Only the REMOVED direction weakens — adding a walk arms a
+    /// predicate that was not deciding before.
+    TraversalRemoved,
     /// A `[[provision]]` row is gone, so a pinned tool stops being verified.
     ProvisionRemoved,
     /// A required check is gone from the `[ci]` projection (CLOUD-54).
@@ -991,6 +1001,7 @@ impl WeakeningKind {
         WeakeningKind::ProgramChanged,
         WeakeningKind::MarkerRemoved,
         WeakeningKind::ExecPatternRemoved,
+        WeakeningKind::TraversalRemoved,
         WeakeningKind::ProvisionRemoved,
         WeakeningKind::DeferralUnwatched,
         WeakeningKind::HostSettingUnprojected,
@@ -1064,6 +1075,7 @@ impl WeakeningKind {
             WeakeningKind::ProgramChanged => "program-changed",
             WeakeningKind::MarkerRemoved => "marker-removed",
             WeakeningKind::ExecPatternRemoved => "exec-pattern-removed",
+            WeakeningKind::TraversalRemoved => "traversal-removed",
             WeakeningKind::ProvisionRemoved => "provision-removed",
             WeakeningKind::HostSettingUnprojected => "host-setting-unprojected",
             WeakeningKind::DeferralUnwatched => "deferral-unwatched",
@@ -1251,6 +1263,10 @@ pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
         field: "patterns",
         coverage: Coverage::Compared(&[WeakeningKind::PatternRemoved]),
+    },
+    FieldCoverage {
+        field: "traversals",
+        coverage: Coverage::Compared(&[WeakeningKind::TraversalRemoved]),
     },
     FieldCoverage {
         field: "verdicts",
@@ -2043,6 +2059,25 @@ fn cutover_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     found
 }
 
+/// The declared-walk table (CLOUD-1866), `pattern`'s shape one table over.
+///
+/// Its own function rather than a block inside [`entry_weakenings`], because
+/// that one is at the line budget and a table's comparison is a unit a reader
+/// can check alone.
+///
+/// Removing a row does not fail a load: it makes `input.tree.traversals[id]`
+/// undefined, and Rego reads undefined as *does not hold*, so every predicate
+/// over it goes quiet rather than red. Only the REMOVED direction weakens —
+/// adding a walk arms a predicate that was not deciding before.
+fn traversal_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
+    removed_entries(
+        WeakeningKind::TraversalRemoved,
+        &ids(base.traversals.iter().map(|row| row.id.clone())),
+        &ids(working.traversals.iter().map(|row| row.id.clone())),
+        "traversal",
+    )
+}
+
 fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     let mut found = Vec::new();
 
@@ -2235,6 +2270,7 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         &ids(working.markers.iter().map(|marker| marker.id.clone())),
         "marker",
     ));
+    found.extend(traversal_weakenings(base, working));
     found.extend(removed_entries(
         WeakeningKind::ExecPatternRemoved,
         &ids(base.exec_patterns.iter().map(|row| row.id.clone())),
@@ -4550,6 +4586,27 @@ mod tests {
             )
         );
         assert!(weakenings(&config(""), &config(provision)).is_empty());
+    }
+
+    /// `PatternRemoved`'s shape one table over: dropping a declared walk makes
+    /// `input.tree.traversals[id]` undefined, and a predicate over it goes quiet
+    /// rather than red. Only the REMOVED direction weakens — adding a walk arms
+    /// a predicate that was not deciding before, which is a tightening.
+    #[test]
+    fn a_dropped_traversal_is_a_weakening_and_an_added_one_is_not() {
+        let row = "\n[[traversal]]\nid = \"chain\"\nseed = \"entry.md\"\n\
+                   labels = [\"warrant\"]\nmax_visits = 64\nmax_depth = 8\n\
+                   reduce = \"present\"\n";
+        assert_eq!(
+            only(&config(row), &config("")),
+            Weakening::new(
+                WeakeningKind::TraversalRemoved,
+                "traversal[chain]",
+                "present",
+                "absent",
+            )
+        );
+        assert!(weakenings(&config(""), &config(row)).is_empty());
     }
 
     fn dated_waiver(rule: &str, expires: &str) -> String {

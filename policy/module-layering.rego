@@ -69,7 +69,7 @@ declared_modules := {
 	"invocation", "journal", "judge", "landed", "lib", "lint", "markers", "mint", "minted", "outputs",
 	"output", "pattern", "policy", "provision", "receipt", "redirect", "refusal",
 	"render", "repair", "resolve", "rules", "secret", "secrets", "session", "severity", "sink",
-	"spec", "state", "stop", "store", "surface", "transcript", "trust", "uses",
+	"spec", "state", "stop", "store", "surface", "transcript", "traversal", "trust", "uses",
 	"verbs", "verdict", "waiver", "worktree",
 	# `brief`, `main` and `selfwrite` were absent from the first draft of this
 	# table, and the coverage rule caught all three on its first run against the

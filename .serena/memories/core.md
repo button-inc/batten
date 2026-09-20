@@ -999,6 +999,15 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   frontier has shown it does not close; `max_visits` is CLOUD-1525's Class E
   counter. Breadth-first so the reported path is the shortest, which is what
   keeps two edge orders from producing two pointers for one defect.
+- `traversal.rs` — the `[[traversal]]` table (CLOUD-1866): a walk DECLARED in
+  `batten.toml` rather than written into a module, because which field carries
+  an edge is a consumer's vocabulary (rule 1) and because declaring it is what
+  BOUNDS it — the engine cannot walk what no row asked for. Two validations
+  refuse a config that would otherwise load clean and decide nothing: a
+  half-declared stop (`until_key` without `until_value`) would walk to
+  exhaustion while reading as a stop, and a zero bound would never leave the
+  seed. The answer is a REDUCTION — present, count, or the node names along the
+  chain, which are paths and so are pointers under rule 4 — never the walk.
 - `gitwrite.rs` — the LOCAL git writes: a loose object into the odb, and a ref
   moved (CLOUD-1274's D2). Placed by EFFECT rather than by subject, which is the
   whole reason it is not part of `git.rs`: that module is read-only over gix and

@@ -272,6 +272,22 @@ pub struct Config {
     /// [`crate::pattern`].
     #[serde(default, rename = "pattern", skip_serializing_if = "Vec::is_empty")]
     pub patterns: Vec<crate::pattern::NamedPattern>,
+    /// The declared-walk table (CLOUD-1866): every graph traversal a module may
+    /// read the answer of, declared once and referenced by id.
+    ///
+    /// Consumer-specific for [`Config::patterns`]'s reason and more sharply:
+    /// which frontmatter field carries an edge, and what a chain terminates at,
+    /// are a consumer's vocabulary, so they live here and never in the crate
+    /// (non-negotiable rule 1). A module reads the answer at
+    /// `input.tree.traversals["<id>"]` and is handed a REDUCTION — a boolean, a
+    /// count, or the node names along the chain — never the walk.
+    ///
+    /// **Declaring it is also what bounds it**: [`crate::graph`] cannot walk
+    /// what no row asked for, so a `check`'s cost is a property of this table
+    /// rather than of the tree's size. The type and its validation are
+    /// [`crate::traversal`].
+    #[serde(default, rename = "traversal", skip_serializing_if = "Vec::is_empty")]
+    pub traversals: Vec<crate::traversal::DeclaredTraversal>,
     /// The refusal vocabulary (CLOUD-1050): every verdict a gate may reach for,
     /// its one-line gloss, its class definition and its closed route list.
     ///
@@ -1750,6 +1766,30 @@ fn validate_remedy_tables(config: &Config) -> Result<()> {
     )
 }
 
+/// The two tables a POLICY MODULE reads by id, refused at parse.
+///
+/// Grouped because they are one thing: a consumer-declared vocabulary that a
+/// module reaches by name and that decides nothing on its own. `[[pattern]]`
+/// gives one concept one spelling; `[[traversal]]` (CLOUD-1866) gives one walk
+/// one declaration. Every clause in either is a property of the ROW — an id that
+/// is unique, an expression that parses, a stop condition declared whole, a
+/// bound that is a budget — so both are knowable without a tree and belong where
+/// a config fault is reported (house style §8).
+///
+/// Their own function rather than two calls inside [`validate_tables`], which is
+/// at the line budget: the lint refusing a 101st line is what says a sequence
+/// this long wants grouping rather than one more entry.
+fn validate_module_vocabulary(config: &Config) -> Result<()> {
+    under(
+        Native::PatternTableRefused,
+        crate::pattern::validate(&config.patterns),
+    )?;
+    under(
+        Native::TraversalTableRefused,
+        crate::traversal::validate(&config.traversals),
+    )
+}
+
 fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) -> Result<()> {
     // The verb table is validated here, at load, because nothing else validates
     // it anywhere: `verbs::validate` had no caller outside its own tests, so a
@@ -1787,10 +1827,7 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
     // `config lint` and `doctor` catch it rather than a mediated call
     // discovering it at adjudication, which is the worst time and the wrong exit
     // class (house style §8).
-    under(
-        Native::PatternTableRefused,
-        crate::pattern::validate(&config.patterns),
-    )?;
+    validate_module_vocabulary(config)?;
     // The refusal vocabulary, at parse for the identical reason (CLOUD-1050).
     // Every clause is a property of the TABLE — a token's prefix, a gloss that
     // is one line, a route list that is not an override alone, a tombstone chain
@@ -3427,6 +3464,7 @@ impl Config {
             fail_on_warning: None,
             rules: Vec::new(),
             patterns: Vec::new(),
+            traversals: Vec::new(),
             verdicts: Vec::new(),
             vocabulary: crate::verdict::Vocabulary::default(),
             scope: Vec::new(),
@@ -3939,6 +3977,11 @@ mod tests {
             Native::PatternTableRefused,
         ),
         (
+            "traversals",
+            "crate::traversal::validate(",
+            Native::TraversalTableRefused,
+        ),
+        (
             "verdicts",
             "crate::verdict::validate(",
             Native::VerdictTableRefused,
@@ -4056,6 +4099,7 @@ mod tests {
         // switched off.
         let parse_body = [
             "fn validate_tables",
+            "fn validate_module_vocabulary",
             "fn validate_sections",
             "fn validate_remedy_tables",
         ]
@@ -4146,6 +4190,7 @@ mod tests {
         // switched off.
         let parse_body = [
             "fn validate_tables",
+            "fn validate_module_vocabulary",
             "fn validate_sections",
             "fn validate_remedy_tables",
         ]

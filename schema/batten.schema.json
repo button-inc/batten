@@ -456,6 +456,13 @@
         }
       ]
     },
+    "traversal": {
+      "description": "The declared-walk table (CLOUD-1866): every graph traversal a module may\nread the answer of, declared once and referenced by id.\n\nConsumer-specific for [`Config::patterns`]'s reason and more sharply:\nwhich frontmatter field carries an edge, and what a chain terminates at,\nare a consumer's vocabulary, so they live here and never in the crate\n(non-negotiable rule 1). A module reads the answer at\n`input.tree.traversals[\"<id>\"]` and is handed a REDUCTION — a boolean, a\ncount, or the node names along the chain — never the walk.\n\n**Declaring it is also what bounds it**: [`crate::graph`] cannot walk\nwhat no row asked for, so a `check`'s cost is a property of this table\nrather than of the tree's size. The type and its validation are\n[`crate::traversal`].",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/DeclaredTraversal"
+      }
+    },
     "trust": {
       "description": "How the base-ref authority behaves when the ref cannot be reached\n(CLOUD-720). Absent means the strict default: an unreachable ref refuses.",
       "anyOf": [
@@ -1416,6 +1423,66 @@
         "tool",
         "key",
         "columns"
+      ]
+    },
+    "DeclaredTraversal": {
+      "description": "One declared walk, keyed by an id a module reads the answer under.\n\nMirrors [`crate::pattern::NamedPattern`]'s shape deliberately: a\nconsumer-owned table in the one committed authority, keyed by an id the\nconfig author picks.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The name a module reads it by — the key under `input.tree.traversals`.\n\nUnique across the table, for [`crate::pattern::NamedPattern`]'s reason: a\nrepeated id makes the lookup ambiguous, and *which declaration answered\nme* is not a question a reviewer should have to resolve.",
+          "type": "string"
+        },
+        "labels": {
+          "description": "The edge labels the walk follows, tried in the order given.\n\nNon-empty: a walk with no labels cannot leave its seed, so its answer\nwould be about the seed alone while reading as a chain result.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "max_depth": {
+          "description": "The most hops the walk may take from its seed. Required, for the same\nreason.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "max_visits": {
+          "description": "The most nodes the walk may visit — CLOUD-1525's Class E counter.\n\nREQUIRED rather than defaulted, and that is the row's own cost statement.\nA default is a number nobody chose, and the first time it is hit the\nfinding reads as a property of the tree rather than of a constant in this\ncrate.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "reduce": {
+          "description": "What the module is handed back.",
+          "$ref": "#/$defs/Reduce"
+        },
+        "seed": {
+          "description": "Where the walk starts.\n\nA node name as the source spells it. For a document source that is a\ntracked path; the source owns the vocabulary, not this table.",
+          "type": "string"
+        },
+        "until_key": {
+          "description": "The field a node must carry for the walk to stop, with `until_value`.\n\nOptional: a walk with no stop condition runs to exhaustion or to a bound,\nwhich is what a [`Reduce::Count`] over a reachable set wants.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "until_value": {
+          "description": "The value `until_key` must carry. Declared together or not at all.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "seed",
+        "labels",
+        "max_visits",
+        "max_depth",
+        "reduce"
       ]
     },
     "DeclaredVerdict": {
@@ -3139,6 +3206,26 @@
       ]
     },
     "Reduce": {
+      "description": "What a module is handed back, rather than the walk itself.",
+      "oneOf": [
+        {
+          "description": "Whether the walk reached a node satisfying its stop condition.\n\nThe shape a chain-completeness predicate wants: *did this close*.",
+          "type": "string",
+          "const": "present"
+        },
+        {
+          "description": "How many nodes the walk visited.\n\nFor a predicate over the SIZE of a reachable set rather than over whether\na particular node is in it.",
+          "type": "string",
+          "const": "count"
+        },
+        {
+          "description": "The node names from seed to the satisfying node, inclusive.\n\nAdmissible under rule 4 because a node name here IS a path — the\n`GraphSource` names nodes by tracked path — so this is a pointer list and\nnever content. It is what lets a finding say which hop broke.",
+          "type": "string",
+          "const": "path"
+        }
+      ]
+    },
+    "Reduce2": {
       "description": "How a [`ResultRow`] turns a response into something rule 4 permits.\n\nA closed set rather than an expression language, for\n[`crate::facts::Reduction`]'s reason exactly: every member is bounded by\nconstruction, so no row can declare a reduction that yields the payload back.",
       "oneOf": [
         {
@@ -3232,7 +3319,7 @@
         },
         "reduce": {
           "description": "What to make of the response.",
-          "$ref": "#/$defs/Reduce"
+          "$ref": "#/$defs/Reduce2"
         }
       },
       "additionalProperties": false,

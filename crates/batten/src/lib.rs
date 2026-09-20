@@ -142,6 +142,7 @@ pub mod taskset;
 /// Third-party tool verdicts, keyed to (tool, pinned version, input digest).
 pub mod tools;
 pub mod transcript;
+pub mod traversal;
 pub mod trust;
 /// The `use` graph: which module reaches which, resolved through the root's own
 /// re-export table.

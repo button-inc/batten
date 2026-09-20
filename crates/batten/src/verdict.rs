@@ -1254,6 +1254,8 @@ pub enum Native {
     VerbTableRefused,
     /// The `[[pattern]]` table would not load.
     PatternTableRefused,
+    /// The `[[traversal]]` table would not load.
+    TraversalTableRefused,
     /// The `[[verdict]]` table would not load.
     VerdictTableRefused,
     /// The `[[redirect]]` table would not load.
@@ -1389,6 +1391,7 @@ impl Native {
         Native::ConfigUnreadable,
         Native::VerbTableRefused,
         Native::PatternTableRefused,
+        Native::TraversalTableRefused,
         Native::VerdictTableRefused,
         Native::RedirectTableRefused,
         Native::DeferralTableRefused,
@@ -1424,6 +1427,7 @@ impl Native {
         Native::VerbTableRefused,
         Native::OutcomeTableRefused,
         Native::PatternTableRefused,
+        Native::TraversalTableRefused,
         Native::VerdictTableRefused,
         Native::RedirectTableRefused,
         Native::DeferralTableRefused,
@@ -1474,6 +1478,7 @@ impl Native {
             Native::ConfigUnreadable => "config read refused",
             Native::VerbTableRefused => "verb declare refused",
             Native::PatternTableRefused => "pattern declare refused",
+            Native::TraversalTableRefused => "traversal declare refused",
             Native::VerdictTableRefused => "verdict declare refused",
             Native::RedirectTableRefused => "redirect declare refused",
             Native::DeferralTableRefused => "deferral declare refused",
@@ -2077,6 +2082,18 @@ discovering it at adjudication -- the worst moment and the wrong exit class.",
         applicability: Applicability::Advice,
     },
     VendoredVerdict {
+        id: "traversal declare refused",
+        gloss: "the declared-walk registry would not load",
+        class: "`[[traversal]]` is where a graph walk is DECLARED rather than written into a \
+module, which is what keeps a consumer's edge vocabulary out of the core and what BOUNDS the \
+walk -- the engine cannot traverse what no row asked for. A malformed row here is a config \
+fault: a half-declared stop condition would walk to exhaustion while reading as a stop, and a \
+zero bound would decide nothing while loading clean. Refusing at load is what stops a gate \
+discovering either at adjudication.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
         id: "verdict declare refused",
         gloss: "the refusal vocabulary would not load",
         class: "`[[verdict]]` is the registry every other class in this table belongs to: a \
@@ -2593,6 +2610,7 @@ mod tests {
                 | Native::KeyMissing
                 | Native::VerbTableRefused
                 | Native::PatternTableRefused
+                | Native::TraversalTableRefused
                 | Native::VerdictTableRefused
                 | Native::RedirectTableRefused
                 | Native::DeferralTableRefused

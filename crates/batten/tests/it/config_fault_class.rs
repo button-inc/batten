@@ -66,6 +66,17 @@ const FAULTS: &[(&str, &str, &str)] = &[
         "version = 1\n[[pattern]]\nid = \"unclosed\"\nregex = \"[\"\n",
     ),
     (
+        // CLOUD-1866. A HALF-DECLARED STOP, which is the row's own worst case
+        // rather than a generic malformation: `until_key` with no `until_value`
+        // reads as "stop when this field is present", walks to exhaustion
+        // instead, and would gate nothing while looking like a stop condition.
+        "traversal declare refused",
+        "traversal",
+        "version = 1\n[[traversal]]\nid = \"chain\"\nseed = \"a.md\"\n\
+         labels = [\"warrant\"]\nuntil_key = \"registered\"\n\
+         max_visits = 8\nmax_depth = 4\nreduce = \"present\"\n",
+    ),
+    (
         "verdict declare refused",
         "verdict",
         "version = 1\n\
