@@ -851,6 +851,58 @@ fn a_zero_concurrent_limit_is_not_a_bound() {
 }
 
 #[test]
+fn the_committed_lane_reserves_a_slot_a_freeze_cannot_consume() {
+    // CLOUD-1881, and the subject is a COMPOSITION rather than either key alone.
+    //
+    // `stopUpdatingLabel` makes Renovate leave a labelled PR alone — no rebase, no
+    // new head, no CI spend, which is what CLOUD-1207 bought it for against a
+    // measured 372 workflow runs on one branch. But a frozen PR still OCCUPIES a
+    // concurrency slot. At `prConcurrentLimit: 1` there is no second one, so a
+    // single frozen head stops the lane for every ecosystem at once.
+    //
+    // MEASURED: #676 held the only slot for 28 days, in which Renovate opened
+    // nothing and `github:nextest-rs/nextest` fell ~41 releases behind. The key
+    // that wedged it was present, non-zero, and passed every check in this file —
+    // which is why the bound is `> 1` and not merely "declared".
+    //
+    // THE COMMITTED FILE, not a fixture. Every other renovate case here drives a
+    // synthetic `RENOVATE` const, and a synthetic config cannot go stale in
+    // production. This one asserts the lane this repository actually runs.
+    let text = fs::read_to_string(common::at_root("renovate.json5"))
+        .expect("renovate.json5 is committed at the repository root");
+
+    // Only a composition is refused, so a lane with no freeze label keeps its
+    // right to a single slot. Reading the label's presence rather than assuming it
+    // is what keeps this case honest if that key is ever retired.
+    if !text.contains("stopUpdatingLabel") {
+        return;
+    }
+
+    // THE KEY LINE, NEVER THE PROSE. The first draft of this case used
+    // `split_once("prConcurrentLimit:")` over the whole file and read the value
+    // out of the comment three lines above the key — which documents the wedge by
+    // quoting `prConcurrentLimit: 1`. It failed against a file that already
+    // carried the fix. A comment line is skipped explicitly rather than hoping the
+    // key comes first, because this file's convention is reasoning beside keys and
+    // that reasoning quotes values by design.
+    let limit = text
+        .lines()
+        .map(str::trim_start)
+        .filter(|line| !line.starts_with("//"))
+        .find_map(|line| line.strip_prefix("prConcurrentLimit:"))
+        .map(|rest| rest.trim_start().trim_end_matches(','))
+        .and_then(|value| value.parse::<u32>().ok())
+        .expect("renovate.json5 declares a numeric `prConcurrentLimit`");
+
+    assert!(
+        limit > 1,
+        "`prConcurrentLimit: {limit}` composed with `stopUpdatingLabel` lets one frozen \
+         pull request hold the only slot and stop every ecosystem's updates — measured at \
+         28 days on #676 (CLOUD-1881). Reserve a slot a freeze cannot consume."
+    );
+}
+
+#[test]
 fn a_top_level_commit_type_does_not_satisfy_the_scoped_one() {
     // THE MEASURED DEFECT: a top-level key is silently outranked by the
     // recommended preset's catch-all package rule, so the config asserts an

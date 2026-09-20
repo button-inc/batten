@@ -142,12 +142,37 @@
   // one matrix in flight, and a queue that drains in landing order rather than a
   // fan of siblings proposing overlapping groups.
   //
-  // It throttles; it does NOT wedge, which was the open question and is now
+  // It throttles; it does NOT wedge, which was the open question and was
   // measured (CLOUD-692): #493 merged at 06:49:36Z and the released slot became
   // #503 at 06:50:56Z, 80 seconds later. So the cost of holding it at 1 is
   // latency on the tail of the queue, not a stuck queue — and the lander is what
   // keeps that latency bounded.
-  prConcurrentLimit: 1,
+  //
+  // IT WEDGED, AND THE MEASUREMENT ABOVE IS WHY THAT WAS MISSED (CLOUD-1881).
+  // #493 and #503 both LANDED, so the slot released on its own. That says nothing
+  // about a head which never lands: `stopUpdatingLabel` below stops Renovate
+  // touching a labelled PR, and a frozen PR still OCCUPIES the slot. At a limit of
+  // 1 there is no second one, so one frozen head stops the lane for every
+  // ecosystem at once. The composition is the defect, not either key.
+  //
+  // MEASURED 2026-09-20. #676 (`renovate/actions`, two minor action bumps) opened
+  // 2026-08-23, was labelled `renovate-frozen`, and held the only slot for 28
+  // days. In that window Renovate opened nothing: five Renovate PRs exist in this
+  // repository's whole history, and `main` carries ONE `(deps)` commit in its last
+  // 400 — a hand-written `fix(deps)` for RUSTSEC-2026-0285, not a bot bump.
+  // `github:nextest-rs/nextest` sat at `cargo-nextest-0.9.104` (2025-09-15)
+  // against 0.9.145, roughly 41 releases behind.
+  //
+  // 2, NOT UNBOUNDED, and the second slot is reserved against exactly this: a
+  // freeze may consume one slot and never the last one. The throttle's economy is
+  // untouched, because `draftPR: true` above means an accumulating draft buys zero
+  // runner minutes — the cost is one more open draft, never one more matrix.
+  //
+  // `lock-currency` cannot cover this and its failure mode is GREEN: it asks
+  // whether regenerating `mise.lock` would change it, which an exactly-pinned tool
+  // answers "no" forever. Its own header says so, and this file's header records
+  // the same blindness costing twelve Rust releases before.
+  prConcurrentLimit: 2,
 
   // Renovate's spelling of the 7-day cooldown CLOUD-105 bought on the Dependabot
   // lanes: let a churny release settle before a PR opens.
