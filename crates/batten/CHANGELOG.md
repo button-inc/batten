@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.178](https://github.com/button-inc/batten/compare/v0.0.177...v0.0.178) - 2026-09-20
+
+### Fixed
+
+- *(land)* walk the check-runs pages, so a live matrix is not read as absent
+- *(mutate)* [**breaking**] bound a Rust suite by what it must do, and never call a timeout a filter fault
+- *(gitwrite)* one UTC stamp for both committer signatures, in git.rs
+- *(gitwrite)* withdraw the UTC stamp until it has a git-module home
+- *(land)* the conflict stop names the route out of it
+- *(gitwrite)* one UTC stamp for both committer signatures
+
+### Other
+
+- *(land)* bind both of CLOUD-1537's obligations to cases
+
 ## [0.0.177](https://github.com/button-inc/batten/compare/v0.0.176...v0.0.177) - 2026-09-20
 
 ### Other
