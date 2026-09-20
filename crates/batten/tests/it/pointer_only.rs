@@ -710,6 +710,34 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // which is the honest could-not-look and not a verb that emitted nothing
     // because it had nothing to emit.
     "land lap",
+    // THE FIVE PORTS WHOSE SUBJECT IS OUTSIDE THE CORPUS (CLOUD-1716,
+    // CLOUD-1753), each here on the bar the paragraph above states: no lighter
+    // fixture produces a verdict, and the reason is the corpus rather than the
+    // verb.
+    //
+    // `ci slow-needed` decides over a diff, and this corpus has one commit and
+    // no base to compare against — an empty diff is could-not-look by the verb's
+    // own design, since answering "skip the slow tier" there is the false-absent
+    // it exists to refuse.
+    "ci slow-needed",
+    // `bench tokens` measures a binary at `target/debug/batten` RELATIVE TO THE
+    // TREE IT JUDGES, and this corpus builds none. Standing one up means
+    // compiling this crate inside the fixture, which is not a lighter fixture.
+    "bench tokens",
+    // `perf measure` is the same shape one noun over: it builds a release binary
+    // and runs a benchmark runner against it.
+    "perf measure",
+    // `perf record` takes `perf measure`'s records on stdin, and the sweep hands
+    // it none — an empty stream is could-not-look rather than an empty series,
+    // which is the distinction that keeps a silent run out of the trunk's data.
+    "perf record",
+    // `release install` asks three authorities that must agree on an asset name,
+    // and the corpus declares no `[ci] release_workflow` — so the matrix cannot
+    // be read and the verb refuses rather than guessing a path.
+    "release install",
+    // `doctor target` reaches rustup and the network. A fixture that made it
+    // answer would be installing a toolchain target.
+    "doctor target",
 ];
 
 /// One entry per leaf verb of [`SURFACE`], asserted total by
@@ -2080,6 +2108,60 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "singleton release",
         args: &["land"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // -- THE PORTS THIS CAMPAIGN ADDED (CLOUD-1716, CLOUD-1753) ---------------
+    //
+    // Every one is `PointerOnly`, which is the default disposition and not a
+    // shrug: each was ported off a shell program under a rule-4 obligation, and
+    // the port is what makes the obligation checkable from outside. Six of the
+    // seven sit on `MAY_ANSWER_COULD_NOT_LOOK` because their subject is outside
+    // this corpus; the assertions below still run over what they emit, which is
+    // the half this file is about.
+    //
+    // `ci suites` needs no roster entry: a corpus with no base is an ANSWER for
+    // it rather than a failure — could-not-look widens, so it names every suite
+    // and exits `0`.
+    Verb {
+        path: "ci slow-needed",
+        args: &["--base", "HEAD"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "ci suites",
+        args: &["--base", "HEAD"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "bench tokens",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "perf measure",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "perf record",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "release install",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "doctor target",
+        args: &["x86_64-unknown-linux-gnu"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
