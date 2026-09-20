@@ -6,19 +6,19 @@ runner measured it; the suite runs `--no-parallelize-within-files`, so a
 file's number is its own serial cost and is what an author adding a case
 to it pays.
 
-- suites: 66
-- serial total: 146.7s
+- suites: 65
+- serial total: 146.0s
 
 | seconds | share | suite |
 | ---: | ---: | --- |
-| 20.7 | 14.1% | `tests/graph-check.bats` |
+| 20.7 | 14.2% | `tests/graph-check.bats` |
 | 8.3 | 5.7% | `tests/ready-lint.bats` |
 | 8.0 | 5.5% | `tests/token-bench.bats` |
 | 7.3 | 5.0% | `tests/board-sweep.bats` |
 | 6.9 | 4.7% | `tests/released.bats` |
 | 5.9 | 4.0% | `tests/in-progress-drain.bats` |
 | 5.7 | 3.9% | `tests/release-tracking-check.bats` |
-| 5.5 | 3.7% | `tests/release-assets-check.bats` |
+| 5.5 | 3.8% | `tests/release-assets-check.bats` |
 | 5.0 | 3.4% | `tests/mcp-allow-check.bats` |
 | 4.8 | 3.3% | `tests/landed-check.bats` |
 | 4.7 | 3.2% | `tests/sbom.bats` |
@@ -27,7 +27,7 @@ to it pays.
 | 3.6 | 2.5% | `tests/land-divergence.bats` |
 | 3.5 | 2.4% | `tests/ntia-check.bats` |
 | 3.5 | 2.4% | `tests/ready-cites-check.bats` |
-| 3.0 | 2.0% | `tests/lint-rego.bats` |
+| 3.0 | 2.1% | `tests/lint-rego.bats` |
 | 2.8 | 1.9% | `tests/hk-selection.bats` |
 | 2.6 | 1.8% | `tests/install.bats` |
 | 1.8 | 1.2% | `tests/finding-sink-check.bats` |
@@ -40,10 +40,10 @@ to it pays.
 | 1.4 | 1.0% | `tests/install-check.bats` |
 | 1.3 | 0.9% | `tests/spawn-census.bats` |
 | 1.2 | 0.8% | `tests/verify.bats` |
-| 1.1 | 0.7% | `tests/perf-record.bats` |
-| 1.1 | 0.7% | `tests/land-divergence-assert.bats` |
-| 1.1 | 0.7% | `tests/nonverdict-scan.bats` |
-| 1.1 | 0.7% | `tests/linear-check.bats` |
+| 1.1 | 0.8% | `tests/perf-record.bats` |
+| 1.1 | 0.8% | `tests/land-divergence-assert.bats` |
+| 1.1 | 0.8% | `tests/nonverdict-scan.bats` |
+| 1.1 | 0.8% | `tests/linear-check.bats` |
 | 1.0 | 0.7% | `tests/done-check.bats` |
 | 1.0 | 0.7% | `tests/release-backfill.bats` |
 | 0.9 | 0.6% | `tests/evaluator-closure-check.bats` |
@@ -56,7 +56,6 @@ to it pays.
 | 0.7 | 0.5% | `tests/duplicate-close-check.bats` |
 | 0.7 | 0.5% | `tests/mcp-attach-check.bats` |
 | 0.7 | 0.5% | `tests/timeout-drift.bats` |
-| 0.7 | 0.5% | `tests/mcp-timeout-budget.bats` |
 | 0.6 | 0.4% | `tests/macos-link-check.bats` |
 | 0.6 | 0.4% | `tests/checksums.bats` |
 | 0.5 | 0.3% | `tests/branch-age-check.bats` |
