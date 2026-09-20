@@ -2039,7 +2039,7 @@ emit() {
 "
 		done
 		awk -v file="$file" -v durations="$durations" '
-			function flush(   samples, n, i, sorted, idx, p95) {
+			function flush(   samples, n, i, j, v, idx, p95) {
 				if (job == "" || declared == "") return
 				n = 0
 				split(durations, rows, "\n")
@@ -2049,7 +2049,18 @@ emit() {
 				}
 				p95 = 0
 				if (n > 0) {
-					asort(samples)
+					# INSERTION SORT RATHER THAN `asort`, WHICH IS GAWK ONLY. `[tools]`
+					# declares no awk at all, so this runs whatever the host has, and
+					# on macOS that is BSD awk — where `asort` is not a function and
+					# the program dies before emitting a single record, for every job
+					# that has samples. `n` is bounded by the run window, so the
+					# quadratic sort is cheaper than declaring a tool to avoid it.
+					for (i = 2; i <= n; i++) {
+						v = samples[i]
+						j = i - 1
+						while (j > 0 && samples[j] > v) { samples[j + 1] = samples[j]; j-- }
+						samples[j + 1] = v
+					}
 					idx = int(((95 * n) + 99) / 100)
 					if (idx < 1) idx = 1
 					p95 = samples[idx]
@@ -2074,7 +2085,18 @@ emit() {
 	done
 }
 
-emit | cargo run --quiet -p batten -- record named timeout-drift
+# THE RECORD IS WRITTEN ONLY AFTER `emit` FINISHES, and the pipe could not do
+# that. `record named` buffers stdin and writes on EOF, so every workflow `emit`
+# had already processed was down the pipe before its `return 2` — and `record
+# named` REPLACES a family, so the store ended up holding a partial census that
+# `policy/timeout-drift.rego` adjudicates as if it were whole. `pipefail` reds
+# the task, which is honest about the run and says nothing about the bytes it
+# left behind; the module reads the store on the next `check`, not this exit
+# code. Buffer to a file, and write only on success.
+census=$(mktemp)
+trap 'rm -f "$census"' EXIT
+emit >"$census"
+cargo run --quiet -p batten -- record named timeout-drift <"$census"
 '''
 
 # CLOUD-831's producer, ported off `mise-tasks/evaluator-closure-check.sh` under
@@ -2192,13 +2214,21 @@ emit | cargo run --quiet -p batten -- record named timeout-drift
 # the signed commit this gate exists to catch would read as clean.
 # `pipefail-grep-check` caught what the retired suite could not.
 #
-# NOTHING IS WRITTEN OUTSIDE A GIT REPOSITORY — could not look, which the module
-# reads as silence rather than as a posture in force.
+# OUTSIDE A GIT REPOSITORY THIS REFUSES, AND THAT IS THE RETIRED PROGRAM'S OWN
+# REASON RESTORED. The port wrote `|| exit 0` here, which turns could-not-look
+# into silence — and `signing-posture.sh:87-89` exited 2 on exactly this branch,
+# saying why in as many words: *a gate that cannot look must not report the
+# posture in force*. Silence is that reading inverted, because the module cannot
+# tell an absent record from a clean one. Exit 2 keeps the reading loud on the
+# one caller that can act on it.
 [tasks.signing-posture-record]
 description = "Effect: record this checkout's signer posture and any signed commit in range, for `commit grade unsafe`"
 shell = "bash -c"
 run = """
-git rev-parse --git-dir >/dev/null 2>&1 || exit 0
+if ! git rev-parse --git-dir >/dev/null 2>&1; then
+	echo "::error:: signing-posture-record: not a git repository, so the signer posture could not be read. Nothing recorded." >&2
+	exit 2
+fi
 
 # THE GATHERING IS THIS TASK'S — `git config`, `git rev-list` and `git
 # cat-file` are spawns house-style §5 keeps outside the engine. What the facts
@@ -2315,7 +2345,16 @@ if [ -n "${EVALUATOR_IO_PROBE_CMD:-}" ]; then
   # shellcheck disable=SC2086 # deliberate word-splitting: the override is an argv
   set -- $EVALUATOR_IO_PROBE_CMD
 else
-  if ./mise-tasks/step-receipt.sh check evaluator-io-check; then exit 0; fi
+  # A CACHE HIT MUST STILL LEAVE A RECORD. Exiting here wrote none, so the
+  # module went silent for the whole run on the strength of a receipt — a
+  # verdict about an earlier tree standing in for one about this one, spelled
+  # exactly like a producer that never ran. The receipt still buys the expensive
+  # half: the probe BUILD is skipped and the reading is re-derived from the
+  # verdict the receipt attests, which costs a `record derive` and nothing else.
+  if ./mise-tasks/step-receipt.sh check evaluator-io-check; then
+    printf 'probe failed\n' | cargo run --quiet -p batten -- record named evaluator-io-probe
+    exit $?
+  fi
   set -- cargo test --quiet -p batten --features probe-evaluator-io \
     --test policy_modules "$probe_test" -- --include-ignored
 fi
@@ -2329,8 +2368,17 @@ status=0
 # where house-style §5 puts a producer's effects, and the classification of
 # what it wrote is `crates/batten/src/probe_verdict.rs` — Rust the engine
 # tests rather than a script beside this task.
-verdict=$(cargo run --quiet -p batten -- record derive evaluator-io-probe \
-  --input "status=$status" --input "test=$probe_test" <"$log") || exit 0
+# A DERIVATION THAT FAILED IS NOT A PROBE THAT SAID NOTHING. `|| exit 0` turned
+# every usage error `record.rs` raises — a renamed family, a malformed input, an
+# unwritable store — into a SUCCESSFUL producer run that wrote no record, and
+# `policy/evaluator-io-probe.rego` reads that absence as silence. The loud
+# could-not-look is the `probe unread` token the reading itself emits; a
+# derivation that could not run has not reached a reading at all.
+if ! verdict=$(cargo run --quiet -p batten -- record derive evaluator-io-probe \
+  --input "status=$status" --input "test=$probe_test" <"$log"); then
+  echo "::error:: evaluator-io-record: the probe's reading could not be derived, so nothing was recorded." >&2
+  exit 2
+fi
 
 
 if [ -z "${EVALUATOR_IO_PROBE_CMD:-}" ] && [ "$verdict" = 'probe failed' ]; then
@@ -2687,7 +2735,12 @@ while IFS= read -r run; do
 			| [.jobs[]?
 			   | select(.conclusion == "failure")
 			   | select(.name != $fan)
-			   | select([.name] | inside($roster))]
+			   # EXACT MEMBERSHIP, NEVER `inside`. jq's `inside` on arrays is subset
+			   # by `contains`, which for strings is SUBSTRING — so `["action"]` was
+			   # inside a roster carrying `action (ubuntu-latest)` and a non-required
+			   # job entered the population, moving the window counts and producing a
+			   # false `job answer missing` when it had no verdict step.
+			   | select(.name as $n | $roster | index($n))]
 			| sort_by(.name)
 			| .[]
 			| . as $job
