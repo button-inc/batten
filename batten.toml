@@ -838,9 +838,13 @@ and stops only for a rebase conflict, a failed `verify`, or red CI. TWO \
 SPELLINGS ARE LEFT ALONE, and neither is a lap: the conflict exits \
 (`--continue`, `--abort`, `--skip`) name no target at all, and \
 `git rebase --onto <newbase> <upstream> <branch>` is a range move this loop \
-cannot perform. A CONFLICT is the one step that is yours, and this row denies \
-rather than warns because a warn row on this surface reaches nobody — so the \
-conflict stop is a limit this row names rather than one it can soften."""
+cannot perform. A CONFLICT is the one step that is yours, and the route to take \
+it is `batten land replay <ref> --resolve <path>`: merge each conflicted path in \
+the worktree, then name it, and the replay re-runs from its base using your \
+bytes for that path. A path conflicting at more than one commit takes \
+`--resolve <path>=<file>`, one file per commit. The stop itself prints both \
+spellings and every conflicted path. This row denies rather than warns because a \
+warn row on this surface reaches nobody."""
 
 # The toolchain pin, given a mechanism (CLOUD-271). AGENTS.md has said "never a
 # bare `cargo`" since long before anything enforced it, which non-negotiable
