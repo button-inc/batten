@@ -110,6 +110,33 @@ fn the_committed_table_reproduces() {
     assert!(answer.contains("reproduces"), "{answer}{cause}");
 }
 
+/// TWO RUNS AT ONCE DO NOT MEASURE EACH OTHER (review of #928).
+///
+/// The scratch root was a fixed `target/token-bench`, wiped on entry — so a
+/// second invocation deleted the first's fixtures mid-measurement and the loser
+/// reported drift. It is this suite's own tier that found it: nextest runs
+/// cases in parallel processes, the two `--check` cases raced, and exactly one
+/// of them failed each run while both passed when run alone.
+///
+/// SHOWN ABLE TO FAIL: with the fixed path restored, this case reports drift on
+/// one thread or the other. A benchmark whose figure depends on what else is
+/// running is the asserted-instead-of-measured claim the subject exists to
+/// refuse, so the property is isolation rather than a lock.
+#[test]
+fn two_checks_at_once_do_not_measure_each_other() {
+    let root = repo().to_owned();
+    let other = std::thread::spawn(move || check(&root));
+    let mine = check(repo());
+    let theirs = other.join().expect("the second check ran");
+    assert_eq!(
+        (mine.status.code(), theirs.status.code()),
+        (Some(0), Some(0)),
+        "both reproduce; neither may see the other's scratch\n{}{}",
+        stderr(&mine),
+        stderr(&theirs)
+    );
+}
+
 /// THE HONESTY HALF FIRES, and this is the case the withdrawn rego module could
 /// never give: it runs over the REAL table with its baselines removed, which is
 /// the engine-fed path rather than a fabricated input.

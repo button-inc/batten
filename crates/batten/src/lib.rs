@@ -432,6 +432,76 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(Command::Bench { command }) => run_bench(command, out, err),
     }
 }
+/// A scratch directory that removes itself, however its owner leaves.
+///
+/// `Drop` rather than a call before each `return`, because [`run_bench`] has
+/// several exits and one of them is a `?` — a path that no explicit cleanup
+/// line can be on.
+struct Scratch(PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        // Best effort: a directory that will not remove is not a reason to fail
+        // a measurement that already concluded, and the next run gets its own.
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+/// Judge the committed table against a fresh render.
+///
+/// **Split out of [`run_bench`] rather than annotated**, for the reason
+/// `tokens::render_method` records: the escape an inline half would need is the
+/// only thing the annotation buys, and this half is the `--check` verb entire.
+///
+/// # Errors
+///
+/// Propagates a write failure on either channel.
+fn bench_drift(
+    committed: &Path,
+    rendered: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let existing = std::fs::read_to_string(committed).unwrap_or_default();
+
+    // THE HONESTY HALF RUNS FIRST, and over the COMMITTED bytes rather than
+    // the fresh render. A generator bug that dropped a method line would
+    // otherwise be invisible here: both sides would lack it and the diff
+    // would be clean. What a reader sees is what is judged.
+    let unmethodical = tokens::unmethodical(&existing);
+    if !unmethodical.is_empty() {
+        writeln!(
+            err,
+            "::error:: bench tokens: {} published figure(s) do not state their method. A \
+             number with no workload, baseline and run count is the claim this benchmark \
+             exists to beat.",
+            unmethodical.len()
+        )?;
+        for finding in &unmethodical {
+            writeln!(
+                err,
+                "  {}:{} lacks {}",
+                tokens::RESULTS,
+                finding.line,
+                finding.owed
+            )?;
+        }
+        return Ok(ExitCode::Violation);
+    }
+
+    if existing == rendered {
+        writeln!(out, "bench tokens: the committed results table reproduces")?;
+        return Ok(ExitCode::Success);
+    }
+    // POINTER-ONLY: the file that drifted, never the diff body — the remedy
+    // is always the same one command, so the bytes add nothing.
+    writeln!(
+        err,
+        "::error:: bench tokens: {} is not what a fresh run produces; run `mise run \
+         token-bench`.",
+        tokens::RESULTS
+    )?;
+    Ok(ExitCode::Violation)
+}
 
 /// `batten bench tokens` (CLOUD-119), ported off `mise-tasks/token-bench.sh`
 /// and the drift half of `mise-tasks/token-bench-check.sh`.
@@ -469,59 +539,36 @@ fn run_bench(
         return Ok(ExitCode::Internal);
     }
 
-    let scratch = root.join("target/token-bench");
+    // PER INVOCATION, NOT A FIXED PATH (review of #928). This was
+    // `target/token-bench`, wiped and recreated on entry — so two `bench tokens`
+    // runs against one checkout raced each other's fixtures, and the loser
+    // measured a directory the winner had just deleted. Not hypothetical: this
+    // suite's own tier runs its cases in parallel processes, and the two that
+    // call `--check` failed together under `verify` and passed one at a time,
+    // which is the signature exactly.
+    //
+    // A benchmark whose figure depends on what else is running is the
+    // asserted-instead-of-measured claim this whole subject exists to refuse, so
+    // the fix is isolation rather than a lock: nothing here needs to be
+    // serialised, it only needs its own directory.
+    let scratch = root.join(format!("target/token-bench-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&scratch);
     std::fs::create_dir_all(&scratch).map_err(|_| {
         UsageError::raise(String::from(
             "bench tokens: could not create the scratch root",
         ))
     })?;
+    // SWEPT ON THE WAY OUT, because the name no longer repeats: a fixed path was
+    // self-cleaning by being reused, and a per-process one would otherwise leave
+    // a directory per run under `target/`.
+    let _sweep = Scratch(scratch.clone());
 
     let measured = tokens::measure(root, &binary, &scratch)?;
     let rendered = tokens::render(root, &measured)?;
     let committed = root.join(tokens::RESULTS);
 
     if check {
-        let existing = std::fs::read_to_string(&committed).unwrap_or_default();
-
-        // THE HONESTY HALF RUNS FIRST, and over the COMMITTED bytes rather than
-        // the fresh render. A generator bug that dropped a method line would
-        // otherwise be invisible here: both sides would lack it and the diff
-        // would be clean. What a reader sees is what is judged.
-        let unmethodical = tokens::unmethodical(&existing);
-        if !unmethodical.is_empty() {
-            writeln!(
-                err,
-                "::error:: bench tokens: {} published figure(s) do not state their method. A \
-                 number with no workload, baseline and run count is the claim this benchmark \
-                 exists to beat.",
-                unmethodical.len()
-            )?;
-            for finding in &unmethodical {
-                writeln!(
-                    err,
-                    "  {}:{} lacks {}",
-                    tokens::RESULTS,
-                    finding.line,
-                    finding.owed
-                )?;
-            }
-            return Ok(ExitCode::Violation);
-        }
-
-        if existing == rendered {
-            writeln!(out, "bench tokens: the committed results table reproduces")?;
-            return Ok(ExitCode::Success);
-        }
-        // POINTER-ONLY: the file that drifted, never the diff body — the remedy
-        // is always the same one command, so the bytes add nothing.
-        writeln!(
-            err,
-            "::error:: bench tokens: {} is not what a fresh run produces; run `mise run \
-             token-bench`.",
-            tokens::RESULTS
-        )?;
-        return Ok(ExitCode::Violation);
+        return bench_drift(&committed, &rendered, out, err);
     }
 
     if let Some(parent) = committed.parent() {
@@ -680,23 +727,20 @@ fn run_release(
     // that a release matrix names targets; WHICH file declares one is a fact
     // about this lane, so it comes off `[ci] release_workflow`. The environment
     // override stays for the suite, which points the verb at a fixture.
-    let workflow_path = match std::env::var("BATTEN_RELEASE_WORKFLOW") {
-        Ok(path) => path,
-        Err(_) => {
-            let declared = resolve::resolve(Path::new("."), overrides)?
-                .ci
-                .and_then(|ci| ci.release_workflow);
-            let Some(path) = declared else {
-                writeln!(
-                    err,
-                    "::error:: release install: `[ci] release_workflow` declares no workflow, so \
-                     the build matrix cannot be read. A guessed path that does not exist reads as \
-                     no matrix, and a gate that checks nothing must not report green."
-                )?;
-                return Ok(ExitCode::Internal);
-            };
-            path
-        }
+    let declared = match std::env::var("BATTEN_RELEASE_WORKFLOW") {
+        Ok(path) => Some(path),
+        Err(_) => resolve::resolve(Path::new("."), overrides)?
+            .ci
+            .and_then(|ci| ci.release_workflow),
+    };
+    let Some(workflow_path) = declared else {
+        writeln!(
+            err,
+            "::error:: release install: `[ci] release_workflow` declares no workflow, so the \
+             build matrix cannot be read. A guessed path that does not exist reads as no matrix, \
+             and a gate that checks nothing must not report green."
+        )?;
+        return Ok(ExitCode::Internal);
     };
     let matrix = install::matrix_targets(&read(&workflow_path)?);
     if matrix.is_empty() {
@@ -780,14 +824,40 @@ fn run_release(
         found.push(install::Disagreement::CommittedBinary(path));
     }
 
+    release_report(
+        &found,
+        matrix.len(),
+        installable.len(),
+        tracked.len(),
+        out,
+        err,
+    )
+}
+
+/// What `release install` says once every authority has been asked.
+///
+/// **Split out of [`run_release`] rather than annotated**, for the reason
+/// [`release_survey`] carries: the dispatch function was one block in which the
+/// setup, the comparison and the report were indistinguishable, and this is the
+/// third of those three.
+///
+/// # Errors
+///
+/// Propagates a write failure on either channel.
+fn release_report(
+    found: &[install::Disagreement],
+    targets: usize,
+    installable: usize,
+    tracked: usize,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
     if found.is_empty() {
         writeln!(
             out,
-            "release install: {} matrix target(s) name-agree across dist, install.sh and \
-             binstall; {} installable; {} tracked file(s) carry no executable magic",
-            matrix.len(),
-            installable.len(),
-            tracked.len()
+            "release install: {targets} matrix target(s) name-agree across dist, install.sh and \
+             binstall; {installable} installable; {tracked} tracked file(s) carry no executable \
+             magic"
         )?;
         return Ok(ExitCode::Success);
     }
@@ -797,7 +867,7 @@ fn run_release(
          so a mismatch here is a 404 on a user's machine and nowhere else.",
         found.len()
     )?;
-    for disagreement in &found {
+    for disagreement in found {
         writeln!(err, "  {}", disagreement.line())?;
     }
     Ok(ExitCode::Violation)
