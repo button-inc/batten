@@ -99,13 +99,22 @@ fn fixture(name: &str, install: &str, workflow: &str) -> PathBuf {
     write(&repo, "Cargo.toml", WORKSPACE);
     write(&repo, "mise-tasks/dist.sh", DIST);
     write(&repo, "install.sh", install);
+    // `cfg(unix)` because `cross-check` TYPE-CHECKS this crate for
+    // `x86_64-pc-windows-gnu`, where `std::os::unix` does not exist at all --
+    // an unconditional path is an E0433 there rather than a runtime
+    // difference. The executable bit is what makes `install.sh` askable, and a
+    // target with no such bit needs nothing set.
+    #[cfg(unix)]
     for program in ["mise-tasks/dist.sh", "install.sh"] {
         let path = repo.join(program);
         let mut mode = std::fs::metadata(&path).unwrap().permissions();
         std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
         std::fs::set_permissions(&path, mode).unwrap();
     }
-    git_in(&repo, &["init", "-q", "-b", "main", "."]);
+    // THE TEMPLATE, NOT A FORK. `common/mod.rs` owns the one `git init` this
+    // suite pays and every other fixture copies it; `policy/fixture-forks.rego`
+    // is what refuses a second one.
+    crate::common::init_repo(&repo);
     git_in(&repo, &["add", "-A"]);
     repo
 }

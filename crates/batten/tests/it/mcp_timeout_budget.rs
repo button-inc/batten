@@ -134,7 +134,9 @@ fn fixture(name: &str, env: Option<&str>) -> PathBuf {
             &format!("{{\n  \"env\": {block}\n}}\n"),
         );
     }
-    git_in(&repo, &["init", "-q", "-b", "main", "."]);
+    // THE TEMPLATE, NOT A FORK, for the reason `policy/fixture-forks.rego`
+    // states: `common/mod.rs` owns the one `git init` this suite pays.
+    crate::common::init_repo(&repo);
     // Tracked, because a consumer's settings file is committed and a suite that
     // only ever judged an untracked one would not be asking this repository's
     // question.

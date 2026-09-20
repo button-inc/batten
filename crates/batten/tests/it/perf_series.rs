@@ -52,7 +52,12 @@ const RECORDS: &str = "path=noop p50=4.6 p95=4.9 mean=4.6 runs=5\n\
 fn repo(name: &str) -> PathBuf {
     let dir = scratch(&format!("perf-series-{name}"));
     write(&dir, "batten.toml", "version = 1\n");
-    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    // THE TEMPLATE, NOT A FORK. `common/mod.rs` owns the one `git init` this
+    // suite pays and every other fixture copies it; `policy/fixture-forks.rego`
+    // refuses a second one. It initialises on `main` already — `git_in` passes
+    // `-c init.defaultBranch=main` on every invocation — which is the trunk this
+    // fixture needs.
+    crate::common::init_repo(&dir);
     git_in(&dir, &["add", "-A"]);
     git_in(&dir, &["commit", "-q", "-m", "base"]);
     dir

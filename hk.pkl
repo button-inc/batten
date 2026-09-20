@@ -42,13 +42,19 @@ local gate = new Mapping<String, Step> {
   }
   // CLOUD-266's rule reaches the one budget nobody had looked at (CLOUD-668).
   // The MCP startup budget was the host's 30000ms default, never measured, and
-  // Serena's worst observed SUCCESSFUL connect is 16650ms — 1.8x headroom, which
-  // came up short twice in one session. Exceeding it is not a retry: Serena is
-  // absent for the whole session, which takes `.serena/memories/**` with it.
-  // The measurement table lives in the task's own header.
+  // Serena's worst observed SUCCESSFUL connect is 52747ms — BELOW that default,
+  // so a connect that did succeed would have been killed by it. Exceeding the
+  // budget is not a retry: Serena is absent for the whole session, which takes
+  // `.serena/memories/**` with it. The measurement table lives in
+  // `policy/mcp-timeout-budget.rego`'s own header.
+  //
+  // THE PROGRAM IS RETIRED (CLOUD-1716) and the gate is now a policy module, so
+  // this step runs the ENGINE over the rule rather than a task. The glob loses
+  // the retired script and keeps the file the budget is declared in — a module
+  // is judged by `batten check`, which needs no task of its own.
   ["mcp-timeout-budget"] {
-    glob = List(".claude/settings.json", "mise-tasks/mcp-timeout-budget.sh")
-    check = "mise run mcp-timeout-budget"
+    glob = List(".claude/settings.json", "policy/mcp-timeout-budget.rego")
+    check = "cargo run --quiet -p batten -- check --rule 'bound guard missing'"
   }
   ["no-docs-tree"] {
     check = "mise run no-docs-tree"
