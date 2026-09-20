@@ -859,6 +859,50 @@ split-debuginfo = "unpacked"
 debug = 0
 opt-level = 2
 
+# AND THE WORKSPACE CRATE TOO, BECAUSE THE SENTENCE ABOVE WAS WORTH 0.51 SECONDS
+# (CLOUD-1878).
+#
+# `[profile.dev.package."*"]` covers DEPENDENCIES, never workspace members. So the
+# `batten` library itself compiled at opt-level 0 inside every test binary, and
+# the integration suite ran `policy::load`, `describe`'s serde work and the rules
+# scanning unoptimised, in-process, 3568 times. CLOUD-1208 found the dependency
+# half of this and stopped at the workspace boundary, deliberately, to keep the
+# edit loop fast.
+#
+# Measured on this container, both arms idle with `target/tmp` cleared before each
+# (CLOUD-1879 — without that collector neither arm is reproducible, and two
+# earlier arms of this experiment were voided by exactly that):
+#
+#   reading                          opt-0     opt-2     delta
+#   suite run, wall                  194.5s    153.9s    1.26x
+#   suite run, summed                741.0s    585.7s    -155.3s
+#   parallel efficiency               95.2%     95.2%    unchanged
+#   incremental rebuild               9.96s     10.47s   +0.51s
+#   cold build                       150.5s    219.5s    +69s
+#
+# EFFICIENCY IS IDENTICAL AT 95.2%, which is what makes this work removed rather
+# than work rescheduled — a scheduling win would show up there and does not.
+# Every file improved or held: `bats_invocation` 2.54x, `surface` 2.15x,
+# `perf_assert` 1.65x, `config_lint` 1.64x, `ci_parity` 1.61x, the lib unit tests
+# 1.59x, `cli` 1.38x, `shell_retirement` 1.28x.
+#
+# THE TRADE THE COMMENT ABOVE DEFENDS IS 0.51 SECONDS. Cargo's incremental
+# compilation handles the workspace crate at opt-level 2 about as cheaply as at 0,
+# because a one-file touch is dominated by the relink rather than by the
+# optimiser. The suite paid 40.6s per run for that half-second, on four lanes.
+#
+# `debug = 1` and `split-debuginfo` are untouched, so every `batten` frame still
+# reports its file and line — the half of the block above that is about
+# readability is unaffected.
+#
+# THE COST, STATED: the cold build goes 150.5s -> 219.5s. That reading is n=1 and
+# was taken while other work shared the box, so treat it as an upper bound until
+# re-taken idle. On a CI cache hit the lane simply saves the run-phase delta; on a
+# MISS it is +69s against -40.6s, and `ci.yml` records a miss on 3 of the last 4
+# runs — so the miss rate, not this profile, is the next thing to look at.
+[profile.dev.package.batten]
+opt-level = 2
+
 # The profile the distributed single binary is built with: maximal optimization
 # and the smallest artifact. Distinct from `release` (used for local/dev release
 # builds) so day-to-day `cargo build --release` stays fast.
