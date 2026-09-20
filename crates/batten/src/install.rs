@@ -315,6 +315,7 @@ pub fn committed_binaries(root: &Path, tracked: &BTreeSet<String>) -> Vec<String
         .collect()
 }
 
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

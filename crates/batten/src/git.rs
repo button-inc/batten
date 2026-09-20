@@ -2300,11 +2300,9 @@ pub fn append_note(dir: &Path, name: &str, commit: &str, body: &str) -> Result<(
     // Every OTHER entry is carried over; only this commit's is replaced.
     let mut entries: std::collections::BTreeMap<String, gix::ObjectId> =
         std::collections::BTreeMap::new();
-    if let Some(parent) = existing.as_ref() {
-        if let Ok(tree) = parent.tree() {
-            for entry in tree.iter().filter_map(std::result::Result::ok) {
-                entries.insert(entry.filename().to_string(), entry.object_id());
-            }
+    if let Some(Ok(tree)) = existing.as_ref().map(gix::Commit::tree) {
+        for entry in tree.iter().filter_map(std::result::Result::ok) {
+            entries.insert(entry.filename().to_string(), entry.object_id());
         }
     }
     entries.insert(commit.to_owned(), blob.detach());
@@ -2359,6 +2357,12 @@ pub fn append_note(dir: &Path, name: &str, commit: &str, body: &str) -> Result<(
     Ok(())
 }
 
+/// The full object id `HEAD` resolves to in the repository at `dir`.
+///
+/// # Errors
+///
+/// A usage error when `dir` is not inside a git repository, or when the
+/// repository carries no commit for `HEAD` to name.
 pub fn head_commit(dir: &Path) -> Result<String> {
     let repo = open(dir)?;
     let refusal = || {
