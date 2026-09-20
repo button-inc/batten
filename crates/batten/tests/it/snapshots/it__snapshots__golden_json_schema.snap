@@ -2817,6 +2817,25 @@ expression: stdout_of(&output)
       ]
     },
     {
+      "path": "release",
+      "id": "release",
+      "about": "Answer whether a release is installable as it says it is",
+      "effect": "unclassified",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "release install",
+          "id": "release.install",
+          "about": "Decide whether install.sh, the release matrix and the binstall manifest agree on every asset name, and that no binary is committed",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "semver",
       "id": "semver",
       "about": "Whether this branch's API delta is compatible with the bump it claims",
