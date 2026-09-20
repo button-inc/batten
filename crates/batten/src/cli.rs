@@ -434,6 +434,13 @@ pub enum Command {
         /// The sub-verb selected.
         command: CiCommand,
     },
+    /// Whether a release is installable as it says it is (CLOUD-65).
+    ///
+    /// APPENDED LAST, for the reason above.
+    Release {
+        /// The sub-verb selected.
+        command: ReleaseCommand,
+    },
 }
 
 /// Subcommands of `hk`.
@@ -1550,6 +1557,14 @@ pub enum ConfigCommand {
     },
 }
 
+/// The `release` sub-verbs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ReleaseCommand {
+    /// Whether the install path resolves the assets a release publishes.
+    Install,
+}
+
 /// The `ci` sub-verbs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -2043,6 +2058,14 @@ fn doctor_of(matches: &ArgMatches) -> DoctorCommand {
         _ => DoctorCommand::Diagnose {
             json: flag(matches, "json"),
         },
+    }
+}
+
+/// The `release` sub-verb a parse resolved to.
+fn release_of(matches: &ArgMatches) -> Option<ReleaseCommand> {
+    match matches.subcommand()? {
+        ("install", _) => Some(ReleaseCommand::Install),
+        _ => None,
     }
 }
 
@@ -2769,6 +2792,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "state" => state_of(matches).map(|command| Command::State { command }),
         "record" => record_of(matches).map(|command| Command::Record { command }),
         "ci" => ci_of(matches).map(|command| Command::Ci { command }),
+        "release" => release_of(matches).map(|command| Command::Release { command }),
         _ => None,
     }
 }

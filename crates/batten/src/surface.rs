@@ -3108,6 +3108,36 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[SLOW_BASE],
     },
+    // CLOUD-65's install contract, ported out of `mise-tasks/install-check.sh`
+    // under CLOUD-1716.
+    //
+    // A NOUN THAT ONLY DISPATCHES, on `ci`'s reading: the noun itself decides
+    // nothing, so it is `Unclassified` rather than `Read` -- a `read` noun over
+    // a subtree leaks onto the derived allowlist for any consumer treating an
+    // entry as a prefix.
+    CommandDecl {
+        path: "release",
+        id: "release",
+        about: "Answer whether a release is installable as it says it is",
+        data_channel: false,
+        exits: EXITS_DISPATCHES,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // `Unclassified` RATHER THAN `Read`, and the reason is the interim: this
+    // asks `mise-tasks/dist.sh` and `install.sh` through the query flags they
+    // publish, so it spawns, and its reach is whatever theirs is. An optimistic
+    // `read` here would put a process-spawning verb on the derived allowlist.
+    // When wave 2 retires both, this becomes `Read` in the same change.
+    CommandDecl {
+        path: "release install",
+        id: "release.install",
+        about: "Decide whether install.sh, the release matrix and the binstall manifest agree on every asset name, and that no binary is committed",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
     CommandDecl {
         path: "config",
         id: "config",

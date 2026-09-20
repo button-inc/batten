@@ -6,23 +6,23 @@ runner measured it; the suite runs `--no-parallelize-within-files`, so a
 file's number is its own serial cost and is what an author adding a case
 to it pays.
 
-- suites: 65
-- serial total: 146.0s
+- suites: 64
+- serial total: 144.6s
 
 | seconds | share | suite |
 | ---: | ---: | --- |
-| 20.7 | 14.2% | `tests/graph-check.bats` |
+| 20.7 | 14.3% | `tests/graph-check.bats` |
 | 8.3 | 5.7% | `tests/ready-lint.bats` |
 | 8.0 | 5.5% | `tests/token-bench.bats` |
 | 7.3 | 5.0% | `tests/board-sweep.bats` |
-| 6.9 | 4.7% | `tests/released.bats` |
-| 5.9 | 4.0% | `tests/in-progress-drain.bats` |
+| 6.9 | 4.8% | `tests/released.bats` |
+| 5.9 | 4.1% | `tests/in-progress-drain.bats` |
 | 5.7 | 3.9% | `tests/release-tracking-check.bats` |
 | 5.5 | 3.8% | `tests/release-assets-check.bats` |
-| 5.0 | 3.4% | `tests/mcp-allow-check.bats` |
+| 5.0 | 3.5% | `tests/mcp-allow-check.bats` |
 | 4.8 | 3.3% | `tests/landed-check.bats` |
-| 4.7 | 3.2% | `tests/sbom.bats` |
-| 4.0 | 2.7% | `tests/step-receipt.bats` |
+| 4.7 | 3.3% | `tests/sbom.bats` |
+| 4.0 | 2.8% | `tests/step-receipt.bats` |
 | 3.8 | 2.6% | `tests/closing-key-check.bats` |
 | 3.6 | 2.5% | `tests/land-divergence.bats` |
 | 3.5 | 2.4% | `tests/ntia-check.bats` |
@@ -37,7 +37,6 @@ to it pays.
 | 1.6 | 1.1% | `tests/deferral-check.bats` |
 | 1.5 | 1.0% | `tests/signing-posture.bats` |
 | 1.5 | 1.0% | `tests/ready-lint-deferral.bats` |
-| 1.4 | 1.0% | `tests/install-check.bats` |
 | 1.3 | 0.9% | `tests/spawn-census.bats` |
 | 1.2 | 0.8% | `tests/verify.bats` |
 | 1.1 | 0.8% | `tests/perf-record.bats` |
@@ -50,9 +49,9 @@ to it pays.
 | 0.9 | 0.6% | `tests/attestation-check.bats` |
 | 0.9 | 0.6% | `tests/commit-attribution.bats` |
 | 0.9 | 0.6% | `tests/render-cli.bats` |
-| 0.8 | 0.5% | `tests/pr-unsubscribed.bats` |
-| 0.8 | 0.5% | `tests/done-pr-check.bats` |
-| 0.8 | 0.5% | `tests/sbom-binary.bats` |
+| 0.8 | 0.6% | `tests/pr-unsubscribed.bats` |
+| 0.8 | 0.6% | `tests/done-pr-check.bats` |
+| 0.8 | 0.6% | `tests/sbom-binary.bats` |
 | 0.7 | 0.5% | `tests/duplicate-close-check.bats` |
 | 0.7 | 0.5% | `tests/mcp-attach-check.bats` |
 | 0.7 | 0.5% | `tests/timeout-drift.bats` |
