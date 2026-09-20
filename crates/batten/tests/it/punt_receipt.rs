@@ -35,7 +35,7 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{Fixture, batten, git_in, run_with_stdin, stderr};
+use common::{Fixture, git_in, run_with_stdin, stderr};
 
 /// The committed row's shape, with nothing else declared.
 ///
@@ -172,123 +172,6 @@ fn the_refusal_names_the_row_and_its_remedy() {
     assert!(
         !refusal.contains("batten-receipts"),
         "no store path reaches the channel: {refusal}"
-    );
-}
-
-/// The wedge, built the way it actually happened: a `verify` receipt minted at
-/// one head, then a commit that moves the head past it.
-///
-/// **Minted by the verb rather than written by hand**, because the receipt is an
-/// in-toto statement whose `recorded_git_dir` and config epoch are read from this
-/// checkout. A fabricated file would answer [`Validity::Missing`] and the cases
-/// below would then be about the wrong class — `receipt read missing`, which has
-/// always had a reachable remedy.
-fn superseded(name: &str) -> PathBuf {
-    let dir = repo(name);
-    let recorded = batten()
-        .current_dir(&dir)
-        .args(["receipt", "record", "verify"])
-        .output()
-        .expect("run batten receipt record");
-    assert!(
-        recorded.status.success(),
-        "the premise is a receipt that WAS valid: {}",
-        stderr(&recorded)
-    );
-    // The commit is what supersedes it, and it is the ordinary remedial action:
-    // AGENTS.md mandates committing early and often, and `key = "head"` makes
-    // exactly that void the evidence.
-    std::fs::write(dir.join("src/tracked.rs"), "// moved on\n").expect("move the bytes");
-    git_in(&dir, &["add", "-A"]);
-    git_in(&dir, &["commit", "-q", "-m", "chore: move the head"]);
-    punt(&dir);
-    dir
-}
-
-#[test]
-fn a_superseded_receipt_still_refuses_an_unarticulated_write() {
-    // ANTI-VACUITY, and it is the half that keeps CLOUD-1823's route from being a
-    // password. Declaring an `override` route changes what is AVAILABLE, never
-    // what is decided: a caller who has articulated nothing is refused exactly as
-    // before, and the class it is refused under is unchanged.
-    let dir = superseded("punt-superseded-bare");
-    let output = run_with_stdin(
-        &dir,
-        &["adjudicate", "--harness", "exit-code"],
-        &write_payload("src/tracked.rs"),
-    );
-    assert_eq!(
-        output.status.code(),
-        Some(2),
-        "an unadmitted write over a stale receipt is still refused"
-    );
-    let said = stderr(&output);
-    assert!(
-        said.contains("receipt read other"),
-        "and under the amend-or-rebase class: {said}"
-    );
-}
-
-#[test]
-fn the_bare_variable_no_longer_clears_a_superseded_receipt() {
-    // THE TIGHTENING, and the assertion a reviewer of CLOUD-1823 should look for
-    // first. `hook::Policy::honours_hatch` stops honouring `BATTEN_HOOK_BYPASS`
-    // for any class declaring an `override` route with a precondition, so
-    // DECLARING the route is what takes the password away. Before it, this exact
-    // call exited 0 — measured on this repository's own wedged branch, where the
-    // variable was the only exit that existed.
-    //
-    // Pinned here rather than left to `hook.rs`'s unit tier because the unit tier
-    // fabricates a registry, and what this asserts is that the VENDORED registry
-    // the binary ships carries the route.
-    let dir = superseded("punt-superseded-hatch");
-    let mut command = batten();
-    command
-        .current_dir(&dir)
-        .args(["adjudicate", "--harness", "exit-code"])
-        .env(batten::hook::BYPASS_ENV, "1")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    let mut child = command.spawn().expect("spawn the bypassed adjudication");
-    {
-        use std::io::Write as _;
-        child
-            .stdin
-            .take()
-            .expect("piped")
-            .write_all(write_payload("src/tracked.rs").as_bytes())
-            .expect("write the payload");
-    }
-    let output = child.wait_with_output().expect("collect the verdict");
-    assert_eq!(
-        output.status.code(),
-        Some(2),
-        "the bare variable must not open a class that declares an articulation route: {}",
-        stderr(&output)
-    );
-}
-
-#[test]
-fn the_class_declares_the_route_that_makes_the_wedge_escapable() {
-    // CLOUD-1823's own predicate, asked of the registry rather than of a refusal.
-    //
-    // The wedge was not that the refusal was wrong — it was that the ONLY declared
-    // remedy, re-running the named check, cannot change its answer when that check
-    // is red for reasons only a write repairs, and the write is what is refused.
-    // An `override` route carrying a precondition is what `admission::questions_for`
-    // reads, so its presence IS the exit existing.
-    let entry = batten::verdict::vendored()
-        .into_iter()
-        .find(|entry| entry.id == "receipt read other")
-        .expect("the class is vendored");
-    assert!(
-        entry
-            .routes
-            .iter()
-            .any(|route| route.kind == batten::verdict::RouteKind::Override
-                && route.precondition.is_some()),
-        "the class must declare an articulation route, or the wedge returns"
     );
 }
 

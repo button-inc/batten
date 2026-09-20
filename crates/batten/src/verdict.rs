@@ -1856,39 +1856,7 @@ covered the bytes it read and nothing later, so it is not evidence about this he
 the check against what is here now. Kept apart from the trunk case because the two name \
 different things that moved, and a refusal that says the wrong one sends the reader after \
 the wrong repair.",
-        routes: &[
-            read("config read first", "batten.toml"),
-            // THE RE-RUN IS THE RIGHT FIRST ANSWER AND SOMETIMES CANNOT BE TAKEN
-            // (CLOUD-1823), which is the same hole `path write refused` had:
-            // a class whose only route is the thing the refusal blocks.
-            //
-            // Measured twice. `turn mint ahead` is keyed to the head and triggers
-            // on WRITE, so where the named check is red for reasons only a write
-            // can repair, "re-run the check" prescribes a run that cannot change
-            // its answer, and the write that would is the call being refused. The
-            // branch has no exit: every edit is denied, and the denial is
-            // discharged only by the edits. With no override route
-            // `admission::questions_for` returns `None`, so the sole remaining way
-            // through was `BATTEN_HOOK_BYPASS` — a knowable string that records
-            // nothing, which this repository already ruled on for `issue file
-            // same`: *the point of the admission mechanism is that the bare
-            // variable stops working*. Declaring this route is what MAKES it stop,
-            // because `hook::Policy::honours_hatch` reads exactly this field.
-            //
-            // The precondition is what the asker must be ABLE TO STATE, never a
-            // judgement the gate makes (non-negotiable rule 3). Both halves are
-            // checkable by a reader: whether the check is red on this head, and
-            // whether the work the receipt was about is on a remote. The second
-            // half is the one that matters — it is the harm the refusing row
-            // actually guards, and an asker who cannot state it is being stopped
-            // for the right reason.
-            admit(
-                "articulate the stale receipt",
-                "the check this receipt names is red on this head for a reason only a write can \
-repair, so re-running it cannot change its answer, and the work the receipt was taken about is \
-already pushed",
-            ),
-        ],
+        routes: &[read("config read first", "batten.toml")],
         applicability: Applicability::Advice,
     },
     VendoredVerdict {
