@@ -201,11 +201,13 @@ pub fn tokens_of(bytes: u64, divisor: u64) -> u64 {
 /// and a column of zeroes is a table nobody can read or check.
 #[must_use]
 pub fn usd_per_1k(tokens: u64, per_million: f64) -> f64 {
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "a token count large enough to lose precision here is orders of magnitude beyond any workload this benchmark runs, and the result is a dollar figure printed to four places"
-    )]
-    let tokens = tokens as f64;
+    // LOSSLESS BY CONSTRUCTION rather than by annotation, which is the idiom
+    // `pr_watch::interval_for` records for CLOUD-1338: narrowing to `u32` first
+    // makes the conversion exact for every value that survives it, and
+    // saturating states the bound in code instead of in a `reason` string
+    // claiming callers stay small. `u32::MAX` tokens is four billion — two
+    // orders of magnitude past the largest workload this benchmark prices.
+    let tokens = f64::from(u32::try_from(tokens).unwrap_or(u32::MAX));
     tokens * per_million / 1_000_000.0 * 1000.0
 }
 
@@ -260,14 +262,12 @@ pub fn reduce(runs: &[Vec<u8>], exit: i32, steps: usize) -> Arm {
         crate::arm::stability(runs),
         crate::arm::Outcome::Observed(crate::arm::Reading::Stable)
     );
-    if stable {
-        if let Some(first) = runs.first() {
-            return Arm::Stable {
-                bytes: first.len() as u64,
-                exit,
-                steps,
-            };
-        }
+    if stable && let Some(first) = runs.first() {
+        return Arm::Stable {
+            bytes: first.len() as u64,
+            exit,
+            steps,
+        };
     }
     Arm::Unstable {
         runs: runs.len(),
@@ -341,11 +341,13 @@ fn collect(dir: &Path, into: &mut Vec<PathBuf>) -> Result<()> {
 #[must_use]
 pub fn ratio(numerator: u64, denominator: u64) -> Option<f64> {
     (denominator != 0).then(|| {
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "byte counts at this scale are exactly representable, and the result is printed to two places"
-        )]
-        let (numerator, denominator) = (numerator as f64, denominator as f64);
+        // `usd_per_1k`'s conversion, for its reason: exact for everything that
+        // survives the narrowing, and `u32::MAX` bytes is four gigabytes of
+        // output from a single benchmark arm. BOTH SIDES SATURATE, so the ratio
+        // stays a ratio of two bounded counts rather than of one bounded and one
+        // not.
+        let numerator = f64::from(u32::try_from(numerator).unwrap_or(u32::MAX));
+        let denominator = f64::from(u32::try_from(denominator).unwrap_or(u32::MAX));
         numerator / denominator
     })
 }
@@ -377,20 +379,24 @@ fn run_arm(dir: &Path, steps: &[String], binary: &Path) -> Result<(Vec<u8>, i32)
     let mut exit = 0;
     for step in steps {
         let step = step.replace("$BATTEN", &binary.to_string_lossy());
-        #[expect(
-            clippy::disallowed_types,
-            reason = "stays: executing the declared step sequence IS this module's effect — a benchmark that did not run the commands it prices would be the asserted-instead-of-measured claim CLOUD-119 exists to refuse"
-        )]
-        let mut command = std::process::Command::new("sh");
-        let done = command
-            .arg("-c")
-            .arg(&step)
-            .current_dir(dir)
-            .output()
-            .with_context(|| format!("token-bench: could not run `{step}`"))?;
-        output.extend_from_slice(&done.stdout);
-        output.extend_from_slice(&done.stderr);
-        exit = done.status.code().unwrap_or(-1);
+        // THROUGH THE PLACED ADAPTER (review of #928). Running the step sequence
+        // is this module's effect, but that is an argument for the spawn
+        // EXISTING, never for it being written here: `exec` is the sanctioned
+        // child-process boundary and `piped_argv` resolves a first word on
+        // `PATH`, which is what `sh` is. With this, `tokens` holds no spawn of
+        // its own and comes off `policy/spawn-adapters.rego`'s table.
+        //
+        // `Diagnostics::Keep` is the both-streams decision stated above, and the
+        // one byte-level difference it makes is deterministic — the adapter
+        // trims the diagnostic's trailing whitespace and separates the two
+        // streams with a newline — so a stability comparison still decides
+        // exactly what it decided before.
+        let argv = ["sh", "-c", step.as_str()].map(ToOwned::to_owned);
+        let (code, text) =
+            crate::exec::piped_argv(dir, &argv, "", crate::exec::Diagnostics::Keep, &[])
+                .with_context(|| format!("token-bench: could not run `{step}`"))?;
+        output.extend_from_slice(text.as_bytes());
+        exit = code;
     }
     Ok((output, exit))
 }
@@ -440,35 +446,305 @@ pub fn measure(root: &Path, binary: &Path, scratch: &Path) -> Result<Vec<Measure
 
 /// Give a staged fixture a committed git dir, which `exec` needs to resolve its
 /// store.
+///
+/// **In-process through `gitwrite::seed`, not three `git` children.** CLOUD-740
+/// emptied this crate of `git` spawns and `git.rs` asserts it terminally; a
+/// fixture is not an exception to that. Seeding is also not part of what this
+/// module measures — the subject is the step sequence's output, not the setup —
+/// so there was never an argument for the child processes.
+///
+/// # Errors
+///
+/// A directory that will not initialise or a file that will not read.
 fn seed_git(dir: &Path) -> Result<()> {
-    if dir.join(".git").exists() {
-        return Ok(());
-    }
-    for args in [
-        vec!["init", "-q", "-b", "main", "."],
-        vec!["add", "-A"],
-        vec![
-            "-c",
-            "user.email=bench@localhost",
-            "-c",
-            "user.name=bench",
-            "commit",
-            "-qm",
-            "bench fixture",
-        ],
+    crate::gitwrite::seed(dir)
+}
+
+/// Append one line, which is the shape every renderer below writes in.
+///
+/// A free function rather than a closure per renderer: a closure borrows `out`
+/// mutably for its whole life, which is exactly what stopped [`render`] from
+/// being split before.
+fn line(out: &mut String, text: &str) {
+    out.push_str(text);
+    out.push('\n');
+}
+
+/// The document's preamble: how to reproduce it, what is counted, and the
+/// constants every figure below is derived through.
+///
+/// **Split out of [`render`] rather than annotated** (review of #928). The
+/// previous shape carried `#[expect(clippy::too_many_lines)]` whose reason said
+/// the table's shape IS the artifact and splitting it would put the document in
+/// pieces — but the three pieces here are the document's own three parts, and
+/// each one is still contiguous in the file. `policy/spawn-widening.rego`
+/// refuses an added escape in engine source, and the escape was the only thing
+/// the annotation bought.
+fn render_method(out: &mut String, method: &Method) {
+    let tokens = &method.tokens;
+    let price = &method.price;
+    line(out, "# Token economics, measured");
+    line(out, "");
+    line(
+        out,
+        "Generated by `mise run token-bench` from the committed fixtures. Do not hand-edit:",
+    );
+    line(
+        out,
+        "`mise run token-bench-check` regenerates this file and diffs it byte-for-byte, so an",
+    );
+    line(
+        out,
+        "edited number fails the gate rather than becoming the published one.",
+    );
+    line(out, "");
+    line(
+        out,
+        "Reproduce it yourself — no credential, no network, committed inputs only:",
+    );
+    line(out, "");
+    line(out, "```");
+    line(
+        out,
+        "git clone https://github.com/button-inc/batten && cd batten",
+    );
+    line(out, "git submodule update --init && mise install");
+    line(out, "mise run token-bench");
+    line(out, "```");
+    line(out, "");
+    line(out, "## What is counted");
+    line(out, "");
+    line(
+        out,
+        "Bytes an arm puts in front of an agent — stdout **and** stderr, across every",
+    );
+    line(
+        out,
+        "step the task costs. Bytes are exact. Tokens are an estimate through one",
+    );
+    line(
+        out,
+        "declared divisor, and dollars are that estimate at one quoted published rate.",
+    );
+    line(out, "");
+    line(out, "| constant | value | source | retrieved |");
+    line(out, "| --- | --- | --- | --- |");
+    line(
+        out,
+        &format!(
+            "| bytes per token | {} — {} | <{}> | {} |",
+            tokens.bytes_per_token, tokens.basis, tokens.source, tokens.retrieved
+        ),
+    );
+    for (what, rate) in [
+        ("fresh input", price.input_fresh),
+        ("cache read", price.input_cached_read),
+        ("output", price.output),
     ] {
-        #[expect(
-            clippy::disallowed_types,
-            reason = "stays: staging the fixture is part of this module's declared effect, beside the step sequence it prices"
-        )]
-        let mut command = std::process::Command::new("git");
-        command
-            .args(&args)
-            .current_dir(dir)
-            .output()
-            .context("token-bench: could not seed the fixture repository")?;
+        line(
+            out,
+            &format!(
+                "| {}, {what} | ${rate:.2} / MTok | <{}> | {} |",
+                price.model, price.source, price.retrieved
+            ),
+        );
     }
-    Ok(())
+    line(out, "");
+    line(out, &format!("The divisor affects {}.", tokens.affects));
+    line(out, "");
+    line(out, "## Per capability");
+    line(out, "");
+}
+
+/// Whether a capability's section published a figure.
+///
+/// A two-state answer rather than a `bool`, because the aggregate prints BOTH
+/// counts and a reader of `false` cannot tell "no figure" from "no section".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Published {
+    /// A figure, with its method stated.
+    Figure,
+    /// No figure, with a stated reason — which is the honest half of the
+    /// contract `unmethodical` holds the artifact to.
+    Reason,
+}
+
+/// One capability's section.
+///
+/// `None` where the section renders nothing a reader could count: a workload
+/// with no `baseline`/`batten` pair measured at all. That is distinct from
+/// [`Published::Reason`], which is a section that DID say why.
+fn render_capability(
+    out: &mut String,
+    workload: &Workload,
+    result: &Measured,
+    price: &Price,
+    divisor: u64,
+) -> Option<Published> {
+    line(
+        out,
+        &format!("### {} — {}", workload.id, workload.capability),
+    );
+    line(out, "");
+    line(out, &format!("**Question.** {}", workload.question));
+    line(out, "");
+
+    if let Some(ref reason) = workload.not_measured {
+        line(out, &format!("**not measured** — {reason}"));
+        line(out, "");
+        line(
+            out,
+            "No figure is published for this capability, and none is projected from a",
+        );
+        line(
+            out,
+            "neighbouring one. A projection is an assertion wearing a measurement's clothes.",
+        );
+        line(out, "");
+        return Some(Published::Reason);
+    }
+
+    let joined = |steps: &[String]| steps.join("` then `");
+    line(
+        out,
+        &format!(
+            "**Baseline** ({} step(s), `{}`). {}",
+            workload.baseline.len(),
+            joined(&workload.baseline),
+            workload.baseline_model.trim().replace('\n', " ")
+        ),
+    );
+    line(out, "");
+    line(
+        out,
+        &format!(
+            "**Batten** ({} step(s), `{}`). {}",
+            workload.batten.len(),
+            joined(&workload.batten).replace("$BATTEN", "batten"),
+            workload.batten_model.trim().replace('\n', " ")
+        ),
+    );
+    line(out, "");
+
+    let (Some(base), Some(mine)) = (result.arms.get("baseline"), result.arms.get("batten")) else {
+        return None;
+    };
+    let (Some(base_bytes), Some(batten_bytes)) = (base.bytes(), mine.bytes()) else {
+        line(
+            out,
+            &format!(
+                "**not measured** — an arm's output was not byte-identical across {} runs",
+                workload.runs
+            ),
+        );
+        line(out, "(baseline byte-stable: no, batten byte-stable: no),");
+        line(
+            out,
+            "so there is no single figure to report. Byte-stability is the precondition the",
+        );
+        line(
+            out,
+            "cross-session cache claim rests on, so a workload that lacks it has lost the",
+        );
+        line(out, "mechanism, not merely the precision.");
+        line(out, "");
+        return Some(Published::Reason);
+    };
+
+    let (base_tokens, batten_tokens) = (
+        tokens_of(base_bytes, divisor),
+        tokens_of(batten_bytes, divisor),
+    );
+    line(
+        out,
+        &format!(
+            "**Method.** measured; {} runs per arm, byte-identical across all of them; run",
+            workload.runs
+        ),
+    );
+    line(out, "count for the task is the step count above.");
+    line(out, "");
+    line(
+        out,
+        "| arm | steps | bytes | est. tokens | USD / 1k tasks (fresh) | USD / 1k tasks (cache read) | exit |",
+    );
+    line(out, "| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
+    for (name, arm, bytes, count) in [
+        ("baseline", base, base_bytes, base_tokens),
+        ("batten", mine, batten_bytes, batten_tokens),
+    ] {
+        let exit = match arm {
+            Arm::Stable { exit, .. } => *exit,
+            Arm::Unstable { .. } => -1,
+        };
+        line(
+            out,
+            &format!(
+                "| {name} | {} | {bytes} | {count} | {:.4} | {:.4} | {exit} |",
+                arm.steps(),
+                usd_per_1k(count, price.input_fresh),
+                usd_per_1k(count, price.input_cached_read),
+            ),
+        );
+    }
+    let show =
+        |value: Option<f64>| value.map_or_else(|| String::from("n/a"), |r| format!("{r:.2}"));
+    line(
+        out,
+        &format!(
+            "| **ratio** | | **{}×** | **{}×** | | | |",
+            show(ratio(base_bytes, batten_bytes)),
+            show(ratio(base_tokens, batten_tokens)),
+        ),
+    );
+    line(out, "");
+    Some(Published::Figure)
+}
+
+/// The closing halves: the aggregate this benchmark refuses to publish, and the
+/// gaps the method states.
+fn render_tail(out: &mut String, method: &Method, counted: usize, uncounted: usize) {
+    line(out, "## Aggregate");
+    line(out, "");
+    line(
+        out,
+        "**Not published.** An aggregate across capabilities is a weighted mean over a",
+    );
+    line(
+        out,
+        "workload mix nobody here has measured, so it would be exactly the unmethodical",
+    );
+    line(
+        out,
+        &format!(
+            "figure this benchmark exists to beat. Measured capabilities: {counted}. Reporting"
+        ),
+    );
+    line(
+        out,
+        &format!("\"not measured\" with a reason above: {uncounted}."),
+    );
+    line(out, "");
+    line(out, "## Stated gaps");
+    line(out, "");
+    for gap in &method.not_measured {
+        line(
+            out,
+            &format!(
+                "- **{}: not measured.** {}",
+                gap.subject,
+                gap.reason.trim().replace('\n', " ")
+            ),
+        );
+        line(
+            out,
+            &format!(
+                "  Measured instead: {}",
+                gap.what_is_measured_instead.trim().replace('\n', " ")
+            ),
+        );
+    }
+    line(out, "");
 }
 
 /// Render the published table.
@@ -479,10 +755,6 @@ fn seed_git(dir: &Path) -> Result<()> {
 /// # Errors
 ///
 /// A missing input.
-#[expect(
-    clippy::too_many_lines,
-    reason = "the table's shape IS the published artifact, and splitting it across helpers would put the reader's document in pieces no single function shows"
-)]
 pub fn render(root: &Path, measured: &[Measured]) -> Result<String> {
     let method = method(root)?;
     let declared = workloads(root)?;
@@ -493,175 +765,27 @@ pub fn render(root: &Path, measured: &[Measured]) -> Result<String> {
         .collect();
 
     let mut out = String::new();
-    let mut line = |text: &str| {
-        out.push_str(text);
-        out.push('\n');
-    };
-
-    line("# Token economics, measured");
-    line("");
-    line("Generated by `mise run token-bench` from the committed fixtures. Do not hand-edit:");
-    line("`mise run token-bench-check` regenerates this file and diffs it byte-for-byte, so an");
-    line("edited number fails the gate rather than becoming the published one.");
-    line("");
-    line("Reproduce it yourself — no credential, no network, committed inputs only:");
-    line("");
-    line("```");
-    line("git clone https://github.com/button-inc/batten && cd batten");
-    line("git submodule update --init && mise install");
-    line("mise run token-bench");
-    line("```");
-    line("");
-    line("## What is counted");
-    line("");
-    line("Bytes an arm puts in front of an agent — stdout **and** stderr, across every");
-    line("step the task costs. Bytes are exact. Tokens are an estimate through one");
-    line("declared divisor, and dollars are that estimate at one quoted published rate.");
-    line("");
-    line("| constant | value | source | retrieved |");
-    line("| --- | --- | --- | --- |");
-    let tokens = &method.tokens;
-    let price = &method.price;
-    line(&format!(
-        "| bytes per token | {} — {} | <{}> | {} |",
-        tokens.bytes_per_token, tokens.basis, tokens.source, tokens.retrieved
-    ));
-    for (what, rate) in [
-        ("fresh input", price.input_fresh),
-        ("cache read", price.input_cached_read),
-        ("output", price.output),
-    ] {
-        line(&format!(
-            "| {}, {what} | ${rate:.2} / MTok | <{}> | {} |",
-            price.model, price.source, price.retrieved
-        ));
-    }
-    line("");
-    line(&format!("The divisor affects {}.", tokens.affects));
-    line("");
-    line("## Per capability");
-    line("");
+    render_method(&mut out, &method);
 
     let (mut counted, mut uncounted) = (0_usize, 0_usize);
     for result in measured {
         let Some(workload) = by_id.get(result.id.as_str()) else {
             continue;
         };
-        line(&format!("### {} — {}", workload.id, workload.capability));
-        line("");
-        line(&format!("**Question.** {}", workload.question));
-        line("");
-
-        if let Some(ref reason) = workload.not_measured {
-            uncounted += 1;
-            line(&format!("**not measured** — {reason}"));
-            line("");
-            line("No figure is published for this capability, and none is projected from a");
-            line("neighbouring one. A projection is an assertion wearing a measurement's clothes.");
-            line("");
-            continue;
+        match render_capability(
+            &mut out,
+            workload,
+            result,
+            &method.price,
+            method.tokens.bytes_per_token,
+        ) {
+            Some(Published::Figure) => counted += 1,
+            Some(Published::Reason) => uncounted += 1,
+            None => {}
         }
-
-        let joined = |steps: &[String]| steps.join("` then `");
-        line(&format!(
-            "**Baseline** ({} step(s), `{}`). {}",
-            workload.baseline.len(),
-            joined(&workload.baseline),
-            workload.baseline_model.trim().replace('\n', " ")
-        ));
-        line("");
-        line(&format!(
-            "**Batten** ({} step(s), `{}`). {}",
-            workload.batten.len(),
-            joined(&workload.batten).replace("$BATTEN", "batten"),
-            workload.batten_model.trim().replace('\n', " ")
-        ));
-        line("");
-
-        let (base, mine) = (result.arms.get("baseline"), result.arms.get("batten"));
-        let (Some(base), Some(mine)) = (base, mine) else {
-            continue;
-        };
-        let (Some(base_bytes), Some(batten_bytes)) = (base.bytes(), mine.bytes()) else {
-            uncounted += 1;
-            line(&format!(
-                "**not measured** — an arm's output was not byte-identical across {} runs",
-                workload.runs
-            ));
-            line("(baseline byte-stable: no, batten byte-stable: no),");
-            line("so there is no single figure to report. Byte-stability is the precondition the");
-            line("cross-session cache claim rests on, so a workload that lacks it has lost the");
-            line("mechanism, not merely the precision.");
-            line("");
-            continue;
-        };
-
-        counted += 1;
-        let divisor = tokens.bytes_per_token;
-        let (base_tokens, batten_tokens) = (
-            tokens_of(base_bytes, divisor),
-            tokens_of(batten_bytes, divisor),
-        );
-        line(&format!(
-            "**Method.** measured; {} runs per arm, byte-identical across all of them; run",
-            workload.runs
-        ));
-        line("count for the task is the step count above.");
-        line("");
-        line(
-            "| arm | steps | bytes | est. tokens | USD / 1k tasks (fresh) | USD / 1k tasks (cache read) | exit |",
-        );
-        line("| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
-        for (name, arm, bytes, count) in [
-            ("baseline", base, base_bytes, base_tokens),
-            ("batten", mine, batten_bytes, batten_tokens),
-        ] {
-            let exit = match arm {
-                Arm::Stable { exit, .. } => *exit,
-                Arm::Unstable { .. } => -1,
-            };
-            line(&format!(
-                "| {name} | {} | {bytes} | {count} | {:.4} | {:.4} | {exit} |",
-                arm.steps(),
-                usd_per_1k(count, price.input_fresh),
-                usd_per_1k(count, price.input_cached_read),
-            ));
-        }
-        let show =
-            |value: Option<f64>| value.map_or_else(|| String::from("n/a"), |r| format!("{r:.2}"));
-        line(&format!(
-            "| **ratio** | | **{}×** | **{}×** | | | |",
-            show(ratio(base_bytes, batten_bytes)),
-            show(ratio(base_tokens, batten_tokens)),
-        ));
-        line("");
     }
 
-    line("## Aggregate");
-    line("");
-    line("**Not published.** An aggregate across capabilities is a weighted mean over a");
-    line("workload mix nobody here has measured, so it would be exactly the unmethodical");
-    line(&format!(
-        "figure this benchmark exists to beat. Measured capabilities: {counted}. Reporting"
-    ));
-    line(&format!(
-        "\"not measured\" with a reason above: {uncounted}."
-    ));
-    line("");
-    line("## Stated gaps");
-    line("");
-    for gap in &method.not_measured {
-        line(&format!(
-            "- **{}: not measured.** {}",
-            gap.subject,
-            gap.reason.trim().replace('\n', " ")
-        ));
-        line(&format!(
-            "  Measured instead: {}",
-            gap.what_is_measured_instead.trim().replace('\n', " ")
-        ));
-    }
-    line("");
+    render_tail(&mut out, &method, counted, uncounted);
     Ok(out)
 }
 
@@ -746,6 +870,7 @@ pub fn unmethodical(report: &str) -> Vec<Unmethodical> {
     found
 }
 
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

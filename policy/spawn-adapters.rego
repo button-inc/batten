@@ -177,19 +177,15 @@ adapters := {
 	# human rather than a keystroke.
 	"startup",
 	"hk",
-	# `tokens` is the token-economics benchmark (CLOUD-119), retired out of
-	# `mise-tasks/token-bench.sh` under CLOUD-1753. It is `perf`'s and `mutate`'s
-	# argument exactly, and neither `symbols`' nor a new one: the SUBJECT of the
-	# measurement IS an external process. What a capability costs an agent's
-	# context is the bytes a command actually writes, so a benchmark that did not
-	# run the commands it prices would be the asserted-instead-of-measured claim
-	# CLOUD-119 exists to refuse. Two spawns, and both are that effect rather than
-	# an implementation of it — the declared step sequence, and the `git` that
-	# seeds the fixture the sequence runs against.
-	#
-	# `Surface::VerifyOnly` is what keeps the class off the mediated call, which is
-	# the same clause `perf`, `prune` and `mutate` carry.
-	"tokens",
+	# `tokens` WAS HERE AND IS NOT ANY MORE, for `fast_forward`'s and
+	# `main_watch`'s reason two blocks up (review of #928). The entry was added
+	# with the token-economics benchmark (CLOUD-119, retired out of
+	# `mise-tasks/token-bench.sh` under CLOUD-1753) and justified as "the SUBJECT
+	# of the measurement IS an external process". That is true of the spawn and
+	# says nothing about WHERE it is written: `exec::piped_argv` already runs a
+	# `PATH`-resolved argv, keeps both streams, and is the placed boundary. The
+	# module reads it now, spawns nothing, and needs no placement — which is the
+	# outcome `policy/spawn-widening.rego` refuses an added row in order to reach.
 }
 
 module_of(path) := name if {

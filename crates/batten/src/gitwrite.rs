@@ -1101,3 +1101,118 @@ fn make_executable(target: &Path) -> std::io::Result<()> {
 fn make_executable(_target: &Path) -> std::io::Result<()> {
     Ok(())
 }
+
+/// Give a directory a git repository carrying its current contents as one
+/// commit.
+///
+/// **In-process, because CLOUD-740's terminal assertion holds.** Nothing in this
+/// crate spawns `git`, and a benchmark fixture is no exception: the previous
+/// shape ran `git init`, `git add -A` and `git commit` as three children, which
+/// is three spawns of the one program the crate stopped invoking. The subject of
+/// `bench tokens` is what a capability COSTS, and seeding its fixture is not
+/// part of that measurement — so there is nothing here that must be an external
+/// process.
+///
+/// **Whatever branch `HEAD` already names.** The reference is `HEAD` rather than
+/// a literal `refs/heads/main`, so the commit lands on the branch `gix::init`
+/// chose from the host's own config. No caller reads the name; what they need is
+/// a repository root that resolves and a commit for `HEAD` to point at.
+///
+/// Idempotent: a directory that already carries `.git` is left alone.
+///
+/// # Errors
+///
+/// A directory that will not initialise, a file that will not read, or an object
+/// the odb refuses.
+pub fn seed(dir: &Path) -> Result<()> {
+    if dir.join(".git").exists() {
+        return Ok(());
+    }
+    let repo = gix::init(dir).map_err(|err| {
+        anyhow::anyhow!("gitwrite: could not initialise {}: {err}", dir.display())
+    })?;
+    let tree = tree_from_dir(&repo, dir)?;
+    let signature = gix::actor::Signature {
+        name: "batten".into(),
+        email: "batten@localhost".into(),
+        time: gix::date::Time::now_utc(),
+    };
+    repo.commit_as(
+        signature.to_ref(&mut gix::date::parse::TimeBuf::default()),
+        signature.to_ref(&mut gix::date::parse::TimeBuf::default()),
+        "HEAD",
+        "fixture",
+        tree,
+        gix::commit::NO_PARENT_IDS,
+    )
+    .map_err(|err| anyhow::anyhow!("gitwrite: could not commit the fixture: {err}"))?;
+    Ok(())
+}
+
+/// Write `dir`'s contents as a tree object, recursing into subdirectories.
+///
+/// `.git` is skipped: a repository's own store is not part of what it tracks,
+/// and walking into it would hash every object twice.
+fn tree_from_dir(repo: &gix::Repository, dir: &Path) -> Result<gix::ObjectId> {
+    let mut entries: Vec<gix::objs::tree::Entry> = Vec::new();
+    let listing = std::fs::read_dir(dir)
+        .map_err(|err| anyhow::anyhow!("gitwrite: cannot read {}: {err}", dir.display()))?;
+    for entry in listing {
+        let entry = entry
+            .map_err(|err| anyhow::anyhow!("gitwrite: cannot read {}: {err}", dir.display()))?;
+        let name = entry.file_name();
+        if name == std::ffi::OsStr::new(".git") {
+            continue;
+        }
+        let path = entry.path();
+        let meta = std::fs::symlink_metadata(&path)
+            .map_err(|err| anyhow::anyhow!("gitwrite: cannot stat {}: {err}", path.display()))?;
+        let (mode, oid) = if meta.is_dir() {
+            (
+                gix::objs::tree::EntryKind::Tree,
+                tree_from_dir(repo, &path)?,
+            )
+        } else {
+            let body = std::fs::read(&path).map_err(|err| {
+                anyhow::anyhow!("gitwrite: cannot read {}: {err}", path.display())
+            })?;
+            let id = repo
+                .write_blob(&body)
+                .map_err(|err| {
+                    anyhow::anyhow!("gitwrite: {} will not write: {err}", path.display())
+                })?
+                .detach();
+            (executable_kind(&meta), id)
+        };
+        entries.push(gix::objs::tree::Entry {
+            mode: mode.into(),
+            filename: name.to_string_lossy().as_ref().into(),
+            oid,
+        });
+    }
+    // GIT'S OWN ORDER, which the odb does not impose: an unsorted tree hashes to
+    // an id no other reader agrees with.
+    entries.sort_by(|left, right| left.filename.cmp(&right.filename));
+    Ok(repo
+        .write_object(gix::objs::Tree { entries })
+        .map_err(|err| anyhow::anyhow!("gitwrite: the fixture tree will not write: {err}"))?
+        .detach())
+}
+
+/// A file's blob kind, which is its executable bit and nothing else.
+#[cfg(unix)]
+fn executable_kind(meta: &std::fs::Metadata) -> gix::objs::tree::EntryKind {
+    use std::os::unix::fs::PermissionsExt as _;
+    if meta.permissions().mode() & 0o111 == 0 {
+        gix::objs::tree::EntryKind::Blob
+    } else {
+        gix::objs::tree::EntryKind::BlobExecutable
+    }
+}
+
+/// On a platform with no executable bit, every blob is a plain one — which is
+/// what git itself records there.
+#[cfg(not(unix))]
+fn executable_kind(_meta: &std::fs::Metadata) -> gix::objs::tree::EntryKind {
+    gix::objs::tree::EntryKind::Blob
+}

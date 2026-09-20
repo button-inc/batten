@@ -629,19 +629,23 @@ const TARGET_LOCK: &str = ".batten-target-lock";
 /// start at all is `None` — could-not-look, never "the target is absent", which
 /// is the reading that would make a broken toolchain look like a missing target.
 fn rustup(args: &[&str]) -> Option<(bool, String)> {
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays: whether rustup HAS a target is a fact about the container that no walk of the tree answers, which is `pinned`'s and `symbols`' argument on the spawn-adapters table. The purge and the add are this verb's own effect, and rustup is the only thing that can perform them"
-    )]
-    let spawned = std::process::Command::new("rustup")
-        .args(args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .ok()?;
-    let mut merged = String::from_utf8_lossy(&spawned.stdout).into_owned();
-    merged.push_str(&String::from_utf8_lossy(&spawned.stderr));
-    Some((spawned.status.success(), merged))
+    // THROUGH THE PLACED ADAPTER, not a `Command::new` here (review of #928).
+    // `doctor` is not on `policy/spawn-adapters.rego`'s table and must not join
+    // it: `exec` already owns the child-process boundary, and `piped_argv` is
+    // the entry point for a first word that resolves on `PATH` — which is what
+    // `rustup` is. `Diagnostics::Keep` is the merge this used to do by hand.
+    let argv: Vec<String> = std::iter::once("rustup")
+        .chain(args.iter().copied())
+        .map(ToOwned::to_owned)
+        .collect();
+    let (code, merged) = crate::exec::piped_argv(
+        Path::new("."),
+        &argv,
+        "",
+        crate::exec::Diagnostics::Keep,
+        &[],
+    )?;
+    Some((code == 0, merged))
 }
 
 /// Whether rustup itself reports `target` installed.
@@ -656,18 +660,21 @@ fn rustup_has(target: &str) -> Option<bool> {
 
 /// The toolchain's `lib/rustlib`, from rustc's own sysroot.
 fn rustlib_dir() -> Option<PathBuf> {
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays: the sysroot is the toolchain's own answer for where it put its files, and reading it from anywhere else would be a second authority over the directory this verb purges"
-    )]
-    let spawned = std::process::Command::new("rustc")
-        .args(["--print", "sysroot"])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .ok()?;
-    spawned.status.success().then(|| {
-        PathBuf::from(String::from_utf8_lossy(&spawned.stdout).trim().to_owned())
+    // `Diagnostics::Drop`, where [`rustup`] one function up takes `Keep`. The
+    // return value here is a PATH that gets joined and read, so a notice on
+    // stderr folded into it would produce a directory nothing can open — and the
+    // caller purges that directory. A diagnostic is not part of the answer when
+    // the answer is parsed (`Diagnostics`' own doc says so).
+    let argv = ["rustc", "--print", "sysroot"].map(ToOwned::to_owned);
+    let (code, stdout) = crate::exec::piped_argv(
+        Path::new("."),
+        &argv,
+        "",
+        crate::exec::Diagnostics::Drop,
+        &[],
+    )?;
+    (code == 0).then(|| {
+        PathBuf::from(stdout.trim().to_owned())
             .join("lib")
             .join("rustlib")
     })
