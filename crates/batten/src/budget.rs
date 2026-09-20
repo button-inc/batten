@@ -295,14 +295,18 @@ impl crate::output::Line for FileCount {
     }
 }
 
-/// The content of `text` that actually reaches a context window: YAML
-/// frontmatter and block-level HTML comments removed.
+/// The content of `text` that actually reaches a context window: frontmatter
+/// and block-level HTML comments removed.
 ///
 /// Both constructs are dropped by the loader before injection, so both are free
-/// and neither may be taxed here. Frontmatter is recognised only as a leading
-/// `---` fence, and a comment only where it opens at the start of a line —
-/// the same two shapes the shell gate this replaces recognised, so the
-/// succession changes the *mechanism* and not the measured surface.
+/// and neither may be taxed here. Frontmatter is recognised only where it LEADS
+/// the file, and a comment only where it opens at the start of a line — the
+/// same two positions the shell gate this replaces recognised, so the
+/// succession changes the *mechanism* and not the measured surface. Which
+/// delimiters open a leading fence is `facts::split_frontmatter`'s to say and
+/// is not restated here (see [`strip_frontmatter`]); this said "only a leading
+/// `---` fence" until CLOUD-1886 widened that set, which is exactly the kind of
+/// sentence a second authority leaves behind.
 ///
 /// Implemented as a byte scan rather than a pattern match: the crate carries no
 /// regex dependency by design, and `outputs.rs` sets the precedent that a
@@ -321,10 +325,23 @@ pub fn loaded(text: &str) -> String {
 /// one rule is how a file gets taxed for bytes the loader drops, or read as a
 /// document the loader counts.
 ///
-/// Sharing it widened this side: a BOM, `\r\n` and a `...` terminator are now
-/// recognised where the scan here saw only `---\n` … `\n---\n`. That is a
-/// correction rather than a drift — the loader drops those fences too, so
-/// counting them was always over-taxing.
+/// Sharing it widened this side once already: a BOM, `\r\n` and a `...`
+/// terminator are now recognised where the scan here saw only `---\n` …
+/// `\n---\n`. CLOUD-1886 widens it again, to every delimiter a generator
+/// actually emits. Both are corrections rather than drift — the loader drops
+/// those fences too, so counting them was always over-taxing, and a file was
+/// being charged for bytes no context window ever saw.
+///
+/// **One of the admitted forms can widen this the WRONG way, and it is recorded
+/// rather than folded in.** The unfenced JSON form has no delimiter, so a
+/// markdown file that genuinely opens at byte 0 with a JSON object stops being
+/// charged for that object — an under-count, which is the direction this module
+/// must never move. Three things bound it: the value must parse as an object,
+/// no tracked file here opens that way, and a JSON sample in prose ordinarily
+/// sits inside a code fence, so byte 0 is a backtick. If that ever stops being
+/// enough, the narrowing belongs in `facts::split_json_object` — not in a
+/// second fence rule here, which is the defect the paragraph above exists to
+/// have fixed.
 fn strip_frontmatter(text: &str) -> &str {
     match crate::facts::split_frontmatter(text) {
         Some(found) => found.body,

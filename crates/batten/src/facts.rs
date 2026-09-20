@@ -2884,17 +2884,31 @@ impl Format {
             // body is only accidentally valid YAML, so reading the file as one
             // YAML stream makes every verdict depend on whether the prose
             // happens to lex.
-            Format::Markdown => match split_frontmatter(text).map(|found| found.block) {
+            //
+            // WHICH syntax the fence encloses is the fence's own to say
+            // (CLOUD-1886), and the dialect routes straight back into the arms
+            // above rather than growing a second reader per syntax. The fence
+            // adds a CONTAINER, never a grammar — the same argument `read_yaml`
+            // makes one function down, now holding for three syntaxes instead of
+            // one.
+            Format::Markdown => match split_frontmatter(text) {
                 // Present and empty is an ANSWER, not a non-answer: a file whose
                 // fence is `---\n---` has frontmatter and it has no keys, which
                 // is a different authoring fault from having no fence at all and
-                // must be a different verdict. Routing it through `read_yaml`
-                // would make it an empty stream and so `CouldNotLook`, which is
-                // the one reading that is false.
-                Some(block) if block.trim().is_empty() => {
+                // must be a different verdict.
+                //
+                // THIS CHECK SITS IN FRONT OF EVERY DIALECT, and must, because
+                // the three parsers disagree about empty input in three
+                // directions: an empty YAML stream is `CouldNotLook`, an empty
+                // TOML document is a valid empty table, and empty JSON is an EOF
+                // error. Dispatching first would make one fence concept answer
+                // three ways depending on which delimiter the author reached
+                // for, and `policy/rules-paths-trigger.rego` requires the empty
+                // fence and the missing fence to be separately decided.
+                Some(found) if found.block.trim().is_empty() => {
                     Look::Is(Node::Map(std::collections::BTreeMap::new()))
                 }
-                Some(block) => read_yaml(block),
+                Some(found) => found.dialect.format().read(found.block),
                 None => Look::IsNot,
             },
         }
@@ -2938,6 +2952,116 @@ fn read_yaml(text: &str) -> Look<Node> {
     }
 }
 
+/// Which syntax a frontmatter fence encloses.
+///
+/// # A syntax, never a generator (CLOUD-1886)
+///
+/// Every delimiter below was adopted from a static-site generator, and not one
+/// of them is named for it. The arms are `Yaml`, `Toml` and `Json` because that
+/// is what the bytes inside the fence are, and [`Format`]'s own note two
+/// hundred lines up — formats, never artifacts — is the rule this obeys. A
+/// `Hugo` arm would put a consumer's name in the core and would also be a lie:
+/// four tools write `---` and two write `+++`.
+///
+/// # Internal on purpose, and it must stay that way
+///
+/// [`Format`] derives `serde::Deserialize` and `schemars::JsonSchema`, which is
+/// what makes it a configurable vocabulary. This is the opposite kind of thing:
+/// an INFERENCE about bytes already read, which nobody declares and nothing may
+/// override. Deriving either here would put it in the generated schema and make
+/// the dialect a setting, widening a configuration surface the house style
+/// keeps narrow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Dialect {
+    Yaml,
+    Toml,
+    Json,
+}
+
+impl Dialect {
+    /// The reader this dialect's block is handed to.
+    ///
+    /// **The cycle is unrepresentable rather than guarded.** There is no
+    /// `Dialect::Markdown`, so [`Format::Markdown`]'s arm cannot route back into
+    /// itself and no `unreachable!()` is needed to say so. A fourth dialect
+    /// would have to name a format that reads bytes, which is the property that
+    /// makes the recursion impossible.
+    const fn format(self) -> Format {
+        match self {
+            Dialect::Yaml => Format::Yaml,
+            Dialect::Toml => Format::Toml,
+            Dialect::Json => Format::Json,
+        }
+    }
+}
+
+/// One admitted fence: how it opens, what it encloses, and what closes it.
+struct Fence {
+    /// The whole first line, trailing whitespace already trimmed.
+    opener: &'static str,
+    dialect: Dialect,
+    /// Every line that ends this fence. A fence closed by a delimiter that is
+    /// not in its own list is not closed at all.
+    closers: &'static [&'static str],
+}
+
+/// The fenced frontmatter forms, as the tools that emit them actually write
+/// them (verified against each implementation's own source or documentation,
+/// CLOUD-1886).
+///
+/// # The asymmetries here are not tidiable, they are the formats
+///
+/// Three of these rows look like they want to be a rule and are not:
+///
+/// - **`---` closes on `...` and `+++` does not.** `...` is YAML's second
+///   document terminator, which Pandoc's metadata block requires a reader to
+///   accept. TOML has no such concept, so accepting `...` there would invent a
+///   grammar rather than admit one. (Hugo refuses `...` even for YAML; we do
+///   not follow it, because that would retire a spelling already shipped.)
+/// - **A TAGGED opener closes on the BARE delimiter.** `---toml` … `---`, not
+///   `---toml` … `---toml`. That is gray-matter's own shape — it reads the
+///   language as the remainder of the opening line and closes on the plain
+///   delimiter — and a reader that expected the tag at both ends would read
+///   nothing at all.
+/// - **`;;;` is JSON.** It is GitLab's documented spelling, not gray-matter's,
+///   which has no `;;;` anywhere.
+///
+/// An unrecognised tag (`---xml`) matches no row and is therefore not a fence.
+/// Guessing which parser an unknown tag meant is the same error as guessing
+/// where an unterminated fence ends.
+const FENCES: &[Fence] = &[
+    Fence {
+        opener: "---",
+        dialect: Dialect::Yaml,
+        closers: &["---", "..."],
+    },
+    Fence {
+        opener: "+++",
+        dialect: Dialect::Toml,
+        closers: &["+++"],
+    },
+    Fence {
+        opener: ";;;",
+        dialect: Dialect::Json,
+        closers: &[";;;"],
+    },
+    Fence {
+        opener: "---yaml",
+        dialect: Dialect::Yaml,
+        closers: &["---"],
+    },
+    Fence {
+        opener: "---toml",
+        dialect: Dialect::Toml,
+        closers: &["---"],
+    },
+    Fence {
+        opener: "---json",
+        dialect: Dialect::Json,
+        closers: &["---"],
+    },
+];
+
 /// The contents of a leading frontmatter fence, if `text` opens with one.
 ///
 /// **Strict, and the strictness is the point.** The fence opens on the FIRST
@@ -2945,35 +3069,39 @@ fn read_yaml(text: &str) -> Look<Node> {
 /// reader that went looking for one would turn ordinary prose into a document
 /// and decide over it. A UTF-8 byte-order mark may precede it and nothing else,
 /// because a BOM is invisible to the author and refusing it would blame a file
-/// for its encoding.
+/// for its encoding. (Hugo additionally skips leading blank lines and spaces
+/// before the delimiter. We do not: a blank first line is prose, and widening
+/// this is how a `---` that opens a section becomes a document.)
 ///
-/// The closing delimiter is `---` or `...` alone on a line — YAML's own two
-/// document terminators, so a consumer who writes the one this crate did not
-/// think of still gets read. Without a terminator there is no frontmatter:
-/// guessing where an unterminated fence ends is the same error as finding one
-/// mid-file.
+/// Which delimiters open and close which dialect is [`FENCES`]'s to say, plus
+/// the one unfenced form in [`split_json_object`]. Without a terminator there is
+/// no frontmatter: guessing where an unterminated fence ends is the same error
+/// as finding one mid-file.
 ///
-/// `\r\n` is accepted throughout.
+/// `\r\n` is accepted throughout, and trailing whitespace on a delimiter line is
+/// ignored — an editor that strips or adds it is not an authoring fault.
 ///
-/// Returns both halves as NAMED fields rather than a tuple, because the two
+/// Returns its parts as NAMED fields rather than a tuple, because the two
 /// callers want opposite ones — [`Format::Markdown`] reads the block and
 /// [`crate::budget`] drops it and counts the body — and a tuple would have each
-/// of them spell `, _)`, which `no_axis_match_carries_a_wildcard_arm` refuses
-/// in this file for an unrelated and better reason.
+/// of them spell a wildcard element, which
+/// `no_axis_match_carries_a_wildcard_arm` refuses in this file for an unrelated
+/// and better reason.
 pub(crate) fn split_frontmatter(text: &str) -> Option<Frontmatter<'_>> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let rest = match text.strip_prefix("---\n") {
-        Some(rest) => rest,
-        None => text.strip_prefix("---\r\n")?,
-    };
+    if let Some(found) = split_json_object(text) {
+        return Some(found);
+    }
+    let opened = open_fence(text)?;
     let mut offset = 0usize;
-    for line in rest.split_inclusive('\n') {
+    for line in opened.rest.split_inclusive('\n') {
         let bare = line.strip_suffix('\n').unwrap_or(line);
         let bare = bare.strip_suffix('\r').unwrap_or(bare);
-        if bare == "---" || bare == "..." {
+        if opened.fence.closers.contains(&bare.trim_end()) {
             return Some(Frontmatter {
-                block: &rest[..offset],
-                body: &rest[offset + line.len()..],
+                dialect: opened.fence.dialect,
+                block: &opened.rest[..offset],
+                body: &opened.rest[offset + line.len()..],
             });
         }
         offset += line.len();
@@ -2981,9 +3109,85 @@ pub(crate) fn split_frontmatter(text: &str) -> Option<Frontmatter<'_>> {
     None
 }
 
+/// A fence this text opens with, and everything after its opening line.
+struct Opened<'a> {
+    fence: &'static Fence,
+    rest: &'a str,
+}
+
+/// Match `text`'s first line against [`FENCES`].
+///
+/// A file with no newline at all opens no fence: the opener line is not
+/// terminated, so neither is anything after it.
+fn open_fence(text: &str) -> Option<Opened<'_>> {
+    let end = text.find('\n')?;
+    let first = text[..end].trim_end();
+    let fence = FENCES.iter().find(|fence| fence.opener == first)?;
+    Some(Opened {
+        fence,
+        rest: &text[end + 1..],
+    })
+}
+
+/// Hugo's unfenced JSON frontmatter: a leading JSON object, and no delimiter.
+///
+/// # Terminated by a real parse, never by counting braces
+///
+/// Hugo finds the end of this block with a hand-rolled brace counter carrying
+/// its own quote and backslash-escape state. That is precisely the state machine
+/// this crate's own document tests mock as the thing every implementation gets
+/// wrong, and `Cargo.toml` already records the general form of the argument
+/// where it chose a real YAML parser over a line scan. So the end of the object
+/// is wherever the JSON parser says the value ended.
+///
+/// Three properties of `byte_offset` this leans on:
+///
+/// - It indexes the slice the deserializer was handed. That slice is already
+///   BOM-stripped by the caller, so the offsets below are into `text` and never
+///   into the original bytes.
+/// - `next()` is called EXACTLY once. A second call would try to read another
+///   value and fail on whatever prose follows — while the first value, and the
+///   offset just past it, are already correct.
+/// - Its documented future change (counting syntactically valid JSON skipped
+///   after a type error) cannot reach us, because deserializing to
+///   `serde_json::Value` admits no type error.
+///
+/// # Only an object, and that narrowing is load-bearing
+///
+/// This is the one admitted form with no delimiter, so it is the only one that
+/// can claim bytes an author did not offer — and [`crate::budget`] shares this
+/// split, so a false positive here stops a file being charged for its own
+/// content. Requiring an object means a leading `[` or a bare scalar stays
+/// prose, which is what a markdown file plausibly opens with.
+fn split_json_object(text: &str) -> Option<Frontmatter<'_>> {
+    if !text.starts_with('{') {
+        return None;
+    }
+    let mut stream = serde_json::Deserializer::from_str(text).into_iter::<serde_json::Value>();
+    let value = stream.next()?.ok()?;
+    if !value.is_object() {
+        return None;
+    }
+    let end = stream.byte_offset();
+    let body = &text[end..];
+    let body = body
+        .strip_prefix("\r\n")
+        .or_else(|| body.strip_prefix('\n'))
+        .unwrap_or(body);
+    Some(Frontmatter {
+        dialect: Dialect::Json,
+        block: &text[..end],
+        body,
+    })
+}
+
 /// A markdown file split at its frontmatter fence, by [`split_frontmatter`].
 pub(crate) struct Frontmatter<'a> {
-    /// What the fence encloses, without either delimiter line.
+    /// Which syntax [`Self::block`] is written in.
+    pub(crate) dialect: Dialect,
+    /// What the fence encloses, without either delimiter line. For the unfenced
+    /// JSON form there are no delimiter lines to remove, so this is the object
+    /// itself, braces included — which is what a JSON reader wants anyway.
     pub(crate) block: &'a str,
     /// Everything after the closing delimiter.
     pub(crate) body: &'a str,
