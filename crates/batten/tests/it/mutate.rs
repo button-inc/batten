@@ -283,10 +283,68 @@ fn a_suite_that_hangs_is_ended_by_the_sweeps_own_bound() {
         "the sweep waited {waited:?} on a suite that never returns, so the bound \
          did not fire and a hanging mutant would hold it forever"
     );
-    // The verdict itself is deliberately not asserted: what a killed suite
-    // reports is the sweep's business and is covered by the decision table
-    // above. This case asserts only that the sweep CAME BACK.
-    let _ = answer.status.code();
+    // AND WHAT IT REPORTS, WHICH THIS CASE USED TO DECLINE TO ASSERT
+    // (CLOUD-1860). The declining comment read: *"what a killed suite reports is
+    // the sweep's business and is covered by the decision table above."* It was
+    // not covered, and the gap was the defect: a killed run selects no case, so
+    // the sweep called it `names-no-case` — a filter that matches nothing — for
+    // a case that is present and green. Every Rust suite hit that, because a
+    // cargo run cannot finish inside a bats-sized bound: 109 of 341 declared
+    // mutations reported a filter fault and looked at nothing, while the verb
+    // reported coverage.
+    //
+    // So the bound firing is half the property and NAMING ITS OWN CAUSE is the
+    // other half.
+    let code = answer.status.code().unwrap_or(-1);
+    let out = stdout(&answer);
+    assert_eq!(code, 3, "a killed suite is a could-not-look: {out}");
+    assert!(
+        out.contains("suite-timed-out"),
+        "the verdict must name the clock, not the filter: {out}"
+    );
+    assert!(
+        !out.contains("names-no-case"),
+        "blaming the filter sends the reader to repair a declaration that is \
+         already correct: {out}"
+    );
+}
+
+/// **THE MIRROR, and without it this fix is indistinguishable from deleting the
+/// term** (CLOUD-1860, CLOUD-418's own shape).
+///
+/// The case above asserts a timing-out suite stops being called `names-no-case`.
+/// A change that simply removed `names-no-case` would satisfy it. This asserts
+/// the verdict still fires where it is the truth: the suite returns promptly and
+/// the row names a case that genuinely is not in it.
+///
+/// The two differ only in whether the suite returns, which is the discrimination
+/// the repair turns on.
+#[cfg(unix)]
+#[test]
+fn a_filter_naming_no_case_is_still_a_filter_fault_and_not_a_timeout() {
+    let root = toy_repo(
+        "no-case-not-timeout",
+        &["#MUTANT limit-ignored|s/^LIMIT=10$/LIMIT=999/|no case is named this"],
+    );
+    let answer = common::batten()
+        .args(["mutate", "sweep"])
+        .current_dir(&root)
+        .env("MUTANT_GATES", "toy")
+        // The same short bound the timeout case uses. The suite here returns well
+        // inside it, so a runner that reported every short bound as a timeout
+        // would fail this — which is the over-correction the mirror exists to
+        // catch.
+        .env("BATTEN_MUTATE_SUITE_TIMEOUT", "2")
+        .output()
+        .expect("run batten mutate");
+    let code = answer.status.code().unwrap_or(-1);
+    let out = stdout(&answer);
+    assert_eq!(code, 3, "still a could-not-look: {out}");
+    assert!(out.contains("names-no-case"), "{out}");
+    assert!(
+        !out.contains("suite-timed-out"),
+        "a suite that answered in time did not time out: {out}"
+    );
 }
 
 #[cfg(unix)]

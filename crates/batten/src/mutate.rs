@@ -299,6 +299,14 @@ pub enum Verdict {
     MalformedRow { fields: usize },
     /// The filter matched no case, on either the clean or the mutated run.
     NamesNoCase { want: String },
+    /// The suite was still running at its bound and was killed (CLOUD-1860).
+    ///
+    /// **ITS OWN VARIANT BECAUSE IT NAMES A DIFFERENT ARTIFACT.** A killed run
+    /// selects no case, so this was indistinguishable from [`Verdict::NamesNoCase`]
+    /// and reported as one — which points the reader at the DECLARATION, the one
+    /// thing that is not wrong. The declaration is correct, the case exists, and
+    /// what ran out was the clock.
+    SuiteTimedOut { seconds: u64 },
     /// The case was already red before the mutation, so its redness afterwards
     /// is not evidence.
     CaseAlreadyRed { want: String },
@@ -336,6 +344,7 @@ impl Verdict {
             Verdict::NoSuchGate
                 | Verdict::NoSuite { .. }
                 | Verdict::NamesNoCase { .. }
+                | Verdict::SuiteTimedOut { .. }
                 | Verdict::CaseAlreadyRed { .. }
                 | Verdict::UnappliableMutation
         )
@@ -354,6 +363,9 @@ impl fmt::Display for Verdict {
                 write!(out, "malformed-row ({fields} fields, want 3)")
             }
             Verdict::NamesNoCase { want } => write!(out, "names-no-case ({want})"),
+            Verdict::SuiteTimedOut { seconds } => {
+                write!(out, "suite-timed-out ({seconds}s)")
+            }
             Verdict::CaseAlreadyRed { want } => write!(out, "case-already-red ({want})"),
             Verdict::FilterNamesEveryCase { want } => {
                 write!(out, "filter-names-every-case ({want})")
@@ -747,7 +759,7 @@ impl Staged {
         ];
         for args in steps {
             let owned: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
-            let answer = spawn(&self.dir, "git", &owned, &[])?;
+            let answer = spawn(&self.dir, "git", &owned, &[], HOUSEKEEPING_BOUND)?;
             if !answer.ok {
                 bail!(
                     "mutate: could not make the staged tree a repository; a suite that resolves \
@@ -857,10 +869,31 @@ pub struct Ran {
     pub ok: bool,
     /// Its combined output, which is scanned for case lines and never reported.
     pub output: String,
+    /// Whether [`suite_bound`] expired and this process killed the child
+    /// (CLOUD-1860).
+    ///
+    /// **CARRIED RATHER THAN INFERRED, because inferring it is the defect.** A
+    /// killed child wrote no case line, so `selected` is 0 and the caller
+    /// reported `names-no-case` — *a filter that matches nothing* — for a case
+    /// that is present, reachable and green. That sends whoever reads the sweep
+    /// to repair a declaration which is already correct, and it is how 109 of 341
+    /// declared mutations sat unlooked-at while the verb reported coverage.
+    pub timed_out: bool,
 }
 
 /// Run a program to completion in `dir`, capturing what it said.
-fn spawn(dir: &Path, program: &str, args: &[String], env: &[(String, String)]) -> Result<Ran> {
+fn spawn(
+    dir: &Path,
+    program: &str,
+    args: &[String],
+    env: &[(String, String)],
+    // The bound is the CALLER'S, so this function has no opinion about how long
+    // its child should take (CLOUD-1860). Passing the duration rather than the
+    // `Suite` keeps `spawn` a process primitive: it is also what the two suite
+    // arms already differ by, and threading the suite here would put a second
+    // reader of that distinction one level below the one that owns it.
+    bound: std::time::Duration,
+) -> Result<Ran> {
     #[expect(
         clippy::disallowed_types,
         reason = "stays: staging a tree and re-running a suite against it IS this module's effect (CLOUD-1267). A mutation cannot be shown to redden a case without running the case, and the spawning side is where §5 puts that — the same disposition `perf.rs` carries for hyperfine"
@@ -967,7 +1000,7 @@ fn spawn(dir: &Path, program: &str, args: &[String], env: &[(String, String)]) -
         // would have carried is the kill this function reports.
         let _ = send_status.send(status);
     });
-    let Ok(reported) = statuses.recv_timeout(suite_bound()) else {
+    let Ok(reported) = statuses.recv_timeout(bound) else {
         // The bound ran out, so the suite is hung. Kill it and take the status
         // the worker's `wait` returns once it does.
         reap(pid);
@@ -976,7 +1009,10 @@ fn spawn(dir: &Path, program: &str, args: &[String], env: &[(String, String)]) -
             .map_err(|_| anyhow::anyhow!("mutate: the wait for {program} was lost"))?
             .with_context(|| format!("mutate: could not reap {program}"))?;
         let _ = worker.join();
-        return Ok(finish(reaped, &out_path, &err_path, &capture));
+        return Ok(Ran {
+            timed_out: true,
+            ..finish(reaped, &out_path, &err_path, &capture)
+        });
     };
     let status = reported.with_context(|| format!("mutate: could not wait for {program}"))?;
     // The worker is finished: it has sent, so its `wait` returned.
@@ -1003,6 +1039,10 @@ fn finish(
     Ran {
         ok: status.success(),
         output,
+        // The ordinary path. The hang path above overrides it, and it is the ONE
+        // caller that may: a `Ran` built anywhere else describes a child that
+        // reached its own exit.
+        timed_out: false,
     }
 }
 
@@ -1013,18 +1053,53 @@ static CAPTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 
 /// How long a suite may run before the sweep stops waiting for it.
 ///
-/// Small because the subject is one filtered case over a staged toy tree rather
-/// than a repository's whole suite. Overridable, because a consumer whose gate
-/// suite is genuinely slower needs a way up that is not editing the engine; the
-/// name is batten's own so it cannot collide with the `BATS_*` namespace the
-/// runner owns.
-fn suite_bound() -> std::time::Duration {
+/// **PER SUITE KIND, AND THE SPLIT IS THE FIX (CLOUD-1860).** One number served
+/// both, justified as *"one filtered case over a staged toy tree rather than a
+/// repository's whole suite"*. That is true of bats and false of cargo, and it
+/// was never revisited when CLOUD-1267 introduced Rust suites — so **every** one
+/// of them was killed mid-build and reported as a filter that matched nothing.
+/// Measured: 109 of 341 declared mutations, the whole Rust half of CLOUD-418's
+/// mechanism, reading as enforced coverage while looking at nothing.
+///
+/// * **Bats keeps 30s**, and keeping it is deliberate rather than incidental.
+///   CLOUD-1726's measurement is a bats-only property — its runner does not
+///   cancel a failing case's countdown, so the bound is paid in full by every
+///   mutation the sweep gets RIGHT. A large number there costs real minutes per
+///   caught row.
+/// * **Cargo gets a bound that admits a build**, because it cannot avoid one. The
+///   sweep's `CARGO_TARGET_DIR` is isolated by construction (CLOUD-1315), so the
+///   first row pays a cold workspace build — measured at 414s here and at 21
+///   minutes on a smaller container (CLOUD-1603) — and every later row pays a
+///   recompile of whatever the mutation touched. The case itself then runs in
+///   0.00s, so this number is bounding compilation and nothing else.
+///
+/// Overridable by one env var for both, because a consumer whose suite is
+/// genuinely slower needs a way up that is not editing the engine; the name is
+/// batten's own so it cannot collide with the `BATS_*` namespace the runner owns.
+/// An explicit override applies to whichever kind is running — a reader setting
+/// it is answering for their own tree, not for this split.
+/// The bound for the sweep's own housekeeping — staging a git repository,
+/// applying a `sed` script — which is not a suite and must not borrow one's
+/// number (CLOUD-1860).
+///
+/// Named rather than inlined because the alternative is a bare `30` beside two
+/// calls that have nothing to do with a test runner, which is how the suite
+/// bound came to cover a case it was never measured against. These are local
+/// file operations over an already-staged tree; a minute is generous and a hang
+/// here is a real defect rather than a slow build.
+const HOUSEKEEPING_BOUND: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn suite_bound(suite: &Suite) -> std::time::Duration {
+    let declared = match suite {
+        Suite::Bats(_) => 30,
+        Suite::Cargo { .. } => 900,
+    };
     std::time::Duration::from_secs(
         std::env::var("BATTEN_MUTATE_SUITE_TIMEOUT")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .filter(|seconds| *seconds > 0)
-            .unwrap_or(30),
+            .unwrap_or(declared),
     )
 }
 
@@ -1125,11 +1200,17 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
 struct Selection {
     selected: usize,
     ok: bool,
+    /// Whether the run was killed at its bound rather than reaching an exit
+    /// (CLOUD-1860). Read by `judge` BEFORE `selected`, because a killed run
+    /// selects nothing and that is a fact about the clock, never about the
+    /// filter.
+    timed_out: bool,
 }
 
 /// Run a gate's suite filtered to `want`, inside the staged tree.
 fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Result<Selection> {
     let env = suite_env(root);
+    let bound = suite_bound(suite);
     match suite {
         Suite::Bats(path) => {
             let args = vec![String::from("--filter"), want.to_owned(), path.to_owned()];
@@ -1138,10 +1219,12 @@ fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Result<
                 &root.join(BATS).to_string_lossy(),
                 &args,
                 &env,
+                bound,
             )?;
             Ok(Selection {
                 selected: tap_lines(&ran.output),
                 ok: ran.ok,
+                timed_out: ran.timed_out,
             })
         }
         Suite::Cargo { .. } => {
@@ -1155,10 +1238,11 @@ fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Result<
             // is not a pass either: `selected` stays 0 and the caller reports
             // `names-no-case`, which is a could-not-look.
             let args = vec![String::from("test"), String::from("--"), want.to_owned()];
-            let ran = spawn(staged.dir(), "cargo", &args, &env)?;
+            let ran = spawn(staged.dir(), "cargo", &args, &env, bound)?;
             Ok(Selection {
                 selected: libtest_lines(&ran.output),
                 ok: ran.ok && !ran.output.contains("error: could not compile"),
+                timed_out: ran.timed_out,
             })
         }
     }
@@ -1223,7 +1307,7 @@ fn apply(staged: &Staged, row: &Row) -> Result<bool> {
         row.script.clone(),
         row.source.clone(),
     ];
-    let ran = spawn(staged.dir(), "sed", &args, &[])?;
+    let ran = spawn(staged.dir(), "sed", &args, &[], HOUSEKEEPING_BOUND)?;
     let _ = std::fs::remove_file(staged.dir().join(format!("{}.bak", row.source)));
     Ok(ran.ok)
 }
@@ -1273,6 +1357,16 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
     // way, and every mutation aimed at it reads as caught. Costs one extra
     // filtered run per row, which is what an anti-vacuity term is worth.
     let clean = run_suite(staged, root, &gate.suite, &row.want)?;
+    // AND THE BOUND IS READ BEFORE EITHER (CLOUD-1860), for the same reason one
+    // rung up: a killed run selects no case and exits non-zero, so it satisfies
+    // both tests below while meaning neither. Reported as `names-no-case` it sent
+    // the reader to repair a declaration that was already correct, and that is
+    // how the whole Rust half of this mechanism read as coverage.
+    if clean.timed_out {
+        return Ok(Verdict::SuiteTimedOut {
+            seconds: suite_bound(&gate.suite).as_secs(),
+        });
+    }
     // "Named no case" is read BEFORE the status, because a filter matching
     // nothing is itself a non-zero exit on both runners — and reporting that as
     // "already red" would name the wrong defect to whoever has to fix it.
@@ -1308,6 +1402,17 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
     }
 
     let mutated = run_suite(staged, root, &gate.suite, &row.want)?;
+    // THE SAME GUARD, AND HERE IT IS THE DANGEROUS DIRECTION. The clean run's
+    // timeout costs a could-not-look reported under the wrong name; this one
+    // would be read as evidence. A killed run exits non-zero, so without this
+    // test `mutated.ok` is false and the row reports `Caught` — the sweep
+    // asserting a mutation was caught by a suite that never ran a case.
+    // Fail-closed is not enough when the failure mode is a forged pass.
+    if mutated.timed_out {
+        return Ok(Verdict::SuiteTimedOut {
+            seconds: suite_bound(&gate.suite).as_secs(),
+        });
+    }
     if mutated.selected == 0 {
         return Ok(Verdict::NamesNoCase {
             want: row.want.clone(),
