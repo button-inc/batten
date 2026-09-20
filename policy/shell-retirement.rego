@@ -375,6 +375,20 @@ only_supplies_the_successors_precondition(path) if {
 # refused. Without this conjunct the arm would admit a retirement that quietly
 # grew the corpus's internal coupling while reporting it shrank.
 only_repoints_at_a_program_this_change_retires(path) if {
+	# A PROGRAM, NEVER A SUITE, and the bound is not tidiness — it is the arm
+	# this one would otherwise swallow. `tests/**/*.bats` already has a repoint
+	# rule with an ANCHORED head: arm 2b admits a suite that spells its subject
+	# relative to `$BATS_TEST_DIRNAME`, and refuses one whose binding names any
+	# other tree, because repointing a reference this retirement does not own is
+	# a rewrite. Nothing here can reproduce that anchor — the conjuncts below ask
+	# what a REMOVED line names, and a binding through a foreign variable names
+	# the retired program just as plainly as a sibling invocation does.
+	#
+	# Measured: without this, `a_bats_binding_outside_the_suite_directory_is_refused`
+	# went green. That case is arm 2b's anti-vacuity half, so an arm that admits
+	# what it refuses does not add a route — it deletes one.
+	under_mise_tasks(path)
+
 	base := delta["base-lines"][path]
 	base_set := {line | some line in base}
 	head := {line | some line in input.tree.lines[path]}
@@ -2033,6 +2047,26 @@ test_repointing_a_caller_at_this_changes_successor_is_admitted if {
 			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
 		},
 	}}
+}
+
+# AND A SUITE DOES NOT REACH THIS ARM AT ALL. The same edit under
+# `tests/**/*.bats` stays arm 2b's, whose anchored head is what tells a
+# sibling's path from a foreign tree's — a distinction the conjuncts here cannot
+# draw and must therefore not overrule.
+test_a_bats_suite_does_not_reach_the_repoint_arm if {
+	some v in violation with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["tests/pinned.bats"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {"tests/pinned.bats": ["setup() {", "  GATE=\"$OTHER/../mise-tasks/old-gate.sh\"", "}"]},
+		},
+		"lines": {
+			"tests/pinned.bats": ["setup() {", "  run batten old gate", "}"],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
+		},
+	}}
+	v.verdict == "shell edit refused"
 }
 
 # THE MEASURED INVOCATION SHAPE. A caller inside `mise-tasks/` reaches its
