@@ -96,21 +96,38 @@ workflow_lines := lines if {
 # its own line. Read as text rather than through a document parser for the reason
 # the retiring program gave: the shape is fixed by this repository's own file, and
 # a parser is a dependency this judgement does not otherwise need.
-paths_start := i if {
+# **EVERY `paths:` BLOCK, AS A SET** (CLOUD-1880, PR #928). This was
+# `paths_start := i`, a complete rule, and a workflow may legitimately declare
+# `paths:` under BOTH `push` and `pull_request` — which is the ordinary shape for
+# a gate that wants the same filter on either trigger. Two blocks bind it twice,
+# which regorus raises as `eval_conflict_error` AT EVALUATION, before `pattern`
+# is ever reached; `policy_rule` discards the whole document on a fault, so this
+# module stops deciding entirely and exits 0. That is CLOUD-1049's fault class.
+#
+# AGGREGATED RATHER THAN NARROWED TO ONE BLOCK. Taking `min(paths_start)` would
+# load and compile, and would then judge the first filter while ignoring every
+# later one — a gate reading clean over paths it never looked at, which is the
+# silent-narrowing failure this module exists to catch one level up.
+paths_start contains i if {
 	some i, line in workflow_lines
 	trim_space(line) == "paths:"
 }
 
-# The sequence ends at the first line after it that is not an entry.
+# The sequence ends at the first line after its own `paths:` that is not an entry.
 entry_index contains j if {
+	some start in paths_start
 	some j, line in workflow_lines
-	j > paths_start
+	j > start
 	startswith(trim_space(line), "- ")
-	all_entries_contiguous_to(j)
+	entries_contiguous_from(start, j)
 }
 
-all_entries_contiguous_to(j) if {
-	every k in numbers.range(paths_start + 1, j) {
+# CONTIGUITY IS PER BLOCK, which is what keeps two blocks from running together:
+# an entry belongs to a `paths:` only when every line between them is also an
+# entry, so the gap between one block's end and the next block's key stops the
+# walk rather than being stepped over.
+entries_contiguous_from(start, j) if {
+	every k in numbers.range(start + 1, j) {
 		startswith(trim_space(workflow_lines[k]), "- ")
 	}
 }
@@ -245,6 +262,49 @@ honest := [
 
 test_a_filter_honouring_every_probe_is_clean if {
 	count(violation) == 0 with input as flow(honest)
+}
+
+# THE SHAPE THAT USED TO KILL THE MODULE (CLOUD-1880). A workflow declaring
+# `paths:` under BOTH `push` and `pull_request` — the ordinary way one filter is
+# applied to either trigger — bound the old complete `paths_start` twice and
+# raised `eval_conflict_error` before `pattern` was ever evaluated, taking every
+# predicate here down with it and exiting 0.
+#
+# Built without `flow`, because that helper hard-codes a single trigger and the
+# whole point is two.
+two_blocks(first, second) := {"tree": {"lines": {".github/workflows/rust.yml": array.concat(
+	array.concat(array.concat(["on:", "  push:", "    paths:"], first), ["  pull_request:", "    paths:"]),
+	array.concat(second, ["jobs:", "  build:"]),
+)}}}
+
+test_two_paths_blocks_still_yield_a_verdict if {
+	count(violation) == 0 with input as two_blocks(honest, honest)
+}
+
+# AND BOTH BLOCKS ARE JUDGED, which is the half that `min(paths_start)` would
+# have failed: it loads and compiles, then reads the first filter and ignores
+# every later one. Here the FIRST block is complete and the second drops an
+# input, so a gate looking only at the first reports clean.
+#
+# The entries are aggregated rather than intersected, so this case asserts the
+# union reaches the matcher: with both blocks read, the dropped input is present
+# via the first and the tree is clean — the discriminating direction is the
+# reverse case below.
+test_a_second_block_alone_is_still_read if {
+	count(violation) == 0 with input as two_blocks(
+		array.concat(array.slice(honest, 0, 5), array.slice(honest, 6, 8)),
+		honest,
+	)
+}
+
+# AN INPUT MISSING FROM BOTH BLOCKS IS STILL REFUSED, which is what keeps the
+# aggregation from being a way to pass by adding an empty second block.
+test_an_input_absent_from_every_block_is_refused if {
+	some v in violation with input as two_blocks(
+		array.concat(array.slice(honest, 0, 5), array.slice(honest, 6, 8)),
+		array.concat(array.slice(honest, 0, 5), array.slice(honest, 6, 8)),
+	)
+	v.verdict == "input select missing"
 }
 
 # THE SILENT DIRECTION: dropping an input leaves the jobs absent, and absent is
