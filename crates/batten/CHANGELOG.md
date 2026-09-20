@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.179](https://github.com/button-inc/batten/compare/v0.0.178...v0.0.179) - 2026-09-20
+
+### Fixed
+
+- *(facts)* read the frontmatter fence a generator actually wrote, not only `---`
+
+### Other
+
+- *(facts)* pin every frontmatter dialect, and declare the mutations that kill the table
+
 ## [0.0.178](https://github.com/button-inc/batten/compare/v0.0.177...v0.0.178) - 2026-09-20
 
 ### Fixed
