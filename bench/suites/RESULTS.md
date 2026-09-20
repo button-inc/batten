@@ -6,39 +6,38 @@ runner measured it; the suite runs `--no-parallelize-within-files`, so a
 file's number is its own serial cost and is what an author adding a case
 to it pays.
 
-- suites: 64
-- serial total: 144.6s
+- suites: 63
+- serial total: 139.8s
 
 | seconds | share | suite |
 | ---: | ---: | --- |
-| 20.7 | 14.3% | `tests/graph-check.bats` |
-| 8.3 | 5.7% | `tests/ready-lint.bats` |
-| 8.0 | 5.5% | `tests/token-bench.bats` |
-| 7.3 | 5.0% | `tests/board-sweep.bats` |
-| 6.9 | 4.8% | `tests/released.bats` |
-| 5.9 | 4.1% | `tests/in-progress-drain.bats` |
-| 5.7 | 3.9% | `tests/release-tracking-check.bats` |
-| 5.5 | 3.8% | `tests/release-assets-check.bats` |
-| 5.0 | 3.5% | `tests/mcp-allow-check.bats` |
-| 4.8 | 3.3% | `tests/landed-check.bats` |
-| 4.7 | 3.3% | `tests/sbom.bats` |
-| 4.0 | 2.8% | `tests/step-receipt.bats` |
-| 3.8 | 2.6% | `tests/closing-key-check.bats` |
-| 3.6 | 2.5% | `tests/land-divergence.bats` |
-| 3.5 | 2.4% | `tests/ntia-check.bats` |
-| 3.5 | 2.4% | `tests/ready-cites-check.bats` |
+| 20.7 | 14.8% | `tests/graph-check.bats` |
+| 8.3 | 5.9% | `tests/ready-lint.bats` |
+| 8.0 | 5.7% | `tests/token-bench.bats` |
+| 7.3 | 5.2% | `tests/board-sweep.bats` |
+| 6.9 | 4.9% | `tests/released.bats` |
+| 5.9 | 4.2% | `tests/in-progress-drain.bats` |
+| 5.7 | 4.1% | `tests/release-tracking-check.bats` |
+| 5.5 | 3.9% | `tests/release-assets-check.bats` |
+| 5.0 | 3.6% | `tests/mcp-allow-check.bats` |
+| 4.7 | 3.4% | `tests/sbom.bats` |
+| 4.0 | 2.9% | `tests/step-receipt.bats` |
+| 3.8 | 2.7% | `tests/closing-key-check.bats` |
+| 3.6 | 2.6% | `tests/land-divergence.bats` |
+| 3.5 | 2.5% | `tests/ntia-check.bats` |
+| 3.5 | 2.5% | `tests/ready-cites-check.bats` |
 | 3.0 | 2.1% | `tests/lint-rego.bats` |
-| 2.8 | 1.9% | `tests/hk-selection.bats` |
-| 2.6 | 1.8% | `tests/install.bats` |
-| 1.8 | 1.2% | `tests/finding-sink-check.bats` |
-| 1.8 | 1.2% | `tests/lint-deno.bats` |
+| 2.8 | 2.0% | `tests/hk-selection.bats` |
+| 2.6 | 1.9% | `tests/install.bats` |
+| 1.8 | 1.3% | `tests/finding-sink-check.bats` |
+| 1.8 | 1.3% | `tests/lint-deno.bats` |
 | 1.7 | 1.2% | `tests/reclaim-census.bats` |
 | 1.6 | 1.1% | `tests/spec-ref-check.bats` |
 | 1.6 | 1.1% | `tests/deferral-check.bats` |
-| 1.5 | 1.0% | `tests/signing-posture.bats` |
-| 1.5 | 1.0% | `tests/ready-lint-deferral.bats` |
+| 1.5 | 1.1% | `tests/signing-posture.bats` |
+| 1.5 | 1.1% | `tests/ready-lint-deferral.bats` |
 | 1.3 | 0.9% | `tests/spawn-census.bats` |
-| 1.2 | 0.8% | `tests/verify.bats` |
+| 1.2 | 0.9% | `tests/verify.bats` |
 | 1.1 | 0.8% | `tests/perf-record.bats` |
 | 1.1 | 0.8% | `tests/land-divergence-assert.bats` |
 | 1.1 | 0.8% | `tests/nonverdict-scan.bats` |
@@ -57,10 +56,10 @@ to it pays.
 | 0.7 | 0.5% | `tests/timeout-drift.bats` |
 | 0.6 | 0.4% | `tests/macos-link-check.bats` |
 | 0.6 | 0.4% | `tests/checksums.bats` |
-| 0.5 | 0.3% | `tests/branch-age-check.bats` |
-| 0.5 | 0.3% | `tests/board-payloads.bats` |
-| 0.5 | 0.3% | `tests/commit-convention.bats` |
-| 0.5 | 0.3% | `tests/connector-allow-guard.bats` |
+| 0.5 | 0.4% | `tests/branch-age-check.bats` |
+| 0.5 | 0.4% | `tests/board-payloads.bats` |
+| 0.5 | 0.4% | `tests/commit-convention.bats` |
+| 0.5 | 0.4% | `tests/connector-allow-guard.bats` |
 | 0.4 | 0.3% | `tests/sonar-gate.bats` |
 | 0.4 | 0.3% | `tests/release-due.bats` |
 | 0.4 | 0.3% | `tests/serena-mcp.bats` |
