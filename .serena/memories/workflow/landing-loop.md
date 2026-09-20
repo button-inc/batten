@@ -114,6 +114,18 @@ invisible on exactly the runs where the suite is slowest.
   and by `land`'s `graded_runs`. Two copies drifted once and that was CLOUD-327.
 - **Each name is judged by its LATEST run** — a sha accumulates a check-run per
   event, and a draft-created head carries its `opened` skip set forever.
+- **A head the lap never REBASES has only that skip set, and the lap stopping
+  there is the loop working.** Measured 2026-09-19 on #995: trunk had not moved,
+  so nothing was replayed, no push, no fresh sha — only the draft `opened` skips.
+  `land` refused to read them as an answer, exited 3 naming the remedy, re-drafted
+  the head and cancelled the matrix it would not use, sparing the fan-in carrier
+  (`land.rs`: `the_run_carrying_the_fan_in_is_spared_and_the_rest_are_not`,
+  `a_red_head_is_redrafted_and_a_green_one_is_left_ready`). The next lap re-readied
+  and `ready_for_review` minted the replacement set, which is what those `types:`
+  entries exist for (CLOUD-503). Nothing here needs repairing, and three separate
+  diagnoses in one session said otherwise before checking — `gh pr create --draft`
+  is AGENTS.md step 1, not the cause; the cancellations are designed, not a race.
+  When this shape appears, read `land`'s own test names before filing anything.
 - `skipped` and `cancelled` are **not** bad conclusions; they are the absence of
   an answer, and reading either as red wedges a branch with no exit. `absent` is
   different again and is tolerated only where a workflow is path-filtered.
