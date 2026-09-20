@@ -1221,7 +1221,13 @@ fn an_adjudication_of_one_row_does_not_authorise_another() {
 #[test]
 fn only_the_move_to_in_review_is_this_rows_business() {
     let repo = repo("row3-columns");
-    mint_read_receipt(&repo, "CLOUD-1", 5);
+    // MINTED PER ASSERTION, NEVER ONCE FOR THE WHOLE CASE. This spawns the
+    // binary eleven times, and `issue-read`'s window is 300s: measured under
+    // `verify`, which runs `test` and `test:musl` concurrently, the case took
+    // 329s and the last column's receipt had genuinely expired, so a correct
+    // exit `2` failed an assertion expecting `0`. The case is about WHICH COLUMN
+    // is this row's business; how long the preceding spawns took is not part of
+    // that question, and a receipt minted once made it one.
     for spelling in [
         "In Review",
         "in review",
@@ -1229,6 +1235,7 @@ fn only_the_move_to_in_review_is_this_rows_business() {
         "in_review",
         "IN-REVIEW",
     ] {
+        mint_read_receipt(&repo, "CLOUD-1", 5);
         assert_eq!(
             verdict(
                 &repo,
@@ -1240,6 +1247,7 @@ fn only_the_move_to_in_review_is_this_rows_business() {
         );
     }
     for column in ["Todo", "In Progress", "Done", "Backlog", "Canceled"] {
+        mint_read_receipt(&repo, "CLOUD-1", 5);
         assert_eq!(
             verdict(
                 &repo,
@@ -1250,6 +1258,7 @@ fn only_the_move_to_in_review_is_this_rows_business() {
             "this column has a different owner and is not gated here: {column}"
         );
     }
+    mint_read_receipt(&repo, "CLOUD-1", 5);
     assert_eq!(
         verdict(
             &repo,
