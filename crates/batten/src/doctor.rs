@@ -634,13 +634,13 @@ fn rustup(args: &[&str]) -> Option<(bool, String)> {
     // it: `exec` already owns the child-process boundary, and `piped_argv` is
     // the entry point for a first word that resolves on `PATH` — which is what
     // `rustup` is. `Diagnostics::Keep` is the merge this used to do by hand.
-    let argv: Vec<String> = std::iter::once("rustup")
+    let invocation: Vec<String> = std::iter::once("rustup")
         .chain(args.iter().copied())
         .map(ToOwned::to_owned)
         .collect();
     let (code, merged) = crate::exec::piped_argv(
         Path::new("."),
-        &argv,
+        &invocation,
         "",
         crate::exec::Diagnostics::Keep,
         &[],

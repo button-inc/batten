@@ -444,6 +444,15 @@ mod tests {
                 // ref log and the closing bodies through git's read-only
                 // plumbing and write nothing, so they sit beside `claim race`
                 // rather than with `claim check`, which records.
+                // The slow-tier probe and the suite selector, retired out of
+                // `mise-tasks/ci-slow-needed.sh` and `mise-tasks/suite-select.sh`
+                // (CLOUD-1716). Both read the diff and the declared headers and
+                // decide over them; neither runs a suite or moves a ref, so the
+                // effect is `read` and the allowlist carries them. `ci wait` is
+                // deliberately absent: it polls the forge and is not read-only in
+                // this sense.
+                "ci slow-needed".to_owned(),
+                "ci suites".to_owned(),
                 "claim keys".to_owned(),
                 "claim merged".to_owned(),
                 "claim race".to_owned(),
@@ -777,6 +786,15 @@ mod tests {
             // §2's listing gained the row in the same change, which is what
             // this assertion exists to prompt.
             "baseline".to_owned(),
+            // The token-economics benchmark (CLOUD-119), retired out of
+            // `mise-tasks/token-bench.sh` and `mise-tasks/token-bench-check.sh`
+            // under CLOUD-1753. A noun with one verb, whose `--check` re-renders
+            // into scratch and diffs — so the gate and the generator are one row
+            // rather than two that could disagree about the table. Neither
+            // reaches the read-only allowlist: the measurement RUNS the commands
+            // it prices.
+            "bench".to_owned(),
+            "bench tokens".to_owned(),
             // The handle-navigation noun (CLOUD-121). `capture show`, not a
             // bare `show`: §2 is noun-verb and lists no bare `show`, and the
             // noun is what gives lifecycle (`prune`) somewhere to live.
@@ -799,6 +817,13 @@ mod tests {
             // that reads the code alone holds instead of landing.
             "checks".to_owned(),
             "checks green".to_owned(),
+            // The CI noun and its two readers (CLOUD-1716), retired out of
+            // `mise-tasks/ci-slow-needed.sh` and `mise-tasks/suite-select.sh`.
+            // Both are on the read-only allowlist above: each decides over the
+            // diff and the declared headers and runs nothing.
+            "ci".to_owned(),
+            "ci slow-needed".to_owned(),
+            "ci suites".to_owned(),
             // The pull-time claim noun (CLOUD-1121), ported off
             // `mise-tasks/claim-check.sh` on the terms `semver` below
             // records: CLOUD-1059 made editing a shell rule refusable, so a
@@ -832,14 +857,19 @@ mod tests {
             "doctor hooks".to_owned(),
             "doctor mediator".to_owned(),
             "doctor session".to_owned(),
-            "doctor toolchain".to_owned(),
             // The one `doctor` sub-verb that writes (CLOUD-1753): it purges a
             // half-installed rustup target and adds it. Declared here like any
             // other row and ABSENT from the read-only allowlist above by
             // construction, which is the §5 derivation working rather than an
             // omission — the allowlist is `effect == read`, and this reaches the
             // network.
+            //
+            // IN SORTED POSITION, which this row was not: the surface emits its
+            // paths sorted and the assertion compares the two lists ELEMENT BY
+            // ELEMENT, so a row in the wrong place fails it with both sides
+            // carrying the same set.
             "doctor target".to_owned(),
+            "doctor toolchain".to_owned(),
             "enforce".to_owned(),
             "exec".to_owned(),
             // The schema is emitted by `generate`, not `config`: it is a
@@ -997,7 +1027,13 @@ mod tests {
             // CLOUD-1163 unit 10. `compare` is the subtree's one `read` member.
             "perf compare".to_owned(),
             "perf gate".to_owned(),
+            // The measurement (CLOUD-172), retired out of `mise-tasks/perf.sh`
+            // under CLOUD-1753. Not read-only: it builds and runs the benchmark.
+            "perf measure".to_owned(),
             "perf pair".to_owned(),
+            // The series, retired out of `mise-tasks/perf-record.sh`. Not
+            // read-only either: it writes a note on `refs/notes/perf`.
+            "perf record".to_owned(),
             "policy".to_owned(),
             "policy budget".to_owned(),
             "policy explain".to_owned(),
@@ -1086,6 +1122,13 @@ mod tests {
             // expensive.
             "record suites".to_owned(),
             "record tool".to_owned(),
+            // The release-install contract (CLOUD-65), retired out of
+            // `mise-tasks/install-check.sh` under CLOUD-1716. It asks the three
+            // authorities that name a release asset and compares them; it is
+            // absent from the read-only allowlist because it still runs the two
+            // interim programs it compares.
+            "release".to_owned(),
+            "release install".to_owned(),
             // The API-compatibility noun (CLOUD-1050), ported off
             // `mise-tasks/semver.sh` when CLOUD-1059 made editing a shell
             // rule refusable. §2 gains the noun in the same change, which is
