@@ -671,6 +671,39 @@ mod tests {
     }
 
     #[test]
+    fn every_frontmatter_dialect_is_stripped_and_nothing_else_is() {
+        // The widened set (CLOUD-1886), on the side that pays for it. A file
+        // whose frontmatter is a `+++` fence was charged for its own metadata
+        // until the shared rule learned the delimiter, which is over-taxing of
+        // exactly the kind the entry above records for `...`.
+        //
+        // Fails by: re-hand-rolling the fence scan here so the two readers
+        // disagree again — this module would then tax a `+++` fence that
+        // `Format::Markdown` reads as a document, which is the disagreement in
+        // its most confusing direction.
+        assert_eq!(loaded("+++\nname = \"x\"\n+++\nbody\n"), "body\n");
+        assert_eq!(loaded(";;;\n{\"name\": \"x\"}\n;;;\nbody\n"), "body\n");
+        assert_eq!(loaded("---toml\nname = \"x\"\n---\nbody\n"), "body\n");
+        assert_eq!(loaded("{\"name\": \"x\"}\nbody\n"), "body\n");
+        // A `}` inside a string is where a brace counter stops and a parser does
+        // not. Getting this wrong leaves half an object in the body, so the file
+        // is charged for the tail of its own frontmatter.
+        assert_eq!(loaded("{\"name\": \"}\"}\nbody\n"), "body\n");
+        // And the asymmetries, from this side: a TOML fence is not closed by
+        // YAML's `...`, and a tagged fence is not closed by its own tag. Both
+        // are unterminated, so both cost what they cost.
+        let unclosed = "+++\nname = \"x\"\n...\nbody\n";
+        assert_eq!(loaded(unclosed), unclosed);
+        let tagged = "---toml\nname = \"x\"\n---toml\nbody\n";
+        assert_eq!(loaded(tagged), tagged);
+        // The unfenced form is the only one with no delimiter, so it is the only
+        // one that could claim bytes nobody offered. A leading value that is not
+        // an object is prose and is charged for.
+        let array = "[1, 2]\nbody\n";
+        assert_eq!(loaded(array), array);
+    }
+
+    #[test]
     fn a_block_comment_is_free_and_an_inline_one_is_not() {
         assert_eq!(loaded("a\n<!-- note -->\nb\n"), "a\nb\n");
         assert_eq!(loaded("<!--\nmulti\nline\n-->\nb\n"), "b\n");

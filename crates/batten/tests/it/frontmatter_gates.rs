@@ -173,6 +173,74 @@ fn a_rules_stub_with_an_empty_trigger_is_refused() {
 }
 
 #[test]
+fn a_stub_carries_its_trigger_in_whatever_dialect_the_author_wrote() {
+    // CLOUD-1886 at the GATE, not at the reader. The module reads a canonical
+    // node and names no syntax — the claim here is that the node it receives is
+    // the same one whichever delimiter opened the fence, so a rule written once
+    // decides a tree that mixes them.
+    //
+    // Fails by: reading only the `---` dialect, which sends every other spelling
+    // through `no-document` and denies it as "you wrote no trigger" — this
+    // row's own defect, and the reason it reports at the gate rather than only
+    // at `Format::read`.
+    let mut seen = 0usize;
+    for fence in [
+        "+++\npaths = [\"crates/**/*.rs\"]\n+++\n",
+        ";;;\n{\"paths\": [\"crates/**/*.rs\"]}\n;;;\n",
+        "---toml\npaths = [\"crates/**/*.rs\"]\n---\n",
+        "{\"paths\": [\"crates/**/*.rs\"]}\n",
+    ] {
+        let root = scratch_for(
+            &format!("stub-dialect-{seen}"),
+            "policy/rules-paths-trigger.rego",
+        );
+        common::write(
+            &root,
+            ".claude/rules/rust.md",
+            &format!("{fence}\n{HOSTILE_BODY}"),
+        );
+        assert_eq!(
+            findings(&root, stub_row()),
+            Vec::<String>::new(),
+            "a stub carrying a trigger was refused for the delimiter it used"
+        );
+        seen += 1;
+    }
+    // ANTI-VACUITY: an empty list passes the loop in silence, and a clean
+    // verdict is what this case asserts — the cheapest way to fake it.
+    assert_eq!(seen, 4);
+}
+
+#[test]
+fn an_empty_trigger_is_refused_in_whatever_dialect_the_author_wrote() {
+    // The mirror of the case above, and the one that proves it is not passing
+    // because the module stopped seeing the file at all: the same delimiters
+    // carrying a trigger that fires on nothing must still be REFUSED. Without
+    // this, a reader that silently dropped every non-`---` document would make
+    // the clean case above pass for the worst possible reason.
+    let mut seen = 0usize;
+    for fence in [
+        "+++\npaths = []\n+++\n",
+        ";;;\n{\"paths\": []}\n;;;\n",
+        "---toml\npaths = []\n---\n",
+        "{\"paths\": []}\n",
+    ] {
+        let root = scratch_for(
+            &format!("stub-dialect-empty-{seen}"),
+            "policy/rules-paths-trigger.rego",
+        );
+        common::write(&root, ".claude/rules/x.md", &format!("{fence}\nbody\n"));
+        assert_eq!(
+            findings(&root, stub_row()),
+            vec![".claude/rules/x.md".to_owned()],
+            "a trigger that fires on nothing was not refused in this dialect"
+        );
+        seen += 1;
+    }
+    assert_eq!(seen, 4);
+}
+
+#[test]
 fn a_skill_missing_a_declared_field_is_refused() {
     let root = scratch_for("skill-missing", "policy/skill-frontmatter-complete.rego");
     common::write(

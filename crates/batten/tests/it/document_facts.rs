@@ -237,6 +237,325 @@ fn the_fence_is_recognised_across_the_spellings_a_consumer_actually_writes() {
     }
 }
 
+/// One well-formed fence per admitted dialect (CLOUD-1886), every one carrying
+/// the shape `WELL_FORMED` carries: a table `pin` with a `rust` key.
+///
+/// Written out per dialect rather than generated from the delimiter table,
+/// because the point is that the bytes a consumer actually types are what gets
+/// parsed — a generator would only restate `FENCES` and would agree with it
+/// however wrong `FENCES` was.
+const DIALECTS: &[(&str, &str)] = &[
+    ("yaml", "---\npin:\n  rust: \"1.97.1\"\n---\n"),
+    ("toml", "+++\n[pin]\nrust = \"1.97.1\"\n+++\n"),
+    (
+        "json-fenced",
+        ";;;\n{\"pin\": {\"rust\": \"1.97.1\"}}\n;;;\n",
+    ),
+    ("tagged-yaml", "---yaml\npin:\n  rust: \"1.97.1\"\n---\n"),
+    ("tagged-toml", "---toml\n[pin]\nrust = \"1.97.1\"\n---\n"),
+    (
+        "tagged-json",
+        "---json\n{\"pin\": {\"rust\": \"1.97.1\"}}\n---\n",
+    ),
+    ("json-object", "{\n  \"pin\": {\"rust\": \"1.97.1\"}\n}\n"),
+];
+
+#[test]
+fn every_frontmatter_dialect_reads_the_same_node_path() {
+    // The point of CLOUD-1886, in the shape CLOUD-1787 established one dialect
+    // over: `pin.rust` means the same thing whichever delimiter the author
+    // reached for, so a tree mixing a Hugo `+++` post and a Jekyll `---` post is
+    // one rule rather than two.
+    //
+    // Fails by: dropping a row from `FENCES` — a `+++` file then answers `IsNot`,
+    // which is the defect this row is filed against — or by handing every block
+    // to the YAML reader regardless of which delimiter opened it, where a TOML
+    // table reads as `CouldNotLook` and reports here as a node mismatch.
+    let mut seen = 0usize;
+    for (dialect, fence) in DIALECTS {
+        let text = format!("{fence}# heading\n\n| a | b |\n| - | - |\n| 1 | 2 |\n");
+        let Look::Is(document) = Format::Markdown.read(&text) else {
+            panic!("{dialect} did not read as a document");
+        };
+        assert_eq!(
+            document.at("pin.rust"),
+            Look::Is(&Node::Text("1.97.1".to_owned())),
+            "{dialect} addressed pin.rust differently"
+        );
+        seen += 1;
+    }
+    // ANTI-VACUITY: an empty table passes the loop above in silence, and the
+    // whole row is the claim that SEVERAL dialects agree.
+    assert_eq!(seen, DIALECTS.len());
+    assert!(seen > 1, "one dialect cannot demonstrate agreement");
+}
+
+#[test]
+fn a_toml_fence_is_not_closed_by_a_yaml_document_terminator() {
+    // `...` is YAML's second document terminator and TOML has no such concept,
+    // so accepting it there would invent a grammar rather than admit one. The
+    // fence is therefore unterminated, and an unterminated fence is no fence.
+    //
+    // Fails by: giving every dialect one shared closer set — the tidying this
+    // table most invites, and the one that would make `+++ … ...` a document
+    // nothing writes.
+    assert_eq!(
+        Format::Markdown.read("+++\n[pin]\nrust = \"1.97.1\"\n...\n# heading\n"),
+        Look::IsNot
+    );
+    // The control, without which the case above passes for a TOML fence that
+    // never parses at all: the same block closed by its own delimiter reads.
+    let Look::Is(document) = Format::Markdown.read("+++\n[pin]\nrust = \"1.97.1\"\n+++\n") else {
+        panic!("a well-formed TOML fence did not read as a document");
+    };
+    assert_eq!(
+        document.at("pin.rust"),
+        Look::Is(&Node::Text("1.97.1".to_owned()))
+    );
+}
+
+#[test]
+fn a_tagged_fence_closes_on_the_bare_delimiter() {
+    // gray-matter's asymmetry, which is the half of its syntax a reader invents
+    // symmetrically and then reads nothing: `---toml` opens and the plain `---`
+    // closes, because the language is the remainder of the OPENING line only.
+    //
+    // Fails by: closing a tagged fence on its own tag, which reads the file the
+    // way the syntax looks rather than the way it is specified.
+    let Look::Is(document) =
+        Format::Markdown.read("---toml\n[pin]\nrust = \"1.97.1\"\n---\nbody\n")
+    else {
+        panic!("a tagged fence did not close on the bare delimiter");
+    };
+    assert_eq!(
+        document.at("pin.rust"),
+        Look::Is(&Node::Text("1.97.1".to_owned()))
+    );
+    // And the mirror, without which the case above is satisfied by a reader that
+    // accepts both spellings: repeating the tag does not close anything.
+    assert_eq!(
+        Format::Markdown.read("---toml\n[pin]\nrust = \"1.97.1\"\n---toml\nbody\n"),
+        Look::IsNot
+    );
+}
+
+#[test]
+fn an_unfenced_json_object_ends_where_its_parser_says_and_not_at_a_brace() {
+    // Hugo counts braces with its own quote and escape state. This does not:
+    // the object ends where `serde_json` says the value ended. The fixture is
+    // the case that separates the two — a `}` inside a string — and a brace
+    // counter stops early on it, taking half an object as the whole document
+    // and leaving the rest of the object in the body.
+    //
+    // Fails by: replacing the parse with a scan for a closing brace, in any
+    // form, including one that tracks quotes but not escapes.
+    let Look::Is(document) =
+        Format::Markdown.read("{\"pin\": {\"rust\": \"1.97.1\"}, \"brace\": \"}\"}\n# heading\n")
+    else {
+        panic!("a leading JSON object did not read as a document");
+    };
+    assert_eq!(
+        document.at("pin.rust"),
+        Look::Is(&Node::Text("1.97.1".to_owned()))
+    );
+    assert_eq!(
+        document.at("brace"),
+        Look::Is(&Node::Text("}".to_owned())),
+        "the object was cut short at a brace inside a string"
+    );
+}
+
+#[test]
+fn a_leading_brace_that_is_not_an_object_is_prose() {
+    // The unfenced form is the only admitted one with no delimiter, so it is the
+    // only one that can claim bytes an author never offered as frontmatter —
+    // and `budget` shares this split, so a false positive stops a file being
+    // charged for its own content. Requiring a parsed OBJECT is the bound.
+    //
+    // Fails by: accepting any leading JSON value, or by treating a leading `{`
+    // as a fence opener before the parse has agreed that it is one.
+    for text in [
+        // A JSON array is a value and is not frontmatter.
+        "[1, 2]\n# heading\n",
+        // A bare scalar likewise.
+        "\"just a string\"\n# heading\n",
+        // An object that does not parse is not a document this reader failed on
+        // — nothing says the author meant frontmatter rather than prose opening
+        // with a brace, and guessing is how prose becomes a document.
+        "{\"pin\": {\"rust\": }\n# heading\n",
+        // A brace mid-sentence, which is the ordinary markdown case.
+        "the shape is {\"a\": 1}\n",
+    ] {
+        assert_eq!(
+            Format::Markdown.read(text),
+            Look::IsNot,
+            "a leading brace that is not an object was read as frontmatter"
+        );
+    }
+}
+
+#[test]
+fn a_fence_that_is_not_the_first_line_is_prose_in_every_dialect() {
+    // CLOUD-1787's strictness, carried to the delimiters CLOUD-1886 adds rather
+    // than relaxed by them. Hugo skips leading blank lines and whitespace before
+    // the delimiter; following it would turn a `+++` opening a section into a
+    // document.
+    //
+    // Fails by: searching for an opener anywhere in the file, or by trimming
+    // leading blank lines before looking.
+    let mut seen = 0usize;
+    for opener in ["+++", ";;;", "---toml"] {
+        for text in [
+            format!("# heading\n{opener}\n[pin]\nrust = \"1.97.1\"\n{opener}\n"),
+            format!("\n{opener}\n[pin]\nrust = \"1.97.1\"\n{opener}\n"),
+            // Opened and never closed: guessing where it ends is the same error
+            // as finding one mid-file.
+            format!("{opener}\n[pin]\nrust = \"1.97.1\"\n\n# heading\n"),
+        ] {
+            assert_eq!(
+                Format::Markdown.read(&text),
+                Look::IsNot,
+                "{opener} was read as a fence where it does not lead the file"
+            );
+            seen += 1;
+        }
+    }
+    // ANTI-VACUITY: the nested loops are two tables, and either being empty
+    // would pass.
+    assert_eq!(seen, 9);
+}
+
+#[test]
+fn an_unknown_tag_is_not_a_fence_and_never_a_guess() {
+    // Guessing which parser `---xml` meant is the same error as guessing where
+    // an unterminated fence ends, and it is the worse one: it would hand an
+    // author's bytes to a parser they did not name.
+    //
+    // Fails by: treating any `---<word>` opener as a fence and falling back to
+    // one dialect for the tags it does not know.
+    assert_eq!(
+        Format::Markdown.read("---xml\n<pin rust=\"1.97.1\"/>\n---\n# heading\n"),
+        Look::IsNot
+    );
+    // The control: the same shape under a tag that IS declared reads, so the
+    // case above is about the tag and not about the fixture.
+    assert!(matches!(
+        Format::Markdown.read("---yaml\npin:\n  rust: \"1.97.1\"\n---\n# heading\n"),
+        Look::Is(_)
+    ));
+}
+
+#[test]
+fn an_empty_fence_is_an_empty_document_in_every_dialect() {
+    // The empty-block answer is decided BEFORE the dialect is dispatched, and
+    // must be, because the three parsers disagree about empty input in three
+    // directions: an empty YAML stream is `CouldNotLook`, an empty TOML document
+    // is a valid empty table, and empty JSON is an EOF error. Dispatching first
+    // makes one fence concept answer three ways depending on which delimiter the
+    // author reached for.
+    //
+    // Fails by: moving the `block.trim().is_empty()` check behind the dispatch,
+    // which reddens the YAML and JSON rows and leaves TOML passing — the shape
+    // that makes this look like a YAML bug rather than an ordering one.
+    let empty = Node::Map(std::collections::BTreeMap::new());
+    let mut seen = 0usize;
+    for text in [
+        "---\n---\n# heading\n",
+        "+++\n+++\n# heading\n",
+        ";;;\n;;;\n# heading\n",
+        "---toml\n---\n# heading\n",
+        // The unfenced form reaches the same value by a different route: `{}`
+        // is not an empty BLOCK, it is an object that parses to no keys. Both
+        // must answer present-and-empty or the two routes disagree.
+        "{}\n# heading\n",
+    ] {
+        let Look::Is(document) = Format::Markdown.read(text) else {
+            panic!("an empty fence did not read as a document");
+        };
+        assert_eq!(document, empty);
+        // Looked, and the key is not there — which is NOT the same answer as the
+        // file having no fence at all.
+        assert_eq!(document.at("name"), Look::IsNot);
+        seen += 1;
+    }
+    assert_eq!(seen, 5);
+}
+
+#[test]
+fn a_malformed_block_is_could_not_look_in_every_fenced_dialect() {
+    // The fence IS there and its contents are not that dialect's syntax, which
+    // is a different non-answer from having no fence: `CouldNotLook` says the
+    // reader could not read it, and sends an author to the block. Each fixture
+    // is malformed in its own dialect's way, because a blob every parser rejects
+    // proves nothing about any of them.
+    //
+    // Fails by: collapsing a parse failure inside a recognised fence into
+    // `IsNot`, which reports a fence that is sitting on line 1 as absent — the
+    // exact harm CLOUD-1886 is filed against, reintroduced one layer in.
+    let mut seen = 0usize;
+    for (dialect, text) in [
+        ("toml", "+++\n[pin\nrust = \n+++\n# heading\n"),
+        (
+            "json-fenced",
+            ";;;\n{\"pin\": {\"rust\": }\n;;;\n# heading\n",
+        ),
+        ("tagged-toml", "---toml\n[pin\nrust = \n---\n# heading\n"),
+        (
+            "tagged-json",
+            "---json\n{\"pin\": {\"rust\": }\n---\n# heading\n",
+        ),
+        (
+            "tagged-yaml",
+            "---yaml\npin:\n\t- bad tab indent\n  - and: [unclosed\n---\n# heading\n",
+        ),
+    ] {
+        assert_eq!(
+            Format::Markdown.read(text),
+            Look::CouldNotLook,
+            "{dialect} read a malformed block as an answer"
+        );
+        seen += 1;
+    }
+    assert_eq!(seen, 5);
+}
+
+#[test]
+fn a_markdown_body_never_reaches_a_parser_in_any_dialect() {
+    // CLOUD-1787's defect, asked of the dialects CLOUD-1886 adds. Identical
+    // correct frontmatter; only the body varies, over the shapes measured
+    // failing when the file was read as one stream. A `+++` fence is the sharper
+    // case than the `---` one above it, because a markdown body is not
+    // accidentally valid TOML in the way it is accidentally valid YAML — so a
+    // reader that leaked the body here would fail loudly rather than subtly.
+    //
+    // Fails by: reading past the closing delimiter, or by taking the LAST
+    // delimiter in the file rather than the first one that closes the fence.
+    const FRONTMATTER: &str = "+++\n[pin]\nrust = \"1.97.1\"\n+++\n";
+    let mut seen = 0usize;
+    for body in [
+        "prose only.\n",
+        "*emphasis*, **bold**, Rate: 3:1\n",
+        "- [ ] a task\n",
+        "| a | b |\n| - | - |\n| 1 | 2 |\n",
+        "> **HEADING** text\n",
+        // A body carrying the opening delimiter again, which is what a reader
+        // scanning for the last one gets wrong.
+        "a thematic break follows\n\n+++\n\nmore prose\n",
+    ] {
+        let text = format!("{FRONTMATTER}{body}");
+        let Look::Is(document) = Format::Markdown.read(&text) else {
+            panic!("a markdown body changed whether the frontmatter parsed");
+        };
+        assert_eq!(
+            document.at("pin.rust"),
+            Look::Is(&Node::Text("1.97.1".to_owned())),
+            "a markdown body changed what the frontmatter said"
+        );
+        seen += 1;
+    }
+    assert_eq!(seen, 6);
+}
+
 #[test]
 fn markdown_is_declarable_by_extension_and_names_no_second_parser() {
     // `.md` was a load-time refusal before CLOUD-1787 ("this build has no parser
