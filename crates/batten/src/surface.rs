@@ -3708,6 +3708,9 @@ pub const SURFACE: &[CommandDecl] = &[
     // release binary and runs the benchmark runner over it, so its reach is
     // whatever those have. It emits one record per path on stdout, which is the
     // data channel `record tool perf-p95` reads.
+    // unreached: "perf measure" CLOUD-1753 `[tasks."perf"]` invokes it in mise.toml, but the
+    // call ENDS the line, so the space-bounded needle this arm reads with cannot see
+    // it -- the residue `reached`'s own header names.
     CommandDecl {
         path: "perf measure",
         id: "perf.measure",
@@ -3724,6 +3727,9 @@ pub const SURFACE: &[CommandDecl] = &[
     // `EXITS_VERDICT` because refusing off trunk is a VIOLATION rather than an
     // error — a branch's numbers are not the trunk's, and the caller is being
     // told its request was wrong rather than that the engine broke.
+    // unreached: "perf record" CLOUD-1753 `[tasks."perf-record"]` invokes it in mise.toml, but the
+    // call ENDS the line, so the space-bounded needle this arm reads with cannot see
+    // it -- the residue `reached`'s own header names.
     CommandDecl {
         path: "perf record",
         id: "perf.record",

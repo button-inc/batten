@@ -561,6 +561,32 @@ declared_modules := {
 	# `error` and `exit`, the codes its report answers in. Its back-edges are
 	# forbidden below for the acquisition modules' reason.
 	"task",
+	# `install` and `tokens` arrived with CLOUD-1753 and this rule named both on
+	# the gate before landing — modules written, both tiers green, and nobody had
+	# placed either. They are placed for OPPOSITE reasons, which is why the pair
+	# is worth the lines rather than one entry naming two names.
+	#
+	# `install` is a LEAF and a PURE PREDICATE. It answers whether a published
+	# release is installable — whether the matrix builds the target an installer
+	# would ask for, whether the asset name that installer derives is the one the
+	# release publishes, whether a committed file is a binary — and it answers all
+	# of it from manifest text and a tracked path list. It reaches `error` for
+	# `UsageError` and nothing else. **IT FETCHES NOTHING**, and that is the
+	# placement rather than an omission: an installability answer that depended on
+	# the network would be unavailable exactly when the release pipeline is broken,
+	# and a gate that stops deciding under load is not a gate. So it must never
+	# grow an edge to `fetch`, which is `hook`'s prohibition one domain over.
+	#
+	# `tokens` is a MEASUREMENT harness in `perf`'s class and sits ABOVE `arm`,
+	# reaching it alone — `stability` and `Reading`, so one definition of
+	# byte-stability serves every declared arm in this crate. It reads no decider
+	# and mints no `Finding`: what a published figure MEANS is the reader's, off a
+	# method and a workload table that are committed data rather than code. Its
+	# back-edges are forbidden for the measurement modules' reason, and the edge
+	# from `arm` to here is forbidden for the reason `perf`'s is — a generic
+	# harness that knew about one of its own instances is the drift the extraction
+	# removed.
+	"install", "tokens",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
