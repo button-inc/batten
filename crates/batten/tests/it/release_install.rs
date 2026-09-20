@@ -21,6 +21,18 @@
 // carried: mise-tasks/install-check.sh crates/batten/src/install.rs kind:verb crates/batten/tests/it/release_install.rs runs:mise+run+install-check
 // carried: tests/install-check.bats crates/batten/src/install.rs kind:verb crates/batten/tests/it/release_install.rs
 //
+// carried: "the tree as it stands agrees across dist, install.sh and binstall" crates/batten/tests/it/release_install.rs
+// carried: "THE DEFECT: a matrix target install.sh does not serve fails, naming it" crates/batten/tests/it/release_install.rs
+// carried: "a target install.sh claims that no matrix leg builds fails the other way" crates/batten/tests/it/release_install.rs
+// carried: "THE DEFECT: renaming the archive in dist breaks the install path" crates/batten/tests/it/release_install.rs
+// carried: "THE DEFECT: a binstall pkg-url that resolves elsewhere fails" crates/batten/tests/it/release_install.rs
+// carried: "THE DEFECT: a committed executable fails, naming the path and nothing else" crates/batten/tests/it/release_install.rs
+// carried: "a text file that happens to start MZ is not an executable" crates/batten/tests/it/release_install.rs
+// changed: "an empty matrix is exit 2 — a gate that checks nothing must not report green" crates/batten/src/install.rs the corpus INVERTS the engine's exit table: this was exit 2 in the shell and is `Internal` (3) on the engine, because the engine could not look rather than the caller asking for something wrong
+// changed: "a missing install.sh is exit 2, not a passing contract" crates/batten/src/install.rs the corpus INVERTS the engine's exit table: this was exit 2 in the shell and is `Internal` (3) on the engine, because the engine could not look rather than the caller asking for something wrong
+// changed: "a manifest with no binstall metadata is exit 2 — that half is unimplemented" crates/batten/src/install.rs the corpus INVERTS the engine's exit table: this was exit 2 in the shell and is `Internal` (3) on the engine, because the engine could not look rather than the caller asking for something wrong
+// changed: "a pkg-fmt with no suffix rule is exit 2, never a guessed extension" crates/batten/src/install.rs the corpus INVERTS the engine's exit table: this was exit 2 in the shell and is `Internal` (3) on the engine, because the engine could not look rather than the caller asking for something wrong
+//
 // carried: "a matrix target install.sh does not serve fails" crates/batten/src/install.rs kind:verb crates/batten/tests/it/release_install.rs runs:mise+run+install-check
 // carried: "the target LIST has one authority and it is the workflow's" crates/batten/src/install.rs
 // carried: "the Windows exclusion is derived, never restated" crates/batten/src/install.rs

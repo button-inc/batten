@@ -17,6 +17,38 @@
 // carried: mise-tasks/landed-check.sh crates/batten/src/landed.rs kind:verb crates/batten/tests/it/landed_check.rs runs:batten+landed+check
 // carried: tests/landed-check.bats crates/batten/src/landed.rs kind:verb crates/batten/tests/it/landed_check.rs
 //
+// carried: "an In Progress issue whose commits are on main is reported" crates/batten/tests/it/landed_check.rs
+// carried: "the same issue in In Review is not reported — that is the correct state" crates/batten/tests/it/landed_check.rs
+// carried: "an In Progress issue with nothing on main is genuinely in progress" crates/batten/tests/it/landed_check.rs
+// carried: "a prefix does not match a longer id" crates/batten/tests/it/landed_check.rs
+// changed: "the pipeline does not eat the verdict" crates/batten/src/landed.rs there is no pipeline to eat a verdict: the sweep is one verb returning an exit code to its caller, which is the whole reason the shell case existed
+// carried: "several issues are each judged, in stable order" crates/batten/tests/it/landed_check.rs
+// carried: "issues in other columns are none of this gate's business" crates/batten/tests/it/landed_check.rs
+// carried: "output is a pointer — identifiers and target state, never issue bodies" crates/batten/tests/it/landed_check.rs
+// carried: "a concatenated payload stream is accepted, like graph-check's" crates/batten/tests/it/landed_check.rs
+// changed: "an unresolvable origin/main exits 2 — a checkout problem, not a clean board" crates/batten/src/landed.rs the corpus INVERTS the engine's exit table: this was exit 2 in the shell and is `Internal` (3) on the engine, because the engine could not look rather than the caller asking for something wrong
+// changed: "empty stdin exits 2, distinct from a clean board" crates/batten/src/landed.rs the corpus INVERTS the engine's exit table: this was exit 2 in the shell and is `Internal` (3) on the engine, because the engine could not look rather than the caller asking for something wrong
+// changed: "unparseable stdin exits 2" crates/batten/src/landed.rs the corpus INVERTS the engine's exit table: this was exit 2 in the shell and is `Internal` (3) on the engine, because the engine could not look rather than the caller asking for something wrong
+// carried: "CLOUD-804: a commit citing an id as PRIOR ART does not land it" crates/batten/tests/it/landed_check.rs
+// carried: "CLOUD-804: a commit naming an id in a LIST OF PAST FAILURES does not land it" crates/batten/tests/it/landed_check.rs
+// carried: "CLOUD-804: a Refs: trailer is a mention, not a claim" crates/batten/tests/it/landed_check.rs
+// carried: "CLOUD-804: a closing keyword in a commit IS a claim" crates/batten/tests/it/landed_check.rs
+// carried: "CLOUD-804: commits on main with the key only in a MERGED PR body still land it" crates/batten/tests/it/landed_check.rs
+// carried: "CLOUD-804: an id named by no merged PR and no claim is live work" crates/batten/tests/it/landed_check.rs
+// carried: "CLOUD-804: a prefix does not match a longer id in the evidence file" crates/batten/tests/it/landed_check.rs
+// changed: "CLOUD-804: no evidence flag is exit 2, never a clean column" crates/batten/src/landed.rs the corpus INVERTS the engine's exit table: this was exit 2 in the shell and is `Internal` (3) on the engine, because the engine could not look rather than the caller asking for something wrong
+// changed: "CLOUD-804: an unreadable evidence file is exit 2" crates/batten/src/landed.rs the corpus INVERTS the engine's exit table: this was exit 2 in the shell and is `Internal` (3) on the engine, because the engine could not look rather than the caller asking for something wrong
+// changed: "CLOUD-804: the flag with no value is a caller bug, not empty evidence" crates/batten/src/landed.rs the corpus INVERTS the engine's exit table: this was exit 2 in the shell and is `Internal` (3) on the engine, because the engine could not look rather than the caller asking for something wrong
+// carried: "CLOUD-804: the report still carries no issue body" crates/batten/tests/it/landed_check.rs
+// carried: "an asserted landing drains a row no derived half can reach" crates/batten/tests/it/landed_check.rs
+// carried: "an asserted landing is REPORTED as asserted, never as derived" crates/batten/tests/it/landed_check.rs
+// carried: "a DERIVED landing is not labelled asserted, even with the flag supplied" crates/batten/tests/it/landed_check.rs
+// carried: "a MENTION still never counts — CLOUD-804's distinction survives the new arm" crates/batten/tests/it/landed_check.rs
+// carried: "the flag is optional — absent is no assertions, not could-not-look" crates/batten/tests/it/landed_check.rs
+// carried: "a --landed-by file that cannot be read is exit 2, not an empty assertion set" crates/batten/tests/it/landed_check.rs
+// changed: "--landed-by needs a value" crates/batten/src/landed.rs the corpus INVERTS the engine's exit table: this was exit 2 in the shell and is `Internal` (3) on the engine, because the engine could not look rather than the caller asking for something wrong
+// changed: "an asserted row that is not In Progress is untouched" crates/batten/src/landed.rs the corpus INVERTS the engine's exit table: this was exit 2 in the shell and is `Internal` (3) on the engine, because the engine could not look rather than the caller asking for something wrong
+//
 // carried: "landedness is a DISJUNCTION and each half exists because the other alone is wrong" crates/batten/src/landed.rs
 // carried: "a commit reachable from origin/main CLAIMS the id — claimed-keys is the authority, consulted rather than copied" crates/batten/src/landed.rs kind:verb crates/batten/tests/it/landed_check.rs runs:batten+landed+check
 // carried: "a PR must be MERGED — an open PR is live work" crates/batten/src/landed.rs kind:verb crates/batten/tests/it/landed_check.rs runs:batten+landed+check

@@ -20,6 +20,20 @@
 // carried: mise-tasks/suite-select.sh crates/batten/src/suites.rs kind:verb crates/batten/tests/it/ci_suites.rs runs:mise+run+test:bats
 // carried: tests/suite-select.bats crates/batten/src/suites.rs kind:verb crates/batten/tests/it/ci_suites.rs
 //
+// carried: "A WIDE RUN SEES AN UNTRACKED SUITE, since the narrow path already does" crates/batten/tests/it/ci_suites.rs
+// carried: "A DELETED SUITE IS NOT HANDED TO BATS as a path that does not exist" crates/batten/tests/it/ci_suites.rs
+// carried: "THE PROBE: a change to one program selects that program's suite and no others" crates/batten/tests/it/ci_suites.rs
+// carried: "a subject match is a whole field, not a substring" crates/batten/tests/it/ci_suites.rs
+// carried: "a changed suite selects itself" crates/batten/tests/it/ci_suites.rs
+// carried: "two changed programs select both suites, sorted" crates/batten/tests/it/ci_suites.rs
+// carried: "a shared input runs everything" crates/batten/tests/it/ci_suites.rs
+// carried: "the helpers file runs everything, because it is sourced widely" crates/batten/tests/it/ci_suites.rs
+// carried: "a path outside the reasonable set runs everything" crates/batten/tests/it/ci_suites.rs
+// carried: "a program no suite declares runs everything" crates/batten/tests/it/ci_suites.rs
+// carried: "an unresolvable base runs everything rather than guessing" crates/batten/tests/it/ci_suites.rs
+// carried: "every wide run says why, as a pointer" crates/batten/tests/it/ci_suites.rs
+// changed: "the case count of a narrow selection is the selected suites' own" crates/batten/src/suites.rs the verb emits the SELECTED PATHS and nothing else; how many cases they hold is the runner's own count, and a selector that also reported it would be a second authority over a number bats already prints
+//
 // carried: "a deny-list, never an allow-list" crates/batten/src/suites.rs
 // carried: "a shared input is one that can move a suite whose subject does not name it" crates/batten/src/suites.rs kind:verb crates/batten/tests/it/ci_suites.rs runs:mise+run+test:bats
 // carried: "the match is on a whole field rather than a substring" crates/batten/src/suites.rs

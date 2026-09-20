@@ -17,11 +17,33 @@
 //! than of a scrubbing step, and `prose_in_the_body_cannot_reach_the_output`
 //! asserts it over a body carrying all three.
 //
-// carried: mise-tasks/board-diff-overlap.sh crates/batten/src/ready.rs kind:authority crates/batten/tests/it/named_paths.rs
-// carried: tests/board-diff-overlap.bats crates/batten/src/ready.rs kind:authority crates/batten/tests/it/named_paths.rs
+// carried: mise-tasks/board-diff-overlap.sh crates/batten/src/ready.rs kind:mechanism crates/batten/tests/it/named_paths.rs
+// carried: tests/board-diff-overlap.bats crates/batten/src/ready.rs kind:mechanism crates/batten/tests/it/named_paths.rs
+//
+// carried: "a short form resolves to the tracked path" crates/batten/tests/it/named_paths.rs
+// carried: "a full tracked path resolves too" crates/batten/tests/it/named_paths.rs
+// carried: "a backticked task name with no extension resolves" crates/batten/tests/it/named_paths.rs
+// withdrawn: "two named changed files are both reported, sorted" the intersect mode is dropped rather than ported, for the reason the decision row above states: `[program.named-paths]` passed `--named` and nothing else ever called the program, so no case over the diff-intersecting default has a successor to name
+// withdrawn: "a row naming only untouched files reports nothing" the intersect mode is dropped rather than ported, for the reason the decision row above states: `[program.named-paths]` passed `--named` and nothing else ever called the program, so no case over the diff-intersecting default has a successor to name
+// withdrawn: "the same body reports nothing once the branch changes nothing" the intersect mode is dropped rather than ported, for the reason the decision row above states: `[program.named-paths]` passed `--named` and nothing else ever called the program, so no case over the diff-intersecting default has a successor to name
+// carried: "an ambiguous basename resolves to nothing" crates/batten/tests/it/named_paths.rs
+// carried: "the same file named by its full path resolves despite the ambiguity" crates/batten/tests/it/named_paths.rs
+// carried: "a path naming no tracked file is ignored rather than reported" crates/batten/tests/it/named_paths.rs
+// carried: "nothing from the body but a tracked path is emitted" crates/batten/tests/it/named_paths.rs
+// changed: "an empty body reports a dash rather than a zero" crates/batten/tests/it/named_paths.rs an empty body answers `0` rather than a dash: the dash was the shell's could-not-look spelling on a channel that had no other, and an authority returns `None` for that case
+// changed: "outside a git checkout it reports a dash" crates/batten/src/ready.rs the exit code is gone with the process: an authority answers `(status, stdout)` to the recorder, and could-not-look is `None` rather than a printed dash
+// changed: "a checkout with no origin/main reports a dash" crates/batten/src/ready.rs the exit code is gone with the process: an authority answers `(status, stdout)` to the recorder, and could-not-look is `None` rather than a printed dash
+// changed: "it never exits non-zero, whatever it finds" crates/batten/src/ready.rs the exit code is gone with the process: an authority answers `(status, stdout)` to the recorder, and could-not-look is `None` rather than a printed dash
+// withdrawn: "REPLAY: all three rows this branch spun off name code it was holding open" the case replayed three board rows that were open when it was written; the rows are closed and the resolution they exercised is asserted over a fixture in the successor tier, so re-pinning live rows would be a test of the board rather than of the code
+// withdrawn: "REPLAY CONTROL: the same three bodies report nothing from a clean tree" the case replayed three board rows that were open when it was written; the rows are closed and the resolution they exercised is asserted over a fixture in the successor tier, so re-pinning live rows would be a test of the board rather than of the code
+// carried: "--named reports a named path the branch has not changed" crates/batten/tests/it/named_paths.rs
+// withdrawn: "the default mode still intersects, so the same body reports nothing" the intersect mode is dropped rather than ported, for the reason the decision row above states: `[program.named-paths]` passed `--named` and nothing else ever called the program, so no case over the diff-intersecting default has a successor to name
+// carried: "--named still resolves an ambiguous basename to nothing" crates/batten/tests/it/named_paths.rs
+// carried: "--named works where there is no origin/main to diff against" crates/batten/tests/it/named_paths.rs
+// withdrawn: "the default mode without origin/main is still could-not-look" the intersect mode is dropped rather than ported, for the reason the decision row above states: `[program.named-paths]` passed `--named` and nothing else ever called the program, so no case over the diff-intersecting default has a successor to name
+// changed: "an unknown flag is a usage error, not a silent default" crates/batten/src/ready.rs there is no flag to get wrong: the authority is asked by name through `authority = { ask = "named-paths" }` and reads its body on stdin
 //
 // carried: "an AMBIGUOUS basename resolves to NOTHING rather than to a guess" crates/batten/src/ready.rs
-// carried: "a short form resolves to the tracked path" crates/batten/src/ready.rs
 // carried: "only paths TRACKED IN THIS REPOSITORY can reach the output" crates/batten/src/ready.rs
 // carried: "a task is INVOKED as `mise run land` and written up as `land`, while the file is `land.sh`" crates/batten/src/ready.rs
 // changed: "the default mode intersects with the diff" crates/batten/src/ready.rs the intersect mode is DROPPED rather than ported, because `[program.named-paths]` passed `--named` and nothing else ever called the program — an intersection is a fact about the diff at write time, and the recorder wants what the row is about, which does not decay
@@ -30,7 +52,7 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::common::{Fixture, git_in};
 
@@ -51,7 +73,7 @@ fn repo(name: &str) -> PathBuf {
 }
 
 /// What the authority answers for a body, as `(status, stdout)`.
-fn named(dir: &PathBuf, body: &str) -> (i32, String) {
+fn named(dir: &Path, body: &str) -> (i32, String) {
     let payload = serde_json::Value::String(body.to_owned());
     batten::ready::named_paths(&payload, dir).expect("the authority could look")
 }
