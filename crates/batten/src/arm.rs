@@ -422,6 +422,20 @@ pub fn percentile<T>(
     // round DOWN into the body of the distribution, which is how a tail that a
     // budget exists to bound stops being represented at all. Integer ceiling
     // division, so the rounding is exact rather than a float's best effort.
+    //
+    // **THE SAME RANK SERVES p50, and that is a stated convention rather than a
+    // side effect** (review of #928). On an EVEN series the ceiling rank selects
+    // the upper of the two middle elements, so `[1.0, 2.0]` has a p50 of 2.0
+    // where a floor rank would answer 1.0. Nearest-rank defines no
+    // interpolation, both are legitimate, and ONE convention across every
+    // percentile this crate reports is worth more than a split that has to be
+    // remembered per call site.
+    //
+    // It moves a published number, which is why it is written down: `perf
+    // measure` prints `p50=` in its record line. Nothing GATES on it —
+    // `policy/perf-assert.rego` reads `perf-p95` and only that — so the change
+    // reaches a reader's eye and no ratchet. A p50 that ever does gate owes its
+    // own basis at that point, not this comment.
     let index = scaled.div_ceil(denominator);
     series.into_iter().nth(index.min(last))
 }
@@ -630,6 +644,30 @@ mod tests {
         let mut shuffled = series;
         shuffled.reverse();
         assert_eq!(percentile(shuffled, 95, 100, u128::cmp), Some(10));
+    }
+
+    /// **THE EVEN SERIES, which is where the convention is visible** (review of
+    /// #928).
+    ///
+    /// Nearest-rank defines no interpolation, so a two-element series has to
+    /// pick one of the middle pair. The ceiling rank picks the UPPER, and the
+    /// review is right that this moves a published p50 — `[1.0, 2.0]` answers
+    /// 2.0 where a floor rank answers 1.0.
+    ///
+    /// It is pinned rather than left implicit because the number reaches a
+    /// reader: `perf measure` prints `p50=` in its record line. Nothing gates on
+    /// it — `perf-assert` reads `perf-p95` alone — so the cost is a figure that
+    /// shifted once, against one convention serving every percentile this crate
+    /// reports instead of a split remembered per call site.
+    #[test]
+    fn an_even_series_takes_the_upper_of_the_middle_pair() {
+        assert_eq!(
+            percentile(vec![1.0_f64, 2.0], 50, 100, f64::total_cmp),
+            Some(2.0)
+        );
+        // And the same rank over an integer series, so the convention is the
+        // function's rather than the float caller's.
+        assert_eq!(percentile(vec![10_u128, 20], 50, 100, u128::cmp), Some(20));
     }
 
     #[test]

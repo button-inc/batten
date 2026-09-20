@@ -184,6 +184,27 @@ fn a_manifest_with_no_verify_task_cannot_be_judged_and_says_so() {
         "no verify task is could-not-look, never a clean board: {}",
         stdout(&output)
     );
+    // **EXACTLY ONE FINDING, AND IT NAMES THE MANIFEST** (review of #928). The
+    // review asked for the VERDICT to be asserted here, because `check` exits 2
+    // for any deny finding and this fixture declares two verdicts under one
+    // rule. That assertion is not expressible on this channel and the reason is
+    // the output contract rather than an oversight: `batten check` renders
+    // `<pointer> <rule-id>` and nothing else — measured, this case prints
+    // `mise.toml gate report silent` — because non-negotiable rule 4 keeps the
+    // payload off it. `-J` carries the same fields.
+    //
+    // The verdict IS pinned, one tier down, by
+    // `report-only.rego`'s `test_no_verify_task_is_could_not_look`. What the
+    // compiled tier adds is the POINTER: a regression that answered through a
+    // report arm instead would name a workflow, or name the manifest twice, and
+    // both fail here.
+    let said = stdout(&output);
+    let lines: Vec<&str> = said.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        lines,
+        vec!["mise.toml gate report silent"],
+        "the could-not-look arm names the manifest, once: {lines:?}"
+    );
 }
 
 #[test]
