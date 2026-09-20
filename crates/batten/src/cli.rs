@@ -888,6 +888,20 @@ pub enum PerfCommand {
         /// and the flag exists so that floor stays re-measurable.
         null: bool,
     },
+    /// Measure this binary's invocation cost on every path, absolutely
+    /// (CLOUD-207, ported off `mise-tasks/perf.sh`).
+    ///
+    /// **Appended rather than placed beside `Pair`**, for the reason `Semver`
+    /// states on the parent enum: this enum carries no `repr`, so a variant
+    /// inserted among its neighbours shifts every later discriminant.
+    Measure,
+    /// Append a measurement to the trunk's series in git notes (CLOUD-172,
+    /// ported off `mise-tasks/perf-record.sh`).
+    ///
+    /// **Appended rather than placed beside `Measure`**, for the reason the
+    /// parent enum states: no `repr`, so a variant inserted among its
+    /// neighbours shifts every later discriminant.
+    Record,
     /// Decide the ratio over a paired measurement read on stdin (CLOUD-1163
     /// unit 10, ported off `mise-tasks/perf-compare.sh`).
     ///
@@ -1959,6 +1973,8 @@ fn perf_of(matches: &ArgMatches) -> Option<PerfCommand> {
         ("pair", matches) => Some(PerfCommand::Pair {
             null: flag(matches, "null"),
         }),
+        ("measure", _) => Some(PerfCommand::Measure),
+        ("record", _) => Some(PerfCommand::Record),
         ("compare", _) => Some(PerfCommand::Compare),
         ("gate", matches) => Some(PerfCommand::Gate {
             null: flag(matches, "null"),

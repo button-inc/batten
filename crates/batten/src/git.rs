@@ -2241,6 +2241,124 @@ pub fn check_ignore(dir: &Path, path: &str) -> Result<bool> {
 ///
 /// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository or
 /// has no commits.
+/// Append `body` to the note on `commit` under `refs/notes/<name>`.
+///
+/// # APPENDING RATHER THAN REPLACING
+///
+/// A commit sampled twice — a re-dispatched schedule, a manual run — keeps both
+/// readings instead of the second silently overwriting the first. Two readings
+/// of one commit is itself the noise measurement a threshold wants, and a
+/// replace would destroy exactly the samples that establish it.
+///
+/// # THE TREE IS THE WHOLE NOTES TREE, not just this entry
+///
+/// A notes ref is a commit whose tree maps `<commit-sha> -> blob`. Writing a
+/// tree containing only the new entry would DROP every other commit's note,
+/// which is a silent history loss that reads as a successful append. The
+/// existing tree is read and the one entry replaced.
+///
+/// # Errors
+///
+/// A repository that will not open, an odb that refuses an object, or a ref the
+/// backend will not move. A note that did not land is one a later read will not
+/// find, so every failure is an error rather than a skip.
+pub fn append_note(dir: &Path, name: &str, commit: &str, body: &str) -> Result<()> {
+    let repo = open(dir)?;
+    let reference = format!("refs/notes/{name}");
+    // Parsed for its REFUSAL rather than its value: a caller handing this a
+    // branch name or a short sha would otherwise write a note under a tree entry
+    // nothing resolves, and the loss would read as a successful append.
+    gix::ObjectId::from_hex(commit.as_bytes())
+        .map_err(|_| UsageError::raise(format!("{commit} is not an object id")))?;
+
+    // What the note already says, so this appends to it rather than over it.
+    let existing = repo
+        .find_reference(reference.as_str())
+        .ok()
+        .and_then(|mut found| found.peel_to_id().ok())
+        .and_then(|id| repo.find_commit(id.detach()).ok());
+    let previous: Option<String> = existing.as_ref().and_then(|parent| {
+        let tree = parent.tree().ok()?;
+        let entry = tree.lookup_entry_by_path(commit).ok()??;
+        let blob = repo.find_object(entry.object_id()).ok()?;
+        Some(String::from_utf8_lossy(&blob.data).into_owned())
+    });
+
+    let mut text = previous.unwrap_or_default();
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(body);
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+
+    let blob = repo
+        .write_blob(text.as_bytes())
+        .map_err(|err| UsageError::raise(format!("could not write the note blob: {err}")))?;
+
+    // Every OTHER entry is carried over; only this commit's is replaced.
+    let mut entries: std::collections::BTreeMap<String, gix::ObjectId> =
+        std::collections::BTreeMap::new();
+    if let Some(parent) = existing.as_ref() {
+        if let Ok(tree) = parent.tree() {
+            for entry in tree.iter().filter_map(std::result::Result::ok) {
+                entries.insert(entry.filename().to_string(), entry.object_id());
+            }
+        }
+    }
+    entries.insert(commit.to_owned(), blob.detach());
+
+    let mut tree = gix::objs::Tree::empty();
+    for (filename, id) in entries {
+        tree.entries.push(gix::objs::tree::Entry {
+            mode: gix::objs::tree::EntryKind::Blob.into(),
+            filename: filename.into(),
+            oid: id,
+        });
+    }
+    tree.entries.sort();
+    let tree_id = repo
+        .write_object(&tree)
+        .map_err(|err| UsageError::raise(format!("could not write the notes tree: {err}")))?;
+
+    let parents: Vec<gix::ObjectId> = existing.iter().map(|parent| parent.id).collect();
+
+    // THE SIGNATURE FALLS BACK RATHER THAN REFUSING, and a note is the one place
+    // that is right. A work commit carries the identity of whoever authored it,
+    // and `[attribution] identity_deny` is about exactly that; a notes commit is
+    // bookkeeping written BY THE TOOL, so a checkout with no configured identity
+    // — a fresh fixture, a CI runner before its config step — must still be able
+    // to record a measurement. A configured identity is honoured where there is
+    // one, so nothing is overridden.
+    let signature = repo.committer().transpose().ok().flatten().map_or_else(
+        || gix::actor::Signature {
+            name: "batten".into(),
+            email: "batten@localhost".into(),
+            time: gix::date::Time::now_utc(),
+        },
+        |found| gix::actor::Signature {
+            name: found.name.to_owned(),
+            email: found.email.to_owned(),
+            // NOW, not the configured signature's instant. A note records when
+            // the measurement was filed; carrying a stamp from elsewhere would
+            // make two appends to one commit unorderable.
+            time: gix::date::Time::now_utc(),
+        },
+    );
+
+    repo.commit_as(
+        signature.to_ref(&mut gix::date::parse::TimeBuf::default()),
+        signature.to_ref(&mut gix::date::parse::TimeBuf::default()),
+        reference.as_str(),
+        format!("Notes added by 'batten perf record' for {commit}"),
+        tree_id,
+        parents,
+    )
+    .map_err(|err| UsageError::raise(format!("could not commit the note: {err}")))?;
+    Ok(())
+}
+
 pub fn head_commit(dir: &Path) -> Result<String> {
     let repo = open(dir)?;
     let refusal = || {
