@@ -3360,9 +3360,40 @@ run = "cargo run --quiet -p batten -- startup --repair"
 # rather than a property of the toolchain. It exits `2`, not the shell's `1`:
 # CLOUD-1718 folds the corpus's inverted table onto the engine's, where a
 # refused argument is a usage error.
+# THE TOOLCHAIN LOCK'S ONE CALL SITE (CLOUD-1753), ported off
+# `mise-tasks/target-ensure.sh`. Three callers name it — `cross-check`,
+# `darwin-link` and `test:musl` — and they name a TASK rather than the verb for
+# two separate reasons that happen to point the same way.
+#
+# THE PATH-VS-TREE RULE IS THE FIRST. `doctor target` is a verb this branch ADDS,
+# and a caller spelling bare `batten` resolves whatever release is on PATH, which
+# answers `unrecognized subcommand 'target'` until the release that ships it. Both
+# `cross-check` and `darwin-link` spelled the bare name and `verify` caught it.
+# This body spells `cargo run -p batten --`, which resolves the TREE and may name
+# a new verb — the same distinction `[tasks."install-check"]` and the four beside
+# it already carry.
+#
+# THE NAME SURVIVING ITS PROGRAM IS THE SECOND. Deleting `mise-tasks/<name>.sh`
+# retires the auto-discovered TASK as well as the program, and `test:musl` still
+# says `mise run target-ensure`. Without this declaration that call fails with
+# "no task target-ensure found" — which is exactly how `hk.pkl`'s
+# `mcp-timeout-budget` step broke in this same campaign. A retired program whose
+# name has other callers owes an explicit wrapper.
+#
+# The lock itself moved with the port: serialising here is what makes `rustup
+# target add` behave like the idempotent operation it documents, because rustup
+# has no cross-process lock and two concurrent adds each see the other's
+# half-written component tree and both roll back (CLOUD-220).
+[tasks."target-ensure"]
+description = "Effect: ensure one rustup target is installed, behind the per-toolchain lock so concurrent callers queue instead of colliding"
+# NO `"$1"`: mise appends a task's positional arguments to its `run` string, so
+# naming one here passes the triple TWICE and the verb refuses the second as an
+# unexpected argument. Measured on the first invocation of this task.
+run = "cargo run --quiet -p batten -- doctor target"
+
 [tasks."darwin-link"]
 description = "Gate: the macOS targets actually LINK from Linux, which is what proves no dependency needs an Apple SDK"
-run = "t=\"${1:-${DARWIN_TARGET:-aarch64-apple-darwin}}\"; case \"$t\" in *-apple-darwin) ;; *) echo \"::error:: darwin-link: expected an *-apple-darwin target, got '$t'\" >&2; exit 2 ;; esac; if ./mise-tasks/step-receipt.sh check darwin-link --arg \"$t\"; then exit 0; fi; batten doctor target \"$t\" || exit 1; cargo zigbuild --workspace --target \"$t\" || exit 1; ./mise-tasks/step-receipt.sh record darwin-link --arg \"$t\" || true; echo \"darwin-link: $t links with no macOS SDK\""
+run = "t=\"${1:-${DARWIN_TARGET:-aarch64-apple-darwin}}\"; case \"$t\" in *-apple-darwin) ;; *) echo \"::error:: darwin-link: expected an *-apple-darwin target, got '$t'\" >&2; exit 2 ;; esac; if ./mise-tasks/step-receipt.sh check darwin-link --arg \"$t\"; then exit 0; fi; mise run target-ensure \"$t\" || exit 1; cargo zigbuild --workspace --target \"$t\" || exit 1; ./mise-tasks/step-receipt.sh record darwin-link --arg \"$t\" || true; echo \"darwin-link: $t links with no macOS SDK\""
 
 [tasks."cross-turn"]
 description = "One turn's cross-triple type-check, detached — reports the previous run's failure and never blocks the turn"
@@ -3415,12 +3446,18 @@ for t in x86_64-pc-windows-gnu x86_64-unknown-linux-musl; do
   # later iteration's exit status and this gate would pass having checked less
   # than it claims. Routed through target-ensure so a concurrent toolchain
   # mutator queues on the lock instead of colliding inside rustup (CLOUD-220).
-  # THE BARE NAME, never `cargo run`: this gate asserts about its own body that
-  # it stays a type-check and names no `cargo build|test|run` (tests/cross-check.bats),
-  # and building batten to install a target would put one there. `doctor:mediator`
-  # invokes the engine the same way, and the `host-dependencies-present` startup
-  # row is what keeps the name resolving to a current binary.
-  if ! batten doctor target "$t"; then
+  # THROUGH THE TASK, never a bare `batten` and never `cargo run` (CLOUD-1753).
+  # Not `cargo run`, because this gate asserts about its own body that it stays a
+  # type-check and names no `cargo build|test|run` (tests/cross-check.bats), and
+  # building batten to install a target would put one there.
+  #
+  # AND NOT THE BARE NAME EITHER, which is what this line used to be and what
+  # `verify` caught. `batten` on PATH is a RELEASE, and `doctor target` is a verb
+  # this branch adds — so the bare name resolved a binary that answers
+  # `unrecognized subcommand 'target'`. A caller that resolves PATH may not name a
+  # verb the released binary does not carry; `target-ensure` is the task every
+  # other call site already routes through, and it resolves the TREE.
+  if ! mise run target-ensure "$t"; then
     echo "::error:: could not install target $t, so its type-check did not run." >&2
     exit 1
   fi
