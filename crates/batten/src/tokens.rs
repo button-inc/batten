@@ -651,15 +651,51 @@ fn render_capability(
         return Some(Published::Reason);
     };
 
+    render_figures(
+        out,
+        &Figures {
+            runs: workload.runs,
+            arms: [(base, base_bytes), (mine, batten_bytes)],
+            price,
+            divisor,
+        },
+    );
+    Some(Published::Figure)
+}
+
+/// The two measured arms of one capability, and what prices them.
+///
+/// A struct rather than five positional arguments, because `render_figures` is
+/// split out to keep `render_capability` under the line lint and a five-argument
+/// helper trades one lint for another.
+struct Figures<'a> {
+    /// How many times each arm ran.
+    runs: usize,
+    /// The baseline arm and the batten arm, each with its byte count.
+    arms: [(&'a Arm, u64); 2],
+    /// The published rates the dollar columns are derived through.
+    price: &'a Price,
+    /// Bytes per token, from the committed method.
+    divisor: u64,
+}
+
+/// The method line, the figure table and the ratio row.
+///
+/// **Split out of [`render_capability`] rather than annotated** (review of #928),
+/// for the reason [`render_method`] records: the escape was the only thing the
+/// annotation bought, and this is the section's own closing half.
+fn render_figures(out: &mut String, figures: &Figures<'_>) {
+    let [(base, base_bytes), (mine, batten_bytes)] = figures.arms;
+    let price = figures.price;
     let (base_tokens, batten_tokens) = (
-        tokens_of(base_bytes, divisor),
-        tokens_of(batten_bytes, divisor),
+        tokens_of(base_bytes, figures.divisor),
+        tokens_of(batten_bytes, figures.divisor),
     );
     line(
         out,
         &format!(
             "**Method.** measured; {} runs per arm, byte-identical across all of them; run",
-            workload.runs
+            figures.runs
         ),
     );
     line(out, "count for the task is the step count above.");
@@ -698,7 +734,6 @@ fn render_capability(
         ),
     );
     line(out, "");
-    Some(Published::Figure)
 }
 
 /// The closing halves: the aggregate this benchmark refuses to publish, and the
