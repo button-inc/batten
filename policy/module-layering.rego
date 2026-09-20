@@ -65,7 +65,7 @@ declared_modules := {
 	"action", "admission", "attribution", "baseline", "budget", "bypass", "capture", "ci",
 	"cli", "commit", "completion", "config", "contract", "decision", "defects",
 	"design", "doctor", "drain", "effect", "emission", "epoch", "error", "exec",
-	"exit", "facts", "findings", "git", "handler", "hook", "identity", "init",
+	"exit", "facts", "findings", "git", "graph", "handler", "hook", "identity", "init",
 	"invocation", "journal", "judge", "landed", "lib", "lint", "markers", "mint", "minted", "outputs",
 	"output", "pattern", "policy", "provision", "receipt", "redirect", "refusal",
 	"render", "repair", "resolve", "rules", "secret", "secrets", "session", "severity", "sink",
@@ -701,6 +701,19 @@ forbidden[from] contains to if {
 		# suite against it, so a back-edge into the module that adjudicates a
 		# mediated call is the reach the surface split exists to make unwritable.
 		"mutate": {"rules", "hook"},
+		# `graph -> {rules, hook, facts}`, and it is WIDER than the pairs above
+		# because this module is lower rather than higher. It is a pure walk over
+		# a caller-supplied `GraphSource`: it holds no sources, opens no files and
+		# reaches nothing in the crate, so every edge listed here is one it must
+		# never grow rather than one it has and should not use.
+		#
+		# `facts` is the entry that matters. A traversal that acquired its own
+		# documents would be a SECOND ACQUIRER beside `rules::acquire`, which
+		# `one_document_acquisition_exists` asserts is the crate's only one — and
+		# two readers of the same tree can disagree about what a path holds, which
+		# is the class `rules/policy-modules.md` records for parsers. The source is
+		# injected so that edge is unwritable rather than merely unwise.
+		"graph": {"rules", "hook", "facts"},
 	}
 	some to in targets
 }

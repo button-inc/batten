@@ -988,6 +988,17 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   (never `#[tokio::main]`), and a status as a typed value so a 404 cannot digest
   as a checksum mismatch. `hook` never reaches here, so CLOUD-689's ceiling is
   untouched.
+- `graph.rs` — the bounded, call-by-need walk (CLOUD-1866). Exists beside
+  `graph.reachable`, not instead of it: that builtin answers what a seed
+  REACHES, and a warrant chain needs to terminate on a node PROPERTY, name the
+  hop that broke, and bound itself. **Holds no sources and opens no files** — a
+  `GraphSource` is injected, so the engine cannot become a second acquirer
+  beside `rules::acquire`, which `one_document_acquisition_exists` asserts is
+  the crate's only one. `BoundExceeded` is kept apart from `Exhausted` because a
+  walk out of budget has shown nothing about the chain, where an emptied
+  frontier has shown it does not close; `max_visits` is CLOUD-1525's Class E
+  counter. Breadth-first so the reported path is the shortest, which is what
+  keeps two edge orders from producing two pointers for one defect.
 - `gitwrite.rs` — the LOCAL git writes: a loose object into the odb, and a ref
   moved (CLOUD-1274's D2). Placed by EFFECT rather than by subject, which is the
   whole reason it is not part of `git.rs`: that module is read-only over gix and

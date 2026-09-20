@@ -55,6 +55,7 @@ pub mod findings;
 pub mod forge;
 pub mod git;
 pub mod gitwrite;
+pub mod graph;
 pub mod handler;
 pub mod hk;
 pub mod hook;

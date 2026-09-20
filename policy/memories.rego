@@ -14,16 +14,38 @@
 # `input.tree.lines` answers "who references one", with no tool dependency, so
 # the gate still catches the damage no matter what performed the rename.
 #
-# WHAT IS DELIBERATELY NOT CHECKED IS MEMBERSHIP (CLOUD-683). CLOUD-291 required
-# every memory to appear as a row in the always-loaded index, on the premise that
-# a memory absent from it is reachable only by listing the directory. The
-# tooling's own documentation contradicts that — the agent receives the full
-# memory NAME LIST up front — so discovery is guaranteed every session and the
-# index was never load-bearing for it. It also aimed a gate at the wrong kind of
-# failure: the harm measured was an agent not READING a memory whose name it
-# already had, which is judgement, and non-negotiable rule 3 says a gate resolves
-# to a command and an exit code over an object it decides. An unreferenced memory
-# is not a defect and this module does not say it is.
+# THREE PROPERTIES LIVE HERE AND THEY ARE NOT ONE (CLOUD-1866, repairing a
+# header that merged them). The paragraph this replaces was titled "WHAT IS
+# DELIBERATELY NOT CHECKED IS MEMBERSHIP (CLOUD-683)" and closed "an unreferenced
+# memory is not a defect and this module does not say it is". Read cold, that
+# attributes to CLOUD-683 a refusal of graph reachability. CLOUD-683 REQUIRES
+# reachability — its Mechanism §2 specifies a BFS from `core`, root and template
+# exempt, and its acceptance is that "a memory referenced only through a chain
+# from `core` passes the gate" while "a genuinely orphaned memory is still
+# reported". The header asserted the opposite of the row it cited, and it misled
+# a planning session into recording the question as closed.
+#
+# 1. TABLE-ROW MEMBERSHIP IN `AGENTS.md` — retired, and the reason is the whole
+#    of CLOUD-683's title: `memories-check` forced every memory into an
+#    always-loaded index whose line budget was full, so the repository could no
+#    longer add a memory at all. An always-present index spends the context
+#    window on every session to answer a question a graph answers on demand.
+#    That is what was retired, and it is what the sentence above was about.
+#
+# 2. ONE-HOP REFERENCEDNESS — not this module's business, and that is the only
+#    claim the retired closing sentence correctly supported. Whether some other
+#    file happens to mention a memory is not a property this predicate decides.
+#
+# 3. REACHABILITY FROM THE ROOT — required, and ENFORCED, having moved to the
+#    serena-held graph rather than being abandoned. It is not checked HERE; it is
+#    not unchecked.
+#
+# SERENA IS SLATED FOR REMOVAL, so (3) needs a home. Python-interpreter fragility
+# is not something to keep tolerating merely to surface memory, and the blocker is
+# the tree-sitter cluster, since serena also supplies AST-driven text
+# manipulation. When it goes, `crates/batten/src/graph.rs` is where this property
+# lands: a bounded walk from `core` over `mem:` edges, terminating on the root,
+# which is exactly CLOUD-683's BFS with a visit counter on it.
 #
 # THE REFERENCE SYNTAX IS A `[[pattern]]` ROW AND NOT A LITERAL HERE. The
 # predecessor restated the tooling's matcher in its own body and said so in a
