@@ -3149,7 +3149,20 @@ pub const SURFACE: &[CommandDecl] = &[
         path: "ci suites",
         id: "ci.suites",
         about: "Name the bats suites a diff can move, or every suite where it cannot prove one inert",
-        data_channel: true,
+        // **NO DATA CHANNEL, and the declaration was the defect rather than the
+        // implementation.** This row said `true` while the verb offers no `-J`
+        // and emits no document: it writes one suite PATH per line, which the
+        // caller hands straight to bats. `cli::every_data_channel_verb_emits_one_pure_json_document`
+        // and `cli::no_progress_reaches_stderr_when_it_is_not_a_terminal` both
+        // caught it — the first because an empty answer printed nothing where a
+        // document was promised, the second because `-J` is not a flag here at
+        // all.
+        //
+        // Inventing a JSON shape to satisfy the declaration would be the wrong
+        // repair: nothing consumes one, and `generate schema` carries this same
+        // `false` for the same reason — its only output IS the artifact, with no
+        // human rendering to switch away from.
+        data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[SLOW_BASE],
@@ -3717,7 +3730,13 @@ pub const SURFACE: &[CommandDecl] = &[
         path: "perf measure",
         id: "perf.measure",
         about: "Measure this binary's invocation cost on every path and print one record per path",
-        data_channel: true,
+        // **NO DATA CHANNEL**, for `ci suites`' reason and stated in this row's
+        // own `about`: it prints ONE RECORD PER PATH — `path=… p50=… p95=…
+        // mean=… runs=…` — which `batten record tool perf-p95` parses. That line
+        // format IS the contract with the frozen caller, so a JSON rendering
+        // would be a second output nothing reads, and declaring a channel the
+        // verb does not implement is what the two `cli` surface cases caught.
+        data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Unclassified,
         flags: &[],
@@ -6110,11 +6129,26 @@ fn arg_of(decl: &FlagDecl) -> Arg {
             .num_args(1..)
             .last(true)
             .allow_hyphen_values(true),
-        ValueDecl::Str => arg.action(ArgAction::Set),
+        // **THE METAVARIABLE IS EXPLICIT** (review of #928). clap defaults it for
+        // `--help` but `clap_mangen` does not, so the committed SYNOPSIS rendered
+        // every value-taking flag as if it took none: `[--lock] [--lock-path]
+        // [--lock-attempts] [--lock-label]`, from which no valid command can be
+        // formed. `--jobs`, `--format` and `--style` carried the same defect, so
+        // this is set where the arg is BUILT rather than on the four flags the
+        // review happened to name.
+        //
+        // THE ID ITSELF, rather than a `value_name` field on `FlagDecl`: a second
+        // column would be a second place to forget, and the id is ALREADY what
+        // `--help` renders — so the page and the help agree instead of carrying
+        // two vocabularies for one value. A semantic name per flag (`<KEY>`,
+        // `<PATH>`, `<N>`) reads better and is not free: it is a per-flag
+        // decision across the whole surface, and one nobody is forced to make
+        // correctly. Consistency with `--help` is the property worth having.
+        ValueDecl::Str => arg.action(ArgAction::Set).value_name(decl.id),
         // `Append` rather than `Set`: every occurrence is kept, in the order
         // written, so a caller widening a selection gets the union rather than
         // the last one silently winning.
-        ValueDecl::StrMany => arg.action(ArgAction::Append),
+        ValueDecl::StrMany => arg.action(ArgAction::Append).value_name(decl.id),
         ValueDecl::Enum { parser, default } => {
             let arg = arg.action(ArgAction::Set).value_parser(parser());
             match default {

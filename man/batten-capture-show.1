@@ -9,16 +9,16 @@ batten\-capture\-show \- Print a capture\*(Aqs pointer, or the lines a selection
 Print a capture\*(Aqs pointer, or the lines a selection asks for, with no second run
 .SH OPTIONS
 .TP
-\fB\-\-lines\fR
+\fB\-\-lines\fR \fI<lines>\fR
 A 1\-indexed inclusive line range, `FROM:TO`, clamped to the capture
 .TP
-\fB\-\-grep\fR
+\fB\-\-grep\fR \fI<grep>\fR
 Only lines containing this literal substring
 .TP
 \fB\-\-raw\fR
 Write the selected bytes to stdout verbatim, with no decode and no added newline
 .TP
-\fB\-\-bytes\fR
+\fB\-\-bytes\fR \fI<bytes>\fR
 A 0\-indexed half\-open byte range, `FROM:TO`, either side omittable, clamped to the capture
 .TP
 \fB\-J\fR, \fB\-\-json\fR

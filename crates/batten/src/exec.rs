@@ -1713,6 +1713,32 @@ pub fn hold(want: Option<&Lock>, err: &mut dyn Write) -> Result<LockOutcome> {
     let pid = std::process::id().to_string();
     let (lock, claim) = match &want.place {
         LockPlace::Key(key) => {
+            // **THE KEY MAY NOT LEAVE THE LOCK DIRECTORY** (review of #928).
+            // `Path::join` DISCARDS the prefix for an absolute operand and honours
+            // `..`, so `--lock /tmp/shared` and `--lock ../../x` each resolved
+            // outside `$GIT_DIR` — serialising a resource the caller did not name
+            // and erasing the whole distinction from `--lock-path`, which exists
+            // precisely to say "outside the repository, deliberately".
+            //
+            // REFUSED RATHER THAN ENCODED, because the two flags mean different
+            // things: silently flattening `/tmp/shared` into a file name would
+            // make `--lock` accept a spelling whose meaning it then changes. A
+            // caller who wants that path already has the flag for it, and the
+            // refusal names it.
+            if Path::new(key.as_str()).components().any(|part| {
+                matches!(
+                    part,
+                    std::path::Component::RootDir
+                        | std::path::Component::ParentDir
+                        | std::path::Component::Prefix(_)
+                )
+            }) {
+                writeln!(
+                    err,
+                    "::error:: exec: --lock takes a name under the git dir, not a path that leaves it — use --lock-path for a lock outside the repository"
+                )?;
+                return Ok(LockOutcome::Refused(ExitCode::Usage));
+            }
             let Ok(git_dir) = crate::git::git_dir(Path::new(".")) else {
                 writeln!(
                     err,
