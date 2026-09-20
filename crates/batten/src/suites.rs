@@ -286,7 +286,9 @@ pub fn select(
         // measured 19 of 142 suites with no same-named program and every one
         // legitimate, so a name heuristic would both skip real work and select
         // the wrong thing.
-        if path.starts_with("tests/") && path.ends_with(".bats") {
+        if path.starts_with("tests/")
+            && Path::new(path).extension().is_some_and(|ext| ext == "bats")
+        {
             // A DELETED SUITE HAS NOTHING TO RUN. The changed set reports a
             // removed path, and handing bats a file it cannot open is a failure
             // rather than coverage — reachable in this very campaign, which

@@ -1786,10 +1786,8 @@ pub fn named_paths(payload: &serde_json::Value, root: &Path) -> Option<(i32, Str
         let base = token.rsplit('/').next().unwrap_or(token);
         // Exactly one candidate resolves. Several is ambiguous and resolves to
         // none: 28 of 530 tracked basenames are ambiguous in this tree.
-        if let Some(candidates) = by_base.get(base) {
-            if let [only] = candidates.as_slice() {
-                named.insert((*only).clone());
-            }
+        if let Some([only]) = by_base.get(base).map(Vec::as_slice) {
+            named.insert((*only).clone());
         }
     }
 
@@ -1823,13 +1821,12 @@ fn tokens_in(body: &str, by_base: &BTreeMap<&str, Vec<&String>>) -> BTreeSet<Str
         }
         // A dotted path or filename: something before a `.` and an extension
         // after it, which is the shape the retired program's first pattern read.
-        if let Some((stem, extension)) = word.rsplit_once('.') {
-            if !stem.is_empty()
-                && !extension.is_empty()
-                && extension.chars().all(|ch| ch.is_ascii_alphanumeric())
-            {
-                found.insert(word.to_owned());
-            }
+        if let Some((stem, extension)) = word.rsplit_once('.')
+            && !stem.is_empty()
+            && !extension.is_empty()
+            && extension.chars().all(|ch| ch.is_ascii_alphanumeric())
+        {
+            found.insert(word.to_owned());
         }
         if word.starts_with("mise-tasks/") {
             found.insert(word.to_owned());

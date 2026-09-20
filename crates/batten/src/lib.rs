@@ -429,7 +429,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(Command::Record { command }) => record::run(command, &overrides, out, err),
         Some(Command::Ci { command }) => run_ci(&command, &overrides, out, err),
         Some(Command::Release { command }) => run_release(&command, out, err),
-        Some(Command::Bench { command }) => run_bench(&command, out, err),
+        Some(Command::Bench { command }) => run_bench(command, out, err),
     }
 }
 
@@ -447,11 +447,11 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
 ///
 /// A missing input, a fixture that will not stage, or a step that will not run.
 fn run_bench(
-    command: &cli::BenchCommand,
+    command: cli::BenchCommand,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let cli::BenchCommand::Tokens { check } = *command;
+    let cli::BenchCommand::Tokens { check } = command;
     let root = git::repo_root(Path::new("."))?;
     let root = Path::new(&root);
 
@@ -537,6 +537,111 @@ fn run_bench(
     Ok(ExitCode::Success)
 }
 
+/// The per-target half of `release install`: the three names each matrix target
+/// is known by, compared against each other.
+///
+/// **Split out of [`run_release`] rather than inlined**, because the dispatch
+/// function was reading as one 153-line block in which the setup, the
+/// comparison and the report were indistinguishable. This half is the only one
+/// that loops, and it is the only one that can stop early for a reason that is
+/// not a disagreement.
+///
+/// `Ok(None)` is "stopped": a program that could not be asked, or a package
+/// format this gate has no suffix rule for. Neither is a clean tree and neither
+/// is a violation, so the caller renders `Internal` and this signature refuses
+/// to let the two be confused with `Ok(Some(vec![]))`, which means agreement.
+///
+/// # Errors
+///
+/// A program that will not run at all.
+fn release_survey(
+    matrix: &std::collections::BTreeSet<String>,
+    binstall: &install::Binstall,
+    repo: &str,
+    version: &str,
+    ask: &dyn Fn(&str, &[&str]) -> Result<String>,
+    err: &mut dyn Write,
+) -> Result<
+    Option<(
+        Vec<install::Disagreement>,
+        std::collections::BTreeSet<String>,
+    )>,
+> {
+    let mut found: Vec<install::Disagreement> = Vec::new();
+    let mut installable: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+
+    for target in matrix {
+        let stem = ask("mise-tasks/dist.sh", &["--stem", target])?
+            .trim()
+            .to_owned();
+        if stem.is_empty() {
+            writeln!(
+                err,
+                "::error:: release install: mise-tasks/dist.sh --stem {target} printed nothing. \
+                 Its naming is what every other reader agrees with; if it cannot be asked, \
+                 nothing here has been checked."
+            )?;
+            return Ok(None);
+        }
+
+        // The archive suffix is the BINSTALL manifest's answer, which is the one
+        // cargo acts on. Deriving it from the triple here would put a second
+        // idea of "which platform ships a zip" in the tree.
+        let format = binstall.format_for(target);
+        let Some(suffix) = install::Binstall::suffix(format) else {
+            writeln!(
+                err,
+                "::error:: release install: binstall pkg-fmt '{format}' (target {target}) is one \
+                 this gate has no suffix rule for. Add it in the same change that adds it to the \
+                 manifest — a guessed suffix would make the comparison vacuous."
+            )?;
+            return Ok(None);
+        };
+        let dist_name = format!("{stem}{suffix}");
+
+        // Every matrix target, including the ones `install.sh` declines to
+        // INSTALL: answering a naming query correctly for them is still part of
+        // the contract binstall reads.
+        let asked = ask("install.sh", &["--asset-name", version, target])?
+            .trim()
+            .to_owned();
+        if asked != dist_name {
+            found.push(install::Disagreement::AssetName {
+                target: target.clone(),
+                dist: dist_name.clone(),
+                install: asked.clone(),
+            });
+        }
+
+        // THE VERSION MUST BE CARRIED, NOT BAKED. Asking twice proves the
+        // template is parametric directly, where a sample version only proved
+        // it by proxy.
+        let other_version = if version == "9.9.9" { "1.1.1" } else { "9.9.9" };
+        let again = ask("install.sh", &["--asset-name", other_version, target])?
+            .trim()
+            .to_owned();
+        if !install::parametric((version, &asked), (other_version, &again)) {
+            found.push(install::Disagreement::NotParametric(target.clone()));
+        }
+
+        if suffix != ".zip" {
+            installable.insert(target.clone());
+        }
+
+        let expected = format!("{repo}/releases/download/v{version}/{dist_name}");
+        let resolved = binstall.resolve(repo, "batten", version, target)?;
+        if resolved != expected {
+            found.push(install::Disagreement::BinstallUrl {
+                target: target.clone(),
+                release: expected,
+                binstall: resolved,
+            });
+        }
+    }
+
+    Ok(Some((found, installable)))
+}
+
 /// `batten release install` (CLOUD-65), ported off `mise-tasks/install-check.sh`.
 ///
 /// # Three authorities, asked rather than scraped
@@ -607,13 +712,17 @@ fn run_release(
 
     // The two interim spawns. Both programs are wave 2's; when they are engine
     // code this asks a function and the contract is unchanged.
+    //
+    // THROUGH `exec::piped`, NOT A `Command::new` HERE. `lib` is the CLI
+    // dispatch and `policy/spawn-adapters.rego` deliberately does not place it:
+    // a spawn written here would admit every future spawn in the crate's largest
+    // file at once. `exec` is the sanctioned child-process boundary, and asking a
+    // program for its stdout is exactly what `piped` exists to do.
     let ask = |program: &str, args: &[&str]| -> Result<String> {
-        let output = std::process::Command::new(root.join(program))
-            .args(args)
-            .current_dir(root)
-            .output()
-            .map_err(|_| UsageError::raise(format!("release install: could not run {program}")))?;
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+        exec::piped(root, Path::new(program), &args, "")
+            .map(|(_, stdout)| stdout)
+            .ok_or_else(|| UsageError::raise(format!("release install: could not run {program}")))
     };
 
     let declared: std::collections::BTreeSet<String> = ask("install.sh", &["--targets"])?
@@ -631,77 +740,10 @@ fn run_release(
         return Ok(ExitCode::Internal);
     }
 
-    let mut found: Vec<install::Disagreement> = Vec::new();
-    let mut installable: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-
-    for target in &matrix {
-        let stem = ask("mise-tasks/dist.sh", &["--stem", target])?
-            .trim()
-            .to_owned();
-        if stem.is_empty() {
-            writeln!(
-                err,
-                "::error:: release install: mise-tasks/dist.sh --stem {target} printed nothing. \
-                 Its naming is what every other reader agrees with; if it cannot be asked, \
-                 nothing here has been checked."
-            )?;
-            return Ok(ExitCode::Internal);
-        }
-
-        // The archive suffix is the BINSTALL manifest's answer, which is the one
-        // cargo acts on. Deriving it from the triple here would put a second
-        // idea of "which platform ships a zip" in the tree.
-        let format = binstall.format_for(target);
-        let Some(suffix) = install::Binstall::suffix(format) else {
-            writeln!(
-                err,
-                "::error:: release install: binstall pkg-fmt '{format}' (target {target}) is one \
-                 this gate has no suffix rule for. Add it in the same change that adds it to the \
-                 manifest — a guessed suffix would make the comparison vacuous."
-            )?;
-            return Ok(ExitCode::Internal);
-        };
-        let dist_name = format!("{stem}{suffix}");
-
-        // Every matrix target, including the ones `install.sh` declines to
-        // INSTALL: answering a naming query correctly for them is still part of
-        // the contract binstall reads.
-        let asked = ask("install.sh", &["--asset-name", &version, target])?
-            .trim()
-            .to_owned();
-        if asked != dist_name {
-            found.push(install::Disagreement::AssetName {
-                target: target.clone(),
-                dist: dist_name.clone(),
-                install: asked.clone(),
-            });
-        }
-
-        // THE VERSION MUST BE CARRIED, NOT BAKED. Asking twice proves the
-        // template is parametric directly, where a sample version only proved
-        // it by proxy.
-        let other_version = if version == "9.9.9" { "1.1.1" } else { "9.9.9" };
-        let again = ask("install.sh", &["--asset-name", other_version, target])?
-            .trim()
-            .to_owned();
-        if !install::parametric((&version, &asked), (other_version, &again)) {
-            found.push(install::Disagreement::NotParametric(target.clone()));
-        }
-
-        if suffix != ".zip" {
-            installable.insert(target.clone());
-        }
-
-        let expected = format!("{repo}/releases/download/v{version}/{dist_name}");
-        let resolved = binstall.resolve(&repo, "batten", &version, target)?;
-        if resolved != expected {
-            found.push(install::Disagreement::BinstallUrl {
-                target: target.clone(),
-                release: expected,
-                binstall: resolved,
-            });
-        }
-    }
+    let survey = release_survey(&matrix, &binstall, &repo, &version, &ask, err)?;
+    let Some((mut found, installable)) = survey else {
+        return Ok(ExitCode::Internal);
+    };
 
     // The installable set is DERIVED from the archive suffix, so this gate never
     // carries its own idea of which platform has no POSIX shell.
@@ -20755,7 +20797,11 @@ fn bats_suites(root: &Path) -> std::collections::BTreeSet<String> {
     if let Ok(entries) = std::fs::read_dir(root.join("tests")) {
         for entry in entries.filter_map(std::result::Result::ok) {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if name.ends_with(".bats") && root.join("tests").join(&name).is_file() {
+            if Path::new(&name)
+                .extension()
+                .is_some_and(|ext| ext == "bats")
+                && root.join("tests").join(&name).is_file()
+            {
                 found.insert(format!("tests/{name}"));
             }
         }
