@@ -184,8 +184,17 @@ branch's unlanded commits — "the main that is about to exist" — and says so.
 both remedies: rebase `--onto origin/main <borrowed>`, or, since nothing borrowed
 has been pushed, `git reset --hard origin/<your-branch>`.
 
-Take the second and two things happen that the message does not mention. Measured
-2026-08-28.
+**TAKE THE FIRST.** The second is refused outright whenever the replay rewrote
+the borrowed commits — which on a speculative lap is always: the rewritten copies
+exist in no other clone, so `history-drop` reads the reset as discarding work and
+stops it. Measured 2026-09-19, and the class's own override did not open it: a
+`history drop unpushed` admission was requested, answered and spent TWICE — once
+against the commit sha, once against the subject its refusal line prints — and
+the reset was refused unchanged after each. CLOUD-1871 owns that gap. The rebase
+went through on the first try.
+
+Take the second anyway, on the rare tree where the guard lets it, and two things
+happen that the message does not mention. Measured 2026-08-28.
 
 **The reset goes to the last PUSHED state, so an unpushed amend is gone.** A
 message corrected between the last push and the speculative lap — declaring a
