@@ -1079,6 +1079,20 @@ const VERDICT_TOKEN: FlagDecl = FlagDecl {
 /// filter that matched nothing and exited 0 is the vacuous pass in its purest
 /// form: the caller would read "the gate passed" from a gate that was never
 /// selected, and a renamed row would silently stop being enforced.
+const CHECK_RULE: FlagDecl = FlagDecl {
+    id: "rule",
+    long: Some("rule"),
+    short: None,
+    help: "Run only the declared rules with these ids (repeatable)",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::StrMany,
+};
+
 /// The non-document inputs a `record derive` family needs, as `<key>=<value>`.
 ///
 /// ONE DECLARED FLAG RATHER THAN A COLUMN PER FAMILY, and the alternative is
@@ -1098,20 +1112,6 @@ const DERIVE_INPUT: FlagDecl = FlagDecl {
     long: Some("input"),
     short: None,
     help: "A `<key>=<value>` input this family needs beyond stdin (repeatable)",
-    env: EnvDecl::None,
-    global: false,
-    positional: false,
-    required: false,
-    hidden: false,
-    rung: Rung::None,
-    value: ValueDecl::StrMany,
-};
-
-const CHECK_RULE: FlagDecl = FlagDecl {
-    id: "rule",
-    long: Some("rule"),
-    short: None,
-    help: "Run only the declared rules with these ids (repeatable)",
     env: EnvDecl::None,
     global: false,
     positional: false,

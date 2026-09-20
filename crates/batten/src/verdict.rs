@@ -1282,12 +1282,6 @@ pub enum Native {
     MintTableRefused,
     /// The `[[recorder]]` table would not load.
     RecorderTableRefused,
-    /// The `[[record]]` table would not load (CLOUD-1810).
-    ///
-    /// Its own class rather than the recorder's, on the reason the environment
-    /// pair one screen up already states: the two tables carry different rows and
-    /// a refusal has to name which one to edit.
-    RecordTableRefused,
     /// The `[[provision]]` table would not load.
     ProvisionTableRefused,
     /// The `[[startup]]` table would not load.
@@ -1334,6 +1328,21 @@ pub enum Native {
     /// left, and the declared hatch is the recovery path. That asymmetry is why
     /// this class exists and why it is exactly one class wide.
     ConfigUnreadable,
+    /// The `[[record]]` table would not load (CLOUD-1810).
+    ///
+    /// Its own class rather than the recorder's, on the reason the environment
+    /// pair states: the two tables carry different rows and a refusal has to name
+    /// which one to edit.
+    ///
+    /// **APPENDED, BECAUSE THE VARIANT ABOVE SAYS SO AND THIS ONE DID NOT LISTEN.**
+    /// It landed beside the other config classes — between `RecorderTableRefused`
+    /// and `ProvisionTableRefused`, where it reads best — and that shifted the
+    /// discriminants of `ProvisionTableRefused`, `StartupTableRefused`,
+    /// `OutcomeTableRefused`, `PlanReadStale` and `ConfigUnreadable`, which is the
+    /// whole tail `enum_no_repr_variant_discriminant_changed` reads as broken.
+    /// Position is API; the reading order is not, and `Native::ALL` below is where
+    /// the grouping belongs.
+    RecordTableRefused,
 }
 
 impl Native {

@@ -1958,10 +1958,22 @@ fi
 		name=${archive##*/}
 		into="$scratch/x-$name"
 		mkdir -p "$into"
+		# AN EXTRACTION THAT FAILED IS NOT AN ARCHIVE WITHOUT A BINARY. Both
+		# commands discarded their status with `|| true`, so a corrupt archive or a
+		# missing extractor left `find` with nothing to find and the producer wrote
+		# `no-binary` — a RELEASE VERDICT, where the honest reading is
+		# could-not-look. The WHOLE record is abandoned rather than the one line
+		# dropped, because a posture line plus a short archive list is a window the
+		# module reads as complete.
+		extracted=ok
 		case "$name" in
-		*.zip) unzip -q -o "$archive" -d "$into" || true ;;
-		*) tar -xzf "$archive" -C "$into" || true ;;
+		*.zip) unzip -q -o "$archive" -d "$into" >/dev/null 2>&1 || extracted=failed ;;
+		*) tar -xzf "$archive" -C "$into" >/dev/null 2>&1 || extracted=failed ;;
 		esac
+		if [ "$extracted" = failed ]; then
+			echo "::error:: attestation-record: could not extract $name, so its provenance is unread. Nothing recorded." >&2
+			exit 2
+		fi
 		binary=$(find "$into" -type f \( -name batten -o -name batten.exe \) | head -n1)
 		if [ -z "$binary" ]; then
 			printf 'archive\t%s\tno-binary\n' "$name"
@@ -2195,9 +2207,17 @@ git rev-parse --git-dir >/dev/null 2>&1 || exit 0
 key=$(git config --get user.signingkey 2>/dev/null || true)
 prog=$(git config --get gpg.ssh.program 2>/dev/null || true)
 
+# `--type=bool` IS LOAD-BEARING, NOT TIDINESS. `git config --get` returns the
+# stored value verbatim and git accepts `1`, `on`, `yes`, `0`, `off` and `no` as
+# booleans, so a comparison against the literals `true`/`false` is wrong in BOTH
+# directions: a global `commit.gpgsign = 1` matched no `*true*` and recorded no
+# conflict, grading a conflicting configuration clean; a local `off` was not
+# equal to `false`, so the guard passed and a global `true` recorded a conflict
+# over a checkout where signing is disabled. `--type=bool` makes git normalise
+# both before either comparison runs.
 gpgsign=none
-local_setting=$(git config --local --get commit.gpgsign 2>/dev/null || true)
-inherited=$(git config --global --get commit.gpgsign 2>/dev/null || true)
+local_setting=$(git config --type=bool --local --get commit.gpgsign 2>/dev/null || true)
+inherited=$(git config --type=bool --global --get commit.gpgsign 2>/dev/null || true)
 if [ "$local_setting" != false ]; then
   case "$inherited$local_setting" in
   *true*) gpgsign=conflict ;;

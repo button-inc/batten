@@ -613,7 +613,6 @@ fn declared_pattern(
         UsageError::raise(format!(
             "record derive {family}: `[[pattern]]` row `{id}` will not compile"
         ))
-        .into()
     })
 }
 
@@ -651,16 +650,38 @@ pub fn run_derive(
     out: &mut dyn std::io::Write,
 ) -> Result<ExitCode> {
     let inputs = derive_inputs(inputs)?;
+    let derived = derive_reading(family, &inputs, overrides)?;
+    let family = safe_component("family", family)?;
+    store_derived(&family, &derived)?;
+    emit_derived(&derived, out)
+}
+
+/// The READING for one family, from its declared inputs and whatever is on stdin.
+///
+/// Split out of [`run_derive`] because the two halves grow at different rates:
+/// this one gains an arm per producer, and the store-and-emit tail below it is
+/// fixed. Nothing here spawns — house-style §5 keeps a producer's effects in the
+/// task, and what arrives is already a reading's worth of input.
+///
+/// # Errors
+///
+/// A [`UsageError`] for an unknown family, or a malformed, missing or
+/// unaccepted input.
+fn derive_reading(
+    family: &str,
+    inputs: &BTreeMap<String, String>,
+    overrides: &Overrides,
+) -> Result<String> {
     let derived = match family {
         "evaluator-io-probe" => {
-            only_these_inputs(&inputs, family, &["status", "test"])?;
-            let raw = required_input(&inputs, family, "status")?;
+            only_these_inputs(inputs, family, &["status", "test"])?;
+            let raw = required_input(inputs, family, "status")?;
             let status: i32 = raw.parse().map_err(|_| {
                 UsageError::raise(format!(
                     "record derive {family}: status `{raw}` is not a whole number"
                 ))
             })?;
-            let test = required_input(&inputs, family, "test")?;
+            let test = required_input(inputs, family, "test")?;
             let log = verdict_lines()?;
             format!(
                 "{}\n",
@@ -669,24 +690,24 @@ pub fn run_derive(
         }
         "signing-posture" => {
             only_these_inputs(
-                &inputs,
+                inputs,
                 family,
                 &["signingkey", "ssh-program", "gpgsign", "signed"],
             )?;
-            let signingkey = required_input(&inputs, family, "signingkey")?;
-            let program = required_input(&inputs, family, "ssh-program")?;
+            let signingkey = required_input(inputs, family, "signingkey")?;
+            let program = required_input(inputs, family, "ssh-program")?;
             // THE TWO ABSENT-MEANS-NOTHING INPUTS. A producer that found no
             // conflict and no signed commit still sends both, empty; treating an
             // omitted input as "no" here would make "the producer did not look"
             // and "the producer looked and found none" the same record.
-            let conflict = required_input(&inputs, family, "gpgsign")? == "conflict";
-            let signed = required_input(&inputs, family, "signed")?;
+            let conflict = required_input(inputs, family, "gpgsign")? == "conflict";
+            let signed = required_input(inputs, family, "signed")?;
             crate::signer_posture::record(signingkey, program, conflict, signed)
         }
         "transcript-corpus" => {
-            only_these_inputs(&inputs, family, &["root", "threshold", "exclude"])?;
-            let root = required_input(&inputs, family, "root")?;
-            let raw = required_input(&inputs, family, "threshold")?;
+            only_these_inputs(inputs, family, &["root", "threshold", "exclude"])?;
+            let root = required_input(inputs, family, "root")?;
+            let raw = required_input(inputs, family, "threshold")?;
             let threshold: usize = raw.parse().map_err(|_| {
                 UsageError::raise(format!(
                     "record derive {family}: threshold `{raw}` is not a whole number"
@@ -711,82 +732,8 @@ pub fn run_derive(
             let sessions = crate::transcript::census(root, exclude);
             format!("sessions {sessions}\nthreshold {threshold}\n")
         }
-        "evaluator-closure" => {
-            only_these_inputs(&inputs, family, &[])?;
-            let config = resolve::resolve(Path::new("."), overrides)?;
-            let evaluator = declared_pattern(&config.patterns, family, "evaluator-package")?;
-            let bears_io = declared_pattern(&config.patterns, family, "evaluator-io-crate")?;
-            let graph = graph_on_stdin(family)?;
-
-            // THE SCOPE IS THE EVALUATOR'S SUB-CLOSURE, NOT THE WORKSPACE'S, and
-            // that was measured before it was written because the obvious
-            // spelling is wrong: walking from the workspace members instead
-            // reached 281 packages, including two direct dependencies of the
-            // consumer itself entering by paths with nothing to do with the
-            // evaluator. The wider spelling fired on all five lockfile-touching
-            // commits reachable from HEAD and every firing was a false positive.
-            let roots = graph.roots_matching(|name| evaluator.is_match(name));
-            if roots.is_empty() {
-                // NOT A PASS. The evaluator vanishing from the graph means the
-                // question could not be asked, and reporting "nothing found"
-                // there is the vacuous pass this repository names CLOUD-251.
-                "absent\n".to_owned()
-            } else {
-                let reached = graph.reachable(roots);
-                let mut lines = format!("closure {}\n", reached.len());
-                let mut found: Vec<&str> = graph
-                    .named_in_order(&reached)
-                    .into_iter()
-                    .map(|(name, _)| name)
-                    .filter(|name| bears_io.is_match(name))
-                    .collect();
-                found.dedup();
-                for name in found {
-                    lines.push_str("crate ");
-                    lines.push_str(name);
-                    lines.push('\n');
-                }
-                lines
-            }
-        }
-        "macos-link" => {
-            only_these_inputs(&inputs, family, &[])?;
-            let config = resolve::resolve(Path::new("."), overrides)?;
-            let framework = declared_pattern(&config.patterns, family, "sdk-framework-crate")?;
-            let vendored = declared_pattern(&config.patterns, family, "vendored-links-crate")?;
-            let graph = graph_on_stdin(family)?;
-
-            // THE WALK STARTS AT THE WORKSPACE MEMBERS, because the question is
-            // about everything this tree builds — unlike `evaluator-closure`,
-            // whose question is about one package's sub-closure. That is the
-            // only difference between the two callers of this graph.
-            let built = graph.reachable(graph.member_roots());
-            let mut lines = format!("scanned {}\n", built.len());
-            for (name, id) in graph.named_in_order(&built) {
-                match graph.links_of(id) {
-                    // RULE 1's PROXY, minus the crates it is wrong about. A crate
-                    // that VENDORS AND COMPILES the library it names reaches no
-                    // platform framework — measured, after this gate refused a
-                    // tree the linker then built with no SDK present. An UNKNOWN
-                    // `links` crate is still a finding, so this narrows the gate
-                    // rather than opening it.
-                    Some(library) if !vendored.is_match(name) => {
-                        lines.push_str("links ");
-                        lines.push_str(name);
-                        lines.push(' ');
-                        lines.push_str(library);
-                        lines.push('\n');
-                    }
-                    _ if framework.is_match(name) => {
-                        lines.push_str("framework ");
-                        lines.push_str(name);
-                        lines.push('\n');
-                    }
-                    _ => {}
-                }
-            }
-            lines
-        }
+        "evaluator-closure" => evaluator_closure_reading(inputs, family, overrides)?,
+        "macos-link" => macos_link_reading(inputs, family, overrides)?,
         // AN UNKNOWN FAMILY IS A USAGE ERROR, never a record written under a name
         // nothing reads. A producer whose family was renamed would otherwise go on
         // writing happily into a key no module has looked at since.
@@ -796,8 +743,119 @@ pub fn run_derive(
             )));
         }
     };
+    Ok(derived)
+}
 
-    let family = safe_component("family", family)?;
+/// The evaluator's own sub-closure, and which crates in it bear IO (CLOUD-831).
+///
+/// # Errors
+///
+/// A [`UsageError`] for an unaccepted input, an undeclared `[[pattern]]` row, or
+/// stdin that is not a `cargo metadata` document.
+fn evaluator_closure_reading(
+    inputs: &BTreeMap<String, String>,
+    family: &str,
+    overrides: &Overrides,
+) -> Result<String> {
+    only_these_inputs(inputs, family, &[])?;
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    let evaluator = declared_pattern(&config.patterns, family, "evaluator-package")?;
+    let bears_io = declared_pattern(&config.patterns, family, "evaluator-io-crate")?;
+    let graph = graph_on_stdin(family)?;
+
+    // THE SCOPE IS THE EVALUATOR'S SUB-CLOSURE, NOT THE WORKSPACE'S, and
+    // that was measured before it was written because the obvious
+    // spelling is wrong: walking from the workspace members instead
+    // reached 281 packages, including two direct dependencies of the
+    // consumer itself entering by paths with nothing to do with the
+    // evaluator. The wider spelling fired on all five lockfile-touching
+    // commits reachable from HEAD and every firing was a false positive.
+    let roots = graph.roots_matching(|name| evaluator.is_match(name));
+    let reading = if roots.is_empty() {
+        // NOT A PASS. The evaluator vanishing from the graph means the
+        // question could not be asked, and reporting "nothing found"
+        // there is the vacuous pass this repository names CLOUD-251.
+        "absent\n".to_owned()
+    } else {
+        let reached = graph.reachable(roots);
+        let mut lines = format!("closure {}\n", reached.len());
+        let mut found: Vec<&str> = graph
+            .named_in_order(&reached)
+            .into_iter()
+            .map(|(name, _)| name)
+            .filter(|name| bears_io.is_match(name))
+            .collect();
+        found.dedup();
+        for name in found {
+            lines.push_str("crate ");
+            lines.push_str(name);
+            lines.push('\n');
+        }
+        lines
+    };
+    Ok(reading)
+}
+
+/// What this tree BUILDS, and which of it needs a platform SDK to link.
+///
+/// [`evaluator_closure_reading`]'s sibling, and the two differ only in their
+/// ROOTS and in what they look for once there — which is the whole reason
+/// [`crate::cargo_graph`] exists rather than a walk per caller.
+///
+/// # Errors
+///
+/// A [`UsageError`] for an unaccepted input, an undeclared `[[pattern]]` row, or
+/// stdin that is not a `cargo metadata` document.
+fn macos_link_reading(
+    inputs: &BTreeMap<String, String>,
+    family: &str,
+    overrides: &Overrides,
+) -> Result<String> {
+    only_these_inputs(inputs, family, &[])?;
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    let framework = declared_pattern(&config.patterns, family, "sdk-framework-crate")?;
+    let vendored = declared_pattern(&config.patterns, family, "vendored-links-crate")?;
+    let graph = graph_on_stdin(family)?;
+
+    // THE WALK STARTS AT THE WORKSPACE MEMBERS, because the question is
+    // about everything this tree builds — unlike `evaluator-closure`,
+    // whose question is about one package's sub-closure. That is the
+    // only difference between the two callers of this graph.
+    let built = graph.reachable(graph.member_roots());
+    let mut lines = format!("scanned {}\n", built.len());
+    for (name, id) in graph.named_in_order(&built) {
+        match graph.links_of(id) {
+            // RULE 1's PROXY, minus the crates it is wrong about. A crate
+            // that VENDORS AND COMPILES the library it names reaches no
+            // platform framework — measured, after this gate refused a
+            // tree the linker then built with no SDK present. An UNKNOWN
+            // `links` crate is still a finding, so this narrows the gate
+            // rather than opening it.
+            Some(library) if !vendored.is_match(name) => {
+                lines.push_str("links ");
+                lines.push_str(name);
+                lines.push(' ');
+                lines.push_str(library);
+                lines.push('\n');
+            }
+            _ if framework.is_match(name) => {
+                lines.push_str("framework ");
+                lines.push_str(name);
+                lines.push('\n');
+            }
+            _ => {}
+        }
+    }
+    Ok(lines)
+}
+
+/// Write a derived reading into the policy-readable store for this branch.
+///
+/// # Errors
+///
+/// A [`UsageError`] for a tree that is not a repository or a detached HEAD with
+/// no branch to key on; an internal error when the store cannot be written.
+fn store_derived(family: &str, derived: &str) -> Result<()> {
     let root = Path::new(".");
     let git_dir = git::git_dir(root).map_err(|_| {
         UsageError::raise(
@@ -811,10 +869,17 @@ pub fn run_derive(
     };
     let claim = claim_of(&git_dir, &branch);
     store(
-        &crate::recorder::record_path(&git_dir, &family, &branch, claim.as_deref()),
-        &derived,
-    )?;
+        &crate::recorder::record_path(&git_dir, family, &branch, claim.as_deref()),
+        derived,
+    )
+}
 
+/// Emit the derived reading on the data channel.
+///
+/// # Errors
+///
+/// An internal error when the output channel cannot be written.
+fn emit_derived(derived: &str, out: &mut dyn std::io::Write) -> Result<ExitCode> {
     // THE DERIVED RECORD GOES TO STDOUT TOO, and it stays pointer-only doing it:
     // what is emitted is the READING — a bounded set of tokens this verb
     // computed — never a byte of the input it read. That distinction is why
