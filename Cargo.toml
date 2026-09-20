@@ -507,6 +507,34 @@ gix-packetline = { version = "0.22", default-features = false, features = [
 # `semver` IS NOT HERE, on the same rule (CLOUD-885): no module calls it, and a
 # feature nothing calls is `input.tree.tracked` documented and never built
 # (CLOUD-845). It lands with its first consumer.
+#
+# `graph` (CLOUD-1863), and it lands WITH its consumer rather than ahead of one:
+# `ci-cache-declared` retires a hand-unrolled walk in the same commit, which is
+# `semver`'s rule above satisfied rather than waived.
+#
+# THE CLOSURE ARGUMENT, RE-TAKEN RATHER THAN ASSUMED TO CARRY. Upstream declares
+# `graph = []` — a bare feature naming no package, so this is `ast`'s case and
+# not `regex`'s: `Cargo.lock` is byte-identical with it on or off, measured
+# 2026-09-19 by generating the lockfile both ways and diffing. No new package,
+# nothing declaring a `links` key, and none of the nine names
+# `evaluator-closure-check` decides on. It gates `builtins/graph.rs`'s
+# registration and nothing else, and performs no I/O, so
+# `no_evaluator_feature_admits_io` holds unchanged.
+#
+# WHY A POLICY MODULE NEEDS IT. Rego forbids a self-referential rule, so a
+# transitive question has no spelling at all and an author writes the closure out
+# by hand. `ci-cache-declared` did, to depth 3 — and a chain deeper than that
+# resolved to "reaches no cargo", which is an under-report the gate could not
+# distinguish from a clean tree. Measured over a depth-10 chain: the unrolled
+# form answers `{n0..n3}` where `graph.reachable` answers `{n0..n9}`. The walk is
+# also superlinear in the depth it is written to — 0.369ms at depth 8 against
+# 23.191ms at depth 64, where the builtin moves 0.030ms to 0.077ms.
+#
+# `graph.reachable` RAISES ON A NULL GRAPH rather than evaluating to undefined,
+# which is the one thing a module author must know: `input.tree.*` is `null`
+# exactly when the engine could not look, and CLOUD-1049 measured that one
+# faulting expression stops every OTHER predicate in the same module, silently,
+# at exit 0. `rules/policy-modules.md` carries the guard.
 # The bash PARSER (CLOUD-1381). The mediation boundary decides denies over the
 # shape of a command line, and it used to derive that shape from a character
 # walk -- so a mis-split produced a confident wrong answer no gate could tell
@@ -529,6 +557,7 @@ regorus = { version = "0.11", default-features = false, features = [
   "arc",
   "coverage",
   "regex",
+  "graph",
 ] }
 # OS advisory locks (flock/fcntl/LockFileEx) for the findings store's shard-merge
 # (CLOUD-78). A crate rather than the syscall directly because the workspace

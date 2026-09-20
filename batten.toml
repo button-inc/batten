@@ -14412,9 +14412,13 @@ target = "policy/ci-cache-declared.rego"
 
 [[verdict]]
 id = "task resolve missing"
-gloss = "the task graph this rule walks could not be resolved, so cargo reachability was not decided"
+gloss = "the manifest that owns the task graph would not parse, so cargo reachability was not decided"
 class = """
-Could-not-look, never a verdict about the tree, and it covers the two ways the walk can fail to answer. Either the manifest that owns the task graph would not parse -- distinct from absent, which means the question does not apply here -- or a `depends` chain runs past the depth the module walks without resolving. The bound is explicit rather than silent for the reason a dead gate and a clean tree are byte-identical on the decision surface: a self-referential rule is not expressible in Rego and `graph.reachable` is outside this build's evaluator feature set, so the walk is written out to a stated depth and a chain longer than that is REPORTED rather than read as "reaches no cargo". Nothing about the job's caching is being claimed; fix the manifest, or flatten the chain, and the predicate answers.
+Could-not-look, never a verdict about the tree, and since CLOUD-1863 it covers ONE way the walk can fail to answer rather than two: the manifest that owns the task graph would not parse. Absent is a different thing and stays out of this class -- it means the question does not apply here.
+
+THE DEPTH ARM IS RETIRED AND IS NOT COMING BACK. This class used to also carry "a `depends` chain runs past the depth the module walks", because a self-referential rule is not expressible in Rego and the closure was therefore written out by hand to three levels. That bound was real and the arm was the honest way to report it -- but the bound itself was an artefact of this repository's own regorus feature list, not of the world: `graph.reachable` sits behind upstream's bare `graph` feature, which names no package and leaves the lockfile byte-identical. The walk is a fixpoint now, so there is no depth to run past. Measured over a depth-10 chain before the change: the unrolled form resolved four nodes where the builtin resolves ten, which means the retired arm was masking an under-report rather than merely bounding one.
+
+Nothing about the job's caching is being claimed; fix the manifest and the predicate answers.
 """
 
 [[verdict.route]]

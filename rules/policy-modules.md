@@ -622,6 +622,41 @@ Assert it in the second tier over the compiled binary, never with `with input
 as` — that fabricates the very shape the engine may be unable to produce, which
 is how the dead clause survived this long.
 
+## A graph builtin RAISES on a null graph, so guard it before the call
+
+`graph.reachable`, `graph.reachable_paths` and `walk` are available since
+CLOUD-1863 — regorus's `graph` feature, which names no package. They are the only
+way to ask a TRANSITIVE question, because Rego forbids a self-referential rule
+and a hand-expanded closure silently under-reports past its own bound.
+
+**They do not abstain the way every other undefined read does, and that is the
+whole of what a module author must know.** Measured 2026-09-19: a seed naming a
+node absent from the graph yields an empty set, silently; a 200-node cycle
+terminates in 243us; and a **`null` graph raises an evaluation error** —
+`` `graph.reachable` expects object argument. Got `null` instead ``.
+
+That last arm is the trap. `input.tree.*` is `null` exactly when the engine could
+not look, so the natural spelling — hand the fact straight to the builtin — faults
+on precisely the input the three-valued model exists to express. And CLOUD-1049
+measured what a fault costs: `policy_rule` discards the whole document, so every
+OTHER predicate in the same module stops deciding too, silently, at exit 0. One
+unresolvable source switches off a module that has nothing to do with it.
+
+So bind the graph behind a type guard and let the rule be undefined, which Rego
+reads as _does not hold_:
+
+```rego
+task_graph := {name: depends_of(name) |
+	some name, _ in input.tree.documents["mise.toml"].tasks
+} if {
+	is_object(input.tree.documents["mise.toml"].tasks)
+}
+```
+
+The could-not-look case then belongs where every other one does — a `missing`
+clause — rather than inside the builtin call. `ci-cache-declared` is the landed
+instance of both halves.
+
 ## Module or preset
 
 **An in-repo module by default.** A preset only when the predicate stays generic

@@ -286,48 +286,47 @@ depends_of(name) := deps if {
 
 invokes_cargo(name) if contains(task_run(name), "cargo")
 
-# THE CLOSURE IS EXPANDED BY HAND TO A STATED DEPTH, and the reason is the
-# evaluator rather than the author's patience: a self-referential rule is not
-# expressible in Rego, and `graph.reachable` is not in this build's regorus
-# feature set (`Cargo.toml` is the one authority on that list — ast, std, arc,
-# coverage, regex). So the walk is written out.
+# THE CLOSURE IS A FIXPOINT, NOT A HAND-EXPANSION (CLOUD-1863). A
+# self-referential rule is still not expressible in Rego, so this reaches for
+# `graph.reachable`, which `Cargo.toml` enables through regorus's bare `graph`
+# feature — a feature naming no package, so the evaluator closure is unchanged.
 #
-# THREE LEVELS, AND THE BOUND IS LOUD RATHER THAN SILENT. Measured over this
-# manifest: `test:bats`, `batten-check`, `perf-gate` and `verify` reach cargo at
-# depth 0, `ci` and `commit-lint` at depth 1. Three levels is therefore double
-# the deepest live chain — and a chain that runs PAST the bound without resolving
-# raises `task graph deep` below instead of being read as "reaches no cargo",
-# because under-denying here is exactly the dead-gate direction this module
-# exists to close.
+# WHAT THE HAND-EXPANSION COST, stated because this comment previously read as a
+# constraint of the world rather than of our own feature list. The walk was
+# written to three levels, and a `depends` chain longer than that resolved to
+# "reaches no cargo" — an UNDER-REPORT a caller could not tell from a clean tree.
+# Measured over a depth-10 chain: the unrolled form answers four nodes where
+# `graph.reachable` answers ten. It was also superlinear in the depth written
+# out, 0.369ms at depth 8 against 23.191ms at depth 64, where the builtin moves
+# 0.030ms to 0.077ms. There is no depth bound left to run past, so the
+# `task graph deep` arm this module used to raise is retired with it.
+
+# The task graph as an adjacency object, which is the shape `graph.reachable`
+# takes: one entry per declared task, its `depends` as the neighbour list.
+#
+# GUARDED ON THE MANIFEST BEING AN OBJECT, and that guard is load-bearing rather
+# than defensive. `graph.reachable` RAISES on a null graph instead of evaluating
+# to undefined, and CLOUD-1049 measured that one faulting expression stops every
+# OTHER predicate in the same module, silently, at exit 0. An unresolvable
+# `mise.toml` must leave this rule undefined — which Rego reads as *does not
+# hold* — never fault the bundle that contains it.
+declared_tasks := tasks if {
+	tasks := input.tree.documents["mise.toml"].tasks
+	is_object(tasks)
+}
+
+task_graph[name] := depends_of(name) if {
+	some name, _ in declared_tasks
+}
+
+# A task reaches cargo if any task reachable from it invokes cargo -- itself
+# included, since `graph.reachable` returns the seed when the seed has edges and
+# the first clause covers it either way.
 reaches_cargo(name) if invokes_cargo(name)
 
 reaches_cargo(name) if {
-	one := depends_of(name)[_]
-	invokes_cargo(one)
-}
-
-reaches_cargo(name) if {
-	one := depends_of(name)[_]
-	two := depends_of(one)[_]
-	invokes_cargo(two)
-}
-
-reaches_cargo(name) if {
-	one := depends_of(name)[_]
-	two := depends_of(one)[_]
-	three := depends_of(two)[_]
-	invokes_cargo(three)
-}
-
-# A chain still branching at the bound, with no cargo found along it. Reported
-# rather than assumed either way: the module cannot see past its own walk, and
-# saying so is the difference between a gate that abstains and one that passes.
-unresolved(name) if {
-	not reaches_cargo(name)
-	one := depends_of(name)[_]
-	two := depends_of(one)[_]
-	three := depends_of(two)[_]
-	count(depends_of(three)) > 0
+	some reached in graph.reachable(task_graph, [name])
+	invokes_cargo(reached)
 }
 
 # THE BODY IS BOUND BEFORE THE `regex.*` CALL, and that is a load-time
@@ -394,21 +393,6 @@ violation contains {
 	task := entry[2]
 	uncached(path, name, task)
 	not job_placed(path, name)
-}
-
-violation contains {
-	"rule": "cargo carry missing",
-	"verdict": "task resolve missing",
-	"subjects": [{"path": path}, {"artifact": task}],
-} if {
-	governed
-	some entry in reach
-	path := entry[0]
-	name := entry[1]
-	task := entry[2]
-	on_pull_request(path)
-	unresolved(task)
-	not declares_a_cache(path, name)
 }
 
 # --- 3. a pull-request reader of a warmed family does not write to it ---------
