@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.177](https://github.com/button-inc/batten/compare/v0.0.176...v0.0.177) - 2026-09-20
+
+### Other
+
+- *(policy)* drive the depth and cycle cases over the compiled binary
+- *(setup)* supersede the consumer artifact with this clone's own build
+
 ## [0.0.176](https://github.com/button-inc/batten/compare/v0.0.175...v0.0.176) - 2026-09-19
 
 ### Fixed
