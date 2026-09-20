@@ -162,16 +162,32 @@ stripped(line) := line if {
 }
 
 # A CALL, not a mention: the tool's name in command position.
+#
+# **THE LINE IS PADDED WITH ONE TRAILING SPACE** (review of #928), and that is
+# the whole of what makes a call ENDING the line visible. Every shape below tests
+# for the tool followed by a space, so `cat payload | jq` — a call with no
+# arguments, at the end of a line, which is entirely ordinary shell — matched
+# none of them and the gate reported clean for a by-path hook depending on a
+# pinned tool. That is the fail-open state this module exists to prevent.
+#
+# It is the SAME RESIDUE `policy/dead-capability.rego`'s `reached()` carries and
+# this campaign paid for twice: a space-bounded needle cannot see a token that
+# ends its line. Padding once here fixes every arm at once, where adding an
+# end-of-line variant per arm would be three more places to forget.
 calls(text, tool) if {
-	startswith(trim_space(text), concat("", [tool, " "]))
+	invoked(concat("", [trim_space(text), " "]), tool)
 }
 
-calls(text, tool) if {
+invoked(text, tool) if {
+	startswith(text, concat("", [tool, " "]))
+}
+
+invoked(text, tool) if {
 	some separator in {";", "&", "|", "(", "$("}
 	contains(text, concat("", [separator, tool, " "]))
 }
 
-calls(text, tool) if {
+invoked(text, tool) if {
 	some separator in {";", "&", "|", "(", "$("}
 	contains(text, concat("", [separator, " ", tool, " "]))
 }
@@ -234,6 +250,40 @@ test_a_by_path_hook_calling_a_pinned_tool_is_refused if {
 		"mise-tasks/guard.sh": ["jq -r .x <<<\"$payload\""],
 	})
 	v.verdict == "tool reach absent"
+}
+
+# THE SHAPE THAT USED TO BE INVISIBLE (review of #928). A call with no arguments
+# at the END of a line — which is entirely ordinary shell — matched none of the
+# space-bounded arms, so the gate reported clean for a by-path hook that depends
+# on a pinned tool. Both spellings are pinned: piped into the tool, and the tool
+# alone on the line.
+test_a_pinned_tool_ending_the_line_is_still_a_call if {
+	some v in violation with input as tree({
+		".claude/settings.json": [registered("mise-tasks/guard.sh")],
+		"mise.toml": manifest,
+		"mise-tasks/guard.sh": ["cat payload | jq"],
+	})
+	v.verdict == "tool reach absent"
+}
+
+test_a_pinned_tool_alone_on_the_line_is_still_a_call if {
+	some v in violation with input as tree({
+		".claude/settings.json": [registered("mise-tasks/guard.sh")],
+		"mise.toml": manifest,
+		"mise-tasks/guard.sh": ["jq"],
+	})
+	v.verdict == "tool reach absent"
+}
+
+# AND THE PADDING DOES NOT INVENT A CALL OUT OF A MENTION, which is the direction
+# that would make this a false-deny: a name that merely ENDS a longer word is
+# still not an invocation.
+test_a_name_ending_a_longer_word_is_not_a_call if {
+	count(violation) == 0 with input as tree({
+		".claude/settings.json": [registered("mise-tasks/guard.sh")],
+		"mise.toml": manifest,
+		"mise-tasks/guard.sh": ["batten hook claude-code # not jqx"],
+	})
 }
 
 test_a_runner_registration_is_not_this_gates_business if {

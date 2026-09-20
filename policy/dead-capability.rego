@@ -183,11 +183,44 @@ code_text(path) := concat(" ", [line |
 # across a pipe into another program, or under an alias, reads as unreached. That
 # lands in the OVER-deny direction for a ratchet whose remedy is one declaration
 # line, which is the cheap direction to be wrong in.
+# **THE LEADING SPACE IS REQUIRED AND THE TRAILING ONE IS NOT** (review of #928),
+# and the asymmetry is the whole mechanism rather than a convenience.
+#
+# The needle was `" <verb> "` over a text `code_text` has already joined with
+# spaces, so the only thing that can follow a verb is what the CALLER wrote next
+# — and in a `mise.toml` task body that is the closing QUOTE of the `run` string:
+# `run = "cargo run --quiet -p batten -- doctor target"`. The verb is followed by
+# `"`, the needle wants a space, and a live, wired verb reads dead. This campaign
+# paid for that three times in `// unreached:` declarations whose stated reason
+# was this residue rather than an absent caller.
+#
+# STRIPPING QUOTES FROM THE TEXT WAS TRIED FIRST AND IS REFUSED, recorded because
+# it reads as the obvious fix and is a gate-disabling one. `SURFACE` is itself a
+# call surface, so with quotes gone `path: "mcp spawn",` becomes ` mcp spawn ,`
+# and the DECLARATION reads as its own caller: measured, 18 of 18 declarations
+# flipped to reached, which would report every one stale and leave the ratchet
+# matching everything.
+#
+# Keeping the LEADING space is what separates the two: a call has a space before
+# the verb because something invoked it, and a `path:` literal has a quote there.
+# So the tail may be a space, a quote, or the end of the text, and the head may
+# not.
+CALL_TAIL := {" ", "\"", "'", "`"}
+
+invokes(text, verb) if {
+	some tail in CALL_TAIL
+	contains(text, concat("", [" ", verb, tail]))
+}
+
+invokes(text, verb) if {
+	endswith(text, concat("", [" ", verb]))
+}
+
 reached(verb) if {
 	some path in call_surfaces
 	text := code_text(path)
 	contains(text, "batten")
-	contains(text, concat("", [" ", verb, " "]))
+	invokes(text, verb)
 }
 
 # The author declared that nothing reaches it, and why.
@@ -235,7 +268,7 @@ unreached contains verb if {
 violation contains {
 	"rule": "verb reach missing",
 	"verdict": "verb reach missing",
-	"subjects": [{"path": SURFACE}, {"artifact": verb}],
+	"subjects": [{"path": verb}],
 } if {
 	some verb in unreached
 }
@@ -312,6 +345,38 @@ test_a_branch_that_adds_a_wired_verb_is_clean if {
 		[],
 		{"mise.toml": ["run = 'batten lease acquire --ttl 60'"]},
 	)
+}
+
+# A CALL THAT ENDS ITS ENCLOSING STRING IS STILL A CALL (review of #928). This is
+# the residue that cost three `// unreached:` declarations: `code_text` joins
+# lines with spaces, so what follows the verb is whatever the caller wrote — and
+# in a task body that is the closing quote.
+test_a_verb_ending_a_task_body_is_reached if {
+	count(violation) == 0 with input as tree_with(
+		surface_with("doctor target"),
+		[],
+		{"mise.toml": ["run = \"cargo run --quiet -p batten -- doctor target\""]},
+	)
+}
+
+# AND ONE ENDING THE WHOLE TEXT, which is the other unbounded position.
+test_a_verb_ending_the_text_is_reached if {
+	count(violation) == 0 with input as tree_with(
+		surface_with("lease check"),
+		[],
+		{".github/workflows/x.yml": ["- run: batten lease check"]},
+	)
+}
+
+# **THE DIRECTION THAT WOULD DISABLE THE RATCHET**, and it is pinned because the
+# obvious fix has it. Stripping quotes from the text before matching makes
+# `SURFACE`'s own `path: "<verb>",` literal read as a caller — measured at 18 of
+# 18 declarations flipping to reached — so the gate would match everything and
+# report every declaration stale. The LEADING space is what separates a call from
+# a declaration, and this case fails the moment it stops being required.
+test_the_surface_declaration_is_not_its_own_caller if {
+	some v in violation with input as tree_with(surface_with("lease acquire"), [], {})
+	v.verdict == "verb reach missing"
 }
 
 # THE RATCHET PROPERTY. Without it this is the 61-verb state check that grooming

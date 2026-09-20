@@ -1088,7 +1088,13 @@ shell = "bash -c"
 # suite is a misleading number rather than a missing one, so the body opts in.
 run = '''
 set -euo pipefail
-if ! rustup component list --installed | grep -qx 'llvm-tools-preview'; then
+# THE PRODUCER IS READ FIRST, never piped into `grep -q` (review of #928).
+# Under `set -o pipefail` a matching `grep -q` exits on the first hit, the
+# producer takes SIGPIPE, and the PIPELINE's status becomes that signal — so the
+# `if !` reads a successful match as "not installed" and reinstalls. The retired
+# `landed-check.sh` carried this same note at its own call site.
+installed_components=$(rustup component list --installed)
+if ! grep -qx 'llvm-tools-preview' <<<"$installed_components"; then
 	if ! rustup component add llvm-tools-preview; then
 		echo "::error:: coverage: could not install llvm-tools-preview, so no report was produced." >&2
 		exit 1
@@ -1166,7 +1172,10 @@ shell = "bash -c"
 # rather than a missing one.
 run = '''
 set -euo pipefail
-if ! rustup toolchain list | grep -q '^nightly'; then
+# Read first for the reason the coverage task above records: a matching
+# `grep -q` under `pipefail` makes the pipeline exit with the producer's SIGPIPE.
+installed_toolchains=$(rustup toolchain list)
+if ! grep -q '^nightly' <<<"$installed_toolchains"; then
 	if ! rustup toolchain install nightly --profile minimal; then
 		echo "::error:: fuzz: could not install the nightly toolchain libFuzzer requires, so nothing was searched." >&2
 		exit 1
