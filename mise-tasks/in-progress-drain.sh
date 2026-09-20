@@ -117,8 +117,6 @@ cannot_look() {
 	exit 2
 }
 
-here="$(cd "$(dirname "$0")" && pwd)"
-
 # --- the payload --------------------------------------------------------------
 if ! payload=$(cat) || [[ -z "${payload//[[:space:]]/}" ]]; then
 	cannot_look "stdin is empty; expected get_issue payloads"
@@ -204,13 +202,60 @@ else
 	trap 'rm -f "$gathered"' EXIT
 	drain_evidence=(--merged-prs "$gathered")
 fi
-landed_report=$("$here/landed-check.sh" "${drain_evidence[@]+"${drain_evidence[@]}"}" <<<"$issues" 2>&1)
+
+# THE CLAIMED-KEY HALF, WHICH THE CALLER NOW SUPPLIES (CLOUD-1753). The retired
+# `landed-check.sh` computed this itself; `batten landed check` takes `--claimed`
+# so that what a commit CLAIMS, as distinct from what it merely MENTIONS, keeps
+# exactly one authority -- `batten claim keys` -- rather than a second copy of
+# that expression living in whichever caller asked (CLOUD-378). Without it the
+# engine declines the arm and says so, which is a landed row reported as unswept
+# forever.
+#
+# `--closing-only` because the branch-name and `Refs:` fallbacks answer "what
+# does THIS branch claim", a different question that would readmit the bare
+# citation CLOUD-804 is about. The three empty explicit sources stop it reading
+# this checkout's HEAD instead of main's history. THE LOG GOES ON STDIN: main's
+# history here is over a megabyte and an argv that size is `Argument list too
+# long`, which exits 126 and would read as "nothing claimed".
+main_log=$(git log --format='%B' origin/main 2>/dev/null || true)
+claimed_file="${TMPDIR:-/tmp}/drain-claimed.$$"
+if ! printf '%s' "$main_log" | batten claim keys --closing-only --branch "" --title "" --log "" >"$claimed_file" 2>/dev/null; then
+	rm -f "$claimed_file"
+	cannot_look "batten claim keys could not read main's log, so a claim cannot be told from a mention. That is not a clean board."
+fi
+drain_evidence+=(--claimed "$claimed_file")
+# THE ENGINE, not the retired program (CLOUD-1753). `mise-tasks/landed-check.sh`
+# was deleted when its predicate landed as `batten landed check`, and this line
+# still named the path — so every sweep answered COULD NOT LOOK with "No such
+# file or directory", which `tests/board-sweep.bats` caught.
+#
+# THREE THINGS CHANGED WITH THE PORT and each is handled rather than absorbed
+# (CLOUD-1559): the claimed-key arm is now the CALLER's to supply, the exit table
+# is the engine's rather than the corpus's, and the rendering carries a prefix
+# and a reason. Each is stated at the line that deals with it below.
+landed_report=$(batten landed check "${drain_evidence[@]+"${drain_evidence[@]}"}" <<<"$issues" 2>&1)
 landed_status=$?
+# AFTER the status is captured, never between: an `rm` in between would clobber
+# `$?` and every verdict would read as the removal's.
+rm -f "${claimed_file:-}"
+# THE ENGINE'S EXIT TABLE, NOT THE CORPUS'S (CLOUD-1718). The retired program
+# answered 0 clean / 1 findings; `batten landed check` answers 0 Success,
+# 1 Usage, 2 Violation, 3 Internal — the corpus INVERTS 1 and 2. Reading 1 as
+# "findings" here would take a caller's usage error for a verdict about the
+# board, and reading 2 as could-not-look would report every landed row as
+# unknown. Both were measured on this port before the table was folded.
 case "$landed_status" in
-0 | 1) ;;
-*) cannot_look "landed-check could not judge the payload, so landedness is unknown and every row would read as abandoned. Its report: ${landed_report:-(none)}" ;;
+0 | 2) ;;
+*) cannot_look "batten landed check could not judge the payload, so landedness is unknown and every row would read as abandoned. Its report: ${landed_report:-(none)}" ;;
 esac
-landed_ids=$(printf '%s\n' "$landed_report" | sed -n 's@^  \([A-Z][A-Z0-9]*-[0-9][0-9]*\)  In Progress -> In Review$@\1@p' | sort -u)
+# THE RENDERING MOVED WITH THE PROGRAM, and this reader follows it rather than
+# the successor being bent to the old shape. The engine prefixes its own name and
+# names WHY each row landed — `batten:   CLOUD-179  In Progress -> In Review
+# behind-git` — where the shell emitted the bare indented row. The anchor stays
+# on the column transition, which is the part that carries meaning; the prefix
+# and the trailing reason are tolerated rather than required, so a new reason
+# token does not silently empty this list.
+landed_ids=$(printf '%s\n' "$landed_report" | sed -n 's@^\(batten: \)\{0,1\}[[:space:]]*\([A-Z][A-Z0-9]*-[0-9][0-9]*\)  In Progress -> In Review\([[:space:]].*\)\{0,1\}$@\2@p' | sort -u)
 landed_json=$(jq -Rsc 'split("\n") | map(select(. != ""))' <<<"$landed_ids")
 
 # CLOUD-783's lesson, applied at construction rather than after a quiet sweep: a

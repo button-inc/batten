@@ -3443,6 +3443,41 @@ run = "cargo run --quiet -p batten -- startup --repair"
 # target add` behave like the idempotent operation it documents, because rustup
 # has no cross-process lock and two concurrent adds each see the other's
 # half-written component tree and both roll back (CLOUD-220).
+# THE FIVE WAVE-1 GATE NAMES THAT SURVIVE THEIR PROGRAMS (CLOUD-1753).
+#
+# Deleting `mise-tasks/<name>.sh` retires the auto-discovered TASK along with the
+# program, and CI still calls every one of these by name: `ci-tools-check` from
+# six workflows, `rust-paths-check` from `rust.yml`, `report-only-check` from
+# `scorecard.yml` and from `verify` here, `timeout-check` from
+# `timeout-drift.yml`, and `awk-regex-check` from `mise-tasks/nonverdict-assert.sh`.
+# Without these rows each of those is "no task found" — which is how `hk.pkl`'s
+# `mcp-timeout-budget` step and `test:musl`'s `target-ensure` call broke in this
+# same campaign, and it is the fourth and fifth instance of one defect.
+#
+# EACH RUNS THE ENGINE OVER ITS SUCCESSOR RULE rather than re-spelling a
+# predicate: the module is the authority and `batten check --rule` is how a
+# caller asks it. `cargo run -p batten --` and not the bare name, because these
+# rule ids are this branch's and a PATH-resolved release does not carry them.
+[tasks."ci-tools-check"]
+description = "Gate: every tool a workflow reaches for is pinned where this repository pins tools"
+run = "cargo run --quiet -p batten -- check --rule 'tool pin wrong'"
+
+[tasks."rust-paths-check"]
+description = "Gate: the rust workflow's path filters name every path its jobs actually judge"
+run = "cargo run --quiet -p batten -- check --rule 'path list partial'"
+
+[tasks."report-only-check"]
+description = "Gate: a reporting workflow does not silently stand in for a gate that must decide"
+run = "cargo run --quiet -p batten -- check --rule 'gate report silent'"
+
+[tasks."timeout-check"]
+description = "Gate: every job declares a timeout, and every declared timeout binds to a job"
+run = "cargo run --quiet -p batten -- check --rule 'job bind missing'"
+
+[tasks."awk-regex-check"]
+description = "Gate: an awk program carries no pattern that is unsafe under the shell that invokes it"
+run = "cargo run --quiet -p batten -- check --rule 'pattern carry unsafe'"
+
 [tasks."target-ensure"]
 description = "Effect: ensure one rustup target is installed, behind the per-toolchain lock so concurrent callers queue instead of colliding"
 # NO `"$1"`: mise appends a task's positional arguments to its `run` string, so
