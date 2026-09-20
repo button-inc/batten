@@ -8917,6 +8917,53 @@ required_checks = ["final"]
 # a `.coderabbit.yaml` entry cannot quietly cover `.coderabbit.yaml.bak`.
 slow_inert = [".serena/memories/", ".coderabbit.yaml"]
 
+# THE PATHS EVERY BATS SUITE DEPENDS ON WITHOUT NAMING (CLOUD-1716), ported out
+# of `mise-tasks/suite-select.sh`. A suite declares its subject in a
+# `# subject:` header, and a change to one of these moves suites whose header
+# names none of them — so a diff touching one runs everything.
+#
+# CONSUMER DATA, and it was a constant in `crates/batten/src/suites.rs` until
+# `no_artifact_name_reaches_the_core` refused it (non-negotiable rule 1). The
+# engine knows the relationship; these five paths are this repository's.
+#
+# EACH ENTRY HAS ITS OWN ARGUMENT, and the direction of a mistake here is the
+# opposite of `slow_inert`'s: a path missing from this list makes the selection
+# NARROWER, and a too-narrow selection has no symptom — the suites do not run and
+# a regression lands green.
+#
+#   `mise.toml`               defines the tasks the suites invoke
+#   `mise.lock`               pins the tools those tasks resolve
+#   `hk.pkl`                  defines the gate the suites assert about
+#   `batten.toml`             is the policy authority every gate reads
+#   `.claude/settings.json`   is the harness wiring several suites drive
+#   `tests/helpers.bash`      is sourced by almost every suite
+#
+# Measured on CLOUD-807: subject-intersection alone selected 7 suites for a
+# `mise.toml` edit and skipped `tests/land.bats`, which is worse than running
+# everything.
+#
+# Same spelling as `slow_inert` one key up: a trailing `/` covers a directory,
+# anything else must match exactly — so a `mise.toml` entry cannot quietly cover
+# `mise.toml.bak`.
+suite_shared = [
+  ".claude/settings.json",
+  "batten.toml",
+  "hk.pkl",
+  "mise.lock",
+  "mise.toml",
+  "tests/helpers.bash",
+]
+
+# The workflow whose matrix names the targets a release builds (CLOUD-65),
+# ported out of `mise-tasks/install-check.sh`. `release install` compares three
+# authorities that must agree on an asset NAME — this matrix, `dist.sh`'s naming,
+# and the binstall manifest — and which file carries the matrix is a fact about
+# this repository's lane rather than about the comparison.
+#
+# ABSENT IS COULD-NOT-LOOK, never a guess: a guessed path that does not exist
+# reads as "no matrix", and a gate that checks nothing must not report green.
+release_workflow = ".github/workflows/release-artifacts.yml"
+
 # The repository settings this tree projects (CLOUD-380). `[ci]` above projects
 # the BRANCH ruleset; this projects the repository object, and the two are the
 # same discipline over two host endpoints: the host is the authority, and a value

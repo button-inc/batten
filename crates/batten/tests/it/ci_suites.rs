@@ -52,8 +52,14 @@ use std::path::{Path, PathBuf};
 
 /// A repository with two programs, two suites, and a declared subject each.
 fn repo(name: &str) -> PathBuf {
+    // The shared inputs are the CONSUMER'S (rule 1), so the fixture declares its
+    // own rather than inheriting a constant from the engine. `required_checks` is
+    // required whenever `[ci]` is present.
     let dir = Fixture::new(name)
-        .config("version = 1\n")
+        .config(
+            "version = 1\n[ci]\nrequired_checks = [\"final\"]\n\
+             suite_shared = [\"mise.toml\", \"tests/helpers.bash\"]\n",
+        )
         .file("mise-tasks/alpha.sh", "#!/usr/bin/env bash\nexit 0\n")
         .file("mise-tasks/beta.sh", "#!/usr/bin/env bash\nexit 0\n")
         .file(
@@ -155,6 +161,44 @@ fn a_shared_input_runs_every_suite_and_names_itself() {
     assert!(
         stderr.contains("mise.toml is an input to suites"),
         "the widening names the path that forced it: {stderr}"
+    );
+}
+
+/// AN UNDECLARED SHARED SET WIDENS, which is the opposite of what an empty
+/// `slow_inert` does and is the asymmetry this verb is built around: a selection
+/// that is too narrow has no symptom — the suites do not run, the count matches
+/// whatever was selected, and a regression lands green. So a tree that has not
+/// said what its shared inputs are gets every suite.
+#[test]
+fn a_tree_that_declares_no_shared_input_runs_every_suite() {
+    let dir = Fixture::new("suites-undeclared")
+        .config("version = 1\n")
+        .file("mise-tasks/alpha.sh", "#!/usr/bin/env bash\nexit 0\n")
+        .file(
+            "tests/alpha.bats",
+            "# subject: mise-tasks/alpha.sh\n@test \"a\" { true; }\n",
+        )
+        .file(
+            "tests/beta.bats",
+            "# subject: mise-tasks/beta.sh\n@test \"b\" { true; }\n",
+        )
+        .git()
+        .build();
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "base"]);
+    git_in(&dir, &["branch", "base"]);
+    change(&dir, "mise-tasks/alpha.sh", "#!/usr/bin/env bash\nexit 1\n");
+
+    let (code, stdout, stderr) = select(&dir, "base");
+    assert_eq!(code, Some(0), "widening is an answer, never a refusal");
+    assert_eq!(
+        named(&stdout).len(),
+        2,
+        "every suite runs where the tree named no shared input"
+    );
+    assert!(
+        stderr.contains("suite_shared"),
+        "the widening names the key that would narrow it: {stderr}"
     );
 }
 

@@ -205,27 +205,27 @@ pub fn derive(root: &Path, tracked: &BTreeSet<String>) -> Result<(Vec<Row>, Stri
     Ok((rows, text))
 }
 
-/// A path that can move a suite whose `# subject:` header does not name it.
+/// Whether `path` is one of the shared inputs the consumer declared.
 ///
-/// **Enumerated rather than inferred, and the enumeration is the conservative
-/// direction**: a path absent from this list still has to match the narrow shape
-/// in [`select`] to avoid a wide run, so a shared input somebody forgets to add
-/// is caught by the shape test instead of slipping through.
+/// **DECLARED, NOT ENUMERATED HERE** (review of #928). This was a constant
+/// listing this repository's task runner, gate config, lockfile and harness
+/// settings, which non-negotiable rule 1 refuses: the core knows the
+/// RELATIONSHIP — a path every suite depends on widens the run — and `[ci]
+/// suite_shared` is where a consumer names its own. The engine's half is the
+/// spelling, which is `slow_inert`'s: an entry ending `/` covers a directory,
+/// anything else must match exactly — so an entry cannot quietly cover a
+/// neighbour whose name merely starts with it.
 ///
-/// `mise.toml` defines the tasks the suites invoke, `hk.pkl` defines the gate,
-/// `batten.toml` is the policy authority, and `tests/helpers` is sourced widely.
-/// Subject-intersection alone selected 7 suites for a `mise.toml` edit and
-/// skipped `tests/land.bats`, which is WORSE than running everything.
-const SHARED_INPUTS: &[&str] = &[
-    ".claude/settings.json",
-    "batten.toml",
-    "hk.pkl",
-    "mise.lock",
-    "mise.toml",
-];
-
-/// The prefix whose every path is a shared input.
-const SHARED_PREFIX: &str = "tests/helpers";
+/// The example that would make that concrete is a consumer path, and naming one
+/// here is what `no_artifact_name_reaches_the_core` refuses, doc comment
+/// included. It is in `batten.toml` beside the declaration instead.
+fn is_shared(path: &str, shared: &[String]) -> bool {
+    shared.iter().any(|entry| {
+        entry.strip_suffix('/').map_or(entry == path, |directory| {
+            path.starts_with(&format!("{directory}/"))
+        })
+    })
+}
 
 /// Which suites a diff can move, or every suite and why.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -262,6 +262,7 @@ pub fn select(
     changed: &BTreeSet<String>,
     suites: &BTreeSet<String>,
     subjects: &BTreeMap<String, BTreeSet<String>>,
+    shared: &[String],
 ) -> Selection {
     let everything = || Vec::from_iter(suites.iter().cloned());
     if changed.is_empty() {
@@ -270,10 +271,23 @@ pub fn select(
             widened: Some(String::from("no changed paths could be computed")),
         };
     }
+    // AN UNDECLARED SHARED SET WIDENS, which is the opposite of what an empty
+    // `slow_inert` does and is the asymmetry this function's header states: a
+    // selection that is too narrow has no symptom, so "this tree has not said
+    // what its shared inputs are" must answer with every suite rather than with
+    // a confident subset.
+    if shared.is_empty() {
+        return Selection {
+            suites: everything(),
+            widened: Some(String::from(
+                "`[ci] suite_shared` declares no shared input, so no diff can be judged narrow",
+            )),
+        };
+    }
 
     let mut selected: BTreeSet<String> = BTreeSet::new();
     for path in changed {
-        if SHARED_INPUTS.contains(&path.as_str()) || path.starts_with(SHARED_PREFIX) {
+        if is_shared(path, shared) {
             return Selection {
                 suites: everything(),
                 widened: Some(format!(
