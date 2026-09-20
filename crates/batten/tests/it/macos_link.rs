@@ -135,7 +135,19 @@ fn record(dir: &std::path::Path, lines: &str) {
 /// `links` key it reads, and the two `[[pattern]]` rows that decide which names
 /// mean an SDK and which vendor what they link.
 fn walk(dir: &std::path::Path, metadata: &str) -> String {
-    let written = run_with_stdin(dir, &["record", "derive", "macos-link"], metadata);
+    let written = run_with_stdin(
+        dir,
+        &[
+            "record",
+            "derive",
+            "macos-link",
+            "--input",
+            "framework=sdk-framework-crate",
+            "--input",
+            "vendored=vendored-links-crate",
+        ],
+        metadata,
+    );
     assert!(
         written.status.success(),
         "the walk reads its graph: {}",

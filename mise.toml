@@ -2429,7 +2429,8 @@ fi
 # so the two cannot drift, and the crate names it looks for are `[[pattern]]`
 # rows rather than constants in a repo-agnostic core (CLOUD-1717).
 printf '%s' "$metadata" \
-  | cargo run --quiet -p batten -- record derive macos-link
+  | cargo run --quiet -p batten -- record derive macos-link \
+    --input framework=sdk-framework-crate --input vendored=vendored-links-crate
 """
 
 [tasks.evaluator-closure-record]
@@ -2446,7 +2447,8 @@ fi
 # so the two cannot drift, and the crate names it looks for are `[[pattern]]`
 # rows rather than constants in a repo-agnostic core (CLOUD-1717).
 printf '%s' "$metadata" \
-  | cargo run --quiet -p batten -- record derive evaluator-closure
+  | cargo run --quiet -p batten -- record derive evaluator-closure \
+    --input roots=evaluator-package --input bears=evaluator-io-crate
 """
 
 [tasks.branch-age-record]

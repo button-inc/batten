@@ -748,19 +748,35 @@ fn derive_reading(
 
 /// The evaluator's own sub-closure, and which crates in it bear IO (CLOUD-831).
 ///
+/// THE ROW IDS ARE THE PRODUCER'S, NOT THIS MODULE'S (non-negotiable rule 1).
+/// `roots` and `bears` name `[[pattern]]` rows, and which rows a repository
+/// declares is a consumer fact — a literal here would be this consumer's config
+/// key compiled into the repo-agnostic core, which is the thing
+/// [`declared_pattern`]'s own doc comment says must not happen. The caller names
+/// them, exactly as `DERIVE_INPUT` describes: the keys a family accepts are that
+/// family's own contract.
+///
 /// # Errors
 ///
-/// A [`UsageError`] for an unaccepted input, an undeclared `[[pattern]]` row, or
-/// stdin that is not a `cargo metadata` document.
+/// A [`UsageError`] for a missing or unaccepted input, an undeclared
+/// `[[pattern]]` row, or stdin that is not a `cargo metadata` document.
 fn evaluator_closure_reading(
     inputs: &BTreeMap<String, String>,
     family: &str,
     overrides: &Overrides,
 ) -> Result<String> {
-    only_these_inputs(inputs, family, &[])?;
+    only_these_inputs(inputs, family, &["roots", "bears"])?;
     let config = resolve::resolve(Path::new("."), overrides)?;
-    let evaluator = declared_pattern(&config.patterns, family, "evaluator-package")?;
-    let bears_io = declared_pattern(&config.patterns, family, "evaluator-io-crate")?;
+    let evaluator = declared_pattern(
+        &config.patterns,
+        family,
+        required_input(inputs, family, "roots")?,
+    )?;
+    let bears_io = declared_pattern(
+        &config.patterns,
+        family,
+        required_input(inputs, family, "bears")?,
+    )?;
     let graph = graph_on_stdin(family)?;
 
     // THE SCOPE IS THE EVALUATOR'S SUB-CLOSURE, NOT THE WORKSPACE'S, and
@@ -800,7 +816,8 @@ fn evaluator_closure_reading(
 ///
 /// [`evaluator_closure_reading`]'s sibling, and the two differ only in their
 /// ROOTS and in what they look for once there — which is the whole reason
-/// [`crate::cargo_graph`] exists rather than a walk per caller.
+/// [`crate::cargo_graph`] exists rather than a walk per caller. Its `framework`
+/// and `vendored` row ids are the producer's for that function's reason.
 ///
 /// # Errors
 ///
@@ -811,10 +828,18 @@ fn macos_link_reading(
     family: &str,
     overrides: &Overrides,
 ) -> Result<String> {
-    only_these_inputs(inputs, family, &[])?;
+    only_these_inputs(inputs, family, &["framework", "vendored"])?;
     let config = resolve::resolve(Path::new("."), overrides)?;
-    let framework = declared_pattern(&config.patterns, family, "sdk-framework-crate")?;
-    let vendored = declared_pattern(&config.patterns, family, "vendored-links-crate")?;
+    let framework = declared_pattern(
+        &config.patterns,
+        family,
+        required_input(inputs, family, "framework")?,
+    )?;
+    let vendored = declared_pattern(
+        &config.patterns,
+        family,
+        required_input(inputs, family, "vendored")?,
+    )?;
     let graph = graph_on_stdin(family)?;
 
     // THE WALK STARTS AT THE WORKSPACE MEMBERS, because the question is

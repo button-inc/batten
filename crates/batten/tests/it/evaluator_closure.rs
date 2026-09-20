@@ -136,7 +136,19 @@ fn record(dir: &std::path::Path, lines: &str) {
 /// `evaluator-package` row selects, and the names its `evaluator-io-crate` row
 /// looks for once there. That composition is the gate, and it is per-consumer.
 fn walk(dir: &std::path::Path, metadata: &str) -> String {
-    let written = run_with_stdin(dir, &["record", "derive", "evaluator-closure"], metadata);
+    let written = run_with_stdin(
+        dir,
+        &[
+            "record",
+            "derive",
+            "evaluator-closure",
+            "--input",
+            "roots=evaluator-package",
+            "--input",
+            "bears=evaluator-io-crate",
+        ],
+        metadata,
+    );
     assert!(
         written.status.success(),
         "the walk reads its graph: {}",
