@@ -628,7 +628,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,attestation-check,awk-regex,bats-invocation,board-payloads,board-sweep,branch-age-check,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,closing-key-check,coderabbit-config,commit-hygiene,connector-allow-guard,connector-allow-resolve,dead-capability,deferral-check,denials-outlive-the-turn,digest-major-agreement,done-check,done-pr-check,duplicate-close-check,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,land-divergence-assert,landing-loop,landing-roster-guarded,leased-push,license-table,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,sonar-gate,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,token-bench-check,transcript-corpus-check,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune"
+MUTANT_GATES = "agentic-experiment-record,attestation-check,awk-regex,bats-invocation,board-payloads,board-sweep,branch-age-check,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,closing-key-check,coderabbit-config,commit-hygiene,connector-allow-guard,connector-allow-resolve,dead-capability,deferral-check,denials-outlive-the-turn,digest-major-agreement,done-check,done-pr-check,duplicate-close-check,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,land-divergence-assert,landing-loop,landing-roster-guarded,leased-push,license-table,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,sonar-gate,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,transcript-corpus-check,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -2200,6 +2200,25 @@ run = "cargo run --quiet -p batten -- perf measure"
 [tasks."perf-record"]
 description = "Append a measurement to the trunk's invocation-cost series in git notes (reads `perf` records on stdin; refuses to run off main)"
 run = "cargo run --quiet -p batten -- perf record"
+
+# CLOUD-119's benchmark, ported onto `bench tokens` under CLOUD-1753. Declared
+# rather than auto-discovered, for the reason `perf` above records: the name is
+# what other callers use, and deleting the file would retire the program and the
+# NAME together.
+#
+# `taplo` AND `jq` HAVE LEFT THIS PATH. The method and the workloads are
+# deserialised into types, so a malformed method is a parse error naming the file
+# rather than an empty shell variable that silently prices everything at zero.
+[tasks."token-bench"]
+description = "Measure the token economics of the Batten-wrapped path against the raw tool, from committed fixtures (CLOUD-119)"
+run = "cargo run --quiet -p batten -- bench tokens"
+
+# The gate over the published table: it reproduces, and every figure states its
+# method. Both halves are the verb's, because deciding the first requires running
+# the benchmark and the second reads the same bytes it already opens.
+[tasks."token-bench-check"]
+description = "Gate: the committed benchmark table is what a fresh run produces, and no figure in it lacks a method (CLOUD-119)"
+run = "cargo run --quiet -p batten -- bench tokens --check"
 
 [tasks.record-perf]
 description = "Effect: reduce `perf` records to a p95 per path and record them where `batten check` reads them (reads `perf` records on stdin)"

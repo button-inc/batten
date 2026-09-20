@@ -1,0 +1,20 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-bench 1  batten 
+.SH NAME
+batten\-bench \- Measure what a capability costs an agent\*(Aqs context
+.SH SYNOPSIS
+\fBbatten bench\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Measure what a capability costs an agent\*(Aqs context
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SUBCOMMANDS
+.TP
+batten\-bench\-tokens(1)
+Measure the token economics of the Batten\-wrapped path against the raw tool, from committed fixtures
+.TP
+batten\-bench\-help(1)
+Print this message or the help of the given subcommand(s)
