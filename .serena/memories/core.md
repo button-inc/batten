@@ -67,6 +67,17 @@ file itself for the "why", this is only the "where":
 
 - `main.rs` — binary boundary: parse → `lib::run` → exit status. Only place
   `print*!`/stderr writes are allowed.
+- `install.rs` — whether a published release is actually installable
+  (CLOUD-1753), retired out of `mise-tasks/install-check.sh`. A PURE PREDICATE
+  over manifest text and a tracked path list: does the release matrix build the
+  target an installer would ask for, is the asset name the installer derives the
+  one the release publishes, does a `[package.metadata.binstall]` override stay
+  parametric, and is any committed file a binary. **IT FETCHES NOTHING**, which
+  is the design rather than an omission — an installability answer that needed
+  the network would be unavailable exactly when the release pipeline is broken,
+  and a gate that stops deciding under load is not a gate. The magic-byte clause
+  is load-bearing beyond its own subject: it is why `serena-mcp` cannot retire by
+  committing a binary. It reaches `error` for `UsageError` and nothing else.
 - `lib.rs` — library entry point, declares the module tree. `run(cli, mode, out,
 err)` takes **both** channels and the resolved `Mode`, so a verb can write a
   ladder-gated message itself instead of that being `main.rs`'s privilege
@@ -2465,6 +2476,27 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   `materialize_rev`, the last of which retires the worktree-wedging defect rather
   than guarding it. The exit contract belongs to a frozen caller: `perf-gate.sh`
   tells a skip from a measurement by grepping `^arm=`, never by a second code.
+- `tokens.rs` — the token-economics benchmark (CLOUD-119), retired out of
+  `mise-tasks/token-bench.sh` and `token-bench-check.sh` under CLOUD-1753. It
+  prices what a capability costs an agent's context with Batten against without
+  it, and the only reason the figure is defensible is that **NOTHING IS BAKED
+  IN**: no price, no divisor, no re-run coefficient and no workload lives in
+  code — they stay in `bench/tokens/method.toml` and `workloads.toml` with their
+  sources and retrieval dates, so a reader checks the arithmetic against the
+  primary. Both streams are counted because both reach the caller; an arm whose
+  runs are not byte-identical publishes NO figure and says so, because averaging
+  a non-deterministic tool is how a number arrives that nothing supports; and no
+  aggregate is published at all, since a weighted mean over an unmeasured
+  workload mix would be the unmethodical claim this exists to beat. It reaches
+  `arm` alone — `stability` and `Reading`, so one definition of byte-stability
+  serves every declared arm in the crate — and mints no `Finding`. **The honesty
+  half is HERE and not a `.rego` module, and that is a measured decision**:
+  `policy/token-bench-honesty.rego` went green over fabricated `input.tree.lines`
+  in both directions while the engine-fed path decided nothing, so the predicate
+  moved to where its input is the engine's own read — `unmethodical` refuses a
+  section that carries a figure without its question, baseline and run count, and
+  names the file and line. `--check` regenerates into scratch, never over the
+  committed file: a gate that rewrites the tree it judges cannot fail twice.
 - `pattern.rs` — the `[[pattern]]` table (CLOUD-885): named regular expressions a
   policy module references by id, never writes inline. **The lever is cost, not
   prohibition** — "do not regex things that are not regular" is a judgement and

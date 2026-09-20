@@ -1,6 +1,4 @@
-# METADATA
-# description: |
-#   CLOUD-668/CLOUD-700, ported off `mise-tasks/mcp-timeout-budget.sh` under
+# CLOUD-668/CLOUD-700, ported off `mise-tasks/mcp-timeout-budget.sh` under
 #   CLOUD-1716. CLOUD-266's rule -- "timeouts are uniform boilerplate, not
 #   measured budgets, so they bound nothing" -- applied to the one budget nobody
 #   had looked at.
