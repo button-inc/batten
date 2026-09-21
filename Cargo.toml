@@ -207,7 +207,7 @@ schemars = "1"
 # straight into `serde_json::Value`, which is already vendored, so the document
 # tree gains no second value type.
 json5 = "1.0"
-jsonschema = { version = "0.51", default-features = false }
+jsonschema = { version = "0.56", default-features = false }
 # Snapshot testing (CLOUD-106). `default-features = false` drops insta's own
 # colour and glob machinery: the suite compares bytes and reports through
 # nextest, so a diff renderer is weight for a reader who never sees it.
@@ -551,7 +551,7 @@ gix-packetline = { version = "0.22", default-features = false, features = [
 # up -- a leaf operation over a token the parser has already delimited, which is
 # a different risk class from deciding where the token ended.
 rable = { version = "0.2", default-features = false }
-regorus = { version = "0.11", default-features = false, features = [
+regorus = { version = "0.12", default-features = false, features = [
   "ast",
   "std",
   "arc",
@@ -710,7 +710,7 @@ toml = "1.1"
 #
 # REMOVE IT when tinyvec ships the feature-gate fix; the pin is a workaround for
 # somebody else's defect and should not outlive it.
-tinyvec = "=1.12.0"
+tinyvec = "=1.13.3"
 unicode-normalization = "0.1"
 # X.509, for reading a trust bundle's certificate subjects (CLOUD-1455). The
 # RustCrypto line rather than the nom-based one: `const-oid` is already resolved
@@ -718,7 +718,7 @@ unicode-normalization = "0.1"
 # dependency, and the whole set is `no_std`-capable parsing with no network, no
 # runtime and no process — which is what keeps it off `ambient_authority.rs`'s
 # list on a property rather than by not having been noticed.
-x509-cert = { version = "0.2", default-features = false, features = ["pem"] }
+x509-cert = { version = "0.3", default-features = false, features = ["pem"] }
 # YAML, for the `[[budget.<name>.embedded]]` entries that count a string carried
 # INSIDE a host's config file rather than a file of its own (CLOUD-298). TOML and
 # JSON are already vendored, so this is the one format the extension dispatch
@@ -726,7 +726,7 @@ x509-cert = { version = "0.2", default-features = false, features = ["pem"] }
 # must be a refusal, which needs a real parser rather than a line scan. yaml-rust2
 # is the maintained successor to yaml-rust (the archived `serde_yaml` carries
 # RUSTSEC-2024-0370); it is a parser only, so it adds no serde derive surface.
-yaml-rust2 = "0.12"
+yaml-rust2 = "0.13"
 
 [profile.release]
 lto = "thin"
