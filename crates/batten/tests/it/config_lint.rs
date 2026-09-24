@@ -169,7 +169,11 @@ fn lint(dir: &Path, extra: &[&str]) -> Output {
 /// The trailer goes on through git's own commit path rather than being written
 /// into a message file by hand, so what the verb parses is what git produced.
 fn weakening_pr(name: &str, trailer: Option<&str>) -> PathBuf {
-    let base = "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"deny\"\n";
+    // `must_land_on` because a fixture has no remote, so no recorded default
+    // branch: without a declared target a CLAIMED run could not find its fork
+    // point and would stay unarmed, and every claim-armed case below would pass
+    // by never deciding anything.
+    let base = "version = 1\nmust_land_on = \"origin/main\"\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"deny\"\n";
     let working = base.replace("\"deny\"", "\"warn\"");
     let dir = Fixture::new(name)
         .config(base)
@@ -292,21 +296,114 @@ fn an_admission_carries_a_pointer_and_never_the_clause_prose() {
 }
 
 #[test]
-fn an_unarmed_run_decides_no_admission_at_all() {
-    // The arm runs only under a base ref, which is the same condition that
-    // produces a base-ref smell — so an unarmed run is byte-identical to what it
-    // was before the admission half existed. Measured rather than assumed,
-    // because reading an unarmed `0 smell(s)` as a pass over the base-ref class
-    // is exactly the error that let two smells reach `verify` on this campaign's
-    // own branch.
+fn an_unclaimed_run_decides_no_admission_at_all() {
+    // With no claim and no base ref there is no groom to read and nothing to
+    // compare against, so the run is byte-identical to what it was before the
+    // admission half existed. This is the consumer that never adopted the
+    // mechanism, and CLOUD-1896 must not reach it.
     let dir = weakening_pr(
-        "lint-admit-unarmed",
+        "lint-admit-unclaimed",
+        Some("severity-lowered rule[no-todo].severity"),
+    );
+    let out = lint(&dir, &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(!stdout(&out).contains("admitted"), "{}", stdout(&out));
+}
+
+/// THE ACCEPTANCE CASE FOR CLOUD-1896, and the one this file used to assert the
+/// opposite of.
+///
+/// Its predecessor groomed a receipt — so the branch WAS claimed — lowered a
+/// severity, ran with no base ref and required exit `0`, under a comment
+/// warning that reading an unarmed `0 smell(s)` as a pass was the error that let
+/// two smells reach `verify` on this campaign's own branch. The comment was
+/// right and the assertion pinned the defect: the pre-commit step runs exactly
+/// this invocation, so a weakening the board never saw committed clean and was
+/// adjudicated eleven days later. A claimed branch is now armed at its fork
+/// point, and the same edit refuses where it is made.
+#[test]
+fn a_claimed_branch_is_armed_at_its_fork_point_without_a_base_ref() {
+    let dir = weakening_pr(
+        "lint-admit-claimed",
         Some("severity-lowered rule[no-todo].severity"),
     );
     groom(&dir, &[]);
     let out = lint(&dir, &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a weakening the groom never named must refuse with no --config-from: {}",
+        stdout(&out)
+    );
+    assert!(
+        stdout(&out).contains("severity-lowered"),
+        "the refusal names the smell: {}",
+        stdout(&out)
+    );
+}
+
+/// The pre-commit shape: the weakening is in the WORK TREE and no commit — so no
+/// trailer — exists yet. The board's admission is the whole question here, and
+/// a groom that named the pair admits it. Demanding the trailer at this surface
+/// would refuse a correctly declared weakening, because the message that will
+/// carry it has not been written.
+#[test]
+fn the_claim_armed_run_admits_what_the_board_groomed_before_any_trailer_exists() {
+    let base = "version = 1\nmust_land_on = \"origin/main\"\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"deny\"\n";
+    let dir = Fixture::new("lint-admit-precommit")
+        .config(base)
+        .git()
+        .base_commit()
+        .config(&base.replace("\"deny\"", "\"warn\""))
+        .build();
+    groom(&dir, &["severity-lowered rule[no-todo].severity"]);
+    let out = lint(&dir, &[]);
     assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
-    assert!(!stdout(&out).contains("admitted"), "{}", stdout(&out));
+    assert!(stdout(&out).contains("groomed"), "{}", stdout(&out));
+
+    // And the same uncommitted edit with a groom that did NOT name it refuses —
+    // so the case above is the groom deciding, not the arm staying quiet.
+    groom(&dir, &[]);
+    let out = lint(&dir, &[]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+}
+
+/// Why the FORK POINT and not the trunk's tip: a trunk that moved after the
+/// branch was cut must not be charged to the branch.
+///
+/// The trunk tightens `no-todo` from `warn` to `deny` after this branch forked,
+/// and the branch never touches it. Compared against the tip, the branch's
+/// `warn` would read as `severity-lowered` — a weakening nobody on this branch
+/// made, refused on a claimed branch with no route but grooming a lie. Against
+/// the fork point there is nothing to report.
+#[test]
+fn the_claim_armed_run_does_not_charge_the_branch_for_trunk_changes() {
+    let forked = "version = 1\nmust_land_on = \"origin/main\"\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"warn\"\n";
+    let dir = Fixture::new("lint-admit-trunk-moved")
+        .config(forked)
+        .git()
+        .base_commit()
+        .build();
+    // Advance the trunk alone: commit the tightening, point the remote at it,
+    // then return the branch to where it forked.
+    common::write(&dir, "batten.toml", &forked.replace("\"warn\"", "\"deny\""));
+    common::git_in(&dir, &["commit", "-q", "-am", "the trunk tightens"]);
+    common::git_in(&dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    common::git_in(&dir, &["reset", "-q", "--hard", "HEAD~1"]);
+    groom(&dir, &[]);
+
+    let out = lint(&dir, &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "a trunk change after the fork is not this branch's weakening: {}",
+        stdout(&out)
+    );
+    // The explicit base still means what it says: pointed at the tip, the same
+    // tree DOES read as lowered, which is what makes the case above a statement
+    // about which base the claim arms at rather than about an empty diff.
+    let out = lint(&dir, &["--config-from", "origin/main"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
 }
 
 /// A `forbid` rule at the given severity.

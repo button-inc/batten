@@ -4720,8 +4720,14 @@ fi
 # The
 # pre-commit step stays single-tree, where that reasoning does not hold.
 #
-# Unarmed callers are unaffected: absent `CONFIG_LINT_BASE` the task runs exactly
-# the single-tree class the `hk` gate has always run.
+# THE PRE-COMMIT STEP IS NO LONGER UNARMED, and the objection above still holds
+# (CLOUD-1896). It was left single-tree because the only base it could name was
+# `origin/main`, a property of the world. The engine now arms a CLAIMED branch at
+# its FORK POINT when no base is passed — a property of the branch, and exactly
+# what the line above compares against once `verify` has proved the rebase — and
+# asks the one question a commit with no message yet can answer: did the board
+# groom this weakening? That is what moves the refusal from the end of a lap to
+# the edit. An unclaimed checkout is unaffected and runs single-tree as before.
 # The third-party validators' verdicts, recorded where the engine reads them
 # (CLOUD-1265). BEFORE the gates below, because `validator-verdict-clean` is a
 # `severity = "deny"` row that adjudicates what it finds here — and until this
