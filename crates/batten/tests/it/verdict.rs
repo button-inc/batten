@@ -28,15 +28,23 @@ use common::{Fixture, run, stderr, stdout};
 /// The verb reads two integers off its own command line, so the repository it
 /// runs in cannot change its answer. A fixture is built anyway — that
 /// independence is a claim worth holding rather than assuming.
-fn anywhere() -> std::path::PathBuf {
-    Fixture::new("verdict-anywhere")
+///
+/// **The scratch name is the CASE's own**, the convention this directory's other
+/// suites state and this one shipped without. `common::scratch` is deterministic
+/// in the default lane and wipes before it builds, while nextest runs each case
+/// in its own PROCESS — so one name across eight cases was eight processes racing
+/// on one directory. Measured: a sibling's wipe landed inside this case's
+/// template copy and `init_repo`'s CLOUD-1832 assertion reported a copy that
+/// "did not produce a repository", in a case whose subject is an exit code.
+fn anywhere(case: &str) -> std::path::PathBuf {
+    Fixture::new(&format!("verdict-{case}"))
         .config("version = 1\n")
         .git()
         .build()
 }
 
-fn verdict(args: &[&str]) -> Output {
-    let dir = anywhere();
+fn verdict(case: &str, args: &[&str]) -> Output {
+    let dir = anywhere(case);
     let mut line = vec!["verdict"];
     line.extend_from_slice(args);
     run(&dir, &line)
@@ -44,7 +52,10 @@ fn verdict(args: &[&str]) -> Output {
 
 #[test]
 fn a_clean_run_exits_success() {
-    let output = verdict(&["--findings", "0", "--unjudgeable", "0"]);
+    let output = verdict(
+        "a_clean_run_exits_success",
+        &["--findings", "0", "--unjudgeable", "0"],
+    );
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -56,13 +67,19 @@ fn a_clean_run_exits_success() {
 
 #[test]
 fn findings_alone_exit_violation() {
-    let output = verdict(&["--findings", "3", "--unjudgeable", "0"]);
+    let output = verdict(
+        "findings_alone_exit_violation",
+        &["--findings", "3", "--unjudgeable", "0"],
+    );
     assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
 }
 
 #[test]
 fn a_blind_spot_alone_exits_internal() {
-    let output = verdict(&["--findings", "0", "--unjudgeable", "1"]);
+    let output = verdict(
+        "a_blind_spot_alone_exits_internal",
+        &["--findings", "0", "--unjudgeable", "1"],
+    );
     assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
 }
 
@@ -75,7 +92,10 @@ fn a_blind_spot_outranks_a_finding() {
     // `2` fixes what it names and sees green, where a caller told `3` learns the
     // gate did not run. The findings reach stderr either way, so ranking the
     // blind spot first costs nothing.
-    let output = verdict(&["--findings", "3", "--unjudgeable", "1"]);
+    let output = verdict(
+        "a_blind_spot_outranks_a_finding",
+        &["--findings", "3", "--unjudgeable", "1"],
+    );
     assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
 }
 
@@ -89,7 +109,10 @@ fn the_two_contracts_disagree_on_every_nonclean_answer() {
     let shell_violation = 1;
     let shell_could_not_look = 2;
 
-    let found = verdict(&["--findings", "1"]);
+    let found = verdict(
+        "the_two_contracts_disagree_on_every_nonclean_answer",
+        &["--findings", "1"],
+    );
     assert_ne!(
         found.status.code(),
         Some(shell_violation),
@@ -101,7 +124,10 @@ fn the_two_contracts_disagree_on_every_nonclean_answer() {
         "and the collision is exact: this table's violation IS the corpus's could-not-look"
     );
 
-    let blind = verdict(&["--unjudgeable", "1"]);
+    let blind = verdict(
+        "the_two_contracts_disagree_on_every_nonclean_answer",
+        &["--unjudgeable", "1"],
+    );
     assert_ne!(
         blind.status.code(),
         Some(shell_could_not_look),
@@ -114,9 +140,9 @@ fn an_absent_count_reads_as_zero() {
     // The verb's job is to be callable from a shell epilogue, where an unset
     // variable expands to the empty string. A caller with only findings to
     // report should not have to say it saw no blind spots.
-    let output = verdict(&["--findings", "2"]);
+    let output = verdict("an_absent_count_reads_as_zero", &["--findings", "2"]);
     assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
-    let bare = verdict(&[]);
+    let bare = verdict("an_absent_count_reads_as_zero", &[]);
     assert_eq!(bare.status.code(), Some(0), "{}", stderr(&bare));
 }
 
@@ -126,7 +152,10 @@ fn an_unparsable_count_reads_as_zero_rather_than_replacing_the_verdict() {
     // still on the caller's own stderr, where a usage error would replace the
     // verdict entirely and put the caller back to hand-folding the case it came
     // here to avoid.
-    let output = verdict(&["--findings", "", "--unjudgeable", "1"]);
+    let output = verdict(
+        "an_unparsable_count_reads_as_zero_rather_than_replacing_the_verdict",
+        &["--findings", "", "--unjudgeable", "1"],
+    );
     assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
 }
 
@@ -138,7 +167,10 @@ fn the_fold_never_reports_a_failure_of_battens_own() {
     // is misconfigured" and never as "policy says no".
     for findings in ["0", "1", "7"] {
         for unjudgeable in ["0", "1", "7"] {
-            let output = verdict(&["--findings", findings, "--unjudgeable", unjudgeable]);
+            let output = verdict(
+                "the_fold_never_reports_a_failure_of_battens_own",
+                &["--findings", findings, "--unjudgeable", unjudgeable],
+            );
             assert_ne!(
                 output.status.code(),
                 Some(1),

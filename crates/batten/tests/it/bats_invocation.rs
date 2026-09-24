@@ -404,15 +404,20 @@ fn a_tree_with_no_such_task_is_not_judged() {
 /// fixture: it is the subject, it survives this change, and a copy would drift
 /// and pass while the shipped helper was broken — the same argument
 /// `install_module` above makes for a policy module.
-fn helper_status(script: &str) -> i32 {
+fn helper_status(case: &str, script: &str) -> i32 {
     let root = common::at_root(".")
         .canonicalize()
         .expect("this checkout is where the manifest says it is");
-    let tmp = common::scratch("helpers-bash");
+    let tmp = common::scratch(&format!("helpers-bash-{case}"));
     // `run_timeout` writes its flag file under `$BATS_TEST_TMPDIR`, falling back
     // to `/tmp`. Pointing it at a scratch dir keeps concurrent cases from sharing
     // one path — nextest runs each case in its own process, and the fallback is
     // shared where the bats harness's per-test dir was not.
+    //
+    // THE NAME IS THE CASE'S, which the sentence above always required and the
+    // first version did not deliver: it pointed every case at one fixed
+    // `helpers-bash`, and `scratch` wipes before it builds — so the per-case dir
+    // this comment promises was one dir eight processes wiped under each other.
     #[expect(
         clippy::disallowed_types,
         reason = "stays — CLOUD-1268: the subject IS a bash library, so exercising it means running bash. The retired suite made this same spawn; it moved rather than being added, and it goes when `tests/helpers.bash` does"
@@ -435,8 +440,20 @@ fn helper_status(script: &str) -> i32 {
 fn a_command_that_finishes_in_time_keeps_its_own_exit_status() {
     // The pass-through case, and the one a naive implementation gets wrong by
     // reporting the watchdog's status instead.
-    assert_eq!(helper_status("run_timeout 10 bash -c 'exit 7'"), 7);
-    assert_eq!(helper_status("run_timeout 10 true"), 0);
+    assert_eq!(
+        helper_status(
+            "a_command_that_finishes_in_time_keeps_its_own_exit_status",
+            "run_timeout 10 bash -c 'exit 7'"
+        ),
+        7
+    );
+    assert_eq!(
+        helper_status(
+            "a_command_that_finishes_in_time_keeps_its_own_exit_status",
+            "run_timeout 10 true"
+        ),
+        0
+    );
 }
 
 #[cfg(unix)]
@@ -444,7 +461,10 @@ fn a_command_that_finishes_in_time_keeps_its_own_exit_status() {
 fn a_timed_out_command_is_124() {
     // `tests/land.bats` asserts this number directly: 124 is GNU's timed-out
     // status and the result that case is proving, not a failure of it.
-    assert_eq!(helper_status("run_timeout 1 sleep 30"), 124);
+    assert_eq!(
+        helper_status("a_timed_out_command_is_124", "run_timeout 1 sleep 30"),
+        124
+    );
 }
 
 #[cfg(unix)]
@@ -453,7 +473,13 @@ fn kill_reports_137_because_the_child_died_of_sigkill() {
     // `tests/main-watch.bats` asserts 137. It uses KILL rather than the default
     // TERM because bash defers a trapped signal until the running `sleep` returns,
     // so a TERM would cost every blocking case a full poll interval.
-    assert_eq!(helper_status("run_timeout -s KILL 1 sleep 30"), 137);
+    assert_eq!(
+        helper_status(
+            "kill_reports_137_because_the_child_died_of_sigkill",
+            "run_timeout -s KILL 1 sleep 30"
+        ),
+        137
+    );
 }
 
 #[cfg(unix)]
@@ -462,7 +488,13 @@ fn an_escalation_that_never_fires_is_124() {
     // `tests/land.bats`' shape: `land` takes the TERM, so `-k` is insurance and
     // the answer is the plain timed-out status. Measured against GNU coreutils
     // and matched here rather than assumed.
-    assert_eq!(helper_status("run_timeout -k 1 1 sleep 30"), 124);
+    assert_eq!(
+        helper_status(
+            "an_escalation_that_never_fires_is_124",
+            "run_timeout -k 1 1 sleep 30"
+        ),
+        124
+    );
 }
 
 #[cfg(unix)]
@@ -473,7 +505,10 @@ fn an_escalation_that_actually_fires_is_137() {
     // helper answering 124 here would disagree with the tool it replaces in the
     // one case the two could differ.
     assert_eq!(
-        helper_status("run_timeout -k 1 1 bash -c 'trap \"\" TERM; sleep 30'"),
+        helper_status(
+            "an_escalation_that_actually_fires_is_137",
+            "run_timeout -k 1 1 bash -c 'trap \"\" TERM; sleep 30'"
+        ),
         137
     );
 }
@@ -484,7 +519,13 @@ fn a_command_killed_by_a_signal_it_raised_itself_is_not_a_timeout() {
     // The distinction the flag file exists for: 143 is TERM, the same status a
     // TERM-timeout produces, so an implementation reading only the exit status
     // would report this as 124 and hide a genuine crash.
-    assert_eq!(helper_status("run_timeout 10 bash -c 'kill -TERM $$'"), 143);
+    assert_eq!(
+        helper_status(
+            "a_command_killed_by_a_signal_it_raised_itself_is_not_a_timeout",
+            "run_timeout 10 bash -c 'kill -TERM $$'"
+        ),
+        143
+    );
 }
 
 #[cfg(unix)]
@@ -496,7 +537,10 @@ fn sed_i_edits_in_place_and_leaves_no_backup_behind() {
     let dir = common::scratch("helpers-sed-i");
     let subject = dir.join("subject");
     fs::write(&subject, "alpha\nbeta\n").expect("write the subject");
-    let status = helper_status(&format!("sed_i 's/alpha/gamma/' '{}'", subject.display()));
+    let status = helper_status(
+        "sed_i_edits_in_place_and_leaves_no_backup_behind",
+        &format!("sed_i 's/alpha/gamma/' '{}'", subject.display()),
+    );
     assert_eq!(status, 0, "a well-formed edit succeeds");
     assert_eq!(
         fs::read_to_string(&subject).expect("read back"),
@@ -516,7 +560,10 @@ fn sed_i_propagates_a_failing_sed_rather_than_reporting_success() {
     let dir = common::scratch("helpers-sed-i-fail");
     let absent = dir.join("absent");
     assert_ne!(
-        helper_status(&format!("sed_i 's/unterminated' '{}'", absent.display())),
+        helper_status(
+            "sed_i_propagates_a_failing_sed_rather_than_reporting_success",
+            &format!("sed_i 's/unterminated' '{}'", absent.display())
+        ),
         0,
         "a failing sed is a failing helper"
     );

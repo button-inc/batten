@@ -278,6 +278,7 @@ mod rust_paths_check;
 mod sbom_inventory;
 mod scanner_taxonomy;
 mod scratch_hygiene;
+mod scratch_names;
 mod secret_redaction;
 mod secrets_kind;
 mod semver_gate;
