@@ -32,10 +32,29 @@ rules contains "prompt declare partial"
 
 # A field is absent, or present and blank.
 #
-# Blank counts, and the distinction is load-bearing: `name:` with nothing after
-# it parses to a null and `name: ""` parses to an empty string, so a predicate
-# testing only for the KEY passes both — a skill that declares its fields and
-# fills in neither.
+# Blank counts, and the distinction is load-bearing: a predicate testing only for
+# the KEY passes a skill that declares its fields and fills in neither.
+#
+# `is_string` IS THE PREDICATE, AND IT IS OVER THE CANONICAL NODE RATHER THAN
+# OVER YAML (CLOUD-1887). Blank is reachable by more than one route and each
+# dialect offers a different set, so naming one syntax's spellings would read as
+# the rule while being one dialect's half of it:
+#
+#   `name:` (YAML)      -> null, which is not a string
+#   `name: ""` (YAML)   -> the empty string
+#   `name = ""` (TOML)  -> the empty string
+#   `name =` (TOML)     -> a SYNTAX ERROR, so the file is `unparsed` and never
+#                          reaches this rule at all
+#
+# TOML has no null, which is why `test_a_null_field_is_refused_like_an_absent_one`
+# below describes a state only a YAML fence can reach. That case is still worth
+# its line — it pins the arm a `is_string` check would lose — but it is an
+# instance and not the rule.
+#
+# This comment argued the whole rule in YAML's spellings until CLOUD-1886 taught
+# the engine `+++` TOML, `;;;` and tagged JSON. The predicate did not move; only
+# its stated reason had narrowed under it, which is the drift this repository
+# gates on elsewhere.
 violation contains {
 	"rule": "prompt declare partial",
 	"verdict": "prompt declare missing",
