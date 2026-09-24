@@ -20566,6 +20566,42 @@ fn report_unresolvable(config: &resolve::Resolved, mode: Mode, err: &mut dyn Wri
     Ok(())
 }
 
+/// The base a claimed branch's `config lint` is armed at when no `--config-from`
+/// was given: where this branch left its landing target (CLOUD-1896).
+///
+/// **Why a claimed branch arms at all.** The admission arm ran only under an
+/// explicit base, and the callers that gave one — `verify` and CI — sit behind
+/// the whole gate fan-in, so a recorder weakened on day one was adjudicated
+/// eleven days and 73 commits later, when the only routes left were an override
+/// or a rewrite. The pre-commit step globbed exactly the files a weakening
+/// touches and ran the arm that cannot adjudicate. A claim is what makes arming
+/// meaningful: it carries the groom the adjudication reads, so an unclaimed
+/// checkout — a consumer that never adopted the mechanism — keeps today's
+/// behaviour byte for byte.
+///
+/// **Why the fork point, and not the trunk's tip nor the claim's recorded base.**
+/// The tip is a property of the world: a trunk that moved since the branch was
+/// cut makes one commit pass or refuse by when it was made, which is why the
+/// pre-commit step was left unarmed. The claim's base is worse in the other
+/// direction: it is fixed at the pull, so after each rebase `base..HEAD` spans
+/// every trunk commit landed since, and their config changes would be charged to
+/// this branch while their `Weakens:` trailers counted as its declarations. The
+/// fork point is the one base that is this branch's own history and nothing
+/// else — and it is what `verify` already compares against, since `verify`
+/// refuses a branch not rebased onto the target first.
+///
+/// `None` is could-not-look at every step — not a repository, a detached HEAD,
+/// no claim, no config to name a target, no target, no shared history — and the
+/// caller runs unarmed rather than guessing a base.
+fn claimed_fork_point(here: &Path, overrides: &Overrides) -> Option<String> {
+    let receipts = git::git_dir(here).ok()?.join("batten-receipts");
+    let branch = git::current_branch(here).ok()??;
+    claim::claimed_token(&receipts, &branch)?;
+    let config = resolve::resolve(here, overrides).ok()?;
+    let target = worktree::land_target(here, config.must_land_on.as_deref()).ok()??;
+    git::merge_base(here, &target).ok()?
+}
+
 fn run_config(
     command: &ConfigCommand,
     overrides: &Overrides,
@@ -20648,13 +20684,20 @@ fn run_config(
             run_config_deprecations(*json, against, out)
         }
         ConfigCommand::Lint { json, host_rules } => {
+            // THE BASE, and who armed it (CLOUD-1896). An explicit `--config-from`
+            // wins, exactly as before. Absent one, a CLAIMED branch is armed at its
+            // fork point — see `claimed_fork_point` for why that base and not the
+            // trunk's tip, and why only a claimed branch.
+            let (base, armed_by_claim) = match overrides.config_from.as_deref() {
+                Some(explicit) => (Some(explicit.to_owned()), false),
+                None => match claimed_fork_point(Path::new("."), overrides) {
+                    Some(fork) => (Some(fork), true),
+                    None => (None, false),
+                },
+            };
             // The date the expiry smell is computed against, read once at this
             // boundary and threaded in as data (`waiver`'s module docs say why).
-            let mut smells = lint::run(
-                Path::new("."),
-                overrides.config_from.as_deref(),
-                waiver::today()?,
-            )?;
+            let mut smells = lint::run(Path::new("."), base.as_deref(), waiver::today()?)?;
             // The drift half (CLOUD-54), added only when the caller supplied a
             // payload — so lint's behaviour without the flag is byte-identical
             // to what it was.
@@ -20690,19 +20733,29 @@ fn run_config(
             // they were. That symmetry is load-bearing rather than tidy: an
             // unarmed `config lint` reports no weakening to admit, and a run that
             // admitted something it had not computed would be deciding blind.
-            let Some(base) = overrides.config_from.as_deref() else {
+            let Some(base) = base.as_deref() else {
                 return Ok(ExitCode::verdict(!smells.is_empty()));
             };
-            let adjudicated = lint::admissions(
-                &smells,
-                &lint::declared(Path::new("."), base)?,
-                &lint::groom(
-                    // `git_dir`, not `common_dir`: a claim is a per-worktree
-                    // fact, and `claim::mint` writes it under the same one.
-                    &git::git_dir(Path::new("."))?.join("batten-receipts"),
-                    git::current_branch(Path::new("."))?.as_deref(),
-                ),
+            let groomed = lint::groom(
+                // `git_dir`, not `common_dir`: a claim is a per-worktree
+                // fact, and `claim::mint` writes it under the same one.
+                &git::git_dir(Path::new("."))?.join("batten-receipts"),
+                git::current_branch(Path::new("."))?.as_deref(),
             );
+            let mut declared = lint::declared(Path::new("."), base)?;
+            // THE CLAIM-ARMED RUN ASKS ONE QUESTION, THE BOARD'S. It runs where no
+            // commit message exists yet — pre-commit, before the author writes the
+            // trailer the change will carry — so demanding the trailer here would
+            // refuse a correctly declared weakening. What this surface CAN decide
+            // is whether the groom admitted the smell before the work reached a
+            // commit, and that is the half that shapes a design: a weakening the
+            // board never saw is refused at the edit, not a lap later. The
+            // trailer's agreement with the groom stays with the explicit-base
+            // callers, `verify` and CI, where the message is a commit.
+            if armed_by_claim && let lint::Groom::Read(admitted) = &groomed {
+                declared.extend(admitted.iter().cloned());
+            }
+            let adjudicated = lint::admissions(&smells, &declared, &groomed);
             let refused = adjudicated
                 .iter()
                 .filter(|(_, admission)| *admission == lint::Admission::Refused)
