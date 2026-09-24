@@ -217,8 +217,51 @@ from the shell**: pipe `initialize`, `notifications/initialized` and a
 the cross-reference rewrite that a direct file write skips. That is the route,
 and it was available the whole time.
 
+**AND THE CONVERSE CASE IS REAL, WHICH THE PARAGRAPH ABOVE DOES NOT SAY AND COST
+A THIRD SESSION 2026-09-24.** The story above is a precondition that was FALSE —
+`edit_memory` existed, so "writing the protected path directly is the only route
+left" was not true of a MEMORY. Read as a general lesson it becomes "an admission
+is what you spend when you have not looked hard enough", and that reading makes
+every protected-path refusal unanswerable. It is wrong, and the discriminator is
+one question: **does the redirect name another WRITE ROUTE, or a PROCESS?**
+
+| class                  | redirect names                     | so the write is   |
+| ---------------------- | ---------------------------------- | ----------------- |
+| `.serena/memories/**`  | `write_memory` / `edit_memory` / … | through that tool |
+| `policy/**`            | "change it in a pull request"      | **the admission** |
+| `batten.toml`          | "change it in a pull request"      | **the admission** |
+| `.github/workflows/**` | "change it in a pull request"      | **the admission** |
+
+Only the first names a tool that performs the write. The other three name how the
+change must be REVIEWED — no tool edits rego or `batten.toml` for you — so
+writing the path directly is the only route left, which is the override's
+precondition verbatim. **`policy/**` is a live, maintained surface: 294 commits
+touch it, and `protected` (`batten.toml:87`) lists three globs that do not
+include it — a registered module is protected by DERIVATION from the rule table
+(CLOUD-1226).**
+
+The route is `batten override request --rule <rule> --verdict "<verdict>"
+--subject <path>`, answering three questions on stdin as `<id>=<text>`
+(`precondition`, `lost`, `rejected-route`), then `batten override spend
+--admission <address> …`, which prints the `Admits-*` block that goes in the
+commit message. `admission.rs` makes that block self-verifying, so the reasoning
+cannot be edited afterwards. `mise run policy-test` is the named checker for a
+module edit. Precedent: `6f998b01` (`policy/harness-wiring.rego`), `a3f98d8e`
+(`batten.toml`); CLOUD-1451 prices a `#MUTANT` comment repair at one admission
+per module and treats that as ordinary.
+
+**The failure this prevents is a PUNT, and it has now happened at least twice.**
+`6f998b01`'s own body retracts it — _"That PR's body claimed the fix was
+'unfixable from a session … no bypass key'; that was wrong … the route is the
+admission below"_ — and 2026-09-24 a session met `path write refused` on
+`policy/skill-frontmatter-complete.rego`, called the refusal correct, filed the
+one-comment fix as a new row, and published the claim that an agent cannot edit a
+registered module in four places. A refusal whose declared route you decline to
+take is a decision you owe an answer for, not a wall.
+
 So the rule is: **read the server's log before calling a connector unreachable,
-and probe it before calling its tools absent.** `mcp-logs-<server>/*.jsonl`
+probe it before calling its tools absent, and read a protected-path redirect for
+whether it names a TOOL or a PROCESS before calling the write impossible.** `mcp-logs-<server>/*.jsonl`
 under `~/.cache/claude-cli-nodejs/<slug>/` carries the cause and usually the
 remedy. An unbound tool is a fact about this session's STARTUP, never about
 whether the thing behind it can be reached.

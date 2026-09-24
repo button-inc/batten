@@ -14,6 +14,70 @@ Each section says which it is; §"What this file does not gate" is the summary. 
 opening that claimed load-time refusal for all of it was the defect this file
 exists to warn about, one level up, and review of #694 is what caught it.
 
+## Landing the edit: your first write to a registered module is refused, and that is expected
+
+**A registered module is a protected path by DERIVATION** — from the `[[rule]]`
+table, not from a glob (CLOUD-1226). `protected` in `batten.toml` lists three
+entries and `policy/**` is not among them, so reading that list and concluding
+the tree is open is the first half of the trap; the second is meeting
+`path write refused` / `protected-mutation` on your first `Edit` and concluding
+it is closed. Neither is true. **`policy/**` is a live surface: 294 commits
+touch it.**
+
+**The discriminator is one question: does the class's redirect name another
+WRITE ROUTE, or a PROCESS?**
+
+| class                  | its redirect names                               | so the write is   |
+| ---------------------- | ------------------------------------------------ | ----------------- |
+| `.serena/memories/**`  | `write_memory` / `edit_memory` / `rename_memory` | through that tool |
+| `policy/**`            | "change it in a pull request"                    | **the admission** |
+| `batten.toml`          | "change it in a pull request"                    | **the admission** |
+| `.github/workflows/**` | "change it in a pull request"                    | **the admission** |
+
+Only the first names a tool that performs the write. The other three name how the
+change must be **reviewed** — nothing edits rego for you — so writing the path
+directly is the only route left, which is the override's own precondition
+verbatim. A redirect naming a process is an instruction about the diff, never a
+prohibition on the author.
+
+The route, and it leaves a record rather than a hole:
+
+```
+batten override request --rule protected-mutation \
+  --verdict "path write refused" --subject policy/<module>.rego
+# answers on stdin, one line each, `<id>=<text>`:
+#   precondition=…   the class's precondition and the fact satisfying it here
+#   lost=…           what is lost if you do not override
+#   rejected-route=… which declared route you rejected, and why it does not apply
+batten override spend --admission <address> --rule protected-mutation \
+  --verdict "path write refused" --subject policy/<module>.rego
+```
+
+`spend` prints an `Admits-*` block that goes in the commit message. It is
+**self-verifying**: the address is computed over the binding _and the answers_,
+so editing the reasoning afterwards breaks the pairing and no store access is
+needed to notice. The gate never adjudicates the reason — presence and
+well-formedness only, which is non-negotiable rule 3 — so the answers are for the
+reviewer, and writing a thin one costs you nothing at the gate and everything at
+review. `mise run policy-test` is the named checker for a module edit; run it
+before the commit, not after the push.
+
+Precedent, so this reads as ordinary rather than exceptional: `6f998b01`
+(`policy/harness-wiring.rego`), `a3f98d8e` (`batten.toml`), and CLOUD-1451, which
+prices repairing a `#MUTANT` comment at one admission per module and treats that
+as a cost to reduce rather than a wall.
+
+**THE FAILURE THIS SECTION EXISTS TO STOP IS A PUNT, and it has happened twice.**
+`6f998b01`'s own body retracts the first — _"That PR's body claimed the fix was
+'unfixable from a session … no bypass key'; that was wrong … the route is the
+admission below."_ The second (2026-09-24, CLOUD-1907) met the refusal on a
+one-comment fix in `skill-frontmatter-complete.rego`, called the refusal correct,
+filed the fix as a new row instead of doing it, and published the claim that an
+agent cannot edit a registered module in four places — one of them a commit
+message now immutable on `main`. Both sessions had the route available and read a
+remedy string as a closed door. **A refusal whose declared route you decline to
+take is a decision you owe an answer for, not a wall.**
+
 ## The shape
 
 Three rule names are fixed, under the `data.batten` prefix, with the sub-package
