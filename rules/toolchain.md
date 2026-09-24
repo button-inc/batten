@@ -425,15 +425,17 @@ mediating.
   the task to use instead; reads (`gh pr view`/`list`/`create`, `gh pr ready`,
   `gh api`, `gh run view`) are not blocked. The corpus that proves it is
   `crates/batten/tests/gh_guard.rs`, over the compiled binary and the committed
-  table. **Bypass: `BATTEN_HOOK_BYPASS=1`, the engine's own hatch.** This clause
-  used to say `BATTEN_GH_GUARD_BYPASS` was "the `bypass_env` these rows DECLARE
-  rather than the engine's global hatch", and that was never true of the landed
-  table: `batten.toml:273` states that these four "WOULD DECLARE
-  `bypass_env = "BATTEN_GH_GUARD_BYPASS"` AND DO NOT YET", deferred to CLOUD-1027
-  because adding the key reads to `config-lint` as `rule-predicate-changed` and
-  owes a groomed `Weakens:` clause first — so "until that row is groomed, these
-  four take the general `BATTEN_HOOK_BYPASS` like every other row." Found by the
-  port, which asserted this file's claim and went red against the tree.
+  table. **There is no bypass to reach for, and this clause used to name one.**
+  It said "Bypass: `BATTEN_HOOK_BYPASS=1`, the engine's own hatch", and an agent
+  following it proposed exactly that for a protected-path refusal — where it
+  could not have worked. A refusal's way out is read off the refusal: `batten
+policy explain "<class>"` on the CLASS token (not the rule id) lists its routes,
+  and where one is an override, `batten override request` then `batten override
+spend` is the way through that leaves a record. CLOUD-1357 makes every class
+  that declares an override route unsuppressible by the hatch at all. These four
+  rows render under `call name refused`, which declares no override route yet —
+  CLOUD-1806 owns that gap, and the residual hatch surviving there is the
+  migration row's business, not a remedy this file prescribes.
 - **`memory-guard` is retired** (CLOUD-442), and what it denied is now the
   engine's protected-path gate: `.serena/memories/**` in `protected` crossed with
   the `[[verb]]` table, which covers the Write/Edit tools and a command's
@@ -443,9 +445,10 @@ mediating.
   names `rename_memory` — the only route that rewrites `mem:` referrers. The
   table in `batten.toml` is the one authority; the corpus that used to live in
   `tests/memory-guard.bats` is `crates/batten/tests/it/mediated_verbs.rs`. There is
-  no `BATTEN_MEMORY_GUARD_BYPASS`: a mediated deny takes the engine's own hatch,
-  `BATTEN_HOOK_BYPASS` — or the row's own `bypass_env` where it declares one
-  (CLOUD-437).
+  no `BATTEN_MEMORY_GUARD_BYPASS`, and no hatch replaces it: a protected-path
+  deny is `path write refused`, whose declared routes include an override, so
+  the way through is `batten override request`/`spend` (CLOUD-1051) and
+  CLOUD-1357 makes the class unsuppressible by any environment variable.
 - `policy-budget` gates AGENTS.md plus anything always-loaded against a token
   budget — what every agent pays every turn. It is `batten policy budget`, not a
   shell task: the counted set and both thresholds are `[budget.instructions]` in
@@ -641,8 +644,11 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   structurally rather than by tuning — git-ignored, out-of-repo and `.git` paths
   are never judged, and a detached HEAD has no branch to key on — while an
   untracked-but-not-ignored file **is**, since opening a new feature file is the
-  first edit this catches. There is no `BATTEN_CLAIM_GUARD_BYPASS`: a mediated
-  deny takes the engine's own hatch, `BATTEN_HOOK_BYPASS` (CLOUD-437).
+  first edit this catches. There is no `BATTEN_CLAIM_GUARD_BYPASS`, and the way
+  past is the gate's own remedy rather than a variable: mint the receipt with
+  `claim check`, and where the row is already held by this same work — a
+  reclaimed container whose receipt died with it — `claim check --takeover`,
+  which clears only the competitor rules and records what it overrode.
 - **The three verdict-discarding shapes are the engine's** (CLOUD-443), as
   `batten.toml`'s `verdict-not-discarded` row — `kind = "pipeline"`. They are
   piping a verdict-bearing command into a pager or filter, following it with `;`
