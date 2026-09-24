@@ -8319,10 +8319,10 @@ keep = 2
 # not raised to meet it. A declared floor that chases the worst observed lap is the
 # floor-nobody-can-satisfy this file warns about, two blocks down.
 [prune.warm]
-mb = 11642
-worst_mb = 11642
+mb = 12144
+worst_mb = 12144
 multiplier = 1
-measured = "2026-09-12"
+measured = "2026-09-24"
 
 [prune.cold]
 mb = 21455
@@ -8777,7 +8777,7 @@ measured = "2026-09-07"
 # makes the very next lap refuse on the other arm with warm never breached.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 255
+count = 266
 tolerance = 10
 
 # COLD'S BASIS MOVES AND COLD'S FLOOR DOES NOT, and that is the entry above
@@ -8797,7 +8797,7 @@ tolerance = 10
 # together.
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 255
+count = 266
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
