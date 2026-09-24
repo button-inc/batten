@@ -13665,6 +13665,170 @@ deny contains "refused by themodule" if {
         );
     }
 
+    /// Every class this registry declares an override route for, which is exactly
+    /// the set [`Policy::honours_hatch`] takes `BATTEN_HOOK_BYPASS` away from.
+    ///
+    /// Read off the registry rather than listed, for the reason the gate exists: a
+    /// hand-kept list is what lets a class gain an override route and no binding
+    /// with nothing noticing.
+    fn classes_with_an_override_route() -> Vec<String> {
+        crate::verdict::vendored()
+            .iter()
+            .filter(|entry| {
+                entry.routes.iter().any(|route| {
+                    route.kind == crate::verdict::RouteKind::Override
+                        && route.precondition.is_some()
+                })
+            })
+            .map(|entry| entry.id.clone())
+            .collect()
+    }
+
+    /// The subset of those the ENGINE ITSELF raises at the mediated boundary.
+    ///
+    /// **The surface is the whole distinction, and the gate's first run taught it.**
+    /// `Refusal::subject()` has exactly one consumer, `admit_mediated`, so the
+    /// binding is what a MEDIATED refusal needs. A tree-scoped class is admitted
+    /// through `apply_admissions`, which is anchored by the finding's fingerprint
+    /// and keyed on the finding's own path — `subject()` never enters it. The
+    /// landing-loop preset's `head grade twice` is one of those: its module emits
+    /// `subjects: [{"artifact": sha}]` and it is admitted through the finding path,
+    /// which is why demanding a boundary binding of it would fail a class that is
+    /// not broken.
+    ///
+    /// Membership in [`crate::verdict::Native::ALL`] is the cut, and it is the
+    /// right one rather than a convenient one: those are the classes whose deny
+    /// sites live in this file, and a new one added there with an override route
+    /// and no binding still reaches the panic in [`sample_refusal`].
+    fn mediated_classes_with_an_override_route() -> Vec<String> {
+        let native: std::collections::BTreeSet<&str> = crate::verdict::Native::ALL
+            .iter()
+            .map(|native| native.id())
+            .collect();
+        classes_with_an_override_route()
+            .into_iter()
+            .filter(|class| native.contains(class.as_str()))
+            .collect()
+    }
+
+    /// A refusal of `class`, built the way that class's own deny site builds one.
+    ///
+    /// **Not a fabricated subject list**, and that is the whole point: the defect
+    /// this guards was in what the deny sites PASS, so a case inventing its own
+    /// subjects would have read clean throughout.
+    fn sample_refusal(class: &str) -> Refusal {
+        if class == crate::verdict::Native::ProtectedMutation.id() {
+            return denial(guarded("rm .serena/memories/core.md"));
+        }
+        if class == crate::verdict::Native::HistoryDropUnpushed.id() {
+            return history_drop_refusal(&["aaaaaaa".to_owned()]);
+        }
+        if class == crate::verdict::Native::ReceiptSuperseded.id() {
+            return receipt_refusal(
+                &shape("r", "unused", None),
+                "verify",
+                Validity::StaleHead,
+                None,
+            );
+        }
+        panic!(
+            "{class} declares an override route and this table has no sample for it. \
+             Add one built the way its deny site builds a refusal — do NOT relax the \
+             assertion, because an override route nobody can reach is the wall \
+             CLOUD-1871 measured"
+        )
+    }
+
+    /// A class that advertises an override must carry something to bind it to
+    /// (CLOUD-1871).
+    ///
+    /// [`Policy::honours_hatch`] disables `BATTEN_HOOK_BYPASS` for any class
+    /// declaring an override route with a precondition, on the stated ground that
+    /// such a class "already has a way through that leaves a record … and
+    /// `admit_mediated` honours the spent admission". `admit_mediated` returns
+    /// early unless the refusal carries a subject. So the two must agree, and that
+    /// function's own doc says what it costs when they do not: *"a disagreement
+    /// here would mean a class the hatch stopped opening and no admission could
+    /// open either, which is the wall in its worst form."*
+    ///
+    /// They disagreed. `history drop unpushed` names a count and per-commit
+    /// artifacts; `receipt read other` names artifacts and deliberately no path.
+    /// Both were unadmittable and unbypassable — measured by two admissions spent
+    /// against a `git reset --hard` that refused unchanged after each.
+    #[test]
+    fn every_class_declaring_an_override_route_can_be_bound() {
+        let overridable = mediated_classes_with_an_override_route();
+        assert!(
+            !overridable.is_empty(),
+            "no class the engine raises at the boundary declares an override route, \
+             so this case is vacuous — it is asserting a property of an empty set"
+        );
+        for class in &overridable {
+            let refusal = sample_refusal(class);
+            assert_eq!(
+                refusal.verdict(),
+                Some(class.as_str()),
+                "a sample must carry the class it stands for"
+            );
+            assert!(
+                refusal.subject().is_some(),
+                "{class} declares an override route, which takes the hatch away, and \
+                 its refusal carries nothing an admission can bind — so the class has \
+                 no way through at all: {}",
+                refusal.render()
+            );
+        }
+    }
+
+    /// The anti-vacuity arm, and it is load-bearing (CLOUD-1871).
+    ///
+    /// Without it the case above is satisfied by "every refusal names a subject",
+    /// which is a different and FALSE claim. A class that keeps its hatch has a
+    /// way through already and owes no binding: `call count over` names two counts
+    /// because two numbers are what a reader acts on, and a count is not an
+    /// identity — binding one would let an admission for "1 commit" fit a
+    /// different single commit.
+    #[test]
+    fn a_class_that_keeps_its_hatch_owes_no_binding() {
+        let ceiling = ceiling_refusal(&ceiling_row("c", "Task", 10), 11, 10);
+        assert!(
+            !mediated_classes_with_an_override_route()
+                .iter()
+                .any(|class| class == crate::verdict::Native::CeilingExceeded.id()),
+            "this arm is about a class that keeps its hatch; if the ceiling class \
+             gained an override route it belongs in the case above instead"
+        );
+        assert!(
+            ceiling.subject().is_none(),
+            "a count is not an identity, so it must not become a binding an \
+             admission could harvest: {}",
+            ceiling.render()
+        );
+    }
+
+    /// Every artifact the refusal names travels in the binding (CLOUD-1871).
+    ///
+    /// Binding one of several would let an admission earned for one commit admit a
+    /// later reset discarding that commit AND another —
+    /// `an_admission_bound_to_another_subject_is_refused` closes that for a path
+    /// subject, and this keeps it closed one variant over.
+    #[test]
+    fn a_refusal_naming_several_artifacts_binds_all_of_them() {
+        let one = history_drop_refusal(&["aaaaaaa".to_owned()]);
+        let two = history_drop_refusal(&["aaaaaaa".to_owned(), "bbbbbbb".to_owned()]);
+        assert_eq!(one.subject(), Some("aaaaaaa"));
+        assert_eq!(
+            two.subject(),
+            Some("aaaaaaa,bbbbbbb"),
+            "every commit the refusal names travels in the binding"
+        );
+        assert_ne!(
+            one.subject(),
+            two.subject(),
+            "an admission for one commit must not fit a reset discarding two"
+        );
+    }
+
     /// The floor's own table, asserted directly (CLOUD-1804).
     ///
     /// The mediated cases above decide the behaviour; this decides the TABLE, and

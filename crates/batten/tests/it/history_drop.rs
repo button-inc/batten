@@ -24,7 +24,7 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{Fixture, git_in, pin_origin_main, run_with_stdin, stderr};
+use common::{Fixture, git_in, pin_origin_main, run, run_with_stdin, stderr, stdout};
 
 /// The class the gate refuses under, and the rule id beside it. Both are the
 /// engine's own tokens rather than strings chosen here, so a rename that broke
@@ -190,6 +190,138 @@ fn the_refusal_carries_a_count_and_shas_and_no_content() {
     assert!(
         !cause.contains("secret-ish.txt"),
         "nor the paths in the range\n{cause}"
+    );
+}
+
+/// The rule id, beside [`CLASS`], for the admission cases below.
+const RULE: &str = "history-drop";
+
+/// Every short sha the refusal names, in the order it named them.
+///
+/// **Read off the rendered refusal rather than computed from the fixture**, and
+/// that is the point: it is what an AGENT can do. The binding is the commits the
+/// refusal listed, so a case that recomputed them with `git rev-parse` could pass
+/// while the only spelling a reader has access to did not fit.
+fn shas_in(cause: &str) -> Vec<String> {
+    cause
+        .split_whitespace()
+        .filter(|token| token.len() >= 7 && token.chars().all(|char| char.is_ascii_hexdigit()))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Answer the class's three declared questions and return the issued address.
+fn request(dir: &Path, subject: &str) -> String {
+    let answers = "precondition=the commits are a duplicate of what is already pushed, \
+         and I can name what they held\n\
+         lost=the branch stays on a borrowed base and the lap cannot proceed\n\
+         rejected-route=git reflog answers a question I do not have — this is a \
+         duplicate, not a recovery\n";
+    let output = run_with_stdin(
+        dir,
+        &[
+            "override",
+            "request",
+            "--rule",
+            RULE,
+            "--verdict",
+            CLASS,
+            "--subject",
+            subject,
+        ],
+        answers,
+    );
+    assert!(
+        output.status.success(),
+        "request must issue: {}",
+        stderr(&output)
+    );
+    stdout(&output)
+        .split_whitespace()
+        .last()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// Spend an issued admission against the situation it was issued for.
+fn spend(dir: &Path, admission: &str, subject: &str) -> bool {
+    run(
+        dir,
+        &[
+            "override",
+            "spend",
+            "--admission",
+            admission,
+            "--rule",
+            RULE,
+            "--verdict",
+            CLASS,
+            "--subject",
+            subject,
+        ],
+    )
+    .status
+    .success()
+}
+
+/// THE ROUTE THE CLASS ADVERTISES ACTUALLY REACHES (CLOUD-1871).
+///
+/// `verdict.rs` trades this class's hatch for its override route — *"the way
+/// through that leaves a record, which is what keeps this a gate rather than a
+/// wall"* — and `Policy::honours_hatch` duly refuses `BATTEN_HOOK_BYPASS` for it.
+/// The record route did not work: `Refusal::declared` bound only path subjects, so
+/// `admit_mediated` returned early on a refusal naming a count and commits, and
+/// the class had no way through at all. Measured before the fix by two admissions
+/// spent against a reset that refused unchanged after each.
+#[test]
+fn a_spent_admission_admits_the_reset_it_was_taken_for() {
+    let dir = fixture("history-drop-admits");
+    unpushed(&dir, "local.txt");
+
+    let (code, cause) = adjudicate(&dir, "git reset --hard HEAD~1");
+    assert_eq!(code, Some(2), "the premise\n{cause}");
+
+    let subject = shas_in(&cause).join(",");
+    assert!(
+        !subject.is_empty(),
+        "the refusal must name the commits it is about, or an asker has no \
+         subject to bind\n{cause}"
+    );
+
+    let admission = request(&dir, &subject);
+    assert!(spend(&dir, &admission, &subject), "spend must consume it");
+
+    let (admitted, after) = adjudicate(&dir, "git reset --hard HEAD~1");
+    assert_eq!(
+        admitted,
+        Some(0),
+        "a spent admission must admit the reset it was taken for\n{after}"
+    );
+}
+
+/// The harvesting arm, end to end (CLOUD-1871).
+///
+/// An admission earned for one commit must not admit a reset discarding two. The
+/// binding is the join of every commit the refusal named, so the deeper reset is
+/// a different subject and the record does not fit it.
+#[test]
+fn an_admission_for_one_commit_does_not_admit_a_deeper_reset() {
+    let dir = fixture("history-drop-harvest");
+    unpushed(&dir, "first.txt");
+
+    let (code, shallow) = adjudicate(&dir, "git reset --hard HEAD~1");
+    assert_eq!(code, Some(2), "the premise\n{shallow}");
+    let one = shas_in(&shallow).join(",");
+    let admission = request(&dir, &one);
+    assert!(spend(&dir, &admission, &one), "spend must consume it");
+
+    // A second unpushed commit, so the same spelling of reset now discards two.
+    unpushed(&dir, "second.txt");
+    let (deeper, after) = adjudicate(&dir, "git reset --hard HEAD~2");
+    assert_eq!(
+        deeper,
+        Some(2),
+        "an admission for one commit must not admit a reset discarding two\n{after}"
     );
 }
 
