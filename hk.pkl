@@ -567,7 +567,7 @@ local gate = new Mapping<String, Step> {
       List(
         ".github/workflows/release-plz.yml",
         ".github/workflows/linear-release-backfill.yml",
-        "mise-tasks/release-tracking-check.sh",
+        "policy/release-tracking.rego",
       )
     check = "mise run release-tracking-check"
   }

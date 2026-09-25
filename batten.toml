@@ -2241,6 +2241,56 @@ writer = "mise run release-due-record"
 id = "release-archive"
 regex = '[.](tar[.]gz|zip)$'
 
+# `policy/release-tracking.rego`'s readings of a workflow's lines (CLOUD-618,
+# ported off `release-tracking-check.sh` under CLOUD-1717). YAML's comment rule
+# applied literally: `#` at line start or after whitespace.
+[[pattern]]
+id = "yaml-comment"
+regex = '(^|[[:space:]])#.*$'
+
+# `[indent, key, value]` of a block-mapping line; a sequence item's `- ` is not one.
+[[pattern]]
+id = "yaml-key-line"
+regex = '^([[:space:]]*)([A-Za-z0-9_-]+):[[:space:]]*(.*)$'
+
+[[pattern]]
+id = "linear-release-uses"
+regex = 'uses:[[:space:]]*linear/linear-release-action@(.*)$'
+
+# A 40-hex SHA AND the trailing `# vX.Y.Z` the update bot tracks the pin through.
+[[pattern]]
+id = "action-sha-pin"
+regex = '^[0-9a-f]{40}[[:space:]]+#[[:space:]]*v[0-9]'
+
+[[pattern]]
+id = "gha-step-output"
+regex = '^\$\{\{[[:space:]]*steps\.([A-Za-z0-9_-]+)\.outputs\.[A-Za-z0-9_-]+[[:space:]]*\}\}$'
+
+# Both spellings GitHub accepts for a `workflow_dispatch` input; the name is group 2.
+[[pattern]]
+id = "gha-dispatch-input"
+regex = '^\$\{\{[[:space:]]*(github\.event\.)?inputs\.([A-Za-z0-9_-]+)[[:space:]]*\}\}$'
+
+[[pattern]]
+id = "linear-key-guard"
+regex = '-z[[:space:]]+"?\$\{?LINEAR_ACCESS_KEY'
+
+[[pattern]]
+id = "gha-output-write"
+regex = '>>[[:space:]]*"?\$\{?GITHUB_OUTPUT'
+
+[[pattern]]
+id = "checkout-uses"
+regex = 'uses:[[:space:]]*actions/checkout@'
+
+[[pattern]]
+id = "git-tag-refresh"
+regex = 'git fetch.*--tags'
+
+[[pattern]]
+id = "tag-exists-probe"
+regex = 'rev-parse.*refs/tags/'
+
 # CLOUD-492's measuring half, ported off `land-divergence.sh` under CLOUD-1717.
 # The decider half is `policy/land-divergence.rego`; the split is the retired
 # pair's own, for the reason the `nonverdict` pair's is.
@@ -5816,14 +5866,20 @@ no_fix_reason = "install the pinned `gh` (`mise install aqua:cli/cli`) or supply
 # file, makes no network call, and needs no credential — so it cannot block on
 # ambient environment the way an earlier attestation precondition did inside fixture
 # repositories. The only way it reds is the workflow actually losing its wiring.
+#
+# PORTED OFF `mise-tasks/release-tracking-check.sh` UNDER CLOUD-1717, which is the
+# collapse the paragraphs above promised: `line_sources` is the kind that addresses
+# a node in a document now, so the program is gone and `policy/release-tracking.rego`
+# walks both workflows' lines. The directory is declared rather than the two files,
+# for `check read never`'s measured reason: a glob matching nothing SKIPS the rule,
+# so a deleted workflow would pass instead of reading as `release wire unread`.
 [[rule]]
-id = "release wire missing"
-kind = "command"
-glob = "mise-tasks/release-tracking-check.sh"
-check = "mise run release-tracking-check"
-severity = "deny"
+id = "release wire other"
+kind = "policy"
 scope = "tree"
-no_fix_reason = "the missing node is in the workflow, not in this file; add the invocation, the pin, or the fetch-depth the finding names"
+line_sources = [".github/workflows/*.yml"]
+module = "policy/release-tracking.rego"
+severity = "deny"
 # `issue-guard`'s duplicate-claim half, and the change that retires that file
 # (CLOUD-446). The naming half is the engine's, two rows above as
 # `pr-names-an-issue`/`ready-names-an-issue`; this is what could not follow it.
@@ -13874,6 +13930,33 @@ class = "A record missing a reading decides over part of the answer."
 id = "task run first"
 kind = "command"
 target = "mise run release-due-record"
+
+# CLOUD-618's readings, ported off `release-tracking-check.sh` under CLOUD-1717.
+# The second subject names which shape; the module's header says what each means.
+[[verdict]]
+id = "release wire missing"
+gloss = "a release workflow does not record, complete, pin, bind or deepen what the Linear release pipeline needs"
+class = """
+Every shape here stays GREEN while a shipped tag never reaches Linear: a \
+dropped `sync` or `complete`, an unpinned ref, a version bound to nothing, a \
+shallow checkout, a tag resolved before it was fetched, a backfill checkout not \
+on the tag or with no base. Fix the node the pointer names in the workflow.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/release-tracking.rego"
+
+[[verdict]]
+id = "release wire unread"
+gloss = "a workflow the release-tracking gate judges was not in the read"
+class = "A gate that cannot read its subject must not report green; either workflow absent is this, never a pass earned on the other."
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/release-tracking.rego"
 
 # CLOUD-258/262/278's readings, ported off `release-assets-check.sh` under
 # CLOUD-1717.

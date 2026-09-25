@@ -19,7 +19,6 @@ to it pays.
 | 6.7 | 3.8% | `tests/token-bench.bats` |
 | 6.5 | 3.7% | `tests/released.bats` |
 | 5.8 | 3.3% | `tests/in-progress-drain.bats` |
-| 5.0 | 2.8% | `tests/release-tracking-check.bats` |
 | 4.7 | 2.7% | `tests/mcp-allow-check.bats` |
 | 4.4 | 2.5% | `tests/sbom.bats` |
 | 3.6 | 2.1% | `tests/doctor-race.bats` |

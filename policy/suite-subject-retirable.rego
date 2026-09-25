@@ -206,7 +206,6 @@ exempt := {
 	# arm F now refuses an ADDED `.py` under `mise-tasks/` outright, so the
 	# "looks governed, is excluded" gap it described is a gate rather than a
 	# note in an exemption table.
-	"tests/release-tracking-check.bats": "workflow yaml — STRANDS mise-tasks/release-tracking-check.sh",
 	"tests/remedy-payload-source.bats": "batten.toml — STRANDS mise-tasks/board-payloads.sh",
 	"tests/session-start.bats": ".claude/hooks/session-start.sh",
 	"tests/spawn-census.bats": "clippy.toml",
