@@ -3503,6 +3503,14 @@ description = "Run the shell test suite (tests/*.bats) — cargo test for the mi
 # owned by the tasks that need them (cross-check, darwin-link), each routed
 # through the target-ensure lock.
 depends = ["doctor --no-targets"]
+# A FIXTURE RUN NEVER READS THE HOST'S MCP LOGS. `mcp-timeout-budget.bats`'s
+# "the committed budget passes" runs the real gate over the real settings, and
+# with this unset the gate also reads whatever session logs this machine holds —
+# so the case went red on a container whose client started serena at 30000ms
+# (CLOUD-730), a host fact no diff can move. Pointed at a root that does not
+# exist, the gate checks the declaration alone, which is what the case asserts;
+# the live-log check stays the hk `mcp-timeout-budget` step's job.
+env = { MCP_TIMEOUT_LOGS = "target/mcp-logs-for-fixtures-never-created" }
 # Parallel across files, never within one (CLOUD-386). Serial, this suite was
 # the pole of the `ci` job — 247.01s of 298.87s, with the cargo chain beside it
 # finishing at 166s — and `verify` pays it again on every `land` lap, so it sat
