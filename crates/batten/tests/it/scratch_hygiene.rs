@@ -45,8 +45,7 @@
 
 use std::path::PathBuf;
 
-/// What the setup script publishes: how many entries the scratch parent held
-/// *before* it was collected.
+/// What the setup script publishes: how many entries it removed.
 const COLLECTED: &str = "BATTEN_SCRATCH_COLLECTED";
 
 /// The scratch parent itself, as the harness resolves it.
@@ -190,4 +189,132 @@ fn the_parent_survives_its_own_collection() {
         "the scratch parent {} must exist after collection — `common::scratch` joins onto it",
         parent.display()
     );
+}
+
+// --- the collector must not delete a concurrent run's scratch -----------------
+//
+// `verify` runs nextest more than once at a time — `test:cargo` beside seven
+// narrow lanes — and the setup script runs at the start of each. The first
+// version wiped the whole parent, so the lane that started last deleted the
+// fixtures the others were using: `config_schema::every_verb_that_reads_config_
+// reports_a_too_old_build` failed on `verify` with `run batten: NotFound`, its
+// working directory gone. The cases below run the DECLARED command, read out of
+// `.config/nextest.toml`, over a seeded parent — the same "assert the run, not
+// the config" this file's header argues for, applied to what the run removes.
+
+/// The `clear-scratch` command exactly as `.config/nextest.toml` declares it.
+fn declared_collector() -> String {
+    let text = std::fs::read_to_string(crate::common::at_root(".config/nextest.toml"))
+        .expect("read the nextest config");
+    let config: toml::Value = toml::from_str(&text).expect("the nextest config parses");
+    config["scripts"]["setup"]["clear-scratch"]["command"]
+        .as_str()
+        .expect("clear-scratch declares a command string")
+        .to_owned()
+}
+
+/// A pid no process holds: one spawned, reaped, and so gone.
+#[cfg(unix)]
+fn a_dead_pid() -> u32 {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: the subject is a shell script's liveness probe, so the fixture needs a pid that provably belonged to a finished process"
+    )]
+    let mut child = std::process::Command::new("true")
+        .spawn()
+        .expect("spawn a process to outlive");
+    let pid = child.id();
+    child.wait().expect("reap it");
+    pid
+}
+
+/// Seed a scratch parent under `root/tmp` and run the declared collector over it
+/// with `lane` as the invocation's lane. Returns what the collector published.
+#[cfg(unix)]
+fn collect(root: &std::path::Path, lane: Option<&str>) -> String {
+    let env_file = root.join("nextest-env");
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: the subject IS the declared shell command, so exercising it means running it"
+    )]
+    let mut command = std::process::Command::new("sh");
+    command
+        .arg("-c")
+        .arg(declared_collector())
+        .env("CARGO_TARGET_DIR", root)
+        .env("NEXTEST_ENV", &env_file)
+        .env_remove("BATTEN_TEST_SCRATCH_LANE");
+    if let Some(lane) = lane {
+        command.env("BATTEN_TEST_SCRATCH_LANE", lane);
+    }
+    let output = command.output().expect("run the collector");
+    assert!(
+        output.status.success(),
+        "the collector must succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::read_to_string(env_file).expect("the collector publishes a reading")
+}
+
+#[cfg(unix)]
+fn seed(root: &std::path::Path) -> (String, String, String, String, String) {
+    let live = format!("fixture.lane-narrow-{}", std::process::id());
+    let dead = format!("fixture.lane-narrow-{}", a_dead_pid());
+    let staging = format!("git-init-template-1-2.staging-{}", a_dead_pid());
+    let template = "git-init-template-1-2".to_owned();
+    let stale = "a-previous-runs-fixture".to_owned();
+    for name in [&live, &dead, &staging, &template, &stale] {
+        std::fs::create_dir_all(root.join("tmp").join(name).join("inner"))
+            .expect("seed a scratch entry");
+    }
+    (live, dead, staging, template, stale)
+}
+
+#[cfg(unix)]
+#[test]
+fn the_default_run_spares_a_live_lane_and_the_shared_template() {
+    let root = crate::common::scratch("hygiene-default-run");
+    let (live, dead, staging, template, stale) = seed(&root);
+
+    let published = collect(&root, None);
+
+    let tmp = root.join("tmp");
+    assert!(
+        tmp.join(&live).is_dir(),
+        "a live lane's fixtures must survive"
+    );
+    assert!(
+        tmp.join(&template).is_dir(),
+        "the shared template every run copies from must survive"
+    );
+    assert!(
+        !tmp.join(&dead).exists(),
+        "a dead lane's leftovers are collected"
+    );
+    assert!(
+        !tmp.join(&staging).exists(),
+        "a dead builder's staging dir is collected"
+    );
+    assert!(
+        !tmp.join(&stale).exists(),
+        "a previous run's fixture is collected"
+    );
+    assert_eq!(published.trim(), format!("{COLLECTED}=3"));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_lane_run_collects_nothing() {
+    // A lane cannot know what the concurrent `test:cargo` still holds open, and
+    // its own names are pid-qualified, so it has nothing it may safely remove.
+    let root = crate::common::scratch("hygiene-lane-run");
+    let (live, dead, staging, template, stale) = seed(&root);
+
+    let published = collect(&root, Some("narrow"));
+
+    let tmp = root.join("tmp");
+    for name in [&live, &dead, &staging, &template, &stale] {
+        assert!(tmp.join(name).is_dir(), "a lane run removed {name}");
+    }
+    assert_eq!(published.trim(), format!("{COLLECTED}=0"));
 }
