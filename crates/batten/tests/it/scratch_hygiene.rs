@@ -157,6 +157,26 @@ fn the_collector_collects_when_it_is_alone() {
     assert_eq!(reading, format!("{COLLECTED}=1"));
 }
 
+/// Every nextest run reports every failure, whichever caller forgot the flag.
+///
+/// The windows, macos and musl legs call `cargo nextest run --workspace` bare,
+/// and nextest's default fail-fast stopped the macos leg at 2 failures with
+/// 1,814 cases never run — one defect surfaced per CI round. The setting lives
+/// in the default profile so it binds every invocation at once.
+///
+/// MUTANT: deleting `fail-fast = false` from `[profile.default]` reds this case.
+#[test]
+fn the_default_profile_never_fails_fast() {
+    let text = std::fs::read_to_string(crate::common::at_root(".config/nextest.toml"))
+        .expect("nextest.toml");
+    let config: toml::Table = text.parse().expect("nextest.toml parses");
+    assert_eq!(
+        config["profile"]["default"].get("fail-fast"),
+        Some(&toml::Value::Boolean(false)),
+        "`[profile.default] fail-fast = false` is what makes a CI leg report every failure"
+    );
+}
+
 #[test]
 fn the_parent_survives_its_own_collection() {
     // The collector removes the parent and recreates it. Recreating is not

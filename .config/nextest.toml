@@ -141,6 +141,13 @@ setup = "clear-scratch"
 # because the floor rose, not because the case got fast.
 [profile.default]
 slow-timeout = { period = "10s", terminate-after = 120 }
+# EVERY RUN REPORTS EVERY FAILURE. nextest's default fail-fast stops scheduling
+# at the first failure, so a leg reports one defect per CI round: the macos job
+# stopped at 2 failures with 1,814 cases never run, and the windows, macos and
+# musl legs call `cargo nextest run --workspace` without `--no-fail-fast`. Set
+# here, once, it covers every invocation that reads this file — including one
+# added later that never heard of the flag.
+fail-fast = false
 
 [[profile.default.overrides]]
 filter = 'test(deleting_six_governed_paths_costs_a_flat_multiple_of_the_floor)'
