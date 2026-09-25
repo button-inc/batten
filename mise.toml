@@ -3377,6 +3377,13 @@ echo "lock-check: mise.lock is complete and current"
 # shell syntax error on every CI `ci` and `bats` job before a test ran. As the
 # last word, `slow_needed` receives them as its own positional parameters.
 #
+# THE HEAD IS COMPARED BY TREE, NOT BY COMMIT. A `pull_request` job checks out
+# GitHub's merge commit, never the PR head, so a commit comparison refused every
+# CI run it exists for. Landing is fast-forward, so a landable head is already on
+# its base and the merge commit carries exactly its tree: diffing the base against
+# the checkout IS diffing it against the head. Where the trees differ, the head
+# is not on its base and that diff answers a different question, so it refuses.
+#
 # THE HEAD ARGUMENT IS ASSERTED, NOT IGNORED. The retired program took
 # `<base> <head>` and diffed them; the verb diffs the base against the CHECKOUT,
 # which is the same thing in CI and not the same thing anywhere else. Rather than
@@ -3385,7 +3392,7 @@ echo "lock-check: mise.lock is complete and current"
 # a question this cannot answer.
 [tasks."ci-slow-needed"]
 description = "Decide whether a diff can move the hk slow tier, so a diff that cannot does not pay for it"
-run = "slow_needed() { base=\"${1:-}\"; if [ -z \"$base\" ]; then echo '::error:: ci-slow-needed: no base revision given, so there is no diff to judge.' >&2; exit 2; fi; if [ -n \"${2:-}\" ] && [ \"$(git rev-parse \"$2\")\" != \"$(git rev-parse HEAD)\" ]; then echo \"::error:: ci-slow-needed: '$2' is not this checkout, and the diff is taken against the checkout.\" >&2; exit 2; fi; cargo run --quiet -p batten -- ci slow-needed --base \"$base\"; case $? in 0) exit 0 ;; 2) exit 1 ;; *) exit 2 ;; esac; }; slow_needed"
+run = "slow_needed() { base=\"${1:-}\"; if [ -z \"$base\" ]; then echo '::error:: ci-slow-needed: no base revision given, so there is no diff to judge.' >&2; exit 2; fi; if [ -n \"${2:-}\" ] && [ \"$(git rev-parse \"$2^{tree}\")\" != \"$(git rev-parse HEAD^{tree})\" ]; then echo \"::error:: ci-slow-needed: '$2' does not carry this checkout's tree, and the diff is taken against the checkout.\" >&2; exit 2; fi; cargo run --quiet -p batten -- ci slow-needed --base \"$base\"; case $? in 0) exit 0 ;; 2) exit 1 ;; *) exit 2 ;; esac; }; slow_needed"
 
 # THE INSTALLED BINARY FIRST, AND `cargo` ONLY AS A FALLBACK (CLOUD-1753).
 # Session start is the one path that may not assume a toolchain: a fresh clone
