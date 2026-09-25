@@ -20590,10 +20590,23 @@ fn report_unresolvable(config: &resolve::Resolved, mode: Mode, err: &mut dyn Wri
 /// else — and it is what `verify` already compares against, since `verify`
 /// refuses a branch not rebased onto the target first.
 ///
-/// `None` is could-not-look at every step — not a repository, a detached HEAD,
-/// no claim, no config to name a target, no target, no shared history — and the
-/// caller runs unarmed rather than guessing a base.
+/// **Only at the repository ROOT.** The claim, the history and the base config
+/// all belong to the repository whose root holds the authority; `lint::run` reads
+/// the config in `here`. Below the root those are two authorities in one run: a
+/// `batten.toml` in a subdirectory, or a scratch fixture under `target/` that git
+/// discovery resolves to the enclosing checkout, would be diffed against the
+/// root's history and charged the root's claim. Measured: the first version armed
+/// `cli::config_lint_emits_its_document_even_when_clean`'s scratch fixture from
+/// this checkout's own claim, and reported this checkout's groomed smells in it.
+///
+/// `None` is could-not-look at every step — not a repository, not its root, a
+/// detached HEAD, no claim, no config to name a target, no target, no shared
+/// history — and the caller runs unarmed rather than guessing a base.
 fn claimed_fork_point(here: &Path, overrides: &Overrides) -> Option<String> {
+    let root = git::repo_root(here).ok()?.canonicalize().ok()?;
+    if here.canonicalize().ok()? != root {
+        return None;
+    }
     let receipts = git::git_dir(here).ok()?.join("batten-receipts");
     let branch = git::current_branch(here).ok()??;
     claim::claimed_token(&receipts, &branch)?;
