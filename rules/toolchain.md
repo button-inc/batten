@@ -300,7 +300,9 @@ The board gates follow the agents-fetch-gates-decide pattern — each is a pure
 function of stdin (`get_issue` payloads piped in by the caller, since no tracker
 credential exists), so live runs need board data but their bats suites run
 unconditionally in the gate. `mise-tasks/` is the authoritative list; don't
-restate a count here, which is how "three `PreToolUse` hooks" went stale. `mise run ready-lint` validates an issue's Ready
+restate a count here, which is how "three `PreToolUse` hooks" went stale. `batten ready lint --issue <key>` is the Ready
+gate; `mise run ready-lint` is its frozen shell ancestor, lacks the claims-block clause, and passes rows the
+compiled gate refuses (CLOUD-1395) — never cite it as the verdict. The ancestor validates an issue's Ready
 block: only the clauses _present_ (restating all eight is forbidden by the DoR
 doc), and it holds §8 to `blockedBy` _claims_ against the real relations. Every
 token it anchors on — which openers name a block, which line is the `(§6)`
