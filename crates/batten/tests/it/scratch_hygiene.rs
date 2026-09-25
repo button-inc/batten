@@ -203,6 +203,11 @@ fn the_parent_survives_its_own_collection() {
 // the config" this file's header argues for, applied to what the run removes.
 
 /// The `clear-scratch` command exactly as `.config/nextest.toml` declares it.
+///
+/// `cfg(unix)` with its only callers: the command is `sh` and the liveness probe
+/// is `kill -0`, so the cases that run it are Unix-only, and an uncalled helper
+/// is a denied warning on the Windows type-check (`cross-check`, CLOUD-397).
+#[cfg(unix)]
 fn declared_collector() -> String {
     let text = std::fs::read_to_string(crate::common::at_root(".config/nextest.toml"))
         .expect("read the nextest config");
