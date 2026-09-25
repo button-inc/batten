@@ -628,7 +628,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "mise,attestation-check,engine-checks-green,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,dead-capability,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,could-not-look-laundered,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence-assert,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-lib,engine-mutate"
+MUTANT_GATES = "mise,attestation-check,engine-checks-green,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,dead-capability,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,could-not-look-laundered,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence-assert,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-lib,engine-mutate,task-target-prune"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -1623,9 +1623,53 @@ description = "Reclaim superseded build artifacts, and refuse below a measured d
 # already failed pays for a build, and where that failure really was the disk the
 # build fails too — the same refusal today gives, with the build's own cause
 # rather than a borrowed one.
+#
+# AND AN ABSENT `batten` ASKS THE DISK QUESTION BEFORE IT BUILDS (CLOUD-1838). The
+# paragraph above holds for a binary that is PRESENT and refuses. It does not hold
+# when there is no binary at all — a fresh clone, a developer machine, provisioning
+# that did not finish — because then there is no first attempt, and the fallback
+# is the only arm: it compiled the engine and wrote to `target/` before anything
+# looked at the disk, so on a short disk the reclaim died on cargo's `ENOSPC`
+# without ever speaking. The one state this task exists for was the one state it
+# could not answer.
+#
+# So the absent arm answers the narrower question that needs no engine: is there
+# room to BUILD the engine that would answer? `[prune.cold] mb` is exactly that
+# number — the measured cost of a cold build — so it is read, not re-derived, and
+# the floor keeps one authority. Below it, refuse with exit 2, which is the code
+# the engine gives its own below-floor refusal. At or above it, or where either
+# number cannot be read, fall through to the build exactly as before: the new arm
+# refuses only on evidence and never invents a verdict.
+#
+# `awk`, not `taplo`: an unprovisioned clone is where a mise-installed tool is
+# likeliest missing, and depending on one would reopen the hole in the case that
+# makes it. String comparison rather than a regex, so the program carries no
+# escape a TOML basic string would have to survive.
+#
+# `sh -o errexit`, not bash-without-`set -e` — this task declares no `shell`, so
+# `rules/toolchain.md`'s no-`set -e` note does not cover it. Every command that
+# may fail therefore sits in an `if` or an `&&` list, where errexit does not fire.
+#
+# THE COST, stated: with no `batten` and free space between the warm and cold
+# floors, this refuses where the engine might have passed a warm tree. That is
+# the one manual step CLOUD-1838 accepts for this shape. It cannot produce a pass
+# the engine would have refused.
+#MUTANT-SUITE crates/batten/tests/it/target_prune.rs
+#MUTANT prune-fallback-builds|s@^if command -v batten >/dev/null 2>&1; then$@if true; then@|an_absent_engine_on_a_short_disk_is_refused_without_a_build
 run = """
-if command -v batten >/dev/null 2>&1 && batten target prune -y; then
-  exit 0
+if command -v batten >/dev/null 2>&1; then
+  if batten target prune -y; then
+    exit 0
+  fi
+else
+  free="${TARGET_PRUNE_FREE_MB%%,*}"
+  if [ -z "$free" ]; then
+    free="$(df -Pm . | awk 'NR == 2 { print $4 }')"
+  fi
+  if cold="$(awk '$0 == "[prune.cold]" { inside = 1; next } substr($0, 1, 1) == "[" { inside = 0 } inside && $1 == "mb" && $2 == "=" { print $3; exit }' batten.toml)" && [ -n "$cold" ] && [ -n "$free" ] && [ "$free" -lt "$cold" ]; then
+    echo "target-prune: no batten on PATH, and ${free}MB free is below the ${cold}MB a cold build needs — refusing rather than building the engine to ask" >&2
+    exit 2
+  fi
 fi
 cargo run --quiet -p batten -- target prune -y
 """
@@ -2215,10 +2259,20 @@ description = "Build the release binary the hook registrations execute"
 # of what the row asks. `install:local` resolves it transitively, so it gains
 # the precondition without naming it.
 #
-# NO CYCLE, checked rather than assumed: `target-prune` declares no `depends` of
-# its own, and its body tries the INSTALLED binary before falling back to `cargo
-# run` — the property its own header calls load-bearing, precisely so the
-# reclaim needs no build in order to run.
+# NO CYCLE: `target-prune` declares no `depends` of its own, which
+# `the_reclaim_itself_stays_dependency_free_and_the_surfaces_are_not_empty` in
+# `crates/batten/tests/it/session_provisioning.rs` asserts rather than assumes.
+#
+# WHETHER IT NEEDS A BUILD depends on whether `batten` is installed, and this
+# paragraph once said otherwise. It claimed the reclaim "needs no build in order
+# to run" and called that checked; `target-prune`'s own header says the fallback
+# is "for a clone that has not been provisioned", and that fallback was `cargo
+# run` — a build. So on an unprovisioned clone with a short disk, the precondition
+# this task depends on compiled the engine first and died on `ENOSPC`. CLOUD-1838
+# closed that: with `batten` installed the reclaim runs build-free; with it absent,
+# a disk below the cold-build floor is refused WITHOUT a build, and only a disk
+# with room for one pays for it. The claim is now true because the code changed,
+# not because the sentence did.
 #
 # IT DOES NOT REACH INSIDE `verify`'S LAP, which is the pairing that would break
 # if it did: this task's callers are `install:local` and the two benches, while
