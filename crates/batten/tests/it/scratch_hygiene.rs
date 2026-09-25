@@ -81,6 +81,82 @@ fn the_collector_ran_for_this_run() {
     });
 }
 
+/// The committed `clear-scratch` command, exactly as nextest runs it.
+fn collector_command() -> String {
+    let text = std::fs::read_to_string(crate::common::at_root(".config/nextest.toml"))
+        .expect("nextest.toml");
+    let config: toml::Table = text.parse().expect("nextest.toml parses");
+    config["scripts"]["setup"]["clear-scratch"]["command"]
+        .as_str()
+        .expect("clear-scratch declares a command")
+        .to_owned()
+}
+
+/// Run the collector over a fixture target dir holding one sentinel entry, with
+/// a stub `pgrep` first on `PATH` that reports `others` as the live
+/// `cargo-nextest` pids. Returns whether the sentinel survived and the count the
+/// collector published.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the subject is the shell command nextest runs, so asserting it means running `sh`"
+)]
+fn collect_beside(name: &str, others: &str) -> (bool, String) {
+    let root = crate::common::scratch(name);
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let stub = bin.join("pgrep");
+    std::fs::write(&stub, format!("#!/bin/sh\nprintf '%s' '{others}'\n")).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let sentinel = root.join("target/tmp/sentinel");
+    std::fs::create_dir_all(sentinel.parent().unwrap()).unwrap();
+    std::fs::write(&sentinel, "").unwrap();
+    let published = root.join("nextest-env");
+    let path = std::env::join_paths(
+        std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let status = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(collector_command())
+        .env("CARGO_TARGET_DIR", root.join("target"))
+        .env("NEXTEST_ENV", &published)
+        .env("PATH", path)
+        .status()
+        .expect("run the collector");
+    assert!(status.success(), "the collector must exit 0");
+    let reading = std::fs::read_to_string(&published).unwrap_or_default();
+    (sentinel.exists(), reading.trim().to_owned())
+}
+
+/// CLOUD-1912: `verify` runs several nextest invocations at once, and a later
+/// run's wipe deleted a live case's `current_dir` in an earlier one. With another
+/// run alive the collector must leave the parent alone.
+///
+/// MUTANT: dropping the `others -eq 0` guard (collect unconditionally) deletes
+/// the sentinel here and this case goes red.
+#[test]
+fn the_collector_defers_while_another_run_is_alive() {
+    let (survived, reading) = collect_beside("clear-scratch-defers", "999999\n");
+    assert!(survived, "a live run's scratch was collected under it");
+    assert_eq!(reading, format!("{COLLECTED}=0"));
+}
+
+/// ANTI-VACUITY: a collector that never collects passes the case above. Alone,
+/// it must still take the previous run's entries.
+#[test]
+fn the_collector_collects_when_it_is_alone() {
+    let (survived, reading) = collect_beside("clear-scratch-alone", "");
+    assert!(
+        !survived,
+        "a lone run left the previous run's scratch behind"
+    );
+    assert_eq!(reading, format!("{COLLECTED}=1"));
+}
+
 #[test]
 fn the_parent_survives_its_own_collection() {
     // The collector removes the parent and recreates it. Recreating is not

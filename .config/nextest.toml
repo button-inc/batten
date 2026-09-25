@@ -49,7 +49,17 @@ experimental = ["setup-scripts"]
 # alone. Measured: run 35539151175, `the_collector_ran_for_this_run` red with
 # `got "       0"` while 5006 other cases passed. The contract this publishes is
 # a COUNT, so it is normalised here rather than tolerated at every reader.
-command = """sh -c 'd="${CARGO_TARGET_DIR:-target}/tmp"; case "$d" in */tmp) ;; *) echo "clear-scratch: refusing $d" >&2; exit 1 ;; esac; n=$(ls -1 "$d" 2>/dev/null | wc -l | tr -d "[:space:]"); rm -rf "$d" && mkdir -p "$d" && echo "BATTEN_SCRATCH_COLLECTED=$n" >> "$NEXTEST_ENV"'"""
+#
+# THE WIPE WAITS FOR EVERY OTHER RUN TO FINISH (CLOUD-1912). "Before any test
+# process exists" holds only within ONE invocation, and `verify` runs several at
+# once (`common/mod.rs`, `scratch`'s CLOUD-1164 note): a later run's `rm -rf`
+# deleted `config_schema`'s 13s case's `current_dir` mid-case, and its next spawn
+# failed `NotFound` — 4 of 5 `verify` runs, 2026-09-25. So the collector counts
+# the OTHER `cargo-nextest` processes alive (its own parent, `$PPID`, excluded)
+# and collects only when there are none; a deferred run publishes 0 and leaves
+# its entries for the next run that is alone. Where `pgrep` does not exist the
+# runner is a fresh CI box running one nextest, and the collection proceeds.
+command = """sh -c 'd="${CARGO_TARGET_DIR:-target}/tmp"; case "$d" in */tmp) ;; *) echo "clear-scratch: refusing $d" >&2; exit 1 ;; esac; others=0; if command -v pgrep >/dev/null 2>&1; then others=$(pgrep -x cargo-nextest | grep -cvx "$PPID"); fi; n=0; if [ "$others" -eq 0 ]; then n=$(ls -1 "$d" 2>/dev/null | wc -l | tr -d "[:space:]"); rm -rf "$d"; fi; mkdir -p "$d" && echo "BATTEN_SCRATCH_COLLECTED=$n" >> "$NEXTEST_ENV"'"""
 
 [[profile.default.scripts]]
 filter = "all()"
