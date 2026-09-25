@@ -2229,6 +2229,11 @@ writer = "mise run pr-unsubscribed check"
 record = "release-assets"
 writer = "mise run release-assets-record"
 
+# CLOUD-319's reading, ported off `release-due.sh` under CLOUD-1717.
+[[record]]
+record = "release-due"
+writer = "mise run release-due-record"
+
 # A release ARCHIVE, as `policy/release-assets.rego` reads one: the name ends in
 # a packed extension. A composed leg's `<stem>.spdx.json` carries the same triple,
 # so it must not satisfy this, and the extension is what keeps it out.
@@ -6776,6 +6781,16 @@ id = "release grade other"
 kind = "policy"
 scope = "tree"
 module = "policy/release-assets.rego"
+severity = "deny"
+
+# CLOUD-319, ported off `mise-tasks/release-due.sh` under CLOUD-1717. A HOLD is
+# the finding: `auto-release-land.yml` runs `mise run release-due`, which produces
+# then checks this one rule, and reads 2 as "not yet". Silent with no record.
+[[rule]]
+id = "release grade early"
+kind = "policy"
+scope = "tree"
+module = "policy/release-due.rego"
 severity = "deny"
 
 # CLOUD-492, ported off `mise-tasks/land-divergence-assert.sh` under CLOUD-1717.
@@ -13834,6 +13849,31 @@ samples and propose tightening a release job on it.
 id = "task run first"
 kind = "command"
 target = "mise run timeout-drift-record"
+
+# CLOUD-319's readings, ported off `release-due.sh` under CLOUD-1717.
+[[verdict]]
+id = "release ship early"
+gloss = "main moved inside the quiet window and the last release is inside the max wait, so the release PR holds"
+class = """
+The ordinary outcome on most ticks, not a failure: the release PR keeps \
+accumulating every commit since the last tag, and lands once `main` is quiet or \
+the max wait passes. A maintainer commenting /fast-forward lands it now.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run release-due-record"
+
+[[verdict]]
+id = "release measure partial"
+gloss = "the release-due record is missing one of its four readings"
+class = "A record missing a reading decides over part of the answer."
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run release-due-record"
 
 # CLOUD-258/262/278's readings, ported off `release-assets-check.sh` under
 # CLOUD-1717.

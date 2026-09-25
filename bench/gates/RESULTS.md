@@ -119,7 +119,6 @@ commit, and a named ref resolves a declared one.
 | `ready-cites-check.sh`         | git    | `head`, `tracked`            |
 | `ready-lint.sh`                | tree   | —                            |
 | `reference-check.sh`           | git    | `location`                   |
-| `release-due.sh`               | forge  | —                            |
 | `release-tracking-check.sh`    | git    | `location`                   |
 | `renovate-config-validator.sh` | tree   | —                            |
 | `report-only-check.sh`         | tree   | —                            |

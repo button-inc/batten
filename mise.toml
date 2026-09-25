@@ -3022,6 +3022,64 @@ mise run release-assets-record ${usage_tag:+"$usage_tag"}
 exec cargo run --quiet -p batten -- check --rule 'release grade other'
 '''
 
+# CLOUD-319's reading half, ported off `mise-tasks/release-due.sh` under
+# CLOUD-1717. The decision is `policy/release-due.rego`; the engine has no clock,
+# so this reads it and the forge and records two AGES in seconds plus the two
+# windows. Every refusal the retired program made stays here and writes nothing:
+# a knob that is not a whole number, an unreadable reading, an unparseable time.
+# The readings stay injectable (`RELEASE_DUE_NOW`, `RELEASE_DUE_LAST_ACTIVITY`,
+# `RELEASE_DUE_LAST_RELEASE`), and an EMPTY last release is "none yet".
+[tasks.release-due-record]
+description = "Effect: record how long main has been quiet and how old the last release is, against the debounce windows (CLOUD-319)"
+shell = "bash -c"
+run = '''
+{% raw %}
+set -euo pipefail
+if [[ -n "${BATTEN_BIN:-}" ]]; then batten=("$BATTEN_BIN"); else batten=(cargo run --quiet -p batten --); fi
+# EXIT 3, NOT 2: `check` answers a hold with 2, and `auto-release-land.yml` reads
+# 2 as "not yet". A reading this could not take is could-not-look, which is 3.
+refuse() { echo "::error:: release-due-record: $*. Nothing recorded." >&2; exit 3; }
+QUIET_MINUTES="${RELEASE_QUIET_MINUTES:-30}"
+MAX_WAIT_HOURS="${RELEASE_MAX_WAIT_HOURS:-24}"
+case "$QUIET_MINUTES" in '' | *[!0-9]*) refuse "RELEASE_QUIET_MINUTES must be a whole number of minutes, got '$QUIET_MINUTES'" ;; esac
+case "$MAX_WAIT_HOURS" in '' | *[!0-9]*) refuse "RELEASE_MAX_WAIT_HOURS must be a whole number of hours, got '$MAX_WAIT_HOURS'" ;; esac
+epoch() { date -d "$1" +%s 2>/dev/null; }
+if [[ -n "${RELEASE_DUE_NOW+set}" ]]; then
+	now=$(epoch "$RELEASE_DUE_NOW") || refuse "cannot parse RELEASE_DUE_NOW '$RELEASE_DUE_NOW'"
+else
+	now=$(date -u +%s)
+fi
+if [[ -n "${RELEASE_DUE_LAST_ACTIVITY+set}" ]]; then
+	activity_raw="$RELEASE_DUE_LAST_ACTIVITY"
+else
+	activity_raw=$(gh api "repos/{owner}/{repo}/commits/main" --jq '.commit.committer.date' 2>/dev/null) || refuse "could not read the last commit on main"
+fi
+[[ -n "$activity_raw" ]] || refuse "the last commit on main has no timestamp"
+if [[ -n "${RELEASE_DUE_LAST_RELEASE+set}" ]]; then
+	release_raw="$RELEASE_DUE_LAST_RELEASE"
+else
+	release_raw=$(gh api "repos/{owner}/{repo}/releases?per_page=1" --jq '.[0].published_at // ""' 2>/dev/null) || refuse "could not read the latest release"
+fi
+activity_at=$(epoch "$activity_raw") || refuse "cannot parse the last-commit timestamp '$activity_raw'"
+release_age=none
+if [[ -n "$release_raw" ]]; then
+	release_at=$(epoch "$release_raw") || refuse "cannot parse the last-release timestamp '$release_raw'"
+	release_age=$((now - release_at))
+fi
+printf 'activity-age\t%d\nrelease-age\t%s\nquiet\t%d\nmax-wait\t%d\n' \
+	"$((now - activity_at))" "$release_age" "$((QUIET_MINUTES * 60))" "$((MAX_WAIT_HOURS * 3600))" |
+	"${batten[@]}" record named release-due
+{% endraw %}
+'''
+
+# The name `auto-release-land.yml` runs, kept: exit 0 due, 2 holding.
+[tasks.release-due]
+description = "Gate: may the release PR land now? Debounce — quiet minutes on main, or hours since the last release, whichever comes first"
+run = [
+  "mise run release-due-record",
+  "cargo run --quiet -p batten -- check --rule 'release grade early'",
+]
+
 [tasks.done-check]
 description = "Gate: no issue sits Done while no release tag contains its commits (reads get_issue payloads on stdin)"
 run = [

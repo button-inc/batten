@@ -73,7 +73,6 @@ to it pays.
 | 0.3 | 0.2% | `tests/commit-convention.bats` |
 | 0.3 | 0.2% | `tests/report-only-check.bats` |
 | 0.3 | 0.2% | `tests/timeout-check.bats` |
-| 0.3 | 0.2% | `tests/release-due.bats` |
 | 0.3 | 0.2% | `tests/batten-glob-check.bats` |
 | 0.3 | 0.2% | `tests/coderabbit-config-check.bats` |
 | 0.3 | 0.1% | `tests/git-hook.bats` |
