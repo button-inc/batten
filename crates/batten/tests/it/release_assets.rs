@@ -27,7 +27,7 @@
 // changed: "the authority schema does not stand in for the override schema" policy/release-assets.rego the missing override schema is asserted by name; the `1 of 7` sentence is not carried
 // carried: "the real workflow publishes the non-target assets this gate derives" policy/release-assets.rego kind:mechanism
 // changed: "the failure names the recovery, not merely that it refused" policy/release-assets.rego the recovery — a `workflow_dispatch` re-run, uploads being `--clobber` idempotent — is the `release ship missing` class's own text now, which `batten policy explain` prints; a refusal line names the class and its route rather than restating it per firing (CLOUD-1286)
-// carried: "no tag given falls back to the latest release" policy/release-assets.rego kind:mechanism
+// carried: "release-assets-check.bats::no tag given falls back to the latest release" policy/release-assets.rego kind:mechanism
 // carried: "an EMPTY tag argument falls back too, which is what the schedule passes" policy/release-assets.rego kind:mechanism
 // carried: "an unreadable release exits 2 — could not look is not a verdict" policy/release-assets.rego kind:mechanism
 // changed: "a complete release with a valid manifest reports the verified count" policy/release-assets.rego a clean release is silent at exit 0 — the success sentence with its count was the program's prose, and silence is the engine's pass

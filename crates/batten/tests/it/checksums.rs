@@ -11,19 +11,19 @@
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
-// ported: mise-tasks/checksums.sh crates/batten/tests/it/checksums.rs subject:mise.toml
-// ported: tests/checksums.bats crates/batten/tests/it/checksums.rs subject:mise.toml
-// ported: "--names answers with no tag, no network and no download" crates/batten/tests/it/checksums.rs subject:mise.toml
-// ported: "the manifest covers every asset the release carries" crates/batten/tests/it/checksums.rs subject:mise.toml
-// ported: "the manifest never lists itself" crates/batten/tests/it/checksums.rs subject:mise.toml
-// ported: "two runs over one release produce identical bytes" crates/batten/tests/it/checksums.rs subject:mise.toml
-// ported: "sha256sum -c accepts the manifest with no flags, in a directory of assets" crates/batten/tests/it/checksums.rs subject:mise.toml
-// ported: "corrupting one byte of one asset makes that check fail" crates/batten/tests/it/checksums.rs subject:mise.toml
-// ported: "a release carrying no assets writes no manifest" crates/batten/tests/it/checksums.rs subject:mise.toml
-// ported: "an unreadable release exits 2, not 1" crates/batten/tests/it/checksums.rs subject:mise.toml
-// ported: "no tag given falls back to the latest release" crates/batten/tests/it/checksums.rs subject:mise.toml
-// ported: "an EMPTY tag argument falls back too, which is what the workflow passes" crates/batten/tests/it/checksums.rs subject:mise.toml
-// ported: "no tag resolvable exits 2 rather than hashing nothing" crates/batten/tests/it/checksums.rs subject:mise.toml
+// carried: mise-tasks/checksums.sh policy/release-assets.rego kind:mechanism crates/batten/tests/it/checksums.rs
+// carried: tests/checksums.bats policy/release-assets.rego kind:mechanism crates/batten/tests/it/checksums.rs
+// carried: "--names answers with no tag, no network and no download" mise.toml kind:mechanism
+// carried: "the manifest covers every asset the release carries" mise.toml kind:mechanism
+// carried: "the manifest never lists itself" mise.toml kind:mechanism
+// carried: "two runs over one release produce identical bytes" mise.toml kind:mechanism
+// carried: "sha256sum -c accepts the manifest with no flags, in a directory of assets" mise.toml kind:mechanism
+// carried: "corrupting one byte of one asset makes that check fail" mise.toml kind:mechanism
+// carried: "a release carrying no assets writes no manifest" mise.toml kind:mechanism
+// carried: "an unreadable release exits 2, not 1" mise.toml kind:mechanism
+// carried: "checksums.bats::no tag given falls back to the latest release" mise.toml kind:mechanism
+// carried: "an EMPTY tag argument falls back too, which is what the workflow passes" mise.toml kind:mechanism
+// carried: "no tag resolvable exits 2 rather than hashing nothing" mise.toml kind:mechanism
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
