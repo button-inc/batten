@@ -140,6 +140,160 @@ fn a_malformed_config_does_not_mention_a_rebuild() {
     );
 }
 
+/// Two `[[hook.handler]]` rows, the second carrying a key no build has.
+///
+/// `[hook]` is never declared as a header of its own, which is the shape
+/// `batten.toml` itself has: the only `hook` headers in the authority are the
+/// sixteen `[[hook.handler]]` rows. That is what makes the section addressable
+/// as a dotted path rather than as a nest inside some `[[hook]]` element.
+const HANDLERS: &str = r#"version = 1
+
+[[hook.handler]]
+id = "readable-handler"
+on = "user-prompt-submit"
+run = ["true"]
+owner = "CLOUD-1775"
+expires = "2027-02-28"
+
+[[hook.handler]]
+id = "from-a-newer-schema"
+on = "user-prompt-submit"
+run = ["true"]
+owner = "CLOUD-1775"
+expires = "2027-02-28"
+this_key_does_not_exist_in_any_version = true
+"#;
+
+/// THE CASE THE DEFECT FAILS (CLOUD-1775), and the one the bootstrap turns on.
+///
+/// `[[hook.handler]]` fell through BOTH prune granularities. `Header::is_row`
+/// equated droppable with dotless, so `owning_row` declined and the row arm never
+/// ran; `drop_key` then asked the top-level table for a key spelled
+/// `hook.handler`, found `hook` instead, and declined too. The file was refused
+/// whole.
+///
+/// That is the detector disabled by the staleness it detects: the skew handler is
+/// declared in the artifact whose vocabulary it polices, so the first schema
+/// addition a running binary predates unregisters it. Measured 2026-09-10 on
+/// `command_matcher`, three hours after the same shape on `[wiring]`; between
+/// them, eight `land` laps at ~900s of local `verify` failed for reasons that had
+/// nothing to do with the branch.
+///
+/// Fails by: `dotted-row-not-droppable`, which restores the dotless requirement.
+#[test]
+fn an_unknown_key_in_a_dotted_row_costs_the_row_not_the_file() {
+    let dir = scratch("dotted-row", HANDLERS);
+
+    let output = check(&dir);
+    let said = stderr(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the rows this build CAN read must still load, or the detector is \
+         disabled by exactly the skew it exists to report: {said}"
+    );
+    assert!(
+        !said.contains("invalid config"),
+        "one unreadable row is not an unreadable file: {said}"
+    );
+}
+
+/// THE ANTI-VACUITY HALF. A partial load must not become a silent one.
+///
+/// Without this, the case above is satisfied by a build that drops the key and
+/// says nothing — which is the permissive fallback CLOUD-251 names, and would let
+/// a typo switch a handler off with no reader ever learning of it. It is also the
+/// second of the row's own Done criteria, stated in its words: *the unknown key
+/// is still REPORTED*.
+///
+/// The good row is asserted present in the same breath, because a report naming
+/// the dropped row would also be produced by a build that dropped both.
+#[test]
+fn the_dropped_handler_is_named_and_its_neighbour_survives() {
+    let dir = scratch("dotted-row-named", HANDLERS);
+
+    let out = batten()
+        .args(["config", "show"])
+        .current_dir(&dir)
+        .env_remove("BATTEN_STRICTNESS")
+        .env_remove("BATTEN_CONFIG_FROM")
+        .output()
+        .expect("run batten config show");
+    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), stderr(&out));
+    assert!(
+        said.contains("from-a-newer-schema"),
+        "a dropped row is a handler that is NOT running, and must be reported by \
+         id: {said}"
+    );
+    // THE SURVIVOR IS COUNTED, NOT NAMED, and the count is the whole assertion.
+    // `config show` is pointer-only (rule 4), so it renders `hook <n>` rather
+    // than each handler's id — which is what makes the number load-bearing here:
+    // `2` is a build that dropped nothing, `0` is a prune that took the section
+    // instead of the row, and only `1` is the repair.
+    let counted = said
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            (fields.next() == Some("hook")).then(|| fields.next())?
+        })
+        .next();
+    assert_eq!(
+        counted,
+        Some("1"),
+        "exactly the readable handler survives — 2 is no prune at all and 0 is \
+         the section taken rather than the row: {said}"
+    );
+    // POINTER, NEVER THE PAYLOAD (rule 4): the report names the row, never the
+    // bytes that could not be read.
+    assert!(
+        !said.contains("this_key_does_not_exist_in_any_version"),
+        "the report is a pointer, not the file's contents: {said}"
+    );
+}
+
+/// A DOTTED ROW NESTED INSIDE AN ARRAY ELEMENT IS STILL NOT THE DROPPABLE UNIT.
+///
+/// `[[provision.env]]` is an array inside the last `[[provision]]` element, so
+/// the row that owns a key under it is the `[[provision]]` row — dropping the
+/// `env` block alone would leave a provision row provisioning something nobody
+/// wrote. The discriminator is whether the dotted header's ROOT is itself an
+/// array row in the same document; `hook` is not, `provision` is.
+///
+/// This is the mirror that keeps the fix from becoming "every dotted header is
+/// droppable", which would pass the two cases above and silently change what a
+/// `[[provision]]` row provisions.
+#[test]
+fn a_dotted_row_nested_in_an_array_element_still_charges_its_owner() {
+    let dir = scratch(
+        "dotted-row-nested",
+        r#"version = 1
+
+[[provision]]
+id = "readable-provision"
+run = ["true"]
+
+[[provision.env]]
+name = "SOME_VAR"
+value = "x"
+this_key_does_not_exist_in_any_version = true
+"#,
+    );
+
+    let out = batten()
+        .args(["config", "show"])
+        .current_dir(&dir)
+        .env_remove("BATTEN_STRICTNESS")
+        .env_remove("BATTEN_CONFIG_FROM")
+        .output()
+        .expect("run batten config show");
+    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), stderr(&out));
+    assert!(
+        said.contains("readable-provision"),
+        "the unit charged is the [[provision]] row that owns the nested block, \
+         named by its own id: {said}"
+    );
+}
+
 /// The wording this predicate matches on is serde's, and nothing types it.
 ///
 /// `config_error` discriminates on the rendered message because serde exposes no
