@@ -9974,10 +9974,27 @@ fn an_action_on_the_adjudicated_event_is_a_config_error() {
 }
 
 #[test]
-fn an_unknown_key_in_an_action_row_stays_a_hard_config_error() {
-    // Acceptance (d). `deny_unknown_fields` on the row, so a mistyped key is
-    // refused rather than silently dropped — an action nobody notices is
-    // half-declared is a side effect that never fires.
+fn an_unknown_key_in_an_action_row_costs_the_row_and_is_reported() {
+    // Acceptance (d), AND THE SUBJECT MOVED UNDER IT — the concern is unchanged
+    // and what answers it is not.
+    //
+    // (d) asks that a mistyped key never be SILENTLY dropped, because an action
+    // nobody notices is half-declared is a side effect that never fires. This
+    // case read that as "the whole file is refused", and until CLOUD-1775 that
+    // was also what happened: `[[hook.action]]` is a dotted header, `is_row`
+    // equated droppable with dotless, and neither prune granularity could name
+    // the unit — so the only granularity left was the file.
+    //
+    // CLOUD-1428 had already overruled that trade for `[[rule]]`: one row off and
+    // named beats every row off and silent, and only the first is a posture a
+    // reader can act on. A dotted row is a row, so the action row takes the same
+    // disposition — and `deny_unknown_fields` STAYS on the row, which is what
+    // makes the key cost it at all rather than being ignored.
+    //
+    // So the assertion is the PAIR, and neither half alone is the criterion: the
+    // file loads, AND the drop is reported by id. A build that dropped the key
+    // quietly satisfies the first and fails the second, which is exactly the
+    // reading (d) exists to refuse.
     let dir = repo_with_config(
         "action-unknown-key",
         "version = 1\n\n[[hook.action]]\nid = \"probe\"\non = \"stop\"\nrun = [\"true\"]\nwhen = \"always\"\n",
@@ -9988,7 +10005,23 @@ fn an_unknown_key_in_an_action_row_stays_a_hard_config_error() {
         &serde_json::json!({ "hook_event_name": "Stop" }).to_string(),
         false,
     );
-    assert_eq!(output.status.code(), Some(1), "a usage error, never a deny");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "one unreadable row is not an unreadable file: {}",
+        common::stderr(&output)
+    );
+
+    let shown = common::batten()
+        .args(["config", "show"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten config show");
+    let said = format!("{}{}", common::stdout(&shown), common::stderr(&shown));
+    assert!(
+        said.contains("probe"),
+        "the dropped action is named by id, or the drop is the silence (d) refuses: {said}"
+    );
 }
 
 /// CLOUD-437's fixture: two rows, one declaring its own hatch and one not.
