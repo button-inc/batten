@@ -49,7 +49,6 @@ to it pays.
 | 1.1 | 0.6% | `tests/tree-clean.bats` |
 | 1.1 | 0.6% | `tests/verify.bats` |
 | 1.1 | 0.6% | `tests/perf-record.bats` |
-| 1.1 | 0.6% | `tests/done-check.bats` |
 | 1.0 | 0.6% | `tests/commit-attribution.bats` |
 | 1.0 | 0.6% | `tests/awk-regex-check.bats` |
 | 0.9 | 0.5% | `tests/checksums.bats` |

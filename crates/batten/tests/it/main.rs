@@ -118,6 +118,7 @@ mod doctor;
 mod doctor_session;
 mod document_facts;
 mod document_read_count;
+mod done;
 mod done_not_landed;
 mod egress_fencing;
 mod emission_census;

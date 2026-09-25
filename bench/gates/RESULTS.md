@@ -83,7 +83,6 @@ commit, and a named ref resolves a declared one.
 | `derived-check.sh`             | git    | `location`                   |
 | `digest-major-agreement.sh`    | tree   | —                            |
 | `doctor.sh`                    | git    | `head`, `location`           |
-| `done-check.sh`                | git    | `head`, `log`                |
 | `done-pr-check.sh`             | tree   | —                            |
 | `evaluator-closure-check.sh`   | git    | `location`                   |
 | `evaluator-io-check.sh`        | git    | `location`                   |

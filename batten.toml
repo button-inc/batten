@@ -2210,6 +2210,12 @@ writer = "mise run timeout-drift-record"
 record = "nonverdict"
 writer = "mise run nonverdict-record"
 
+# CLOUD-192's reading half, ported off `done-check.sh` under CLOUD-1717. The
+# decision is `policy/done.rego`; the reading needs stdin payloads and `git log`.
+[[record]]
+record = "done"
+writer = "mise run done-record"
+
 # CLOUD-492's measuring half, ported off `land-divergence.sh` under CLOUD-1717.
 # The decider half is `policy/land-divergence.rego`; the split is the retired
 # pair's own, for the reason the `nonverdict` pair's is.
@@ -2444,6 +2450,63 @@ name = "obligations"
 value = { authority = { ask = "ready", read = { stdout-line = "obligations " }, stdin = { object = { id = { result = "id" }, description = { result = "description" } } } } }
 counted-with = ":"
 zero-is-a-count = true
+
+# A CLOSE OF A ROW THIS BRANCH FILED, and without it the class's FIRST route is
+# unreachable. `issue file unclear` says "close the row you filed and fix it in
+# this diff", but a close is a `save_issue` with an id, so only the groom row
+# above recorded it — re-linting the unchanged body to `unready`, and the gate
+# refused a canceled row forever. Measured on CLOUD-1910: filed, fixed in the
+# same diff, canceled, and still refused.
+#
+# DECLARED AFTER THE GROOM ROW ON PURPOSE. Both fire on one close, and the
+# module takes the LAST line per id, so this one's reading is the current one.
+# The verdict column is the tracker's own `status` from the RESPONSE; the input
+# only selects. `filed-here` refuses nothing but `unready`, so a closed status
+# passes, and a close the tracker rejected carries no closed status.
+[[pattern]]
+id = "closed-state"
+regex = '^(?i:canceled|cancelled|duplicate)$'
+
+[[recorder]]
+name = "board-issue-closed"
+record = "board-writes"
+tool = "save_issue"
+key = "branch"
+requires = ["id", "status"]
+requires-recorded = { matches = { 0 = { literal = "issue" }, 1 = { result = "id" } } }
+requires-input-matching = { state = "closed-state" }
+
+[[recorder.columns]]
+name = "kind"
+value = { literal = "issue" }
+
+[[recorder.columns]]
+name = "id"
+value = { result = "id" }
+
+[[recorder.columns]]
+name = "updated"
+value = { result = "updatedAt" }
+
+[[recorder.columns]]
+name = "verdict"
+value = { result = "status" }
+
+[[recorder.columns]]
+name = "overlap"
+value = { literal = "-" }
+
+[[recorder.columns]]
+name = "cites"
+value = { literal = "-" }
+
+[[recorder.columns]]
+name = "sec1"
+value = { literal = "-" }
+
+[[recorder.columns]]
+name = "obligations"
+value = { literal = "-" }
 
 # A COMMENT IS RECORDED AND NEVER GATED. It is the honest common case — a comment
 # on the row that already owns a finding — and pricing it would push the pressure
@@ -6639,6 +6702,18 @@ kind = "policy"
 scope = "tree"
 module = "policy/nonverdict.rego"
 severity = "warn"
+
+# CLOUD-192, ported off `mise-tasks/done-check.sh` under CLOUD-1717. `deny`, as
+# the retired gate's exit 1 was: a Done no release carries is the board lying,
+# and the one who set it can move it back. It fires only over a record someone
+# produced by piping the board in, so an ordinary `check` with no record is
+# silent rather than red.
+[[rule]]
+id = "issue grade other"
+kind = "policy"
+scope = "tree"
+module = "policy/done.rego"
+severity = "deny"
 
 # CLOUD-492, ported off `mise-tasks/land-divergence-assert.sh` under CLOUD-1717.
 #
@@ -13696,6 +13771,35 @@ samples and propose tightening a release job on it.
 id = "task run first"
 kind = "command"
 target = "mise run timeout-drift-record"
+
+# CLOUD-192's two readings, ported off `done-check.sh` under CLOUD-1717.
+[[verdict]]
+id = "issue ship ahead"
+gloss = "an issue reads Done while its commits are on main and no release tag contains them"
+class = """
+`Done` on this board means released, and landed-but-unreleased is In Review. \
+Refs come from commit messages, so a ref inside a tag cannot confirm a Done — \
+but a ref on `main` that no `v*` tag reaches is conclusive: nothing shipped it.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run done-record"
+
+[[verdict]]
+id = "issue read partial"
+gloss = "the done record carries no closing census, or one that disagrees with its lines"
+class = """
+A record torn mid-write judges part of a board as if it were all of it. The \
+census is written last and counts the lines above it, so a missing or wrong \
+one is a write that did not finish rather than a clean board.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run done-record"
 
 # CLOUD-484's two readings, ported off `nonverdict-assert.sh` under CLOUD-1717.
 [[verdict]]
