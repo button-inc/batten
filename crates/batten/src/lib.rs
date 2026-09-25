@@ -7778,7 +7778,7 @@ fn run_land(
         // The verdict is the LAP's to read; a hand-driven wait reports the code
         // and nothing else, exactly as it did before the tap needed one.
         cli::LandCommand::Wait { reference } => {
-            run_land_wait(root, reference, &branch, out, err).map(|(code, _, _)| code)
+            run_land_wait(root, reference, &branch, false, out, err).map(|(code, _, _)| code)
         }
         cli::LandCommand::Push => {
             let Some(url) = land_remote(root, err)? else {
@@ -8948,7 +8948,10 @@ fn run_the_step(
         land::Step::Lease => run_land_lease(root, branch, out, err)?,
         land::Step::Ready => run_land_ready(root, branch, bet, ledger, out, err)?,
         land::Step::Push => run_land_push(root, url, branch, out)?,
-        land::Step::Wait => return run_land_wait(root, reference, branch, out, err),
+        land::Step::Wait => {
+            let fresh_ready = ledger.take_fresh_ready();
+            return run_land_wait(root, reference, branch, fresh_ready, out, err);
+        }
         land::Step::FastForward => run_land_fast_forward(root, branch, out, err)?,
     };
     Ok((code, None, None))
@@ -10984,6 +10987,7 @@ fn run_land_wait(
     root: &Path,
     reference: &str,
     branch: &str,
+    fresh_ready: bool,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<(ExitCode, Option<land::TapVerdict>, Option<String>)> {
@@ -11072,6 +11076,7 @@ fn run_land_wait(
         &roster,
         &trunk,
         asks,
+        fresh_ready,
         &|observed| holding.beat(observed),
         out,
     )?;

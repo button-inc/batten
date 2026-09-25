@@ -27,6 +27,7 @@
 /*
 #MUTANT-SUITE crates/batten/tests/it/land.rs
 #MUTANT a-truncated-reading-reads-as-closed|s@        "repos/{}/commits/{}/check-runs?per_page={PER_PAGE}&page={number}",@        "repos/{}/commits/{}/check-runs?per_page={PER_PAGE}",@|a_truncated_reading_is_not_read_as_closed
+#MUTANT dead-end-believed-before-the-ready-registers|s@^    before_ready.is_none_or(|seen| {$@    true || before_ready.is_none_or(|seen| {@|a_dead_end_after_a_fresh_ready_waits_for_the_ready_s_own_runs
 */
 
 #![cfg(unix)]
@@ -741,5 +742,60 @@ fn the_conflict_stop_and_its_gate_name_a_route_that_exists() {
     assert!(
         reason.contains("STATELESS"),
         "and must say why the rebase-in-progress exits cannot apply, rather than offering them"
+    );
+}
+
+fn skipped(name: &str, id: u64) -> batten::checks_green::Run {
+    batten::checks_green::Run {
+        status: String::from("completed"),
+        conclusion: String::from("skipped"),
+        name: name.to_owned(),
+        started_at: String::new(),
+        completed_at: String::new(),
+        id,
+    }
+}
+
+/// The #928 reading. A lap readied the pull request and its wait's first look
+/// found only the draft-era runs, every one `skipped` and terminal: a closed set
+/// with a masked name, so the wait stopped with "no verdict is coming" and
+/// re-drafted the pull request while the ready's own eleven runs were starting.
+///
+/// After a fresh ready, that reading is not believed until a required run the
+/// first look did not hold has registered. The mutation row above makes the
+/// predicate believe every reading, and is killed here (inert under the sweep,
+/// which rewrites this file; applied to `land.rs` by hand).
+#[test]
+fn a_dead_end_after_a_fresh_ready_waits_for_the_ready_s_own_runs() {
+    let roster = batten::checks_green::Roster {
+        required: vec![String::from("ci"), String::from("final")],
+        absent_ok: Vec::new(),
+        answered: vec![String::from("success")],
+        fanin: None,
+    };
+    let drafted = [skipped("ci", 1), skipped("final", 2)];
+    let before: std::collections::BTreeSet<u64> = drafted.iter().map(|run| run.id).collect();
+
+    assert!(
+        land::registered_since(None, &drafted, &roster),
+        "a wait no ready preceded believes the reading as it is"
+    );
+    assert!(
+        !land::registered_since(Some(&before), &drafted, &roster),
+        "the draft-era skips alone are not the ready's answer"
+    );
+    let unrelated = [
+        skipped("ci", 1),
+        skipped("final", 2),
+        skipped("lint-bot", 9),
+    ];
+    assert!(
+        !land::registered_since(Some(&before), &unrelated, &roster),
+        "a run outside the roster is not the ready's answer either"
+    );
+    let answered = [skipped("ci", 1), skipped("final", 2), skipped("ci", 3)];
+    assert!(
+        land::registered_since(Some(&before), &answered, &roster),
+        "a required run the first look did not hold is"
     );
 }
