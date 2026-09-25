@@ -97,7 +97,7 @@ fn payload(tool: &str, prompt: &str) -> String {
     let tool = serde_json::to_string(tool).expect("a tool name is encodable");
     let prompt = serde_json::to_string(prompt).expect("a prompt is encodable");
     format!(
-        "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":{tool},\"tool_input\":{{\"prompt\":{prompt}}}}}"
+        "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":{tool},\"tool_input\":{{\"subagent_type\":\"Explore\",\"prompt\":{prompt}}}}}"
     )
 }
 
@@ -131,7 +131,7 @@ fn a_manifest_over_the_cap_is_refused() {
     let refusal = run_with_stdin(
         &repo,
         &["adjudicate", "--harness", "exit-code"],
-        &payload("Task", "read a.txt b.txt c.txt d.txt then act"),
+        &payload("Agent", "read a.txt b.txt c.txt d.txt then act"),
     );
     assert_eq!(
         refusal.status.code(),
@@ -151,12 +151,12 @@ fn a_manifest_over_the_cap_is_refused() {
     );
 
     assert_eq!(
-        verdict(&repo, "Task", "read a.txt b.txt c.txt then act"),
+        verdict(&repo, "Agent", "read a.txt b.txt c.txt then act"),
         Some(0),
         "three is AT the ceiling, and at is not over"
     );
     assert_eq!(
-        verdict(&repo, "Task", "read a.txt then act"),
+        verdict(&repo, "Agent", "read a.txt then act"),
         Some(0),
         "and an ordinary single-target spawn is what this must not price"
     );
@@ -185,7 +185,7 @@ fn a_memory_reference_counts_as_an_artifact() {
     assert_eq!(
         verdict(
             &repo,
-            "Task",
+            "Agent",
             "read a.txt b.txt mem:core mem:workflow/landing-loop then act"
         ),
         Some(2),
@@ -195,7 +195,7 @@ fn a_memory_reference_counts_as_an_artifact() {
     assert_eq!(
         verdict(
             &repo,
-            "Task",
+            "Agent",
             "read a.txt b.txt mem:nothing-here mem:also/absent then act"
         ),
         Some(0),
@@ -216,7 +216,7 @@ fn only_tracked_paths_count() {
     assert_eq!(
         verdict(
             &repo,
-            "Task",
+            "Agent",
             "read nope.txt other/missing.rs https://example.com/x.md origin/main \
              and/or some prose then act"
         ),
@@ -240,7 +240,7 @@ fn an_oversize_prompt_is_refused() {
     let refusal = run_with_stdin(
         &repo,
         &["adjudicate", "--harness", "exit-code"],
-        &payload("Task", &over),
+        &payload("Agent", &over),
     );
     assert_eq!(
         refusal.status.code(),
@@ -255,7 +255,7 @@ fn an_oversize_prompt_is_refused() {
 
     let under = "y".repeat(5000);
     assert_eq!(
-        verdict(&repo, "Task", &under),
+        verdict(&repo, "Agent", &under),
         Some(0),
         "a prompt inside the budget is what this must not price"
     );
@@ -301,7 +301,7 @@ fn only_a_spawn_is_judged() {
     // The host may expose the spawn with a server prefix; `selects_tool` matches
     // the whole final `__`-delimited segment.
     assert_eq!(
-        verdict(&repo, "mcp__someserver__Task", over),
+        verdict(&repo, "mcp__someserver__Agent", over),
         Some(2),
         "whatever prefix the host minted, this is the spawning verb"
     );
@@ -309,13 +309,116 @@ fn only_a_spawn_is_judged() {
     let no_prompt = run_with_stdin(
         &repo,
         &["adjudicate", "--harness", "exit-code"],
-        r#"{"hook_event_name":"PreToolUse","tool_name":"Task","tool_input":{}}"#,
+        r#"{"hook_event_name":"PreToolUse","tool_name":"Agent","tool_input":{"subagent_type":"Explore"}}"#,
     );
     assert_eq!(
         no_prompt.status.code(),
         Some(0),
         "a spawn carrying no prompt is nothing this can measure"
     );
+}
+
+/// `spawn place wrong`, end to end over the committed config (CLOUD-1717): one
+/// checkout has one implementer, so a worktree spawn, the host's worktree tool
+/// and an implementing agent type are refused, and a read-only search is not.
+fn spawn(repo: &Path, tool: &str, input: &serde_json::Value) -> (Option<i32>, String) {
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool,
+        "tool_input": input,
+    })
+    .to_string();
+    let output = run_with_stdin(repo, &["adjudicate", "--harness", "exit-code"], &payload);
+    (output.status.code(), stderr(&output))
+}
+
+#[test]
+fn a_worktree_spawn_is_refused() {
+    let repo = repo("spawn-place-worktree");
+    let (code, text) = spawn(
+        &repo,
+        "Agent",
+        &serde_json::json!({"subagent_type": "Explore", "isolation": "worktree", "prompt": "x"}),
+    );
+    assert_eq!(code, Some(2), "{text}");
+    assert!(text.contains("spawn place wrong"), "{text}");
+}
+
+#[test]
+fn an_implementer_spawn_is_refused() {
+    let repo = repo("spawn-place-implementer");
+    let (code, text) = spawn(
+        &repo,
+        "Agent",
+        &serde_json::json!({"subagent_type": "general-purpose", "prompt": "port x"}),
+    );
+    assert_eq!(code, Some(2), "{text}");
+    assert!(text.contains("spawn place wrong"), "{text}");
+}
+
+#[test]
+fn the_worktree_tool_is_refused() {
+    let repo = repo("spawn-place-tool");
+    let (code, text) = spawn(&repo, "EnterWorktree", &serde_json::json!({}));
+    assert_eq!(code, Some(2), "{text}");
+    assert!(text.contains("spawn place wrong"), "{text}");
+}
+
+#[test]
+fn a_read_only_search_spawn_is_allowed() {
+    let repo = repo("spawn-place-search");
+    let (code, text) = spawn(
+        &repo,
+        "Agent",
+        &serde_json::json!({"subagent_type": "Explore", "prompt": "find x"}),
+    );
+    assert_eq!(code, Some(0), "{text}");
+}
+
+/// Every committed tool-call row names a tool the host actually sends.
+///
+/// The spawn rows keyed on `Task` for months after Claude Code renamed the tool
+/// `Agent`: both ceilings were dead and every case above stayed green, because
+/// the cases sent the dead spelling too. A capitalised `tool` is a host tool
+/// name, so it must be one the host emits today; a lowercase one is an MCP
+/// method suffix and is checked where those rows are.
+#[test]
+fn every_committed_host_tool_row_names_a_live_tool() {
+    const HOST_TOOLS: &[&str] = &[
+        "Agent",
+        "Bash",
+        "Edit",
+        "EnterWorktree",
+        "Glob",
+        "Grep",
+        "MultiEdit",
+        "NotebookEdit",
+        "Read",
+        "Skill",
+        "WebFetch",
+        "WebSearch",
+        "Write",
+    ];
+    let config: toml::Value = toml::from_str(include_str!("../../../../batten.toml"))
+        .expect("the committed config parses");
+    let rules = config["rule"]
+        .as_array()
+        .expect("the committed config has rules");
+    for rule in rules {
+        if rule.get("scope").and_then(toml::Value::as_str) != Some("mediated_call") {
+            continue;
+        }
+        let Some(tool) = rule.get("tool").and_then(toml::Value::as_str) else {
+            continue;
+        };
+        if tool.starts_with(char::is_uppercase) {
+            assert!(
+                HOST_TOOLS.contains(&tool),
+                "row {:?} names `{tool}`, which the host never sends, so it can never fire",
+                rule.get("id")
+            );
+        }
+    }
 }
 
 /// CARRIES: "the refusal is a pointer — it carries no prompt bytes".
@@ -332,7 +435,7 @@ fn the_refusal_carries_no_prompt_bytes() {
         &repo,
         &["adjudicate", "--harness", "exit-code"],
         &payload(
-            "Task",
+            "Agent",
             &format!("read a.txt b.txt c.txt d.txt and remember {secret}"),
         ),
     );

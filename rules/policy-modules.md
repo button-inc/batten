@@ -269,7 +269,8 @@ over an arbitrary timestamp, that is its own row with its own argument to make.
 
 A **mediated-call** module (`scope = "mediated_call"`, run by `batten hook`)
 reads `input.call.command`, `input.call.segments`, `input.call.programs`,
-`input.call.event`, `input.call.operation`, `input.call.writes`,
+`input.call.event`, `input.call.operation`, `input.call.tool`,
+`input.call.arguments`, `input.call.writes`,
 `input.call["run-in-background"]`, `input.call["final-message"]`,
 `input.call.transcript` and `input.call["stop-repeat"]`, plus the `facts` object.
 

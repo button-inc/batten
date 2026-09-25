@@ -75,7 +75,7 @@ every time. Boundary reports, permission-seeking on an authorized step (clarifyi
 an _ambiguous_ action is fine), compliance reassurance, restating a rule you just
 followed, sycophancy and narrating a visible result fail the same test. **It is a
 predicate, not a list**: enumeration is why the previous version did not hold
-(CLOUD-200, CLOUD-248).
+(CLOUD-200, CLOUD-248). **A cause cites `path:line`; an unchecked one is not written.**
 
 ## The board: move the issue as you move the work
 

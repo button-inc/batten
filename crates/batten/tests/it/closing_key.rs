@@ -51,7 +51,7 @@
 use crate::common;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 
 use common::{at_root, git_in, init_repo, run, scratch, write};
 
@@ -116,40 +116,9 @@ fn repo(name: &str, served: &[&str]) -> PathBuf {
     dir
 }
 
-fn producer_body() -> String {
-    let manifest = std::fs::read_to_string(at_root("mise.toml")).expect("the manifest");
-    let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
-    parsed["tasks"]["closing-key-record"]["run"]
-        .as_str()
-        .expect("[tasks.closing-key-record] declares a run body")
-        .to_owned()
-}
-
+/// Run `closing-key-record` over `body`, in `dir`.
 fn produce(dir: &Path, body: &str) -> Output {
-    use std::io::Write as _;
-
-    let template = common::batten();
-    let mut command = Command::new("bash");
-    for (name, value) in template.get_envs() {
-        match value {
-            Some(value) => command.env(name, value),
-            None => command.env_remove(name),
-        };
-    }
-    let mut child = command
-        .args(["-c", &producer_body()])
-        .current_dir(dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn the producer");
-    let _ = child
-        .stdin
-        .take()
-        .expect("piped stdin")
-        .write_all(body.as_bytes());
-    child.wait_with_output().expect("run the producer")
+    common::produce(dir, "closing-key-record", body)
 }
 
 fn said(output: &Output) -> String {

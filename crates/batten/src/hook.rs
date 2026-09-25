@@ -320,7 +320,9 @@ impl Harness {
             Harness::ClaudeCode | Harness::CodexCli | Harness::ExitCode => match raw_tool {
                 "Bash" => Operation::Execute,
                 "Read" => Operation::Read,
-                "Task" => Operation::Subagent,
+                // Claude Code renamed its spawn tool `Task` → `Agent`; both
+                // spellings are one operation, or every spawn row goes dead.
+                "Agent" | "Task" => Operation::Subagent,
                 other if other.starts_with(MCP_TOOL_PREFIX) => Operation::Mcp,
                 other => Operation::Other(other.to_owned()),
             },
@@ -3283,6 +3285,12 @@ impl Policy {
             // property total — a folder must not be less protected than a named
             // file was, which is exactly what would have happened if this had
             // been left reading `module` alone.
+            //
+            // THE DERIVATION FOLLOWS THE DECLARED SET. A consumer that declares
+            // no `protected` paths has switched the gate off, and deriving module
+            // paths anyway would keep refusing writes while the config reads as
+            // if nothing were guarded. Declare any path and modules are covered
+            // again, so the half-configured spelling above still does not exist.
             protected: PathSet::includes(
                 "protected",
                 &resolved
@@ -3293,7 +3301,9 @@ impl Policy {
                         resolved
                             .rules
                             .iter()
-                            .filter(|rule| rule.kind == RuleKind::Policy)
+                            .filter(|rule| {
+                                !resolved.protected.is_empty() && rule.kind == RuleKind::Policy
+                            })
                             .flat_map(policy_protected_paths),
                     )
                     .collect::<Vec<String>>(),
@@ -7061,6 +7071,12 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
         "call": {
             "event": envelope.event.as_str(),
             "operation": envelope.operation.as_str(),
+            // The host's own tool name and the arguments it handed that tool.
+            // `operation` is the classification; a module deciding over a
+            // non-shell call (a spawn's `isolation`, a tool no arm classifies)
+            // needs what was actually asked for, which no other key carries.
+            "tool": envelope.raw_tool,
+            "arguments": envelope.input,
             "command": envelope.command,
             "writes": envelope.writes,
             // THE TWO STOP PROJECTIONS (CLOUD-1051). Both are `null` on every
@@ -12440,36 +12456,39 @@ deny contains "refused by themodule" if {
     /// Driven through `resolve` rather than a hand-built `Resolved`, because the
     /// derivation lives in `from_resolved`: a struct literal would assert the
     /// field the test set rather than the one the loader computes.
+    ///
+    /// Both halves of the switch: a consumer that declares ANY protected path
+    /// gets every registered module protected without listing it, and one that
+    /// declares none has turned the gate off, so no module path is derived.
     #[test]
-    fn a_registered_module_is_protected_without_being_listed() {
-        let dir = std::env::temp_dir().join(format!("batten-protect-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("scratch");
-        std::fs::write(
-            dir.join("guard.rego"),
-            "package batten\n\nimport rego.v1\n\ndeny contains \"x\" if { false }\n",
-        )
-        .expect("write module");
-        std::fs::write(
-            dir.join("batten.toml"),
-            // NOTHING in `protected` — that absence is the premise.
-            "version = 1\n\n[[rule]]\nid = \"policy-guard\"\nkind = \"policy\"\n\
-             scope = \"mediated_call\"\nmodule = \"guard.rego\"\nseverity = \"deny\"\n",
-        )
-        .expect("write authority");
-
-        let resolved = crate::resolve::resolve(&dir, &crate::resolve::Overrides::default())
-            .expect("the authority resolves");
-        assert!(
-            resolved.protected.is_empty(),
-            "the consumer declared no protected paths, which is what makes this a real case"
-        );
-
-        let policy =
-            Policy::from_resolved(&resolved, Harness::ExitCode, &dir, None).expect("policy loads");
-        assert!(
-            policy.protected.contains("guard.rego"),
-            "a registered module is protected by construction, not by configuration"
-        );
+    fn a_registered_module_is_protected_iff_the_gate_is_declared() {
+        let module = "package batten\n\nimport rego.v1\n\ndeny contains \"x\" if { false }\n";
+        let row = "[[rule]]\nid = \"policy-guard\"\nkind = \"policy\"\n\
+                   scope = \"mediated_call\"\nmodule = \"guard.rego\"\nseverity = \"deny\"\n";
+        for (label, head, protected) in [
+            (
+                "declared",
+                "version = 1\nprotected = [\"other.txt\"]\n\n",
+                true,
+            ),
+            ("undeclared", "version = 1\n\n", false),
+        ] {
+            let dir =
+                std::env::temp_dir().join(format!("batten-protect-{label}-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("scratch");
+            std::fs::write(dir.join("guard.rego"), module).expect("write module");
+            std::fs::write(dir.join("batten.toml"), format!("{head}{row}"))
+                .expect("write authority");
+            let resolved = crate::resolve::resolve(&dir, &crate::resolve::Overrides::default())
+                .expect("the authority resolves");
+            let policy = Policy::from_resolved(&resolved, Harness::ExitCode, &dir, None)
+                .expect("policy loads");
+            assert_eq!(
+                policy.protected.contains("guard.rego"),
+                protected,
+                "{label}"
+            );
+        }
     }
 
     /// The resolved half of [`ReceiptFacts`] — what a boundary that COULD look
@@ -15003,6 +15022,18 @@ deny contains "refused by themodule" if {
         assert!(!Operation::Subagent.names_targets_through(WriteStage::ToolNamed));
         assert!(!Operation::Write.names_targets_through(WriteStage::CommandParsed));
         assert!(!Operation::Execute.names_targets_through(WriteStage::ToolNamed));
+    }
+
+    /// Claude Code renamed its spawn tool `Task` → `Agent`. Classifying only the
+    /// old spelling left every spawn row dead: the call fell to `Other` and no
+    /// cap ever fired. Both spellings are the one operation.
+    #[test]
+    fn both_spawn_tool_spellings_are_the_subagent_operation() {
+        for harness in [Harness::ClaudeCode, Harness::CodexCli, Harness::ExitCode] {
+            for tool in ["Agent", "Task"] {
+                assert_eq!(harness.operation_of(tool), Operation::Subagent, "{tool}");
+            }
+        }
     }
 
     #[test]

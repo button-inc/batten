@@ -42,21 +42,9 @@ use crate::common;
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 
-use common::{at_root, scratch, write};
-
-fn body() -> String {
-    let manifest = std::fs::read_to_string(at_root("mise.toml")).expect("the manifest");
-    let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
-    parsed["tasks"]["release-backfill"]["run"]
-        .as_str()
-        .expect("[tasks.release-backfill] declares a run body")
-        .lines()
-        .filter(|line| !line.contains("{% raw %}") && !line.contains("{% endraw %}"))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
+use common::{at_root, scratch, task_bash, task_body, write};
 
 /// How the stub `gh` answers.
 #[derive(Clone, Copy)]
@@ -110,16 +98,8 @@ impl Sweep {
 
     /// Run the task body with `usage`'s variables and the injected knobs.
     fn run(&self, tags: &str, dry_run: bool, env: &[(&str, &str)]) -> Output {
-        let path = format!(
-            "{}:{}",
-            self.dir.join("bin").display(),
-            std::env::var("PATH").unwrap_or_default()
-        );
-        let mut command = Command::new("bash");
+        let mut command = task_bash(&self.dir, &task_body("release-backfill"));
         command
-            .args(["-c", &body()])
-            .current_dir(&self.dir)
-            .env("PATH", path)
             .env("usage_tag", tags)
             .env("usage_dry_run", if dry_run { "true" } else { "false" })
             .env("RELEASE_BACKFILL_POLL_INTERVAL", "0")

@@ -5,6 +5,26 @@ deciding whether to. The gates this protocol leans on are `mise run ready-lint`
 and `mise run graph-check` (CLOUD-179, CLOUD-175); the board model is
 `mem:workflow/board-states`.
 
+## GOVERNING RULE: one container, one checkout, one branch — implement serially
+
+**A remote session (`CLAUDE_CODE_REMOTE` set) has ONE checkout on ONE designated
+branch. Implementation runs serially in that checkout, by this session. Never
+spawn implementer subagents in it, never pass `isolation: "worktree"`, never call
+`EnterWorktree`.** Subagents are for read-only search (`Explore`) only.
+
+Measured 2026-09-25 (CLOUD-1717): four implementer subagents in worktrees, each
+missing the submodules and `ripsecrets`, each rebuilding `target/` from nothing,
+filled the disk twice, one committed `--no-verify`, and in hours produced zero
+integrable commits — while one serial loop in the main checkout was landing
+ports. The cause was this file: it called in-process subagents "the wrong tool"
+because they share the tree, and priced extra agents as "only tokens"; worktree
+isolation was reached for as the fix to the sharing. The sharing is the point —
+there is one tree, so there is one implementer. `policy/agent-spawn.rego`
+refuses the shapes above.
+
+Everything below is about sibling SESSIONS, each with its own container and
+clone. None of it licenses subagent implementers inside one container.
+
 ## READ FIRST: you cannot open the sessions. `create_session` is blocked upstream.
 
 **Every parameter this memory documents for `create_session` — permission mode,
@@ -398,11 +418,10 @@ invisible until they bite:
 
 - **Reasoning effort is not a `create_session` parameter.** Children inherit the
   dispatcher's, so dispatch from a session at the effort you want them to run at.
-- **In-process subagents are the wrong tool here, for a reason unrelated to
-  caps.** They share the parent's single working tree, and there is no channel
-  for one to put a question to the human — the parent must relay it after the
-  subagent has already stopped. Sibling sessions get their own container, their
-  own clone, and their own thread to ask in.
+- **In-process subagents never implement.** They share the parent's single
+  working tree — so inside one container the answer is serial work by the
+  parent, NOT worktree isolation (see the governing rule at the top). Only
+  sibling sessions, each with its own container and clone, implement in parallel.
 
 The partition is by **file domain**, not by topic, and it is only real if it
 reads open PRs' file lists rather than their titles. Two issues that read as

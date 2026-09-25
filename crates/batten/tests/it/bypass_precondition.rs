@@ -74,11 +74,12 @@ fn adjudicate(command: &str, hatch: bool) -> (Option<i32>, String) {
 /// exited `0` with the variable set, which is the case CLOUD-1357 left open.
 #[test]
 fn the_retired_hatch_opens_no_class() {
-    for (call, class) in [
-        (BARE_CALL, BARE),
-        (PRECONDITIONED_CALL, PRECONDITIONED),
-        ("rm batten.toml", "path write refused"),
-    ] {
+    // The protected-path arm holds only while the committed set is declared.
+    let mut cases = vec![(BARE_CALL, BARE), (PRECONDITIONED_CALL, PRECONDITIONED)];
+    if crate::common::committed_protected_declared() {
+        cases.push(("rm batten.toml", "path write refused"));
+    }
+    for (call, class) in cases {
         let (code, cause) = adjudicate(call, true);
         assert_eq!(
             code,

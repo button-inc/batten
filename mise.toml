@@ -622,7 +622,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "mise,attestation,timeout-drift,engine-checks-green,engine-cargo-graph,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age,done,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,denials-outlive-the-turn,digest-major-agreement,doctor,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure,evaluator-io-probe,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,linear-check,lock-complete,macos-link,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict,ntia,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-due,release-provision-parity,release-tag-shape,release-tracking,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-callable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules,deferral,closing-key,release-assets"
+MUTANT_GATES = "mise,attestation,timeout-drift,engine-checks-green,engine-cargo-graph,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age,done,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,denials-outlive-the-turn,digest-major-agreement,doctor,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure,evaluator-io-probe,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,agent-spawn,in-progress-drain,install-check,land-divergence,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,linear-check,lock-complete,macos-link,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict,ntia,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-due,release-provision-parity,release-tag-shape,release-tracking,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-callable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules,deferral,closing-key,release-assets"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -1038,7 +1038,12 @@ if [ -n "$unformatted" ]; then
 	echo "::error:: rego formatting: the files above would change under opa fmt. Run 'mise run fmt' (or 'mise run fmt:rego')." >&2
 	exit 1
 fi
-echo "lint:rego: every tracked Rego module is formatted"
+# The parse and type half, here because this step is cheap and runs before any
+# compile: a module that does not parse, or reads a path the engine never emits,
+# used to surface only inside `batten-check`, after the whole cargo chain. The
+# `module read undefined` row stays the landing authority over the same command.
+mise exec -- opa check -s schema/ policy/
+echo "lint:rego: every tracked Rego module is formatted and type-checks"
 '''
 
 [tasks."fmt:rego"]
@@ -6676,6 +6681,17 @@ description = "Gate: no vendor authorship, branding or session links in BASE_SHA
 # `cargo run` for the same reason `batten-check` and `policy-budget` use it: the
 # gate must judge the working tree's engine and config as the pair that ships.
 run = "cargo run --quiet -p batten -- attribution check ${BASE_SHA:?}..${HEAD_SHA:?}"
+
+[tasks."commit:precheck"]
+description = "Run both commit-msg gates over a drafted message file BEFORE `git commit`, so a subject or attribution refusal never costs the pre-commit suite"
+# Cheap first, at the commit too: git runs `pre-commit` (the whole gate) and only
+# then `commit-msg`, so a message refusal used to arrive after every compile.
+# Same two tasks the hook runs, so the answer cannot differ.
+usage = 'arg "<file>" help="The drafted commit message"'
+run = [
+  "mise run commit-msg {{usage.file}}",
+  "mise run commit-attribution-msg {{usage.file}}",
+]
 
 [tasks.commit-attribution-msg]
 description = "Gate: no vendor authorship, branding or session links in one pending commit message, before the commit exists"

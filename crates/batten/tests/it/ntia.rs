@@ -46,7 +46,7 @@ use crate::common;
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 
 use common::{at_root, git_in, init_repo, scratch, write};
 
@@ -127,32 +127,11 @@ fn repo(name: &str) -> PathBuf {
     dir
 }
 
-fn task_body(name: &str) -> String {
-    let manifest = std::fs::read_to_string(at_root("mise.toml")).expect("the manifest");
-    let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
-    parsed["tasks"][name]["run"]
-        .as_str()
-        .expect("the task declares a run body")
-        .lines()
-        .filter(|line| !line.contains("{% raw %}") && !line.contains("{% endraw %}"))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 /// Run one of the two task bodies in `dir` with the stubs injected.
 fn run_task(dir: &Path, task: &str, knobs: &[(&str, &str)]) -> Output {
-    let template = common::batten();
-    let mut command = Command::new("bash");
-    for (name, value) in template.get_envs() {
-        match value {
-            Some(value) => command.env(name, value),
-            None => command.env_remove(name),
-        };
-    }
+    let mut command = common::task_command(dir, task);
     let stubs = dir.join(".stubs");
     command
-        .args(["-c", &task_body(task)])
-        .current_dir(dir)
         .env("NTIA_SBOM", stubs.join("sbom"))
         .env("SBOMCHECK", stubs.join("sbomcheck"))
         .env("NTIA_STANDARDS", "ntia")
@@ -194,17 +173,7 @@ fn a_conformant_document_passes() {
 fn the_default_standards_set_is_satisfiable() {
     let dir = repo("default");
     // Unset is the default, `ntia` alone: a refusing `fsct3-min` is never asked.
-    let template = common::batten();
-    let mut command = Command::new("bash");
-    for (name, value) in template.get_envs() {
-        match value {
-            Some(value) => command.env(name, value),
-            None => command.env_remove(name),
-        };
-    }
-    let produced = command
-        .args(["-c", &task_body("ntia-record")])
-        .current_dir(&dir)
+    let produced = common::task_command(&dir, "ntia-record")
         .env("NTIA_SBOM", dir.join(".stubs/sbom"))
         .env("SBOMCHECK", dir.join(".stubs/sbomcheck"))
         .env_remove("NTIA_STANDARDS")

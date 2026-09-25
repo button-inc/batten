@@ -42,7 +42,7 @@
 use crate::common;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 
 use common::{at_root, git_in, init_repo, scratch, write};
 
@@ -140,39 +140,12 @@ fn with_origin(dir: &Path) {
     );
 }
 
-fn body() -> String {
-    let manifest = std::fs::read_to_string(at_root("mise.toml")).expect("the manifest");
-    let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
-    parsed["tasks"]["pr-unsubscribed"]["run"]
-        .as_str()
-        .expect("[tasks.pr-unsubscribed] declares a run body")
-        .lines()
-        .filter(|line| !line.contains("{% raw %}") && !line.contains("{% endraw %}"))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 /// Run the task body as `mise run pr-unsubscribed <verb> <pr>` would.
 fn task(dir: &Path, verb: &str, pr: &str, stdin: &str) -> Output {
     use std::io::Write as _;
 
-    let template = common::batten();
-    let mut command = Command::new("bash");
-    for (name, value) in template.get_envs() {
-        match value {
-            Some(value) => command.env(name, value),
-            None => command.env_remove(name),
-        };
-    }
-    let mut paths = vec![dir.join("bin")];
-    paths.extend(std::env::split_paths(
-        &std::env::var_os("PATH").unwrap_or_default(),
-    ));
-    let path = std::env::join_paths(paths).expect("PATH");
+    let mut command = common::task_command(dir, "pr-unsubscribed");
     command
-        .args(["-c", &body()])
-        .current_dir(dir)
-        .env("PATH", path)
         .env("BATTEN_MCP_CONFIG_DIR", dir.join("cfg"))
         .env("BATTEN_CCR_ENDPOINT", "https://stub.invalid")
         .env("usage_verb", verb)

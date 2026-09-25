@@ -2767,6 +2767,8 @@ pub fn call_input_schema() -> Result<String> {
                 "properties": {
                     "event": {"type": "string"},
                     "operation": {"type": "string"},
+                    "tool": {"type": "string"},
+                    "arguments": {},
                     "command": {},
                     // A property of the CALL rather than of the command string
                     // (CLOUD-613): `true`, `false`, or `null` where the host said

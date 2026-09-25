@@ -84,15 +84,16 @@ must_land_on = "origin/main"
 # Which paths are guarded. Consumer-specific by nature, which is why they live
 # here and never in the crate (non-negotiable rule 1) — the engine holds the
 # matcher, this file holds the answer.
-protected = [
-  # Agent memory: written through the Serena tools, never by hand.
-  ".serena/memories/**",
-  # The policy authority itself. Deleting it is the maximal weakening — it
-  # disarms every gate at once, including this one.
-  "batten.toml",
-  # CI's definition of green.
-  ".github/workflows/**",
-]
+# DISABLED by the owner. The admission this set forces is spent with nothing
+# adjudicating the statement it carries, so it costs a request+spend per write
+# and decides nothing. Restore the set once a skill judges admission statements;
+# the engine mechanism is untouched.
+#
+# protected = [
+#   ".serena/memories/**",
+#   "batten.toml",
+#   ".github/workflows/**",
+# ]
 
 # Programs that only READ their operands, so naming a protected path above is not
 # a mutation (CLOUD-1141).
@@ -701,6 +702,16 @@ id = "hook skip unseen"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/hook-skip-local.rego"
+severity = "deny"
+
+# One container is one checkout on one branch, so it has one implementer: the
+# session. CLOUD-1717 measured the alternative (worktree implementers, disk full
+# twice, zero integrable commits); `mem:workflow/agent-fanout` carries it.
+[[rule]]
+id = "spawn place wrong"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/agent-spawn.rego"
 severity = "deny"
 
 [[rule]]
@@ -3473,7 +3484,7 @@ id = "spawn count wrong"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
-tool = "Task"
+tool = "Agent"
 measures = "prompt"
 counts = "tracked_artifacts"
 max = 3
@@ -3499,7 +3510,7 @@ id = "prompt measure wrong"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
-tool = "Task"
+tool = "Agent"
 measures = "prompt"
 counts = "tokens"
 max = 1500
@@ -12489,6 +12500,21 @@ precondition = "the history being replaced is this clone's own and no other clon
 # three commits, and the false justification went into two commit messages. One
 # `batten wiring reclaim -y` cleared the condition. The variable is `hk`'s and
 # batten never saw it, so the gate that was switched off had no way to say so.
+[[verdict]]
+id = "spawn place wrong"
+gloss = "a spawn would implement in parallel, or in a worktree, inside the one checkout"
+class = """
+A container holds one checkout on one branch, so implementation is serial and \
+done by the session itself. Subagents are for read-only search and design \
+(`Explore`, `Plan`); a worktree copy lacks the submodules and tools, rebuilds \
+`target/` from nothing and fills the disk. Do the work in this checkout.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/agent-spawn.rego"
+
 [[verdict]]
 id = "hook skip unseen"
 gloss = "a gate is switched off for this call by an environment assignment nothing recorded"

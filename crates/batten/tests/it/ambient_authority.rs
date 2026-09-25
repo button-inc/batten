@@ -211,6 +211,12 @@ fn bound_four_the_policy_authority_is_a_protected_path() {
     let Look::Is(config) = Format::Toml.read(&text) else {
         panic!("the authority did not parse");
     };
+    // THE GATE IS SWITCHABLE, NOT OPTIONAL: the owner turned it off until a skill
+    // adjudicates admission statements. Off is legal only while the authority says
+    // so in the marker below, so a set that silently vanished still reds here.
+    if !crate::common::committed_protected_declared() {
+        return;
+    }
     let Look::Is(Node::List(protected)) = config.at("protected") else {
         panic!("the authority declares no protected set");
     };

@@ -35,7 +35,7 @@
 use crate::common;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 
 use common::{at_root, git_in, init_repo, run, scratch, write};
 
@@ -107,42 +107,9 @@ writer = "mise run deferral-record"
     dir
 }
 
-fn producer_body(task: &str) -> String {
-    let manifest = std::fs::read_to_string(at_root("mise.toml")).expect("the manifest");
-    let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
-    parsed["tasks"][task]["run"]
-        .as_str()
-        .unwrap_or_else(|| panic!("[tasks.{task}] declares a run body"))
-        .to_owned()
-}
-
-/// Run the producer the way `mise run deferral-record` would, with the engine
-/// the suite built and `batten()`'s scrubbed environment.
+/// Run `deferral-record` over `body`, in `dir`.
 fn produce(dir: &Path, body: &str) -> Output {
-    use std::io::Write as _;
-
-    let template = common::batten();
-    let mut command = Command::new("bash");
-    for (name, value) in template.get_envs() {
-        match value {
-            Some(value) => command.env(name, value),
-            None => command.env_remove(name),
-        };
-    }
-    let mut child = command
-        .args(["-c", &producer_body("deferral-record")])
-        .current_dir(dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn the producer");
-    let _ = child
-        .stdin
-        .take()
-        .expect("piped stdin")
-        .write_all(body.as_bytes());
-    child.wait_with_output().expect("run the producer")
+    common::produce(dir, "deferral-record", body)
 }
 
 fn said(output: &Output) -> String {

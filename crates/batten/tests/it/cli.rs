@@ -257,7 +257,9 @@ fn claude_spawn_payload(tool: &str, prompt: &str) -> String {
     serde_json::json!({
         "hook_event_name": "PreToolUse",
         "tool_name": tool,
-        "tool_input": { "prompt": prompt }
+        // A read-only type, so `spawn place wrong` stays silent and the case
+        // measures the ceiling row it names.
+        "tool_input": { "subagent_type": "Explore", "prompt": prompt }
     })
     .to_string()
 }
@@ -3045,6 +3047,9 @@ fn the_committed_protected_paths_fire_on_a_mutating_verb() {
     // The same obligation the shape rows carry: every other protected-path test
     // supplies its own fixture, so without this, deleting a `protected` entry or
     // a `[[verb]]` row from the real `batten.toml` would break nothing.
+    if !common::committed_protected_declared() {
+        return;
+    }
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     for command in [
         "rm .serena/memories/core.md",
@@ -3282,7 +3287,7 @@ const SHAPE_CENSUS: &[ShapeCase] = &[
     // tracked set the `Manifest` fixture supplies.
     ShapeCase {
         call: CensusCall::Spawn {
-            tool: "Task",
+            tool: "Agent",
             prompt: "read one.txt two.txt three.txt four.txt then act",
             repeat: 1,
         },
@@ -3294,7 +3299,7 @@ const SHAPE_CENSUS: &[ShapeCase] = &[
     // 1525, past the committed 1500.
     ShapeCase {
         call: CensusCall::Spawn {
-            tool: "Task",
+            tool: "Agent",
             // 6100 characters over four is 1525, past the committed 1500.
             prompt: "x",
             repeat: 6100,

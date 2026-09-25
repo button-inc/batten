@@ -31,22 +31,9 @@
 use crate::common;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 
-use common::{at_root, scratch, write};
-
-/// `[tasks.checksums]`'s body, fence stripped, as mise renders it.
-fn body() -> String {
-    let manifest = std::fs::read_to_string(at_root("mise.toml")).expect("the manifest");
-    let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
-    parsed["tasks"]["checksums"]["run"]
-        .as_str()
-        .expect("[tasks.checksums] declares a run body")
-        .lines()
-        .filter(|line| !line.contains("{% raw %}") && !line.contains("{% endraw %}"))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
+use common::{program, scratch, task_bash, task_body, write};
 
 /// A scratch directory with a stub `gh` whose `release download` copies
 /// `release/` into `--dir`, and whose tag lookup answers `v9.9.9`. A marker file
@@ -97,16 +84,8 @@ fn make_executable(path: &Path) {
 
 /// Run the body in `dir`, with `names`/`tag` as the `usage` spec delivers them.
 fn run_task(dir: &Path, names: bool, tag: Option<&str>) -> Output {
-    let mut paths = vec![dir.join("bin")];
-    paths.extend(std::env::split_paths(
-        &std::env::var_os("PATH").unwrap_or_default(),
-    ));
-    let path = std::env::join_paths(paths).expect("PATH");
-    let mut command = Command::new("bash");
+    let mut command = task_bash(dir, &task_body("checksums"));
     command
-        .args(["-c", &body()])
-        .current_dir(dir)
-        .env("PATH", path)
         .env("CHECKSUMS_OUT_DIR", dir.join("out"))
         .env("usage_names", if names { "true" } else { "false" });
     match tag {
@@ -156,14 +135,14 @@ fn sha256sum_accepts_the_manifest_and_a_corrupted_asset_fails_it() {
     let dir = bench("verify", RELEASE);
     assert!(run_task(&dir, false, Some("v9.9.9")).status.success());
     std::fs::copy(dir.join("out/SHA256SUMS"), dir.join("release/SHA256SUMS")).expect("copy");
-    let ok = Command::new("sha256sum")
+    let ok = program("sha256sum")
         .args(["-c", "SHA256SUMS"])
         .current_dir(dir.join("release"))
         .output()
         .expect("sha256sum");
     assert!(ok.status.success(), "no flags needed: {ok:?}");
     write(&dir, &format!("release/{}", RELEASE[0]), "tampered\n");
-    let bad = Command::new("sha256sum")
+    let bad = program("sha256sum")
         .args(["-c", "SHA256SUMS"])
         .current_dir(dir.join("release"))
         .output()

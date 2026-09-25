@@ -7,6 +7,7 @@
       "additionalProperties": false,
       "description": "The envelope the harness handed the boundary -- what is being attempted, never a fact resolved about it.",
       "properties": {
+        "arguments": {},
         "command": {},
         "event": {
           "type": "string"
@@ -90,6 +91,9 @@
           "type": "array"
         },
         "stop-repeat": {},
+        "tool": {
+          "type": "string"
+        },
         "transcript": {},
         "writes": {}
       },

@@ -30,7 +30,7 @@
 use crate::common;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 
 use common::{at_root, git_in, init_repo, scratch, write};
 
@@ -66,31 +66,10 @@ fn repo(name: &str) -> PathBuf {
     dir
 }
 
-fn producer_body() -> String {
-    let manifest = std::fs::read_to_string(at_root("mise.toml")).expect("the manifest");
-    let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
-    parsed["tasks"]["release-due-record"]["run"]
-        .as_str()
-        .expect("[tasks.release-due-record] declares a run body")
-        .lines()
-        .filter(|line| !line.contains("{% raw %}") && !line.contains("{% endraw %}"))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 /// Run the producer with the readings injected, plus any window overrides.
 fn produce(dir: &Path, activity: &str, release: &str, knobs: &[(&str, &str)]) -> Output {
-    let template = common::batten();
-    let mut command = Command::new("bash");
-    for (name, value) in template.get_envs() {
-        match value {
-            Some(value) => command.env(name, value),
-            None => command.env_remove(name),
-        };
-    }
+    let mut command = common::task_command(dir, "release-due-record");
     command
-        .args(["-c", &producer_body()])
-        .current_dir(dir)
         .env("RELEASE_DUE_NOW", NOW)
         .env("RELEASE_DUE_LAST_ACTIVITY", activity)
         .env("RELEASE_DUE_LAST_RELEASE", release)

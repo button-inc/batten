@@ -711,13 +711,13 @@ pub fn evaluate(value: &Value, context: &Context<'_>) -> Option<serde_json::Valu
                 )?,
                 Ask::ClosingKeys => {
                     let text = as_text(&payload)?;
-                    let keys: Vec<String> = context
+                    let lines: String = context
                         .grammar?
                         .keys_closed_in(&text)
                         .iter()
-                        .map(|key| key.as_str().to_owned())
+                        .flat_map(|key| [key.as_str(), "\n"])
                         .collect();
-                    (0, keys.iter().map(|key| format!("{key}\n")).collect())
+                    (0, lines)
                 }
             };
             read_back(read, status, &out)

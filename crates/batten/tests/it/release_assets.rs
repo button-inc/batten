@@ -53,7 +53,7 @@
 use crate::common;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 
 use common::{at_root, git_in, init_repo, scratch, write};
 
@@ -114,7 +114,7 @@ fn release(dir: &Path, assets: &[String]) {
     for asset in assets {
         std::fs::write(root.join(asset), format!("bytes of {asset}\n")).expect("asset");
     }
-    let listing: String = assets.iter().map(|a| format!("{a}\n")).collect();
+    let listing: String = assets.iter().flat_map(|a| [a.as_str(), "\n"]).collect();
     write(dir, "assets", &listing);
     let base = dir.display();
     write(
@@ -155,7 +155,7 @@ fn manifest(dir: &Path, names: Option<&[String]>) {
         .collect();
     all.sort();
     let over = names.map_or(all, <[String]>::to_vec);
-    let out = Command::new("sha256sum")
+    let out = common::program("sha256sum")
         .args(&over)
         .current_dir(&root)
         .env("LC_ALL", "C")
@@ -169,7 +169,7 @@ fn manifest(dir: &Path, names: Option<&[String]>) {
 
 /// The binary SBOM a composed leg publishes, derived as the producer derives it.
 fn binary_sbom(dir: &Path, target: &str) -> String {
-    let out = Command::new(at_root("mise-tasks/sbom-binary.sh"))
+    let out = common::program(at_root("mise-tasks/sbom-binary.sh"))
         .args(["--names", target])
         .current_dir(dir)
         .output()
@@ -202,18 +202,6 @@ fn complete(dir: &Path, extra: &[&str]) -> Vec<String> {
     assets
 }
 
-fn producer_body() -> String {
-    let manifest = std::fs::read_to_string(at_root("mise.toml")).expect("the manifest");
-    let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
-    parsed["tasks"]["release-assets-record"]["run"]
-        .as_str()
-        .expect("[tasks.release-assets-record] declares a run body")
-        .lines()
-        .filter(|line| !line.contains("{% raw %}") && !line.contains("{% endraw %}"))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 fn env_manifest_name() -> String {
     let manifest = std::fs::read_to_string(at_root("mise.toml")).expect("the manifest");
     let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
@@ -224,22 +212,8 @@ fn env_manifest_name() -> String {
 }
 
 fn produce(dir: &Path, tag: Option<&str>) -> Output {
-    let template = common::batten();
-    let mut command = Command::new("bash");
-    for (name, value) in template.get_envs() {
-        match value {
-            Some(value) => command.env(name, value),
-            None => command.env_remove(name),
-        };
-    }
-    let mut paths = vec![dir.join("bin")];
-    paths.extend(std::env::split_paths(
-        &std::env::var_os("PATH").unwrap_or_default(),
-    ));
+    let mut command = common::task_command(dir, "release-assets-record");
     command
-        .args(["-c", &producer_body()])
-        .current_dir(dir)
-        .env("PATH", std::env::join_paths(paths).expect("PATH"))
         .env("BATTEN_RELEASE_WORKFLOW", dir.join("workflow.yml"))
         .env("BATTEN_TASKS_DIR", at_root("mise-tasks"))
         .env("BATTEN_CHECKSUM_MANIFEST", env_manifest_name())
@@ -473,10 +447,8 @@ fn a_manifest_omitting_an_asset_or_naming_an_orphan_is_refused() {
     manifest(&orphan, None);
     let path = orphan.join("release/SHA256SUMS");
     let mut text = std::fs::read_to_string(&path).expect("manifest");
-    text.push_str(&format!(
-        "{:064}  batten-9.9.9-x86_64-pc-windows-gnu.zip\n",
-        0
-    ));
+    text.push_str(&"0".repeat(64));
+    text.push_str("  batten-9.9.9-x86_64-pc-windows-gnu.zip\n");
     std::fs::write(&path, text).expect("orphan entry");
     let (code, text) = decide(&orphan);
     assert_eq!(code, Some(2), "{text}");

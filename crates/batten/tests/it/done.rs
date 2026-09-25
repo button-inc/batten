@@ -37,7 +37,7 @@
 use crate::common;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 
 use common::{at_root, git_in, init_repo, run, scratch, write};
 
@@ -113,44 +113,9 @@ fn release(dir: &Path, tag: &str) {
     git_in(dir, &["tag", tag, "main"]);
 }
 
-/// `[tasks.done-record]`'s body, as the manifest declares it.
-fn producer_body() -> String {
-    let manifest = std::fs::read_to_string(at_root("mise.toml")).expect("the manifest");
-    let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
-    parsed["tasks"]["done-record"]["run"]
-        .as_str()
-        .expect("[tasks.done-record] declares a run body")
-        .to_owned()
-}
-
-/// Run the producer over `board`, in `dir`, the way `mise run done-record`
-/// would — with the engine the suite built, and the environment `batten()`
-/// scrubs, so a developer's shell cannot move a reading.
+/// Run `done-record` over `board`, in `dir`.
 fn produce(dir: &Path, board: &str) -> Output {
-    use std::io::Write as _;
-
-    let template = common::batten();
-    let mut command = Command::new("bash");
-    for (name, value) in template.get_envs() {
-        match value {
-            Some(value) => command.env(name, value),
-            None => command.env_remove(name),
-        };
-    }
-    let mut child = command
-        .args(["-c", &producer_body()])
-        .current_dir(dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn the producer");
-    let _ = child
-        .stdin
-        .take()
-        .expect("piped stdin")
-        .write_all(board.as_bytes());
-    child.wait_with_output().expect("run the producer")
+    common::produce(dir, "done-record", board)
 }
 
 fn said(output: &Output) -> String {

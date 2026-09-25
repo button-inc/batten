@@ -914,7 +914,12 @@ local gate = new Mapping<String, Step> {
   ["cargo-clippy"] = (Builtins.cargo_clippy) {
     // `slow` tier: a whole-workspace compile at --all-targets --all-features.
     profiles = List("slow")
-    depends = List("cargo-fmt")
+    // CHEAP FIRST. Every sub-second lint over a file the build or the gate reads
+    // runs before the first compile, so a Rego parse error, a TOML typo or an
+    // unformatted file fails in under two seconds instead of after the whole
+    // cargo chain. `test`, `batten-check` and `policy-test` inherit it through
+    // this edge.
+    depends = List("cargo-fmt", "rego", "taplo", "pkl", "config-lint")
     // Upstream lints the default target set at default severity. The
     // workspace lints are only meaningful if every target is checked and a
     // warning fails, so the command — and only the command — is ours.
