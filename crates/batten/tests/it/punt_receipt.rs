@@ -407,6 +407,79 @@ fn a_spent_admission_clears_a_superseded_receipt() {
     );
 }
 
+/// Request an admission for `dir`'s superseded receipt and return its address.
+fn issued(dir: &Path) -> String {
+    let requested = override_verb(dir, &["request"], ANSWERS);
+    assert!(
+        requested.status.success(),
+        "the request is issued: {}",
+        stderr(&requested)
+    );
+    String::from_utf8(requested.stdout)
+        .expect("stdout is UTF-8")
+        .trim()
+        .to_owned()
+}
+
+/// ISSUED IS NOT SPENT (CLOUD-1889's second case). Articulating costs the
+/// thinking and spending is what consumes it; `admission::admitted` reads
+/// `State::Spent` alone. An issued record that suppressed on its own would be
+/// the retired password again: hold the address, pay nothing, pass forever.
+#[test]
+fn an_issued_admission_that_was_never_spent_clears_nothing() {
+    let dir = superseded("punt-superseded-issued");
+    let _unspent = issued(&dir);
+    let output = run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "exit-code"],
+        &write_payload("src/tracked.rs"),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "an issued, unspent admission admits nothing: {}",
+        stderr(&output)
+    );
+}
+
+/// A COMMIT UNBINDS IT (CLOUD-1889's third case), deliberately. The anchor is
+/// the head the admission was spent at, which is what the receipt is keyed to,
+/// so the next commit is a new situation and costs its own articulation.
+///
+/// Measured before it was pinned, on the branch that carried this case: an
+/// admission spent at one head stopped clearing writes the moment the next
+/// commit landed. This makes that a contract rather than an observation.
+#[test]
+fn an_admission_spent_one_commit_ago_clears_nothing() {
+    let dir = superseded("punt-superseded-stale");
+    let payload = write_payload("src/tracked.rs");
+    let admission = issued(&dir);
+    let spent = override_verb(&dir, &["spend", "--admission", &admission], "");
+    assert!(spent.status.success(), "{}", stderr(&spent));
+    assert_eq!(
+        run_with_stdin(&dir, &["adjudicate", "--harness", "exit-code"], &payload)
+            .status
+            .code(),
+        Some(0),
+        "the premise: at its own head the admission clears the write"
+    );
+
+    std::fs::write(dir.join("src/tracked.rs"), "// and on again\n").expect("move the bytes");
+    git_in(&dir, &["add", "-A"]);
+    git_in(
+        &dir,
+        &["commit", "-q", "-m", "chore: move the head once more"],
+    );
+
+    let output = run_with_stdin(&dir, &["adjudicate", "--harness", "exit-code"], &payload);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "an admission spent at the previous head does not clear this one: {}",
+        stderr(&output)
+    );
+}
+
 #[test]
 fn a_marker_no_sweep_clears_is_refused_at_load() {
     // THE SPEND IS WHAT MAKES THE REFUSAL FINITE. A `while_marker` naming a family
