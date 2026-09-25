@@ -612,6 +612,33 @@ pub enum Waited {
     Unanswered,
 }
 
+/// Whether a dead end read after a fresh ready is about the ready's own runs.
+///
+/// **A READY'S RUNS REGISTER SECONDS AFTER IT FIRES** (CLOUD-497's dead end,
+/// read too early). Measured on #928: the lap readied, and its first read found
+/// only the draft-era runs, every one `skipped` and terminal. That is a closed set
+/// with a masked name, so the wait stopped with "no verdict is coming" and
+/// re-drafted the pull request while the eleven runs the ready had bought were
+/// already starting.
+///
+/// So after a fresh ready, a dead end is believed only once a required run has
+/// registered that the first reading did not hold. Until then it is the state the
+/// wait exists to sit in. A ready whose runs never register spends the ask count
+/// and answers [`Waited::Unanswered`], which laps: that is the honest reading of
+/// a matrix that never started, and it costs asks rather than a false stop.
+/// A count, never a clock, for the reason [`Ledger`] gives.
+#[must_use]
+pub fn registered_since(
+    before_ready: Option<&std::collections::BTreeSet<u64>>,
+    runs: &[crate::checks_green::Run],
+    roster: &crate::checks_green::Roster,
+) -> bool {
+    before_ready.is_none_or(|seen| {
+        runs.iter()
+            .any(|run| roster.required.contains(&run.name) && !seen.contains(&run.id))
+    })
+}
+
 /// Ask both questions concurrently and take whichever answers first.
 ///
 /// # The race is a race
@@ -657,6 +684,7 @@ pub fn wait(
     roster: &crate::checks_green::Roster,
     trunk: &crate::main_watch::Config,
     asks: u32,
+    fresh_ready: bool,
     heartbeat: &(dyn Fn(u64) + Sync),
     out: &mut dyn std::io::Write,
 ) -> Result<Waited> {
@@ -678,6 +706,9 @@ pub fn wait(
         let stop = &decided;
         drop(scope.spawn(move || {
             let mut poll = crate::pr_watch::Poll::default();
+            // The runs already on the head when a fresh ready's wait first read
+            // it; see `registered_since`. `None` until that first reading.
+            let mut before_ready: Option<std::collections::BTreeSet<u64>> = None;
             for _ in 0..asks {
                 if stop.load(std::sync::atomic::Ordering::Relaxed) {
                     return;
@@ -712,6 +743,9 @@ pub fn wait(
                 // against. Still a number and not a lease call: what the caller
                 // does with it stays the caller's.
                 heartbeat(poll.signature());
+                if fresh_ready && before_ready.is_none() && !poll.runs().is_empty() {
+                    before_ready = Some(poll.runs().iter().map(|run| run.id).collect());
+                }
                 // AND THE SAME NEVER-ANSWERED BOUND `pr_watch::watch` TAKES
                 // (review of #848). A credential the forge refuses answers a
                 // could-not-look to every request, so this arm would spend its
@@ -745,14 +779,20 @@ pub fn wait(
                     // the two above do — nothing further is coming — and it must
                     // end it HERE rather than by running out of asks, because
                     // running out spells `Unanswered`, which laps.
-                    Ok(crate::checks_green::Verdict::DeadEnd(findings)) => {
+                    Ok(crate::checks_green::Verdict::DeadEnd(findings))
+                        if registered_since(before_ready.as_ref(), poll.runs(), roster) =>
+                    {
                         stop.store(true, std::sync::atomic::Ordering::Relaxed);
                         drop(green.send(Waited::DeadEnd { findings }));
                         return;
                     }
                     // Pending is the state this loop exists to sit in, and a
                     // roster that cannot decide was refused before the loop.
-                    Ok(crate::checks_green::Verdict::Pending(_)) | Err(_) => {}
+                    Ok(
+                        crate::checks_green::Verdict::Pending(_)
+                        | crate::checks_green::Verdict::DeadEnd(_),
+                    )
+                    | Err(_) => {}
                 }
                 // INTERRUPTIBLE, because the OTHER arm may answer during this
                 // wait and `thread::scope` joins this one before the verdict can
@@ -2225,6 +2265,11 @@ pub struct Ledger {
     pub gate_reclaims: u32,
     /// Passes whose gate refused over a base borrowed from a lease holder.
     pub speculative_refusals: u32,
+    /// Whether the ready this lap fired has not yet been waited on.
+    ///
+    /// Taken, not read, by [`Ledger::take_fresh_ready`], so it describes one
+    /// wait: the one straight after the ready that bought the matrix.
+    pub fresh_ready: bool,
 }
 
 impl Ledger {
@@ -2236,6 +2281,15 @@ impl Ledger {
     /// A matrix was bought. **The one site that increments this.**
     pub const fn bought_a_matrix(&mut self) {
         self.paid = self.paid.saturating_add(1);
+        self.fresh_ready = true;
+    }
+
+    /// Whether the wait about to start follows a ready this lap fired, clearing
+    /// it so a later wait on the same lap reads the forge as it stands.
+    pub const fn take_fresh_ready(&mut self) -> bool {
+        let fresh = self.fresh_ready;
+        self.fresh_ready = false;
+        fresh
     }
 
     /// A pass that never won the lease: refund the lap, charge the wait.
@@ -3025,7 +3079,7 @@ mod lap_tests {
         // that will not accept output, and a `Vec` always accepts, so a panic
         // would be reporting the impossible case as the interesting one.
         assert_eq!(
-            super::wait(&config, &roster, &trunk, 1, &|_| (), &mut out).ok(),
+            super::wait(&config, &roster, &trunk, 1, false, &|_| (), &mut out).ok(),
             Some(super::Waited::Unanswered),
             "an unreachable forge is a could-not-look, never a verdict about the work"
         );
@@ -3520,6 +3574,22 @@ mod tests {
         ledger.attempt();
         ledger.bought_a_matrix();
         assert_eq!(ledger.spent(), 1, "the one site that buys one, counted");
+    }
+
+    /// A ready is fresh for exactly one wait.
+    #[test]
+    fn a_fired_ready_is_fresh_for_the_next_wait_only() {
+        let mut ledger = Ledger::default();
+        assert!(!ledger.take_fresh_ready(), "no ready, nothing fresh");
+        ledger.bought_a_matrix();
+        assert!(
+            ledger.take_fresh_ready(),
+            "the wait after the ready sees it"
+        );
+        assert!(
+            !ledger.take_fresh_ready(),
+            "and a later wait reads the forge as it stands"
+        );
     }
 
     /// **A pass that spent nothing is refunded, and the refund is the point.**
