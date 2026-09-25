@@ -27,7 +27,7 @@
 // changed: "a syft that cannot run exits 2 — the document, not the verdict, is missing" mise.toml the same move: an underivable document is the producer's exit 3, nothing recorded
 // changed: "THE SEVERITY SPLIT: the precondition passes over a nonconformant document" policy/ntia.rego the two command rows collapse into one policy row and both are `deny`; the split survives as two verdicts, and a nonconformant document raises `manifest cover partial` and never `manifest check unread`
 // changed: "the precondition records no receipt — it attests the mechanism, not the SBOM" mise.toml there is no precondition mode left to call; the receipt is written only after `check` passes, which the nonconformant case asserts
-// carried: "the gate leaves the tree it judges unmodified" mise.toml kind:mechanism
+// carried: "ntia-check.bats::the gate leaves the tree it judges unmodified" mise.toml kind:mechanism
 // carried: "the DEFAULT standards set is satisfiable: a conformant document exits 0" mise.toml kind:mechanism
 // carried: "dropping the unsatisfiable standard does not disarm the gate" policy/ntia.rego kind:mechanism
 // changed: "THE DURABLE HALF: an spdx3-only standard over an spdx2 document is a PRECONDITION refusal" policy/ntia.rego `manifest check unread`, a finding through `check`, where the program exited 2; still never `manifest cover partial`
