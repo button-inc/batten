@@ -2838,6 +2838,39 @@ fn table_at<'a>(table: &'a mut toml::Table, path: &str) -> Option<&'a mut toml::
     Some(at)
 }
 
+/// Remove every table along `path` that the drop above left empty, root-ward.
+///
+/// A file whose only `hook` headers were `[[hook.handler]]` rows parses, once
+/// they are all blanked, to a document with no `hook` key at all — not to
+/// `hook = {}`. So the husk goes too, and its own holder is asked the same
+/// question in turn. Leaving one behind would fail [`prune_unresolvable`]'s
+/// exactness guard and abandon a prune that was otherwise right.
+///
+/// It stops at the first table that is NOT empty, which is the whole of its
+/// caution: a section that still holds something the author wrote is never
+/// removed because a sibling array emptied.
+fn drop_empty_ancestors(table: &mut toml::Table, path: Option<&str>) {
+    let mut path = path;
+    while let Some(above) = path {
+        let (next, key) = above
+            .rsplit_once('.')
+            .map_or((None, above), |(next, key)| (Some(next), key));
+        let emptied = match next {
+            Some(next) => table_at(table, next),
+            None => Some(&mut *table),
+        }
+        .filter(|holder| {
+            holder
+                .get(key)
+                .and_then(toml::Value::as_table)
+                .is_some_and(toml::Table::is_empty)
+        });
+        let Some(emptied) = emptied else { break };
+        emptied.remove(key);
+        path = next;
+    }
+}
+
 /// Whether `header` names a row that can be addressed — and therefore dropped —
 /// as a path from the top-level table.
 ///
@@ -3304,25 +3337,7 @@ fn prune_unresolvable<T: serde::de::DeserializeOwned>(source: &str, behind: bool
         // own exactness guard and abandon a prune that was otherwise right.
         if rows.is_empty() {
             holder.remove(leaf);
-            let mut path = holder_path;
-            while let Some(above) = path {
-                let (next, key) = above
-                    .rsplit_once('.')
-                    .map_or((None, above), |(next, key)| (Some(next), key));
-                let emptied = match next {
-                    Some(next) => table_at(&mut expected, next),
-                    None => Some(&mut expected),
-                }
-                .filter(|holder| {
-                    holder
-                        .get(key)
-                        .and_then(toml::Value::as_table)
-                        .is_some_and(toml::Table::is_empty)
-                });
-                let Some(emptied) = emptied else { break };
-                emptied.remove(key);
-                path = next;
-            }
+            drop_empty_ancestors(&mut expected, holder_path);
         }
 
         let mut candidate = text.clone();

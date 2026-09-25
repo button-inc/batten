@@ -230,13 +230,10 @@ fn the_dropped_handler_is_named_and_its_neighbour_survives() {
     // than each handler's id — which is what makes the number load-bearing here:
     // `2` is a build that dropped nothing, `0` is a prune that took the section
     // instead of the row, and only `1` is the repair.
-    let counted = said
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.split_whitespace();
-            (fields.next() == Some("hook")).then(|| fields.next())?
-        })
-        .next();
+    let counted = said.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        (fields.next() == Some("hook")).then(|| fields.next())?
+    });
     assert_eq!(
         counted,
         Some("1"),
