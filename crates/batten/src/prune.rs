@@ -2069,21 +2069,74 @@ fn lap(
 ///
 /// Which kinds are in scope is [`RECLAIMED_KINDS`], and the retention is per kind:
 /// see the module header for why the extension cannot collapse into the stem.
+///
+/// **AN ARTIFACT AND ITS FINGERPRINT GO TOGETHER** (CLOUD-1913). "Superseded" is
+/// newest-mtime per `(stem, kind)`, and that is not always a generation: one crate
+/// can have several CURRENT variants — two locked versions, the check profile
+/// clippy builds beside the test profile, a normal and a build dependency — and
+/// cargo never rewrites an artifact it reuses, so a long-lived current variant
+/// carries the oldest mtime in its group. Deleting it alone left cargo's
+/// `.fingerprint/<crate>-<hash>` behind, still claiming the unit fresh, and the
+/// next compile that depended on it failed: `extern location for bstr does not
+/// exist`, measured on three of four landing laps in a row, each straight after a
+/// lap-open prune.
+///
+/// Removing the fingerprint with the artifact turns that failure into a rebuild of
+/// one unit, which is the cost the prune already accepts for anything it reclaims.
+/// It does not try to tell current from stale: cargo keeps every generation's
+/// fingerprint, so "has a fingerprint" would mark everything live and reclaim
+/// nothing, which is CLOUD-766's disk exhaustion back.
 fn reclaim_superseded(root: &Path, keep: usize) -> (usize, u64) {
     let mut pruned = 0;
     let mut bytes = 0;
     for deps in directories_named(root, "deps") {
+        let fingerprints = deps.parent().map(|profile| profile.join(".fingerprint"));
         for victims in superseded_in(&deps, keep).values() {
             for victim in victims {
                 let size = victim.metadata().map_or(0, |meta| meta.len());
                 if std::fs::remove_file(victim).is_ok() {
                     pruned += 1;
                     bytes += size;
+                    if let Some(fingerprints) = &fingerprints {
+                        forget_fingerprint(fingerprints, victim);
+                    }
                 }
             }
         }
     }
     (pruned, bytes)
+}
+
+/// Remove the `.fingerprint/<crate>-<hash>` entry for a reclaimed artifact.
+///
+/// Matched on the HASH, because the fingerprint directory is named for the
+/// package (`sha1-checked`) and the artifact for the crate (`libsha1_checked`),
+/// and the hash is the one token both carry. Could-not-look is a no-op: an
+/// unreadable directory leaves the fingerprint, which is the state before this
+/// function existed rather than a new failure.
+fn forget_fingerprint(fingerprints: &Path, victim: &Path) {
+    let Some(hash) = victim
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(artifact_hash)
+    else {
+        return;
+    };
+    let suffix = format!("-{hash}");
+    let Ok(entries) = std::fs::read_dir(fingerprints) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let named_for_it = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.ends_with(&suffix));
+        // A DIRECTORY BY ITS OWN TYPE, never through a link, for `superseded_in`'s
+        // reason: removing through a link deletes something outside this tree.
+        if named_for_it && entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 /// The artifact kinds the superseded pass groups, beside the extension-less one.
@@ -2162,6 +2215,17 @@ fn superseded_in(deps: &Path, keep: usize) -> BTreeMap<(String, String), Vec<Pat
 /// this file is not a hashed artifact, which stays true if `keep` ever reaches 0
 /// through some other route.
 fn artifact_key(name: &str) -> Option<(&str, &str)> {
+    split_artifact(name).map(|(stem, _hash, kind)| (stem, kind))
+}
+
+/// The metadata hash cargo gave an artifact, by the same parse [`artifact_key`]
+/// groups on, so the two cannot disagree about what a name's hash is.
+fn artifact_hash(name: &str) -> Option<&str> {
+    split_artifact(name).map(|(_stem, hash, _kind)| hash)
+}
+
+/// `(stem, hash, kind)` for a name cargo hashed: the one parse both readers use.
+fn split_artifact(name: &str) -> Option<(&str, &str, &str)> {
     let (head, kind) = match name.rsplit_once('.') {
         Some((head, kind)) if RECLAIMED_KINDS.contains(&kind) => (head, kind),
         // A KNOWN-SHAPE NAME THIS PASS DOES NOT RECLAIM, `.d` above all. Falling
@@ -2175,7 +2239,7 @@ fn artifact_key(name: &str) -> Option<(&str, &str)> {
     // A SUFFIX THAT MERELY CONTAINS A DASH MUST NOT BE EATEN, or two unrelated
     // binaries collapse into one group and the newer one deletes the older.
     if hash.len() >= 8 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
-        Some((stem, kind))
+        Some((stem, hash, kind))
     } else {
         None
     }
@@ -3354,5 +3418,72 @@ mod tests {
             cold.refusal(Path::new("target")).contains("full rebuild"),
             "the refusal says why this floor applies"
         );
+    }
+
+    // --- an artifact and its fingerprint go together (CLOUD-1913) -------------
+
+    /// Write one `deps` artifact at a controlled age, with the fingerprint cargo
+    /// would have left beside it.
+    fn variant(profile: &Path, stem: &str, hash: &str, age_seconds: u64) {
+        let deps = profile.join("deps");
+        mkdir(&deps);
+        let file = deps.join(format!("lib{stem}-{hash}.rmeta"));
+        if let Err(why) = std::fs::write(&file, b"rmeta") {
+            panic!("fixture: could not write {}: {why}", file.display());
+        }
+        let when = std::time::SystemTime::now() - std::time::Duration::from_secs(age_seconds);
+        let stamped = std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .and_then(|handle| handle.set_modified(when));
+        if let Err(why) = stamped {
+            panic!("fixture: could not age {}: {why}", file.display());
+        }
+        mkdir(&profile.join(".fingerprint").join(format!("{stem}-{hash}")));
+    }
+
+    #[test]
+    fn a_reclaimed_artifact_takes_its_fingerprint_with_it() {
+        // The measured failure, reduced: a fingerprint left claiming a unit fresh
+        // after its artifact was reclaimed is what made the next compile report
+        // `extern location ... does not exist` instead of rebuilding the unit.
+        let root = build_root("fingerprint-with-artifact");
+        let profile = root.join("debug");
+        variant(&profile, "demo", "a1a1a1a1a1a1a1a1", 3000);
+        variant(&profile, "demo", "a2a2a2a2a2a2a2a2", 2000);
+        variant(&profile, "demo", "a3a3a3a3a3a3a3a3", 1000);
+        variant(&profile, "other", "b1b1b1b1b1b1b1b1", 9000);
+
+        let (pruned, _) = reclaim_superseded(&root, 1);
+
+        let prints = profile.join(".fingerprint");
+        assert_eq!(pruned, 2, "keep 1 of three `demo` variants");
+        assert!(!prints.join("demo-a1a1a1a1a1a1a1a1").exists());
+        assert!(!prints.join("demo-a2a2a2a2a2a2a2a2").exists());
+        assert!(
+            prints.join("demo-a3a3a3a3a3a3a3a3").is_dir(),
+            "the kept variant keeps its fingerprint"
+        );
+        assert!(
+            prints.join("other-b1b1b1b1b1b1b1b1").is_dir(),
+            "a unit the pass did not reclaim is not touched, however old"
+        );
+    }
+
+    #[test]
+    fn the_fingerprint_is_matched_by_hash_across_the_crate_and_package_spellings() {
+        // The artifact carries the CRATE name (`libsha1_checked`) and the
+        // fingerprint the PACKAGE name (`sha1-checked`); the hash is the one token
+        // both share, so a name comparison would miss exactly this case.
+        let root = build_root("fingerprint-by-hash");
+        let prints = root.join("debug/.fingerprint");
+        mkdir(&prints.join("sha1-checked-c0ffee00c0ffee00"));
+        mkdir(&prints.join("sha1-checked-c0ffee00c0ffee01"));
+        forget_fingerprint(
+            &prints,
+            &root.join("debug/deps/libsha1_checked-c0ffee00c0ffee00.rmeta"),
+        );
+        assert!(!prints.join("sha1-checked-c0ffee00c0ffee00").exists());
+        assert!(prints.join("sha1-checked-c0ffee00c0ffee01").is_dir());
     }
 }
