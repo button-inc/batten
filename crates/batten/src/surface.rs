@@ -3965,8 +3965,6 @@ pub const SURFACE: &[CommandDecl] = &[
     // `read` structurally and in the strongest sense available: it opens no file,
     // walks no tree and spawns nothing. It reads two integers off its own command
     // line and returns a code.
-    // unreached: "verdict" CLOUD-1710 the operator's fold (AGENTS.md rule 5) for a corpus exit read by hand;
-    // no task pipes through it, and the settings prose naming it is not a caller.
     CommandDecl {
         path: "verdict",
         id: "verdict",
