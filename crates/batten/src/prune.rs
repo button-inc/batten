@@ -2485,6 +2485,36 @@ fn drop_regrowable(root: &Path, declared: &[Regrowable], basis_moving: bool) -> 
     (removed, freed, basis_moved)
 }
 
+/// The variable naming the tree whose lap a `verify` run holds open.
+///
+/// Set by the run that opened the lap, cleared for the call that closes it.
+pub const LAP_OPEN_ENV: &str = "BATTEN_PRUNE_LAP_OPEN";
+
+/// Whether `here` is the tree another run's open lap names.
+///
+/// **A PRUNE INSIDE A LAP IS THAT LAP'S CLOSE, ARRIVING EARLY** (CLOUD-1913). The
+/// phase is derived from the journal, so any run that finds a lap open closes
+/// it — and `build:release`, which prunes first, is reached from inside `verify`
+/// through `test:bats`'s startup repair. Measured: that run escalated mid-gate,
+/// dropped the declared `tmp` root while the suite's fixtures were in it
+/// (`run batten: NotFound` from a case whose working directory vanished), and
+/// took `target/clippy` from under clippy. The lap's own close reclaims what
+/// the lap superseded; a second actor inside it only races the builds.
+///
+/// SCOPED TO ONE TREE, not a bare flag, because the variable is inherited by
+/// everything the gate spawns — every integration case included. A fixture is
+/// another directory, so it prunes as it always did.
+#[must_use]
+pub fn inside_open_lap(here: &Path, marker: Option<&std::ffi::OsStr>) -> bool {
+    let Some(opened) = marker.filter(|marker| !marker.is_empty()) else {
+        return false;
+    };
+    match (std::fs::canonicalize(opened), std::fs::canonicalize(here)) {
+        (Ok(opened), Ok(here)) => opened == here,
+        _ => false,
+    }
+}
+
 /// The lock cargo holds on a profile directory for the whole of a build.
 const BUILD_LOCK: &str = ".cargo-lock";
 

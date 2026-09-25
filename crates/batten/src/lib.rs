@@ -2597,6 +2597,15 @@ fn run_target(
     // case in the suite shared one lap journal: a run with a fabricated 99999MB
     // reading wrote a ratchet that the next case then judged itself against. The
     // authority is `./.git`, for the reason `./batten.toml` is the config's.
+    if prune::inside_open_lap(here, std::env::var_os(prune::LAP_OPEN_ENV).as_deref()) {
+        output::message(
+            mode,
+            output::Verbosity::Normal,
+            err,
+            "target prune: this tree's lap is open in another run, and its own close reclaims — nothing touched",
+        )?;
+        return Ok(ExitCode::Success);
+    }
     let store = here
         .join(".git")
         .exists()

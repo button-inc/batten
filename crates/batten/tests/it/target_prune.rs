@@ -223,6 +223,7 @@ fn prune(dir: &Path, free: &str, args: &[&str]) -> std::process::Output {
         .arg("prune")
         .args(args)
         .env("TARGET_PRUNE_FREE_MB", free)
+        .env_remove("BATTEN_PRUNE_LAP_OPEN")
         .current_dir(dir)
         .output()
         .expect("run batten")
@@ -1825,6 +1826,58 @@ fn a_tree_a_running_build_holds_is_not_reclaimed() {
     let output = prune(&repo, "99999", &["-y"]);
     assert!(output.status.success(), "{}", said(&output));
     assert_eq!(survivors(&deps), 2, "released, keep = 2 applies again");
+}
+
+// CLOUD-1913's third declared mutation: a marker naming this tree read as some
+// other tree's is the mid-lap escalation that emptied `target/tmp` under the suite.
+/*
+#MUTANT-SUITE crates/batten/tests/it/target_prune.rs
+#MUTANT prune-inside-an-open-lap|s@^        (Ok(opened), Ok(here)) => opened == here,$@        (Ok(_), Ok(_)) => false,@|a_prune_inside_this_tree_s_open_lap_touches_nothing
+*/
+
+#[test]
+fn a_prune_inside_this_tree_s_open_lap_touches_nothing() {
+    // The marker `verify` exports names the tree it opened a lap on. Here it is
+    // this fixture, so the run is inside that lap and reclaims nothing; named for
+    // another tree, the same run prunes, so the case cannot pass by doing nothing.
+    let repo = repo("target-prune-open-lap");
+    let deps = repo.join("target/debug/deps");
+    artifact(&deps, "cli", "aaaaaaaaaaaa", 3600);
+    artifact(&deps, "cli", "bbbbbbbbbbbb", 1800);
+    artifact(&deps, "cli", "cccccccccccc", 60);
+
+    let inside = batten()
+        .args(["target", "prune", "-y"])
+        .env("TARGET_PRUNE_FREE_MB", "99999")
+        .env("BATTEN_PRUNE_LAP_OPEN", &repo)
+        .current_dir(&repo)
+        .output()
+        .expect("run batten");
+    assert!(inside.status.success(), "{}", said(&inside));
+    assert_eq!(
+        survivors(&deps),
+        3,
+        "inside the open lap nothing is touched"
+    );
+    assert!(
+        said(&inside).contains("nothing touched"),
+        "{}",
+        said(&inside)
+    );
+
+    let elsewhere = batten()
+        .args(["target", "prune", "-y"])
+        .env("TARGET_PRUNE_FREE_MB", "99999")
+        .env("BATTEN_PRUNE_LAP_OPEN", repo.join("target"))
+        .current_dir(&repo)
+        .output()
+        .expect("run batten");
+    assert!(elsewhere.status.success(), "{}", said(&elsewhere));
+    assert_eq!(
+        survivors(&deps),
+        2,
+        "a lap on another tree does not hold this one"
+    );
 }
 
 #[test]
