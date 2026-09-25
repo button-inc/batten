@@ -357,7 +357,6 @@ fn hook_in(dir: &Path, home: &Path, payload: &str) -> Output {
         .current_dir(dir)
         .args(["adjudicate", "--harness", "claude-code"])
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
-        .env_remove("BATTEN_HOOK_BYPASS")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -769,7 +768,6 @@ fn the_stop_guard_bypass_silences_the_whole_surface() {
     command
         .current_dir(&dir)
         .args(["adjudicate", "--harness", "claude-code"])
-        .env_remove("BATTEN_HOOK_BYPASS")
         .env("BATTEN_STOP_GUARD_BYPASS", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1071,7 +1069,6 @@ fn verb_in(dir: &Path, home: &Path, args: &[&str]) -> Output {
         .current_dir(dir)
         .args(args)
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
-        .env_remove("BATTEN_HOOK_BYPASS")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     command.output().expect("run batten verb")

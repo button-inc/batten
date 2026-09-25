@@ -3796,6 +3796,27 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "delete the literal; a consumer fact belongs in that consumer's own batten.toml, never in the core"
 
+# THE GENERAL HATCH IS REMOVED FROM THE ENGINE, AND ITS NAME STAYS OUT OF THE
+# TREE. It was a knowable string that switched off mediation and recorded
+# nothing; CLOUD-1357 narrowed it and this removes it. A name nobody may write
+# cannot be prescribed by a rule file, advertised by a refusal, or set by a
+# test, so one literal row covers all three. The two excluded suites are the
+# proofs that setting it now changes nothing, and must spell it to set it.
+# `exclude` keeps this row from matching its own `pattern` line.
+[[rule]]
+id = "hook name dead"
+kind = "forbid"
+glob = "**"
+pattern = "BATTEN_HOOK_BYPASS"
+exclude = "^(pattern|exclude) = "
+exclude_paths = [
+  "crates/batten/tests/it/bypass_scrub.rs",
+  "crates/batten/tests/it/bypass_precondition.rs",
+]
+severity = "deny"
+scope = "tree"
+no_fix_reason = "the general hatch is removed; a refusal's ways through are its declared routes, a waiver, or batten override request"
+
 # `regex` rather than `pattern`, which is the whole reason this row can exist:
 # the shape is the stem, so one expression covers every ending the name takes,
 # and `(?i)` covers the capitalised form a literal would have to enumerate.

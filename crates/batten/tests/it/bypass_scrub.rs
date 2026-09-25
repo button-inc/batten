@@ -10,8 +10,8 @@
 //! so the derivation is structurally blind to exactly the class of variable whose
 //! purpose is to stop the engine refusing.
 //!
-//! Measured before the fix, on `ccb40a13`: `test:cargo` under an exported
-//! `BATTEN_HOOK_BYPASS=1` was 1543 passed / 2 failed, both `board_receipts` cases
+//! Measured before the fix, on `ccb40a13`: `test:cargo` under the then-live
+//! general hatch, exported, was 1543 passed / 2 failed, both `board_receipts` cases
 //! that assert a refusal, each expecting exit `2` and getting exit `0`. The same
 //! tree with nothing exported was 3270/3270.
 //!
@@ -58,18 +58,6 @@ fn scrubbed() -> Vec<String> {
         .collect()
 }
 
-/// THE CASE THAT FAILS AGAINST THE UNFIXED HELPER. Before CLOUD-1227 the global
-/// hatch was reachable from no surface flag, so the derived scrub never named it
-/// and an inherited one went straight through to the engine.
-#[test]
-fn the_global_hatch_is_scrubbed() {
-    let names = scrubbed();
-    assert!(
-        names.iter().any(|name| name == batten::hook::BYPASS_ENV),
-        "the engine's own hatch must never reach the binary under test: {names:?}"
-    );
-}
-
 /// THE PER-ROW HALF, AND IT IS VACUOUS TODAY — which this case says out loud
 /// rather than hiding behind a passing assertion.
 ///
@@ -97,21 +85,15 @@ fn every_row_declared_hatch_is_scrubbed() {
             "a row-declared hatch must be scrubbed too: {hatch} not in {names:?}"
         );
     }
-    // The set is empty today, so the loop proves nothing on its own. What is
-    // checkable now is that the scrub is CONFIG-DERIVED rather than a literal:
-    // the global hatch is present because the helper puts it there, and nothing
-    // else is, because nothing else is declared.
-    assert!(
-        names.contains(&batten::hook::BYPASS_ENV.to_owned()),
-        "the derived set must still carry the global hatch: {names:?}"
-    );
 }
 
-/// THE ANTI-VACUITY MIRROR, and the half that makes the two above worth
-/// asserting: it shows the hatch genuinely disarms the engine, so removing it is
-/// load-bearing rather than tidy. Same fixture, same call, one variable apart.
+/// THE REMOVED GLOBAL HATCH OPENS NOTHING, asserted on the compiled binary.
+///
+/// `BATTEN_HOOK_BYPASS` used to turn this refusal into an allow; the engine no
+/// longer reads it. Same fixture, same call, one variable apart, and both runs
+/// must refuse — a build that still honoured the name fails here.
 #[test]
-fn the_hatch_is_load_bearing() {
+fn the_removed_global_hatch_opens_nothing() {
     let root = scratch("bypass-scrub-load-bearing");
     write(
         &root,
@@ -162,16 +144,14 @@ fn the_hatch_is_load_bearing() {
         "the fixture must refuse on its own, or the comparison below proves nothing"
     );
 
-    let allowed = run(
-        batten()
-            .current_dir(&root)
-            .env(batten::hook::BYPASS_ENV, "1"),
+    let still = run(
+        batten().current_dir(&root).env("BATTEN_HOOK_BYPASS", "1"),
         &payload,
     );
     assert_eq!(
-        allowed,
-        Some(0),
-        "the hatch disarms the engine, which is why the scrub matters"
+        still,
+        Some(2),
+        "setting the retired name must change nothing"
     );
 }
 

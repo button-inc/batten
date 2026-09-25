@@ -426,13 +426,12 @@ mediating.
   `gh api`, `gh run view`) are not blocked. The corpus that proves it is
   `crates/batten/tests/gh_guard.rs`, over the compiled binary and the committed
   table. **There is no bypass to reach for, and this clause used to name one.**
-  It said "Bypass: `BATTEN_HOOK_BYPASS=1`, the engine's own hatch", and an agent
-  following it proposed exactly that for a protected-path refusal — where it
-  could not have worked. A refusal's way out is read off the refusal: `batten
+  It named the engine's general hatch, and an agent following it proposed
+  exactly that for a protected-path refusal — where it could not have worked.
+  The hatch is now removed from the engine outright. A refusal's way out is read off the refusal: `batten
 policy explain "<class>"` on the CLASS token (not the rule id) lists its routes,
   and where one is an override, `batten override request` then `batten override
-spend` is the way through that leaves a record. CLOUD-1357 makes every class
-  that declares an override route unsuppressible by the hatch at all. These four
+spend` is the way through that leaves a record. These four
   rows render under `call name refused`, which declares no override route yet —
   CLOUD-1806 owns that gap, and the residual hatch surviving there is the
   migration row's business, not a remedy this file prescribes.

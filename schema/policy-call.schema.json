@@ -102,10 +102,6 @@
         "agent-sourced": {
           "description": "Fact::AgentSourced -- what a command the AGENT ran said (CLOUD-776), or null."
         },
-        "bypass": {
-          "description": "Fact::Bypass -- the BATTEN_HOOK_BYPASS hatch (CLOUD-610). The one fact whose shape is certain enough to constrain.",
-          "type": "boolean"
-        },
         "extracted": {
           "additionalProperties": {
             "type": "integer"

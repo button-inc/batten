@@ -34,9 +34,9 @@
 //!
 //! **Posture: fail open.** Unreadable stdin, unparseable JSON, an envelope with
 //! no command — all resolve to [`Decision::Allow`]. A guard must never be the
-//! reason a session cannot proceed; the general escape hatch (`BATTEN_HOOK_BYPASS`,
-//! or a row's own `bypass_env`)
-//! is honoured exactly as the shell guard honours it. Fail-open needs no care
+//! reason a session cannot proceed; a row's own `bypass_env` is honoured by
+//! removing that row. There is no general hatch: a wrong refusal is waived or
+//! admitted, both of which leave a record. Fail-open needs no care
 //! here beyond the returns below: §7 spends `2` on the policy verdict alone, so
 //! neither code a Batten failure can produce is one a host reads as a deny.
 
@@ -3070,64 +3070,6 @@ fn cursor_specialized_input(value: &Value) -> Value {
     Value::Object(input)
 }
 
-/// The GENERAL escape hatch: the whole-call "do not mediate this" switch, and
-/// the fallback a row declaring no [`crate::rules::Rule::bypass_env`] advertises.
-///
-/// **Renamed from `BATTEN_GH_GUARD_BYPASS` by CLOUD-437, and the old name was a
-/// fossil rather than a description.** It was the first retiring bash guard's
-/// hatch, kept when that guard was ported and then inherited by every predicate
-/// the engine absorbed after it — so a `protected-mutation` deny about a Serena
-/// memory told its reader to set a `gh` variable. Measured on this tree:
-///
-/// ```text
-/// Refused by protected-mutation: `Write` targets the protected path .serena/memories/core.md.
-/// Fix: … Bypass with BATTEN_GH_GUARD_BYPASS=1.
-/// ```
-///
-/// That breaks CLOUD-122's contract in a way worse than a missing pointer: an
-/// operator who reads `GH_GUARD` concludes the refusal came from somewhere it did
-/// not, and it reads as evidence that a `gh` guard is what is installed — the
-/// exact mis-modelling this layer keeps producing.
-///
-/// `BATTEN_GH_GUARD_BYPASS` survives, but only where it is TRUE: as the declared
-/// `bypass_env` of the `gh`-lifecycle rows that legitimately own it. There is no
-/// dual-honour window — two live names for one hatch is the second authority this
-/// module's one-definition property forbids, and there is no external consumer to
-/// protect.
-///
-/// It stays resolved at the boundary before the config load, because per-row
-/// hatches cannot be: which hatches exist is a property of the loaded rows, so
-/// those resolve after the load and only for rows that declare one. That ordering
-/// is why the general hatch survives as a separate switch rather than becoming
-/// another row's name.
-///
-/// **It no longer skips the load, and that invariant is retired rather than
-/// eroded.** This paragraph used to end "which is what keeps the hot path free: a
-/// bypassed call must never pay a config read". It could not survive the
-/// protected gate becoming non-bypassable — deciding whether a path is protected
-/// needs the `protected` and `[[verb]]` tables, which are the config. A bypassed
-/// adjudicable call pays one load, the `noop`-to-`check` difference in `perf`,
-/// ~0.7 ms against a 100 ms budget. A call with nothing to adjudicate still skips
-/// it, and that is the arm the hot path rides.
-///
-/// # It does not suppress the protected-path gate
-///
-/// One class is outside this hatch's reach: `path write refused` is adjudicated
-/// even when this is set, because it declares an override route and the boundary
-/// honours a spent admission for it. A refusal whose only way through is a string
-/// somebody knows is a password rather than a gate, and this repository already
-/// retired that shape once — `issue file same`'s two variables were deleted
-/// rather than kept beside the admission mechanism, on the stated ground that *the
-/// point of the admission mechanism is that the bare variable stops working*.
-///
-/// **The no-config-read property above still holds, and the cost that changed is
-/// stated rather than left to be discovered.** A bypassed call reaching a
-/// protected path now pays the two `protected_write` stages, which is CPU over an
-/// envelope already decoded and a policy already in hand — no additional read, no
-/// spawn, no clock. A bypassed call that names no protected path pays a path-set
-/// comparison and nothing else.
-pub const BYPASS_ENV: &str = "BATTEN_HOOK_BYPASS";
-
 /// The mediated-call policy this run adjudicates against.
 ///
 /// Built from the *resolved* config (§8), not the committed file alone, so a
@@ -3976,64 +3918,6 @@ impl Policy {
             && (self.verbs.is_empty() || self.protected.is_empty())
     }
 
-    /// The hatch that suppresses the row with this id, or [`BYPASS_ENV`] where
-    /// the row declares none or is not a `[[rule]]` row at all (CLOUD-437).
-    ///
-    /// The fallback carries both of the cases a derived gate produces: the
-    /// protected-mutation gate and the verb table refuse under ids that are
-    /// declared constants rather than rows, so there is nothing to look up and
-    /// the general hatch is the honest answer. That is also why this cannot
-    /// return an `Option` and leave the caller to decide — a deny with no hatch
-    /// clause is the bare "no" CLOUD-122 forbids, and an `Option` invites one.
-    #[must_use]
-    pub fn bypass_env_for(&self, rule: &str) -> &str {
-        self.shapes
-            .iter()
-            .find(|row| row.id == rule)
-            .and_then(|row| row.bypass_env.as_deref())
-            .unwrap_or(BYPASS_ENV)
-    }
-
-    /// Whether [`BYPASS_ENV`] may suppress a refusal of this class (CLOUD-1357).
-    ///
-    /// **False for any class that declares an override route carrying a
-    /// precondition**, which is the generalisation of the carve-out `path write
-    /// refused` has had since CLOUD-1051. A class with such a route already has a
-    /// way through that leaves a record — `batten override request` generates its
-    /// questions from exactly this field, and `admit_mediated` honours the spent
-    /// admission — so taking the password away is a repair rather than a wall.
-    ///
-    /// **True for a class with no such route, and that is the row's own bound.**
-    /// Removing the hatch where nothing replaces it is the wall CLOUD-1357
-    /// explicitly refuses; each such class is a migration row of its own, which is
-    /// the tracking CLOUD-1051's scoping sentence owed and never got.
-    ///
-    /// A refusal carrying no class token at all keeps the hatch by construction: a
-    /// consumer `[[rule]]`-composed refusal is "deliberately not a Batten class …
-    /// no token an admission could bind", so it can declare no precondition and
-    /// there is nothing for an admission to bind against.
-    ///
-    /// Reads the same field [`crate::admission::questions_for`] does, so the two
-    /// cannot disagree about which classes have a route — a disagreement here
-    /// would mean a class the hatch stopped opening and no admission could open
-    /// either, which is the wall in its worst form.
-    ///
-    /// Pure: a registry lookup over the policy already in hand, which is what lets
-    /// [`adjudicate`] stay free of I/O, environment and clock.
-    #[must_use]
-    pub fn honours_hatch(&self, class: Option<&str>) -> bool {
-        let Some(class) = class else {
-            return true;
-        };
-        !self.verdicts.iter().any(|entry| {
-            entry.id == class
-                && entry.routes.iter().any(|route| {
-                    route.kind == crate::verdict::RouteKind::Override
-                        && route.precondition.is_some()
-                })
-        })
-    }
-
     /// This policy with every row whose declared hatch is in `set` removed
     /// (CLOUD-437).
     ///
@@ -4086,8 +3970,7 @@ impl Policy {
     /// against the environment (CLOUD-437).
     ///
     /// The boundary cannot read these before config loads — the rows are not
-    /// known yet — so [`BYPASS_ENV`] keeps its early position as the whole-call
-    /// switch and these are read after. Returning the names rather than reading
+    /// known yet — so these are read after it. Returning the names rather than reading
     /// them here is what keeps [`adjudicate`] pure: this module never touches the
     /// environment, and the caller hands back which of these were set.
     #[must_use]
@@ -4101,9 +3984,9 @@ impl Policy {
 
 /// Adjudicate an envelope against the policy, then apply the waivers.
 ///
-/// Pure: no I/O, no environment, no clock. `bypass` is the caller-resolved
-/// escape hatch (the boundary reads [`BYPASS_ENV`]), and the policy arrives as a
-/// value, so every verdict is a function of config plus argv and nothing else.
+/// Pure: no I/O, no environment, no clock. The policy arrives as a value, with
+/// any row whose own hatch is set already removed at the boundary, so every
+/// verdict is a function of config plus argv and nothing else.
 ///
 /// `waived` is the fourth thing that arrives already decided, and it is what
 /// keeps that list true with an expiry in the design (CLOUD-610). A waiver
@@ -4144,60 +4027,16 @@ pub fn adjudicate(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> De
 /// instead of a check repeated at each of the deny arms below. A deny site that
 /// forgot it would be a rule quietly unwaivable, which is exactly the asymmetry
 /// CLOUD-293 found and CLOUD-606 decided against.
-/// Adjudicate, then apply the hatch to the OUTCOME rather than to the chain.
+/// The gates, with no general hatch applied to their outcome.
 ///
-/// # What CLOUD-1357 changed
-///
-/// `BATTEN_HOOK_BYPASS` used to suppress every refusal class but one. The
-/// argument against that shape was already written at [`BYPASS_ENV`] and applied
-/// to `path write refused` alone: *a refusal whose only way through is a string
-/// somebody knows is a password rather than a gate*. Nothing in it is specific to
-/// protected paths.
-///
-/// It is general now. A class declaring an override route with a precondition is
-/// not suppressed, because it already has a way through that leaves a record —
-/// `batten override request` generates its questions from that field and
-/// `admit_mediated` honours the spent admission. A class with no such route keeps
-/// the hatch, which is the bound CLOUD-1357 draws for itself: taking the password
-/// away where nothing replaces it is a wall, and each such class is a migration
-/// row of its own.
-///
-/// # The chain now RUNS on a bypassed call, and that retires an argument
-///
-/// The previous arm ran the two `protected_write` stages and nothing else,
-/// explaining that adjudicating there "rather than by hoisting the two gates"
-/// avoided reordering every refusal a caller sees. **That constraint is gone
-/// rather than worked around**: filtering the OUTCOME moves no gate, so every
-/// refusal is still raised by the row a reviewer would see quoted back, in the
-/// order it always was. The hoisting objection was correct about hoisting and
-/// does not reach this shape.
-///
-/// **The cost, stated rather than left for a profile to find.** A bypassed
-/// adjudicable call now walks the whole chain instead of two stages. That is pure
-/// CPU over an envelope already decoded and a policy already in hand —
-/// [`adjudicate`] is contractually free of I/O, environment and clock, and the
-/// config load this arm already paid since the protected gate stopped being
-/// bypassable is unchanged. A call with nothing to adjudicate still returns
-/// before any of it.
-///
-/// # `Ask` stays suppressible, deliberately
-///
-/// Only a `Deny` is held back. `admit_mediated` does not filter `Ask` — "an
-/// escalation is a question put to a person, and a record the asker wrote
-/// themselves is not an answer to it" — so an `Ask` has no admission route, and
-/// refusing to suppress one would be the wall this row refuses, not the repair it
-/// makes.
+/// CLOUD-1357 narrowed the general hatch to the classes declaring no override
+/// route; it is now gone for all of them. A refusal's ways through are its
+/// declared routes, a waiver (an admitted, recorded edit to the protected
+/// config), or an admission where the class declares an override route. Each
+/// leaves a record, which the general hatch never did. A row's own `bypass_env`
+/// is removed from the policy at the boundary before this runs (CLOUD-437).
 fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decision {
-    let decision = adjudicated_gates(policy, envelope, facts);
-    if !facts.bypass {
-        return decision;
-    }
-    match decision {
-        Decision::Deny(refusal) if !policy.honours_hatch(refusal.verdict()) => {
-            Decision::Deny(refusal)
-        }
-        _ => Decision::Allow,
-    }
+    adjudicated_gates(policy, envelope, facts)
 }
 
 // `match_same_arms` would collapse the eight event arms below into one
@@ -4631,34 +4470,11 @@ fn command_line_gates(policy: &Policy, envelope: &Envelope, receipts: &ReceiptFa
 
 /// The text a host reads for one refusal — the deny's whole projection.
 ///
-/// [`Refusal::render`] is the shared shape; this adds the one thing that is a
-/// fact about *mediation* rather than about the refusal, and so has no place in
-/// the payload: the escape hatch. `check`'s refusal of a rule it cannot honestly
-/// run carries the same [`Refusal`] and no hatch, which is correct — there is
-/// nothing to bypass in a read-only run.
-///
-/// `hatch` is the name **this** refusal's row declared, or [`BYPASS_ENV`] where
-/// it declared none (CLOUD-437). Passed in rather than read off the [`Refusal`]
-/// deliberately: the hatch is a fact about mediation and the refusal is shared
-/// with `check`, so putting it on the payload would give a read-only finding a
-/// field that can only ever be meaningless there. [`Policy::bypass_env_for`] is
-/// the one place the row is looked up, so the string a deny prints and the
-/// variable the boundary reads stay one definition — the property this module's
-/// single-constant comment has always claimed and could not keep once the hatch
-/// stopped being single.
-/// # A class the hatch cannot open must not advertise it
-///
-/// `path write refused` is adjudicated under the hatch, so printing "Bypass
-/// with `BATTEN_HOOK_BYPASS`=1" on its refusal would name a remedy that does
-/// nothing — the defect class `crate::verdict`'s own header exists to kill ("a
-/// refusal could name no remedy, name a task that does not exist"), reintroduced
-/// by the commit that closed the hatch.
-///
-/// This is not a list of exempt classes and must not become one. The predicate is
-/// the same fact the boundary decides on: a class the hatch does not reach is one
-/// whose way through is its declared `override` route, and `Refusal::render`
-/// already carries that route as the fix. So the hatch sentence is simply
-/// omitted, and what remains is the remedy that works.
+/// **No hatch sentence, on any arm.** The general hatch is removed from the
+/// engine, and a row's own `bypass_env` is not advertised either: a refusal's
+/// ways through are its declared routes, which `batten policy explain <token>`
+/// prints, and an advertised variable is the cheapest concrete thing in reach
+/// whether or not it is the right one (CLOUD-680).
 /// # CLOUD-1286: a declared refusal emits its line and stops
 ///
 /// Everything below this paragraph applies to a refusal with NO declared class.
@@ -4825,29 +4641,16 @@ fn command_line_gates(policy: &Policy, envelope: &Envelope, receipts: &ReceiptFa
 #[must_use]
 pub fn deny_text(
     refusal: &Refusal,
-    hatch: &str,
     first_sighting: bool,
     ceiling: Option<&crate::refusal::Ceiling>,
 ) -> String {
-    if refusal.verdict().is_some() {
-        if !first_sighting {
-            return refusal.line();
-        }
+    if refusal.verdict().is_some() && first_sighting {
         return first_sighting_line(refusal, ceiling);
     }
-    let long = refusal.render();
-    if !first_sighting {
-        return long;
+    if refusal.verdict().is_some() {
+        return refusal.line();
     }
-    // The hatch is the droppable member on this arm, for the reason the module
-    // header already gives: it is identical on every deny. `render()` is what
-    // stays, because reason-and-fix is the contract.
-    let carried = format!("{long} Bypass with {hatch}=1.");
-    if ceiling.is_some_and(|declared| declared.over_first_sighting(&carried)) {
-        long
-    } else {
-        carried
-    }
+    refusal.render()
 }
 
 /// What an ESCALATION carries, which is not what a refusal carries.
@@ -5158,8 +4961,6 @@ pub type ManifestFacts = Option<usize>;
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct Facts<'a> {
-    /// The caller-resolved [`BYPASS_ENV`] hatch.
-    pub bypass: bool,
     /// The receipt verdicts this call is judged against.
     pub receipts: &'a ReceiptFacts,
     /// The tracker-key evidence a `requires_key` row is judged against.
@@ -5260,7 +5061,6 @@ impl<'a> Facts<'a> {
         waived: &'a crate::waiver::Live,
     ) -> Facts<'a> {
         Facts {
-            bypass: false,
             receipts: &crate::facts::Look::CouldNotLook,
             keys: &crate::facts::Look::CouldNotLook,
             stop,
@@ -6949,7 +6749,6 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             reason = "one arm per fact is the correspondence property; the shared `None` is a coincidence of three distinct reasons"
         )]
         let projected = match *fact {
-            crate::facts::Fact::Bypass => Some(serde_json::Value::Bool(facts.bypass)),
             // BOTH non-answers project as `null`, which is what keeps this a
             // type substitution rather than a document change (CLOUD-787): the
             // previous `Option` spelling emitted `null` for could-not-look and
@@ -10153,7 +9952,7 @@ mod tests {
             &[],
             crate::refusal::Fix::None,
         );
-        let text = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true, None);
+        let text = deny_text(&refusal, true, None);
         assert!(
             text.contains("git push --force-with-lease=<ref>:<sha>"),
             "the second route is the one that answers the reader: {text}"
@@ -10176,7 +9975,7 @@ mod tests {
             &[],
             crate::refusal::Fix::None,
         );
-        let text = deny_text(&refusal, "BATTEN_HOOK_BYPASS", false, None);
+        let text = deny_text(&refusal, false, None);
         assert!(!text.contains("git pull --rebase"), "{text}");
         assert!(!text.contains(" — "), "{text}");
     }
@@ -10220,7 +10019,7 @@ mod tests {
             &[],
             crate::refusal::Fix::Run(PROSE_FIX.to_owned()),
         );
-        let unbounded = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true, None);
+        let unbounded = deny_text(&refusal, true, None);
         // THE PREMISE HAS MOVED, and the move is CLOUD-1637's (see `deny_text`).
         // The prose no longer reaches the line on ANY arm — `Fix::Run` is a dedup
         // key and never a rendered member — so what the ceiling sheds is the
@@ -10241,7 +10040,7 @@ mod tests {
                 crate::budget::estimate_tokens(&unbounded).saturating_sub(2),
             ),
         };
-        let bounded = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true, Some(&one_route));
+        let bounded = deny_text(&refusal, true, Some(&one_route));
         assert!(
             bounded.contains("git pull --rebase"),
             "the first route is the floor: {bounded}"
@@ -10276,7 +10075,7 @@ mod tests {
             max_tokens: 24,
             first_sighting_max_tokens: Some(1),
         };
-        let text = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true, Some(&ceiling));
+        let text = deny_text(&refusal, true, Some(&ceiling));
         assert!(
             ceiling.over_first_sighting(&text),
             "the premise: nothing this arm can compose fits a ceiling of 1 — {text}"
@@ -10311,7 +10110,7 @@ mod tests {
             max_tokens: 24,
             first_sighting_max_tokens: None,
         };
-        let text = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true, Some(&ceiling));
+        let text = deny_text(&refusal, true, Some(&ceiling));
         assert!(
             text.contains("git push --force-with-lease=<ref>:<sha>"),
             "{text}"
@@ -10341,7 +10140,7 @@ mod tests {
             &[],
             crate::refusal::Fix::Run(PROSE_FIX.to_owned()),
         );
-        let text = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true, None);
+        let text = deny_text(&refusal, true, None);
         assert!(
             !text.contains("Re-read the row"),
             "a consumer `reason` is not a rendered member: {text}"
@@ -10377,7 +10176,7 @@ mod tests {
             &[],
             crate::refusal::Fix::None,
         );
-        let text = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true, None);
+        let text = deny_text(&refusal, true, None);
         assert_eq!(text.matches("run git pull --rebase").count(), 1, "{text}");
     }
 
@@ -10392,7 +10191,6 @@ mod tests {
     fn adjudicate(
         policy: &Policy,
         envelope: &Envelope,
-        bypass: bool,
         receipts: &ReceiptFacts,
         keys: &KeyFacts,
         stop: &crate::stop::StopFacts,
@@ -10401,7 +10199,6 @@ mod tests {
             policy,
             envelope,
             &Facts {
-                bypass,
                 receipts,
                 keys,
                 stop,
@@ -10624,7 +10421,6 @@ mod tests {
                 verb(">", Some("write through the surface that owns it")),
             ]),
             &envelope(command),
-            false,
             &crate::facts::Look::CouldNotLook,
             &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
@@ -11148,7 +10944,6 @@ mod tests {
         adjudicate(
             &gh_policy(),
             &envelope(command),
-            false,
             &crate::facts::Look::CouldNotLook,
             &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
@@ -11172,7 +10967,7 @@ mod tests {
             // the class is new to them — the one these assertions are about. The
             // repeat rendering has its own cases, where the difference IS the
             // subject rather than incidental to it.
-            Decision::Deny(refusal) => deny_text(&refusal, BYPASS_ENV, true, None),
+            Decision::Deny(refusal) => deny_text(&refusal, true, None),
             // An `Ask` is not a deny, and collapsing the two here would let a
             // row that silently started escalating keep passing every assertion
             // below about what a refusal says. A `Waived` is not one either, and
@@ -11256,7 +11051,6 @@ mod tests {
             adjudicate(
                 &program_only_shape_policy(),
                 &envelope(command),
-                false,
                 &crate::facts::Look::CouldNotLook,
                 &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
@@ -11424,7 +11218,6 @@ mod tests {
             adjudicate(
                 &require_via_policy(),
                 &envelope(command),
-                false,
                 &crate::facts::Look::CouldNotLook,
                 &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
@@ -11715,21 +11508,6 @@ mod tests {
     }
 
     #[test]
-    fn bypass_allows_everything() {
-        assert_eq!(
-            adjudicate(
-                &gh_policy(),
-                &envelope("gh pr merge"),
-                true,
-                &crate::facts::Look::CouldNotLook,
-                &crate::facts::Look::CouldNotLook,
-                &crate::stop::StopFacts::default()
-            ),
-            Decision::Allow
-        );
-    }
-
-    #[test]
     fn decode_reads_the_claude_payload() {
         let raw = r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"gh pr merge"}}"#;
         let envelope = decode(Harness::ClaudeCode, raw).expect("decodes");
@@ -11802,7 +11580,6 @@ mod tests {
             adjudicate(
                 &gh_policy(),
                 &envelope,
-                false,
                 &crate::facts::Look::CouldNotLook,
                 &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default()
@@ -11820,7 +11597,6 @@ mod tests {
             let decision = adjudicate(
                 &gh_policy(),
                 &envelope_at(event, "gh pr merge 42"),
-                false,
                 &crate::facts::Look::CouldNotLook,
                 &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
@@ -11843,7 +11619,6 @@ mod tests {
             adjudicate(
                 &gh_policy(),
                 &envelope,
-                false,
                 &crate::facts::Look::CouldNotLook,
                 &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default()
@@ -11861,7 +11636,6 @@ mod tests {
             adjudicate(
                 &Policy::declaring_nothing(Harness::ExitCode),
                 &envelope("gh pr merge 42"),
-                false,
                 &crate::facts::Look::CouldNotLook,
                 &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
@@ -11885,7 +11659,7 @@ mod tests {
             "and the class, which is what carries the why now: {reason}"
         );
         assert!(
-            !reason.contains(BYPASS_ENV),
+            !reason.contains("BYPASS"),
             "the hatch sentence is off the hot path: {reason}"
         );
         // The row's prose is not lost, it is dereferenced — asserted on the
@@ -11954,7 +11728,6 @@ mod tests {
             adjudicate(
                 &policy,
                 &envelope("gh pr merge 42"),
-                false,
                 &crate::facts::Look::CouldNotLook,
                 &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default()
@@ -11992,7 +11765,6 @@ mod tests {
             adjudicate(
                 &advisory,
                 &call,
-                false,
                 &crate::facts::Look::CouldNotLook,
                 &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default()
@@ -12025,7 +11797,6 @@ mod tests {
                 adjudicate(
                     &promoted,
                     &call,
-                    false,
                     &crate::facts::Look::CouldNotLook,
                     &crate::facts::Look::CouldNotLook,
                     &crate::stop::StopFacts::default()
@@ -12066,7 +11837,6 @@ mod tests {
         let reason = denial_text(adjudicate(
             &policy,
             &envelope("gh pr merge"),
-            false,
             &crate::facts::Look::CouldNotLook,
             &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
@@ -12115,7 +11885,6 @@ mod tests {
         let reason = denial_text(adjudicate(
             &policy,
             &envelope("gh pr merge"),
-            false,
             &crate::facts::Look::CouldNotLook,
             &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
@@ -12147,7 +11916,6 @@ mod tests {
                 verb("Write", Some("use the surface that owns the file")),
             ]),
             &write_envelope(tool, path),
-            false,
             &crate::facts::Look::CouldNotLook,
             &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
@@ -12485,7 +12253,6 @@ violation contains {
         let denied = adjudicate(
             &policy,
             &envelope,
-            false,
             &stale,
             &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
@@ -12499,7 +12266,6 @@ violation contains {
         let allowed = adjudicate(
             &policy,
             &envelope,
-            false,
             &fresh,
             &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
@@ -12516,7 +12282,6 @@ violation contains {
         let unresolved = adjudicate(
             &policy,
             &envelope,
-            false,
             &crate::facts::Look::CouldNotLook,
             &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
@@ -12603,7 +12368,6 @@ deny contains "refused by themodule" if {
         let decision = adjudicate(
             &policy,
             &envelope("run forbidden thing"),
-            false,
             &crate::facts::Look::CouldNotLook,
             &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
@@ -12633,12 +12397,12 @@ deny contains "refused by themodule" if {
                 // struct would fail on a field whose presence is the design. What
                 // the row is about is which ARM renders it: the repeat never does,
                 // and the first sighting is the one firing that must.
-                let repeat = deny_text(&refusal, "BATTEN_HOOK_BYPASS", false, None);
+                let repeat = deny_text(&refusal, false, None);
                 assert!(
                     !repeat.contains("the fixture class"),
                     "a repeat dereferences the gloss rather than carrying it: {repeat}"
                 );
-                let first = deny_text(&refusal, "BATTEN_HOOK_BYPASS", true, None);
+                let first = deny_text(&refusal, true, None);
                 assert!(
                     first.contains("the fixture class"),
                     "and the first sighting is where it does travel: {first}"
@@ -12657,7 +12421,6 @@ deny contains "refused by themodule" if {
             adjudicate(
                 &policy,
                 &envelope("run something else"),
-                false,
                 &crate::facts::Look::CouldNotLook,
                 &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
@@ -12724,7 +12487,6 @@ deny contains "refused by themodule" if {
         adjudicate(
             &receipt_policy(),
             &envelope("gh pr ready 42"),
-            false,
             facts,
             &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
@@ -12765,7 +12527,6 @@ deny contains "refused by themodule" if {
         adjudicate(
             &claim_policy(),
             &write_envelope("Write", "crates/batten/src/new.rs"),
-            false,
             facts,
             &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
@@ -12800,7 +12561,6 @@ deny contains "refused by themodule" if {
             adjudicate(
                 &claim_policy(),
                 &envelope("gh pr ready 42"),
-                false,
                 &crate::facts::Look::Is(resolved(&[("claim", Validity::Missing)])),
                 &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
@@ -12812,7 +12572,6 @@ deny contains "refused by themodule" if {
             adjudicate(
                 &receipt_policy(),
                 &write_envelope("Write", "notes.md"),
-                false,
                 &crate::facts::Look::Is(resolved(&[("verify", Validity::Missing)])),
                 &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
@@ -13018,7 +12777,6 @@ deny contains "refused by themodule" if {
             adjudicate(
                 &receipt_policy(),
                 &envelope("gh pr view 42"),
-                false,
                 &crate::facts::Look::Is(resolved(&[("verify", Validity::Missing)])),
                 &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
@@ -13068,7 +12826,6 @@ deny contains "refused by themodule" if {
             adjudicate(
                 &program_only_receipt_policy(),
                 &envelope(command),
-                false,
                 &crate::facts::Look::Is(resolved(&[("toolchain", Validity::Missing)])),
                 &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
@@ -13196,7 +12953,6 @@ deny contains "refused by themodule" if {
             adjudicate(
                 &protected_policy(vec![verb("Write", Some("use the owning surface"))]),
                 &envelope,
-                false,
                 &crate::facts::Look::CouldNotLook,
                 &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
@@ -13227,7 +12983,6 @@ deny contains "refused by themodule" if {
         adjudicate(
             &protected_policy(verbs),
             &envelope(command),
-            false,
             &crate::facts::Look::CouldNotLook,
             &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
@@ -13379,7 +13134,6 @@ deny contains "refused by themodule" if {
                     adjudicate(
                         &protected_policy(vec![row]),
                         &write_envelope("Write", "batten.toml"),
-                        false,
                         &crate::facts::Look::CouldNotLook,
                         &crate::facts::Look::CouldNotLook,
                         &crate::stop::StopFacts::default(),
@@ -13395,7 +13149,6 @@ deny contains "refused by themodule" if {
             adjudicate(
                 &protected_policy(vec![verb("Write", None)]),
                 &write_envelope("Write", "batten.toml"),
-                false,
                 &crate::facts::Look::CouldNotLook,
                 &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
@@ -13572,7 +13325,7 @@ deny contains "refused by themodule" if {
         ] {
             let text = denial_text(decision);
             assert!(
-                !text.contains(BYPASS_ENV),
+                !text.contains("BYPASS"),
                 "no deny advertises the hatch on the hot path: {text}"
             );
             assert!(
@@ -13659,7 +13412,6 @@ deny contains "refused by themodule" if {
                 redirects,
             ),
             &envelope(command),
-            false,
             &crate::facts::Look::CouldNotLook,
             &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
@@ -13839,7 +13591,6 @@ deny contains "refused by themodule" if {
             adjudicate(
                 &no_verbs,
                 &envelope("rm batten.toml"),
-                false,
                 &crate::facts::Look::CouldNotLook,
                 &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default()
@@ -13869,7 +13620,6 @@ deny contains "refused by themodule" if {
             adjudicate(
                 &no_paths,
                 &envelope("rm batten.toml"),
-                false,
                 &crate::facts::Look::CouldNotLook,
                 &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default()
@@ -13887,69 +13637,11 @@ deny contains "refused by themodule" if {
         let reason = denial_text(adjudicate(
             &policy,
             &envelope("rm .serena/memories/core.md"),
-            false,
             &crate::facts::Look::CouldNotLook,
             &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
         ));
         assert!(reason.contains("no-rm-memories"), "got: {reason}");
-    }
-
-    /// THE HATCH NO LONGER REACHES THIS CLASS, and this case is the inversion of
-    /// the one it replaces.
-    ///
-    /// `the_protected_gate_honours_the_bypass_hatch` asserted the opposite and was
-    /// correct for its whole life: `BATTEN_HOOK_BYPASS` was the only way through a
-    /// protected-path refusal, so honouring it was the difference between a gate
-    /// and a wall. That is what made the refusal a password — a knowable string
-    /// the guarded party can set, recording nothing.
-    ///
-    /// The class declares an override route now and the boundary honours a spent
-    /// admission for it, so there is a way through that leaves a record. Taking
-    /// the variable away is therefore a repair rather than a tightening, and this
-    /// case is where that shows: the deny is what a caller gets, and
-    /// `mediated_admission.rs` is what proves the record still opens it.
-    #[test]
-    fn the_bypass_hatch_does_not_reach_the_protected_gate() {
-        assert!(
-            matches!(
-                adjudicate(
-                    &protected_policy(vec![verb("rm", None)]),
-                    &envelope("rm batten.toml"),
-                    true,
-                    &crate::facts::Look::CouldNotLook,
-                    &crate::facts::Look::CouldNotLook,
-                    &crate::stop::StopFacts::default(),
-                ),
-                Decision::Deny(_)
-            ),
-            "the hatch must not suppress a protected-path refusal"
-        );
-    }
-
-    /// ...AND STILL REACHES EVERY OTHER ROW, which is the half that keeps the
-    /// change narrow.
-    ///
-    /// Without this the case above would pass just as well if the hatch had been
-    /// deleted outright, and a reader could not tell a scoped exemption from a
-    /// removal. `shape` rows are the rest of the mediated surface, so one of them
-    /// under the hatch is the discriminator.
-    #[test]
-    fn the_bypass_hatch_still_reaches_an_explicit_row() {
-        let mut policy = protected_policy(vec![verb("rm", None)]);
-        policy.shapes = vec![shape("no-touching", "touch scratch", None)];
-        assert_eq!(
-            adjudicate(
-                &policy,
-                &envelope("touch scratch"),
-                true,
-                &crate::facts::Look::CouldNotLook,
-                &crate::facts::Look::CouldNotLook,
-                &crate::stop::StopFacts::default(),
-            ),
-            Decision::Allow,
-            "the hatch must still suppress a row that is not the protected gate"
-        );
     }
 
     #[test]
@@ -14024,7 +13716,6 @@ deny contains "refused by themodule" if {
                 adjudicate(
                     &guarding,
                     &call,
-                    false,
                     &crate::facts::Look::CouldNotLook,
                     &crate::facts::Look::CouldNotLook,
                     &crate::stop::StopFacts::default()
@@ -14037,7 +13728,6 @@ deny contains "refused by themodule" if {
             adjudicate(
                 &elsewhere,
                 &call,
-                false,
                 &crate::facts::Look::CouldNotLook,
                 &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default()
@@ -14823,7 +14513,6 @@ deny contains "refused by themodule" if {
             let decision = adjudicate(
                 &policy,
                 &envelope,
-                false,
                 &crate::facts::Look::CouldNotLook,
                 &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
@@ -15355,7 +15044,6 @@ deny contains "refused by themodule" if {
             let decision = adjudicate(
                 &policy,
                 &write_envelope_on(*harness, spelling, "batten.toml"),
-                false,
                 &crate::facts::Look::CouldNotLook,
                 &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
@@ -15386,7 +15074,6 @@ deny contains "refused by themodule" if {
         let Decision::Deny(refusal) = adjudicate(
             &policy,
             &write_envelope_on(Harness::GeminiCli, "WriteFile", "batten.toml"),
-            false,
             &crate::facts::Look::CouldNotLook,
             &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
@@ -15604,7 +15291,6 @@ deny contains "refused by themodule" if {
             adjudicate(
                 &policy,
                 &read,
-                false,
                 &crate::facts::Look::CouldNotLook,
                 &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),

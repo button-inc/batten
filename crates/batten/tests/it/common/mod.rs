@@ -181,7 +181,7 @@ fn declared_env_vars() -> Vec<&'static str> {
 /// class of variable whose entire purpose is **to stop the engine refusing** is
 /// the one class that survived the scrub.
 ///
-/// Measured on `ccb40a13`: with `BATTEN_HOOK_BYPASS=1` exported, `test:cargo` was
+/// Measured on `ccb40a13`: with the since-retired general hatch exported, `test:cargo` was
 /// 1543 passed / **2 failed** — both `board_receipts` cases asserting a refusal,
 /// each expecting exit `2` and getting exit `0`. The same tree with nothing
 /// exported was 3270/3270. Four `test:bats` record-keying cases went the same way
@@ -215,7 +215,7 @@ fn bypass_env_vars() -> Vec<String> {
     // covering the next row somebody adds, silently, in the direction that
     // weakens the suite". The signature is unchanged so no caller has to know.
     static NAMES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
-        let mut names = vec![batten::hook::BYPASS_ENV.to_owned()];
+        let mut names = Vec::new();
         if let Ok(config) = batten::config::load(&at_root("batten.toml")) {
             names.extend(
                 config

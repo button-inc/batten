@@ -86,8 +86,6 @@
 //! environment variable is an override anyone can spend without articulating
 //! anything, and the four `override` cases above are now the admission
 //! mechanism's — requested, answered, content-addressed, and spent exactly once.
-//! The engine's own `BATTEN_HOOK_BYPASS` never reached this gate and still does
-//! not; `batten check` is a tree verb.
 //!
 //! The three-remedy and four-remedy prose is `[[verdict]]`'s now, once, where a
 //! gate can read it — which is what makes a refusal naming a task that does not

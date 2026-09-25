@@ -2163,10 +2163,6 @@ pub const MEASURED_CLASSES: &[(&str, &str)] = &[
     ("tool run loose", "no-tool-substitution"),
 ];
 
-/// The bypass name the mediated path renders; it reaches the unverdicted arm
-/// only, and is passed so this measures the same call the harness makes.
-const HATCH: &str = "BATTEN_HOOK_BYPASS";
-
 /// One rendered arm: what was asked for, and what it cost to say.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderRecord {
@@ -2234,8 +2230,8 @@ pub fn refusal_render(
         for strategy in Strategy::ALL {
             for residency in Residency::ALL {
                 let first = first_sighting(*strategy, *residency);
-                let line = crate::hook::deny_text(&refusal, HATCH, first, ceiling);
-                let unbounded = crate::hook::deny_text(&refusal, HATCH, first, None);
+                let line = crate::hook::deny_text(&refusal, first, ceiling);
+                let unbounded = crate::hook::deny_text(&refusal, first, None);
                 records.push(RenderRecord {
                     strategy: *strategy,
                     residency: *residency,

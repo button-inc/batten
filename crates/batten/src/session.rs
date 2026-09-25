@@ -62,8 +62,7 @@
 //!
 //! These are bare consts rather than a [`crate::resolve`] `SETTINGS` row because
 //! they are ambient context, not settings: there is no config-file spelling for
-//! "which session is this", so there is no precedence ladder to declare. It is the
-//! shape [`crate::hook::BYPASS_ENV`] already takes.
+//! "which session is this", so there is no precedence ladder to declare.
 //!
 //! # The record, and why it is keyed the way it is
 //!

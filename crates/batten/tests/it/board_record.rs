@@ -82,8 +82,7 @@
 //! variable could buy was a quieter record — which is the one direction the gate
 //! reading it cannot detect, since it passes on could-not-look by design. A
 //! caller who wants no record removes the `[[recorder]]` row, which is a visible
-//! config change rather than an invisible environment one. The engine's own
-//! `BATTEN_HOOK_BYPASS` still suppresses the whole mediated path.
+//! config change rather than an invisible environment one.
 //!
 //! The overlap column's meaning is unchanged — it holds the paths the body NAMES,
 //! intersected later by the gate — so the retired case asserting an untouched

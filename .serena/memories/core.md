@@ -2147,7 +2147,7 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   unrelated trajectory — the direction that hides an alert. A warm fork inherits
   its parent's environment, which is what makes env the honest channel and costs
   no new command, flag, or envelope field (§3). Bare consts rather than a
-  `resolve.rs` `SETTINGS` row (`hook::BYPASS_ENV`'s shape): ambient context has no
+  `resolve.rs` `SETTINGS` row (the shape `session.rs`'s consts take): ambient context has no
   config spelling, so no precedence ladder to declare. Absent is unconfigured and
   silent, and the record file is named by a FINGERPRINT of the key — a host
   session id is somebody else's arbitrary string and must not name this crate's

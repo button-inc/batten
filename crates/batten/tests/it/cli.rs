@@ -49,9 +49,9 @@ use common::{
 /// `version = 1` and nothing else IS the no-authority case, stated rather than
 /// inherited: an authority that loads and declares no rule. `name` is per
 /// caller because [`Fixture::new`] wipes, and these cases run in parallel.
-fn run_hook(name: &str, harness: &str, payload: &str, bypass: bool) -> Output {
+fn run_hook(name: &str, harness: &str, payload: &str) -> Output {
     let dir = repo_with_config(name, "version = 1\n");
-    run_hook_in(&dir, harness, payload, bypass)
+    run_hook_in(&dir, harness, payload)
 }
 
 /// The `gh` lifecycle shape rows a hook fixture adjudicates against.
@@ -113,8 +113,8 @@ fn repo_with_gh_policy(name: &str) -> PathBuf {
 /// policy and allows everything. `run_hook` itself keeps the old signature and
 /// points at `crates/batten/`, which has no `batten.toml` — that is the
 /// no-authority case, which several tests want.
-fn run_hook_in(dir: &std::path::Path, harness: &str, payload: &str, bypass: bool) -> Output {
-    run_hook_in_promoted(dir, harness, payload, bypass, false)
+fn run_hook_in(dir: &std::path::Path, harness: &str, payload: &str) -> Output {
+    run_hook_in_promoted(dir, harness, payload, false)
 }
 
 /// [`run_hook_in`], with `--fail-on-warning` selectable.
@@ -130,7 +130,6 @@ fn run_hook_in_promoted(
     dir: &std::path::Path,
     harness: &str,
     payload: &str,
-    bypass: bool,
     promoted: bool,
 ) -> Output {
     let mut command = common::batten_at_real_root();
@@ -140,14 +139,10 @@ fn run_hook_in_promoted(
     }
     command
         .args(["adjudicate", "--harness", harness])
-        .env_remove("BATTEN_HOOK_BYPASS")
         .env_remove("BATTEN_GH_GUARD_BYPASS")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if bypass {
-        command.env("BATTEN_HOOK_BYPASS", "1");
-    }
     let mut child = command.spawn().expect("spawn batten hook");
     child
         .stdin
@@ -177,7 +172,6 @@ fn run_hook_with_env(
     command
         .current_dir(dir)
         .args(["adjudicate", "--harness", harness])
-        .env_remove("BATTEN_HOOK_BYPASS")
         .env_remove("BATTEN_GH_GUARD_BYPASS")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -201,7 +195,6 @@ fn run_hook_verbose(dir: &std::path::Path, harness: &str, payload: &str) -> Outp
     command
         .current_dir(dir)
         .args(["-v", "adjudicate", "--harness", harness])
-        .env_remove("BATTEN_HOOK_BYPASS")
         .env_remove("BATTEN_GH_GUARD_BYPASS")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1896,7 +1889,7 @@ const MATRIX: &[Row] = &[
 fn the_decision_channel_matrix_holds_for_every_harness() {
     let dir = repo_with_gh_policy("matrix-policy");
     for row in MATRIX {
-        let output = run_hook_in(&dir, row.harness, &claude_payload(row.command), false);
+        let output = run_hook_in(&dir, row.harness, &claude_payload(row.command));
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         let at = format!("{}/{}", row.harness, row.case);
@@ -2020,7 +2013,7 @@ fn every_hook_policy_table_deny_names_its_fix() {
 
     let dir = repo_with_gh_policy("refusal-fix-pointer");
     for case in FIX_CASES {
-        let output = run_hook_in(&dir, "exit-code", &claude_payload(case.command), false);
+        let output = run_hook_in(&dir, "exit-code", &claude_payload(case.command));
         assert_eq!(output.status.code(), Some(2), "{}: deny", case.command);
         let stderr = String::from_utf8_lossy(&output.stderr);
         // CLOUD-1286: the sanctioned command is ONE HOP away rather than
@@ -2095,7 +2088,7 @@ fn the_in_band_hosts_carry_the_decision_in_their_document() {
         ),
         ("cursor", "/agent_message"),
     ] {
-        let output = run_hook_in(&dir, harness, &claude_payload("gh pr merge 42"), false);
+        let output = run_hook_in(&dir, harness, &claude_payload("gh pr merge 42"));
         assert_eq!(output.status.code(), Some(0), "{harness}: in-band deny");
         let body: serde_json::Value = serde_json::from_slice(&output.stdout)
             .unwrap_or_else(|err| panic!("{harness}: the deny document must parse: {err}"));
@@ -2144,7 +2137,6 @@ fn a_deny_with_no_consumer_remedy_falls_back_to_the_declared_class() {
         &dir,
         "exit-code",
         &claude_payload("mv notes.md guarded/thing"),
-        false,
     );
     assert_eq!(output.status.code(), Some(2), "the protected gate denies");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2253,12 +2245,7 @@ fn a_deny_names_the_path_classs_own_mutation_over_the_verbs() {
     // proven rather than assumed.
     let dir = repo_with_config("refusal-per-class", PER_CLASS_REDIRECT_CONFIG);
 
-    let claimed = run_hook_in(
-        &dir,
-        "exit-code",
-        &claude_payload("rm guarded/thing.md"),
-        false,
-    );
+    let claimed = run_hook_in(&dir, "exit-code", &claude_payload("rm guarded/thing.md"));
     assert_eq!(claimed.status.code(), Some(2), "the protected gate denies");
     let stderr = String::from_utf8_lossy(&claimed.stderr);
     // CLOUD-1286 took the remedy off the emitted line, so what this case can
@@ -2296,12 +2283,7 @@ fn a_deny_names_the_path_classs_own_mutation_over_the_verbs() {
         "the verb's general remedy must not appear either, got: {stderr}"
     );
 
-    let unclaimed = run_hook_in(
-        &dir,
-        "exit-code",
-        &claude_payload("rm vendor/thing.md"),
-        false,
-    );
+    let unclaimed = run_hook_in(&dir, "exit-code", &claude_payload("rm vendor/thing.md"));
     assert_eq!(unclaimed.status.code(), Some(2), "still denied");
     let stderr = String::from_utf8_lossy(&unclaimed.stderr);
     assert!(
@@ -2440,12 +2422,7 @@ fn every_normalized_event_resolves_to_its_golden_decision() {
             row.spelling
         );
         for harness in harnesses() {
-            let output = run_hook_in(
-                &dir,
-                harness,
-                &payload_at(row.spelling, "gh pr merge 42"),
-                false,
-            );
+            let output = run_hook_in(&dir, harness, &payload_at(row.spelling, "gh pr merge 42"));
             let at = format!("{harness}/{}", row.spelling);
             if row.adjudicated {
                 // Pre-tool is the one event a deny can still prevent anything at.
@@ -2530,7 +2507,6 @@ fn the_deny_document_echoes_the_hosts_own_spelling_not_ours() {
         &dir,
         "claude-code",
         &payload_at("PreToolUse", "gh pr merge 42"),
-        false,
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("PreToolUse"), "got: {stdout}");
@@ -2555,8 +2531,8 @@ fn an_absent_session_degrades_to_per_invocation_without_panicking() {
     .to_string();
     let without = payload_at("PreToolUse", "gh pr merge 42");
     for harness in harnesses() {
-        let a = run_hook_in(&dir, harness, &with, false);
-        let b = run_hook_in(&dir, harness, &without, false);
+        let a = run_hook_in(&dir, harness, &with);
+        let b = run_hook_in(&dir, harness, &without);
         assert_eq!(
             a.status.code(),
             b.status.code(),
@@ -2574,7 +2550,7 @@ fn an_absent_session_degrades_to_per_invocation_without_panicking() {
     })
     .to_string();
     assert_eq!(
-        run_hook_in(&dir, "exit-code", &empty, false).status.code(),
+        run_hook_in(&dir, "exit-code", &empty).status.code(),
         Some(0)
     );
 }
@@ -2587,7 +2563,7 @@ fn an_undecodable_payload_fails_open_loudly_and_never_denies() {
     // rather than a verdict.
     let dir = repo_with_gh_policy("undecodable");
     for harness in harnesses() {
-        let output = run_hook_in(&dir, harness, "{not json at all", false);
+        let output = run_hook_in(&dir, harness, "{not json at all");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(
             output.status.code(),
@@ -2614,7 +2590,7 @@ fn a_quoted_invocation_denies_on_both_harness_channels() {
     // pinned wherever a host reads its decision.
     let dir = repo_with_gh_policy("quoted-invocation");
     for harness in harnesses() {
-        let output = run_hook_in(&dir, harness, &claude_payload("gh \"pr\" \"merge\""), false);
+        let output = run_hook_in(&dir, harness, &claude_payload("gh \"pr\" \"merge\""));
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         if reads_a_deny_body(harness) {
@@ -2647,7 +2623,6 @@ fn a_malformed_harness_token_fails_loud_without_denying() {
     for token in ["claude_code", "", "exitcode"] {
         let output = batten()
             .args(["adjudicate", "--harness", token])
-            .env_remove("BATTEN_HOOK_BYPASS")
             .env_remove("BATTEN_GH_GUARD_BYPASS")
             .stdin(Stdio::null())
             .output()
@@ -2684,12 +2659,7 @@ fn hook_allows_when_no_authority_is_configured() {
     // this case actually makes needs a directory no repository encloses, which is
     // what `scratch_outside_tree` is for.
     let dir = common::scratch_outside_tree("hook-no-authority", "not-a-repository");
-    let output = run_hook_in(
-        &dir,
-        "claude-code",
-        &claude_payload("gh pr merge 42"),
-        false,
-    );
+    let output = run_hook_in(&dir, "claude-code", &claude_payload("gh pr merge 42"));
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty(), "no authority denies nothing");
 }
@@ -2717,7 +2687,7 @@ fn hook_refuses_and_is_loud_on_an_unloadable_authority() {
     // Here there is no partial surface: nothing parsed, so nothing is enforced.
     let dir = repo_with_config("hook-broken-authority", "this is not toml at all\n");
     for harness in harnesses() {
-        let output = run_hook_in(&dir, harness, &claude_payload("gh pr view 42"), false);
+        let output = run_hook_in(&dir, harness, &claude_payload("gh pr view 42"));
         let code = output.status.code();
         let stdout = String::from_utf8_lossy(&output.stdout);
         // WHAT THIS CASE PROVES IS THAT NO HARNESS FAILS OPEN, and it deliberately
@@ -2817,7 +2787,7 @@ fn hook_refuses_an_invalid_severity_without_denying() {
          pattern = \"gh pr merge\"\nreason = \"r\"\n",
     );
     for harness in harnesses() {
-        let output = run_hook_in(&dir, harness, &claude_payload("gh pr merge"), false);
+        let output = run_hook_in(&dir, harness, &claude_payload("gh pr merge"));
         let code = output.status.code();
         assert_eq!(code, Some(1), "{harness}: a bad severity is a usage error");
         assert_ne!(code, Some(2), "{harness}: must never deny");
@@ -2838,12 +2808,7 @@ fn hook_honours_a_shape_rule_a_local_override_added() {
          scope = \"mediated_call\"\nseverity = \"deny\"\n\
          pattern = \"npm publish\"\nreason = \"releases go through the release pipeline\"\n",
     );
-    let output = run_hook_in(
-        &dir,
-        "exit-code",
-        &claude_payload("npm publish --tag next"),
-        false,
-    );
+    let output = run_hook_in(&dir, "exit-code", &claude_payload("npm publish --tag next"));
     assert_eq!(output.status.code(), Some(2), "a local row must be applied");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("local-shape"), "got: {stderr}");
@@ -2876,7 +2841,7 @@ fn repo_with_protected_policy(name: &str) -> PathBuf {
 fn hook_denies_a_mutating_verb_against_a_protected_path_on_both_channels() {
     let dir = repo_with_protected_policy("protected-both-channels");
     for harness in harnesses() {
-        let output = run_hook_in(&dir, harness, &claude_payload("rm guarded/thing"), false);
+        let output = run_hook_in(&dir, harness, &claude_payload("rm guarded/thing"));
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         if reads_a_deny_body(harness) {
@@ -2909,12 +2874,7 @@ fn hook_denies_a_mutating_verb_against_a_protected_path_on_both_channels() {
 #[test]
 fn hook_allows_the_same_verb_against_an_unprotected_path() {
     let dir = repo_with_protected_policy("protected-elsewhere");
-    let output = run_hook_in(
-        &dir,
-        "exit-code",
-        &claude_payload("rm scratch/thing"),
-        false,
-    );
+    let output = run_hook_in(&dir, "exit-code", &claude_payload("rm scratch/thing"));
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty());
 }
@@ -2925,7 +2885,7 @@ fn hook_denies_a_truncating_redirect_against_a_protected_path() {
     // pseudo-verb the consumer declared.
     let dir = repo_with_protected_policy("protected-redirect");
     for command in ["cat x > guarded/thing", "cat x >guarded/thing"] {
-        let output = run_hook_in(&dir, "exit-code", &claude_payload(command), false);
+        let output = run_hook_in(&dir, "exit-code", &claude_payload(command));
         assert_eq!(output.status.code(), Some(2), "must deny: {command}");
     }
 }
@@ -3091,7 +3051,7 @@ fn the_committed_protected_paths_fire_on_a_mutating_verb() {
         "mv batten.toml elsewhere.toml",
         "cat x > .github/workflows/ci.yml",
     ] {
-        let output = run_hook_in(&root, "exit-code", &claude_payload(command), false);
+        let output = run_hook_in(&root, "exit-code", &claude_payload(command));
         assert_eq!(
             output.status.code(),
             Some(2),
@@ -3103,7 +3063,6 @@ fn the_committed_protected_paths_fire_on_a_mutating_verb() {
         &root,
         "exit-code",
         &claude_payload("rm target/debug/scratch"),
-        false,
     );
     assert_eq!(output.status.code(), Some(0));
 }
@@ -3117,7 +3076,7 @@ fn hook_fails_open_and_loud_on_a_malformed_protected_list() {
         "version = 1\nprotected = [\"!nope\"]\n\n[[verb]]\nverb = \"rm\"\n\
          effect = \"destructive\"\n",
     );
-    let output = run_hook_in(&dir, "exit-code", &claude_payload("rm anything"), false);
+    let output = run_hook_in(&dir, "exit-code", &claude_payload("rm anything"));
     let code = output.status.code();
     assert_eq!(code, Some(1), "a malformed protected list is usage");
     assert_ne!(code, Some(2), "must never deny");
@@ -3547,7 +3506,7 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
             } => claude_spawn_payload(tool, &prompt.repeat(*repeat)),
         };
         let promoted = promoted_rows.contains(case.rule);
-        let output = run_hook_in_promoted(&dir, "exit-code", &payload, false, promoted);
+        let output = run_hook_in_promoted(&dir, "exit-code", &payload, promoted);
         assert_eq!(
             output.status.code(),
             Some(2),
@@ -3606,7 +3565,7 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
     // — and `another_task_is_none_of_this_gates_business` beside it is what keeps
     // the row from becoming a blanket refusal of `mise run`.
     let command = "gh pr view 42";
-    let output = run_hook_in(&root, "exit-code", &claude_payload(command), false);
+    let output = run_hook_in(&root, "exit-code", &claude_payload(command));
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -3626,12 +3585,7 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
     // here. A rule that denied it outright would take the backgrounded form too,
     // and this is where that would surface.
     for command in ["mise exec -- cargo test -p batten", "mise run test:cargo"] {
-        let output = run_hook_in(
-            &root,
-            "exit-code",
-            &claude_payload_backgrounded(command),
-            false,
-        );
+        let output = run_hook_in(&root, "exit-code", &claude_payload_backgrounded(command));
         assert_eq!(
             output.status.code(),
             Some(0),
@@ -3647,12 +3601,7 @@ fn the_bare_cargo_refusal_names_the_sanctioned_route() {
     // refusal that did not name the route would read as "cargo is banned" and
     // send its reader looking for a way around rather than through.
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = run_hook_in(
-        &root,
-        "exit-code",
-        &claude_payload("cargo test -p batten"),
-        false,
-    );
+    let output = run_hook_in(&root, "exit-code", &claude_payload("cargo test -p batten"));
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
     // CLOUD-1286: the route is one hop from the row id on the line. The claim
@@ -3860,7 +3809,7 @@ fn the_census_check_refuses_a_case_naming_no_row() {
 #[test]
 fn the_committed_policy_gates_ready_on_receipts_rather_than_banning_it() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = run_hook_in(&root, "exit-code", &claude_payload("gh pr ready 42"), false);
+    let output = run_hook_in(&root, "exit-code", &claude_payload("gh pr ready 42"));
     let stderr = String::from_utf8_lossy(&output.stderr);
     match output.status.code() {
         // Preconditions satisfied in this checkout: allowed, which is the point.
@@ -3905,7 +3854,6 @@ fn hook_denies_a_blocked_shape_in_the_harness_channel() {
         &dir,
         "claude-code",
         &claude_payload("mise exec -- gh pr merge 42"),
-        false,
     );
     assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -3947,7 +3895,7 @@ fn every_host_denies_the_same_call_through_its_own_channel() {
         ),
         ("cursor", "cursor", "\"permission\":\"deny\""),
     ] {
-        let output = run_hook_in(&dir, harness, &host_fixture(stem), false);
+        let output = run_hook_in(&dir, harness, &host_fixture(stem));
         assert_eq!(
             output.status.code(),
             Some(0),
@@ -3974,7 +3922,7 @@ fn every_host_denies_the_same_call_through_its_own_channel() {
         ("gemini-cli", "gemini-cli"),
         ("codex-cli", "codex-cli"),
     ] {
-        let output = run_hook_in(&dir, harness, &host_fixture(stem), false);
+        let output = run_hook_in(&dir, harness, &host_fixture(stem));
         assert_eq!(
             output.status.code(),
             Some(2),
@@ -4064,7 +4012,7 @@ fn a_protected_write_is_refused_on_every_harness_in_its_own_vocabulary() {
         ("gemini-cli", "gemini-cli-write"),
         ("codex-cli", "codex-cli-write"),
     ] {
-        let output = run_hook_in(&dir, harness, &host_fixture(stem), false);
+        let output = run_hook_in(&dir, harness, &host_fixture(stem));
         assert!(
             denied(harness, &output),
             "{harness}: a write to a protected path was not refused — \
@@ -4080,7 +4028,6 @@ fn a_protected_write_is_refused_on_every_harness_in_its_own_vocabulary() {
         &dir,
         "exit-code",
         r#"{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"guarded.txt"}}"#,
-        false,
     );
     assert_eq!(
         neutral.status.code(),
@@ -4097,7 +4044,7 @@ fn a_cursor_shell_call_reaches_the_same_protected_gate() {
     // `Operation::Execute`, and the SAME gate judges it — which is what stops the
     // shell path and the tool path from being two implementations that drift.
     let dir = repo_with_config("protected-write-cursor-shell", PROTECTED_WRITE_CONFIG);
-    let output = run_hook_in(&dir, "cursor", &host_fixture("cursor-shell-write"), false);
+    let output = run_hook_in(&dir, "cursor", &host_fixture("cursor-shell-write"));
     assert!(
         denied("cursor", &output),
         "got stdout: {}",
@@ -4122,7 +4069,6 @@ fn a_read_of_a_protected_path_is_not_refused_on_any_harness() {
             &dir,
             harness,
             r#"{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"guarded.txt"}}"#,
-            false,
         );
         assert!(
             !denied(harness, &output),
@@ -4137,7 +4083,7 @@ fn a_cursor_payload_with_a_windows_bom_still_denies() {
     // strict JSON parser, and fail-open turns that into allow-all. Through the
     // binary, because that is where the bytes actually arrive.
     let dir = repo_with_gh_policy("host-bom");
-    let output = run_hook_in(&dir, "cursor", &host_fixture("cursor-bom"), false);
+    let output = run_hook_in(&dir, "cursor", &host_fixture("cursor-bom"));
     assert_eq!(output.status.code(), Some(0));
     assert!(
         String::from_utf8_lossy(&output.stdout).contains("\"permission\":\"deny\""),
@@ -4166,7 +4112,7 @@ fn an_event_a_host_does_not_declare_degrades_cleanly() {
 
     // Declared: no capability note, and the event is simply not adjudicated
     // (only pre-tool is), so it allows quietly.
-    let declared = run_hook_in(&dir, "claude-code", &payload, false);
+    let declared = run_hook_in(&dir, "claude-code", &payload);
     assert_eq!(declared.status.code(), Some(0));
     assert!(declared.stdout.is_empty());
     assert!(
@@ -4176,7 +4122,7 @@ fn an_event_a_host_does_not_declare_degrades_cleanly() {
 
     // Undeclared: still an allow, still nothing on the answer channel.
     for harness in ["cursor", "copilot-cli", "gemini-cli", "codex-cli"] {
-        let output = run_hook_in(&dir, harness, &payload, false);
+        let output = run_hook_in(&dir, harness, &payload);
         assert_eq!(
             output.status.code(),
             Some(0),
@@ -4219,7 +4165,7 @@ fn a_payload_that_fits_no_host_fails_open_on_every_host() {
         "codex-cli",
         "exit-code",
     ] {
-        let output = run_hook_in(&dir, harness, "not json at all", false);
+        let output = run_hook_in(&dir, harness, "not json at all");
         assert_eq!(output.status.code(), Some(0), "{harness} must fail open");
         assert!(output.stdout.is_empty(), "{harness} emits no verdict");
     }
@@ -4228,12 +4174,7 @@ fn a_payload_that_fits_no_host_fails_open_on_every_host() {
 #[test]
 fn hook_allows_reads_and_quoted_lookalikes_silently() {
     for command in ["gh pr view 42", "git commit -m \"gh pr merge\""] {
-        let output = run_hook(
-            "hook-allows-reads",
-            "claude-code",
-            &claude_payload(command),
-            false,
-        );
+        let output = run_hook("hook-allows-reads", "claude-code", &claude_payload(command));
         assert_eq!(output.status.code(), Some(0), "command: {command}");
         assert!(
             output.stdout.is_empty(),
@@ -4246,25 +4187,7 @@ fn hook_allows_reads_and_quoted_lookalikes_silently() {
 fn hook_fails_open_on_an_undecodable_payload() {
     // A guard must never be the reason a session cannot proceed: junk on stdin
     // is an allow, not an error.
-    let output = run_hook(
-        "hook-undecodable-payload",
-        "claude-code",
-        "not json at all",
-        false,
-    );
-    assert_eq!(output.status.code(), Some(0));
-    assert!(output.stdout.is_empty());
-}
-
-#[test]
-fn hook_honours_the_bypass_hatch() {
-    // THE AUTHORITY HAS TO REFUSE THIS CALL, or the case says nothing (CLOUD-1135).
-    // It used to drive `run_hook`, which now loads an authority declaring no
-    // rules — an allow the bypass could not have caused. `commit ship other` is a row
-    // in the same fixture `hook_exit_code_harness_denies_with_exit_2` uses to
-    // assert the deny this suppresses, so the two are the same call twice.
-    let dir = repo_with_gh_policy("bypass-over-a-real-deny");
-    let output = run_hook_in(&dir, "claude-code", &claude_payload("gh pr merge 42"), true);
+    let output = run_hook("hook-undecodable-payload", "claude-code", "not json at all");
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty());
 }
@@ -4275,7 +4198,7 @@ fn hook_exit_code_harness_denies_with_exit_2() {
     // no translation. The reason goes to stderr — the neutral channel for a
     // host whose only decision vocabulary is an exit status.
     let dir = repo_with_gh_policy("deny-exit-code-channel");
-    let output = run_hook_in(&dir, "exit-code", &claude_payload("gh pr merge 42"), false);
+    let output = run_hook_in(&dir, "exit-code", &claude_payload("gh pr merge 42"));
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -4308,7 +4231,7 @@ fn no_failure_path_can_deny_a_mediated_call() {
     let dir = repo_with_config("no-failure-path-denies", "version = 1\n");
     for harness in harnesses() {
         for (name, payload) in cases {
-            let output = run_hook_in(&dir, harness, payload, false);
+            let output = run_hook_in(&dir, harness, payload);
             assert_ne!(
                 output.status.code(),
                 Some(2),
@@ -5663,7 +5586,6 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf, String) {
         .args(["adjudicate", "--harness", "claude-code"])
         .current_dir(&repo)
         .state_home(&home)
-        .env_remove("BATTEN_HOOK_BYPASS")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -9865,7 +9787,7 @@ fn a_declared_action_fires_on_its_event_with_the_substituted_argv() {
         "task-completed",
         r#"["sh", "-c", "printf %s \"$1\" > fired.txt", "sh", "{event}"]"#,
     );
-    let output = run_hook_in(&dir, "claude-code", &claude_event_payload("Stop"), false);
+    let output = run_hook_in(&dir, "claude-code", &claude_event_payload("Stop"));
 
     // Claude's `Stop` normalizes to the stop event, so the task-completed row
     // must NOT fire: an action runs at the moment it named, never a stand-in.
@@ -9876,7 +9798,6 @@ fn a_declared_action_fires_on_its_event_with_the_substituted_argv() {
         &dir,
         "claude-code",
         &serde_json::json!({ "hook_event_name": "TaskCompleted", "session_id": "s-1" }).to_string(),
-        false,
     );
     assert_eq!(output.status.code(), Some(0), "the answer is unchanged");
     assert_eq!(
@@ -9900,7 +9821,6 @@ fn a_host_without_the_capability_fires_nothing_and_still_answers() {
         &dir,
         "exit-code",
         &serde_json::json!({ "hook_event_name": "TaskCompleted" }).to_string(),
-        false,
     );
     assert_eq!(output.status.code(), Some(0), "allow, never an error");
     assert!(
@@ -9918,7 +9838,6 @@ fn a_failing_action_leaves_the_hooks_answer_alone_and_reports_a_pointer() {
         &dir,
         "claude-code",
         &serde_json::json!({ "hook_event_name": "TaskCompleted" }).to_string(),
-        false,
     );
     assert_eq!(
         output.status.code(),
@@ -9947,7 +9866,6 @@ fn an_actions_output_never_reaches_either_channel() {
         &dir,
         "claude-code",
         &serde_json::json!({ "hook_event_name": "TaskCompleted" }).to_string(),
-        false,
     );
     assert_eq!(output.status.code(), Some(0));
     let both = format!("{}{}", common::stdout(&output), common::stderr(&output));
@@ -9964,7 +9882,7 @@ fn an_action_on_the_adjudicated_event_is_a_config_error() {
     // the very call. Exit 1, the config-error code — never 2, which would read
     // to a host as a policy verdict about the mediated call.
     let dir = action_repo("action-pre-tool", "pre-tool", r#"["true"]"#);
-    let output = run_hook_in(&dir, "claude-code", &claude_payload("echo hi"), false);
+    let output = run_hook_in(&dir, "claude-code", &claude_payload("echo hi"));
     assert_eq!(output.status.code(), Some(1));
     assert!(
         common::stderr(&output).contains("before a possible deny"),
@@ -9986,7 +9904,6 @@ fn an_unknown_key_in_an_action_row_stays_a_hard_config_error() {
         &dir,
         "claude-code",
         &serde_json::json!({ "hook_event_name": "Stop" }).to_string(),
-        false,
     );
     assert_eq!(output.status.code(), Some(1), "a usage error, never a deny");
 }
@@ -10053,8 +9970,8 @@ fn no_deny_advertises_a_hatch_on_the_hot_path() {
     let general = run_hook_with_env(&dir, "claude-code", &hatch_call("danger-zone --now"), &[]);
     let general_text = String::from_utf8_lossy(&general.stdout).into_owned();
     assert!(
-        !general_text.contains("BATTEN_HOOK_BYPASS"),
-        "and neither does a row taking the general hatch: {general_text}"
+        !general_text.contains("BYPASS"),
+        "and neither does a row declaring no hatch: {general_text}"
     );
     assert!(
         !general_text.contains("GH_GUARD"),
@@ -10114,28 +10031,6 @@ fn one_rows_hatch_leaves_every_other_row_live() {
 }
 
 #[test]
-fn a_bypassed_call_fires_no_action() {
-    // The bypass says "do not mediate this call"; spawning the operator's
-    // command while claiming not to mediate would be the surprising reading.
-    let dir = action_repo(
-        "action-bypassed",
-        "task-completed",
-        r#"["sh", "-c", "touch fired.txt"]"#,
-    );
-    let output = run_hook_in(
-        &dir,
-        "claude-code",
-        &serde_json::json!({ "hook_event_name": "TaskCompleted" }).to_string(),
-        true,
-    );
-    assert_eq!(output.status.code(), Some(0));
-    assert!(
-        !dir.join("fired.txt").exists(),
-        "a bypassed run fires nothing"
-    );
-}
-
-#[test]
 fn a_repository_declaring_no_actions_spawns_nothing_and_is_unaffected() {
     // Absent is not empty, and it is certainly not an error: the overwhelming
     // majority of directories a registered hook runs in declare no actions.
@@ -10144,7 +10039,6 @@ fn a_repository_declaring_no_actions_spawns_nothing_and_is_unaffected() {
         &dir,
         "claude-code",
         &serde_json::json!({ "hook_event_name": "TaskCompleted" }).to_string(),
-        false,
     );
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(common::stderr(&output), "");
@@ -10179,7 +10073,7 @@ fn a_clean_tree_and_an_empty_store_let_the_turn_end() {
     // Acceptance (b). Allow prints nothing: a turn that may end is the ordinary
     // case, and saying so on every one would spend context to report a non-event.
     let dir = stop_repo("stop-clean");
-    let output = run_hook_in(&dir, "claude-code", &stop_payload(), false);
+    let output = run_hook_in(&dir, "claude-code", &stop_payload());
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(common::stdout(&output), "");
     assert_eq!(common::stderr(&output), "");
@@ -10200,7 +10094,7 @@ fn at_risk_work_does_not_block_the_turn() {
     let dir = stop_repo("stop-at-risk");
     common::write(&dir, "scratch.txt", "work in progress\n");
 
-    let output = run_hook_in(&dir, "claude-code", &stop_payload(), false);
+    let output = run_hook_in(&dir, "claude-code", &stop_payload());
     assert_eq!(output.status.code(), Some(0));
     let document = common::stdout(&output);
     assert!(
@@ -10247,7 +10141,7 @@ fn the_same_state_on_a_pre_tool_event_does_not_deny() {
     let dir = stop_repo("stop-pre-tool");
     common::write(&dir, "scratch.txt", "work in progress\n");
 
-    let output = run_hook_in(&dir, "claude-code", &claude_payload("echo hi"), false);
+    let output = run_hook_in(&dir, "claude-code", &claude_payload("echo hi"));
     assert_eq!(output.status.code(), Some(0));
     assert!(
         !common::stdout(&output).contains("\"deny\""),
@@ -10268,7 +10162,6 @@ fn a_host_that_does_not_emit_stop_ends_its_turn_unmediated() {
         &dir,
         "exit-code",
         &serde_json::json!({ "hook_event_name": "TaskCompleted" }).to_string(),
-        false,
     );
     assert_eq!(
         output.status.code(),
@@ -10286,7 +10179,7 @@ fn outside_a_repository_the_turn_ends_unmediated() {
     // inside this repository, so a gate that reads the checkout would answer
     // about Batten's own working tree rather than about nothing.
     let dir = common::scratch_outside_tree("batten-stop", "outside");
-    let output = run_hook_in(&dir, "claude-code", &stop_payload(), false);
+    let output = run_hook_in(&dir, "claude-code", &stop_payload());
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(common::stdout(&output), "");
 }
@@ -10306,7 +10199,7 @@ fn a_stop_event_never_reaches_the_deny_exit_code() {
     let dir = stop_repo("stop-exit-code");
     common::write(&dir, "scratch.txt", "work in progress\n");
 
-    let output = run_hook_in(&dir, "exit-code", &stop_payload(), false);
+    let output = run_hook_in(&dir, "exit-code", &stop_payload());
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -10386,7 +10279,6 @@ fn a_matcher_keeps_a_pre_tool_handler_off_the_calls_it_does_not_name() {
         &dir,
         "claude-code",
         &pre_tool_payload("mcp__x__get_session"),
-        false,
     );
     let document = common::stdout(&named);
     assert!(
@@ -10395,7 +10287,7 @@ fn a_matcher_keeps_a_pre_tool_handler_off_the_calls_it_does_not_name() {
     );
 
     for tool in ["Bash", "Read", "Edit"] {
-        let other = run_hook_in(&dir, "claude-code", &pre_tool_payload(tool), false);
+        let other = run_hook_in(&dir, "claude-code", &pre_tool_payload(tool));
         let document = common::stdout(&other);
         assert!(
             !document.contains("dispatched"),
@@ -10416,7 +10308,7 @@ fn a_handler_with_no_matcher_still_runs_for_every_call_at_its_event() {
         r#"["sh", "-c", "echo dispatched >&2; exit 2"]"#,
     );
     for tool in ["Bash", "mcp__x__get_session"] {
-        let output = run_hook_in(&dir, "claude-code", &pre_tool_payload(tool), false);
+        let output = run_hook_in(&dir, "claude-code", &pre_tool_payload(tool));
         let document = common::stdout(&output);
         assert!(
             document.contains("dispatched"),
@@ -10435,7 +10327,7 @@ fn a_handler_that_refuses_reaches_the_host_channel_the_engine_uses() {
         "user-prompt-submit",
         r#"["sh", "-c", "echo refused-by-handler >&2; exit 2"]"#,
     );
-    let output = run_hook_in(&dir, "claude-code", &prompt_payload(), false);
+    let output = run_hook_in(&dir, "claude-code", &prompt_payload());
     let document = common::stdout(&output);
     assert_eq!(output.status.code(), Some(0));
     assert!(
@@ -10476,7 +10368,7 @@ fn a_handler_that_refuses_and_says_nothing_allows_rather_than_denying() {
         "post-tool-batch",
         r#"["sh", "-c", "exit 2"]"#,
     );
-    let output = run_hook_in(&dir, "claude-code", &batch_payload(), false);
+    let output = run_hook_in(&dir, "claude-code", &batch_payload());
     let document = common::stdout(&output);
     assert_eq!(output.status.code(), Some(0));
     assert!(
@@ -10497,7 +10389,7 @@ fn a_handler_that_exits_zero_with_stdout_advises_rather_than_deciding() {
         "post-tool-batch",
         r#"["sh", "-c", "echo a-pointer-line"]"#,
     );
-    let output = run_hook_in(&dir, "claude-code", &batch_payload(), false);
+    let output = run_hook_in(&dir, "claude-code", &batch_payload());
     let document = common::stdout(&output);
     assert_eq!(output.status.code(), Some(0));
     assert!(
@@ -10527,7 +10419,7 @@ fn an_advisory_at_an_event_with_no_channel_reaches_the_operator_not_the_model() 
         "user-prompt-submit",
         r#"["sh", "-c", "echo a-pointer-line"]"#,
     );
-    let output = run_hook_in(&dir, "claude-code", &prompt_payload(), false);
+    let output = run_hook_in(&dir, "claude-code", &prompt_payload());
     assert_eq!(output.status.code(), Some(0));
     assert!(
         common::stdout(&output).is_empty(),
@@ -10564,7 +10456,7 @@ fn a_handler_writing_a_host_document_is_reported_and_not_forwarded() {
         "post-tool-batch",
         r#"["sh", "-c", 'printf %s "{\"hookSpecificOutput\":{\"permissionDecision\":\"deny\"}}"']"#,
     );
-    let output = run_hook_in(&dir, "claude-code", &batch_payload(), false);
+    let output = run_hook_in(&dir, "claude-code", &batch_payload());
     let document = common::stdout(&output);
     assert_eq!(output.status.code(), Some(0));
     assert!(
@@ -10587,7 +10479,7 @@ fn a_handler_that_hangs_is_killed_at_its_bound_and_the_turn_still_ends() {
         )
         .build();
     let started = std::time::Instant::now();
-    let output = run_hook_in(&dir, "claude-code", &batch_payload(), false);
+    let output = run_hook_in(&dir, "claude-code", &batch_payload());
     assert_eq!(output.status.code(), Some(0), "a bound is not a refusal");
     assert!(
         started.elapsed() < std::time::Duration::from_secs(10),
@@ -10610,7 +10502,7 @@ fn an_event_no_handler_selects_for_dispatches_nothing() {
         "user-prompt-submit",
         r#"["sh", "-c", "echo should-not-run"]"#,
     );
-    let output = run_hook_in(&dir, "claude-code", &stop_payload(), false);
+    let output = run_hook_in(&dir, "claude-code", &stop_payload());
     assert_eq!(output.status.code(), Some(0));
     let seen = format!("{}{}", common::stdout(&output), common::stderr(&output));
     assert!(
@@ -11654,7 +11546,7 @@ fn the_agent_sourced_fact_loop_closes_end_to_end() {
 
     // 1. The gate has no fact, so it denies — and the deny carries the COMMAND to
     //    run, built from the declared fact rather than from the row's prose.
-    let denied = run_hook_in(&dir, "exit-code", PR_CREATE, false);
+    let denied = run_hook_in(&dir, "exit-code", PR_CREATE);
     assert_eq!(denied.status.code(), Some(2), "a missing fact must deny");
     let reason = common::stderr(&denied);
     // CLOUD-1286 moved the command one hop out, and this case is what proves the
@@ -11679,7 +11571,6 @@ fn the_agent_sourced_fact_loop_closes_end_to_end() {
         &dir,
         "exit-code",
         &post_tool("gh pr list --state open --json headRefName", "[]"),
-        false,
     );
     assert_eq!(
         recorded.status.code(),
@@ -11689,7 +11580,7 @@ fn the_agent_sourced_fact_loop_closes_end_to_end() {
 
     // 3. The retry decides from the fact. `[]` is "it ran and there are none" —
     //    an ANSWER, and the one a never-ran must never collapse into.
-    let allowed = run_hook_in(&dir, "exit-code", PR_CREATE, false);
+    let allowed = run_hook_in(&dir, "exit-code", PR_CREATE);
     assert_eq!(
         allowed.status.code(),
         Some(0),
@@ -11710,9 +11601,9 @@ fn a_buffer_from_another_command_never_becomes_the_fact() {
         .base_commit()
         .build();
 
-    run_hook_in(&dir, "exit-code", &post_tool("echo '[]'", "[]"), false);
+    run_hook_in(&dir, "exit-code", &post_tool("echo '[]'", "[]"));
 
-    let still_denied = run_hook_in(&dir, "exit-code", PR_CREATE, false);
+    let still_denied = run_hook_in(&dir, "exit-code", PR_CREATE);
     assert_eq!(
         still_denied.status.code(),
         Some(2),
@@ -11753,10 +11644,9 @@ fn a_buffer_that_breaks_the_declared_shape_records_nothing() {
             "gh pr list --state open --json headRefName",
             "gh: could not determine the current repository",
         ),
-        false,
     );
 
-    let still_denied = run_hook_in(&dir, "exit-code", PR_CREATE, false);
+    let still_denied = run_hook_in(&dir, "exit-code", PR_CREATE);
     assert_eq!(
         still_denied.status.code(),
         Some(2),
@@ -11800,7 +11690,6 @@ fn run_hook_state(
     command
         .current_dir(dir)
         .args(["adjudicate", "--harness", harness])
-        .env_remove("BATTEN_HOOK_BYPASS")
         .env_remove("BATTEN_GH_GUARD_BYPASS")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -12563,7 +12452,7 @@ fn a_fact_row_that_states_no_returns_is_refused_at_load_over_the_binary() {
         .base_commit()
         .build();
 
-    let refused = run_hook_in(&dir, "exit-code", PR_CREATE, false);
+    let refused = run_hook_in(&dir, "exit-code", PR_CREATE);
     assert_eq!(
         refused.status.code(),
         Some(1),
@@ -12626,7 +12515,6 @@ fn record_response(dir: &Path, home: &Path, tool: &str, document: &serde_json::V
     let output = command
         .current_dir(dir)
         .args(["adjudicate", "--harness", "claude-code"])
-        .env_remove("BATTEN_HOOK_BYPASS")
         .state_home(home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -13363,33 +13251,6 @@ fn a_command_that_is_not_a_ready_is_never_gated_here() {
             stderr(&output)
         );
     }
-}
-
-#[test]
-fn the_engine_hatch_suppresses_the_row() {
-    // `BATTEN_READY_GUARD_BYPASS` is gone; the row declares no `bypass_env`, so
-    // the hatch is the engine's own. Asserted here as well as in
-    // `guardrail_bypass.rs` because the ledger's `changed` arm claims it.
-    let (repo, home) = ready_fixture("ready-guard-bypass");
-    let mut child = batten()
-        .args(["adjudicate", "--harness", "exit-code"])
-        .current_dir(&repo)
-        .state_home(&home)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
-        .env("BATTEN_HOOK_BYPASS", "1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn batten hook");
-    child
-        .stdin
-        .as_mut()
-        .expect("hook stdin")
-        .write_all(claude_payload("gh pr ready 42").as_bytes())
-        .expect("write the payload");
-    let output = child.wait_with_output().expect("batten hook");
-    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
 }
 
 #[test]

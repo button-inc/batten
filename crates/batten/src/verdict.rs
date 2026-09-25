@@ -1609,9 +1609,9 @@ refusal names when one exists.",
             //
             // With no override route, `admission::questions_for` returns `None` and
             // `batten override request` answers "declares no `override` route, so
-            // it cannot be overridden". The only remaining exit was
-            // `BATTEN_HOOK_BYPASS` — a knowable string the guarded party can set,
-            // which records nothing and stops nobody. This repository already ruled
+            // it cannot be overridden". The only remaining exit was the general
+            // hatch (since retired) — a knowable string the guarded party could
+            // set, which recorded nothing and stopped nobody. This repository already ruled
             // on that shape for `issue file same`: *the point of the admission
             // mechanism is that the bare variable stops working*.
             //
@@ -1682,7 +1682,7 @@ reachability is.",
             run("file reverted", "git checkout -- <path>"),
             // The way through that leaves a record, which is what keeps this a
             // gate rather than a wall. Its precondition also makes the class
-            // non-suppressible by `BATTEN_HOOK_BYPASS` (CLOUD-1357), which is
+            // non-suppressible by any hatch (CLOUD-1357), which is
             // right for a verb whose subject is gone by the time anyone reads
             // the refusal.
             admit(

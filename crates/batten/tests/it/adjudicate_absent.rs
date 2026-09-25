@@ -98,39 +98,45 @@ fn a_loadable_config_still_allows_an_ordinary_call() {
     );
 }
 
-#[test]
-fn the_declared_hatch_still_reaches_a_clone_whose_config_will_not_load() {
-    // What keeps a container recoverable rather than bricked. A stale binary
-    // meeting a newer config refuses every call until one of them moves, so the
-    // operator's declared escape has to survive exactly the state that needs it.
-    //
-    // `common::batten()` scrubs every bypass variable by construction, so setting
-    // one here is the only way it is present — a case that inherited it from the
-    // developer's shell would pass without testing anything.
-    use std::io::Write as _;
-    use std::process::Stdio;
+/// A write-tool call targeting `file` inside `dir`, by absolute path the way
+/// Claude Code sends one — the boundary relativises it before judging.
+fn write_payload(dir: &Path, file: &str) -> String {
+    serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": dir.join(file), "content": "version = 1\n"},
+    })
+    .to_string()
+}
 
-    let dir = fixture("adjudicate-hatch", WILL_NOT_PARSE);
-    let mut child = common::batten()
-        .args(["adjudicate", "--harness", "exit-code"])
-        .current_dir(&dir)
-        .env("BATTEN_HOOK_BYPASS", "1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("the binary runs");
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin is piped")
-        .write_all(payload().as_bytes())
-        .expect("the payload is writable");
-    let output = child.wait_with_output().expect("the binary answers");
+#[test]
+fn the_config_file_stays_writable_while_it_will_not_load() {
+    // THE REPAIR LANE, which replaced the general hatch in the one state that
+    // needed it. A stale binary meeting a newer config, or a `batten.toml`
+    // mid-edit, refuses every call — so the file itself must stay writable or
+    // nothing the session can do recovers the container.
+    let dir = fixture("adjudicate-repair", WILL_NOT_PARSE);
+    let repair = run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "exit-code"],
+        &write_payload(&dir, "batten.toml"),
+    );
     assert_eq!(
-        output.status.code(),
+        repair.status.code(),
         Some(0),
-        "the declared hatch must still pass a call the engine cannot judge"
+        "writing the config file is how an unreadable config gets fixed"
+    );
+    // THE LANE IS THE FILE AND NOTHING ELSE. A write anywhere else is as
+    // unjudged as the command in the case above, and is refused the same way.
+    let other = run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "exit-code"],
+        &write_payload(&dir, "notes.md"),
+    );
+    assert_eq!(
+        other.status.code(),
+        Some(2),
+        "a write that is not the config stays refused"
     );
 }
 

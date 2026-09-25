@@ -1746,11 +1746,10 @@ pub struct Rule {
     /// The environment variable that suppresses **this row**, named in this
     /// row's own deny (CLOUD-437).
     ///
-    /// Absent means the general hatch, [`crate::hook::BYPASS_ENV`]. That default
-    /// is not a hedge — it is what keeps the guarantee true as rows are added:
-    /// per-row with no fallback would leave the next row hatchless and silent,
-    /// which is the failure that produced this column. A row declaring one is
-    /// declaring that its bypass is a *separate decision* from every other row's.
+    /// Absent means no hatch: there is no general one to fall back to, so a row
+    /// without this column is suppressed only by a waiver or an admission, both
+    /// of which leave a record. A row declaring one is declaring that its bypass
+    /// is a *separate decision* from every other row's.
     ///
     /// Why a per-row column rather than one global name: the bash guards this
     /// surface inherited each had their own hatch, so an operator could suppress
@@ -9621,8 +9620,7 @@ pub(crate) fn tree_document(
             // changed nothing", which is the distinction the whole fact exists
             // to keep.
             crate::facts::Fact::BaseDelta => serde_json::json!(resolved.git.base_delta),
-            crate::facts::Fact::Bypass
-            | crate::facts::Fact::Receipts
+            crate::facts::Fact::Receipts
             | crate::facts::Fact::Keys
             | crate::facts::Fact::Stop
             | crate::facts::Fact::Waived

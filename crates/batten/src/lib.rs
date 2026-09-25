@@ -13152,7 +13152,6 @@ fn run_hook(
     let Some((raw, mut envelope)) = read_envelope(harness, mode, err)? else {
         return Ok(ExitCode::Success);
     };
-    let bypass = std::env::var_os(hook::BYPASS_ENV).is_some_and(|value| !value.is_empty());
     // THE WRITE TARGET IS READ AS THE REPOSITORY READS IT (CLOUD-1133), and this
     // is the one place that can do it: `decode` is pure and has no repository,
     // and the readers below — the protected gate, and any module over
@@ -13214,15 +13213,14 @@ fn run_hook(
     // read its own authority is the correct trade.
     // Only now is config touched. Ordering the cheap refusals first is §4's
     // "cheap when irrelevant" applied to the hottest path in the binary — this
-    // runs on every mediated tool call — and it is also what keeps a bypassed or
+    // runs on every mediated tool call — and it is also what keeps a
     // command-less call from being able to fail on an unrelated config error.
     //
     // "Command-less" is no longer the same claim as "nothing to judge": a write
     // tool carries a path and no command, and skipping the config load for it
     // is what made the write matcher unjudgeable even once `adjudicate` grew
     // the gate (CLOUD-312). The cheap-refusals-first ordering is intact — a
-    // bypassed call, and a payload that is neither a command nor a write, still
-    // never touch config.
+    // payload that is neither a command nor a write still never touches config.
     // THE OTHER HALF OF THE LOOP (CLOUD-776). A gate denied with `Fix::Run`; the
     // agent ran that command with its own binary; the harness is handing the
     // result back right now. Record what it said, so the retry has a fact.
@@ -13256,8 +13254,8 @@ fn run_hook(
     // re-measured with `perf-pair` against the merge base rather than argued
     // about, and the number travels with the change.
     //
-    // The cheap refusals stay first and stay cheap: a bypassed call still never
-    // touches config, and so does every event that is not the adjudicated one.
+    // The cheap refusals stay first and stay cheap: every event that is not the
+    // adjudicated one still never touches config.
     // What is no longer free is a PreToolUse call with a tool name, which is the
     // one shape a tool-keyed row exists to judge — buying that back would mean
     // knowing whether any such row is declared, which is a question only the
@@ -13281,24 +13279,6 @@ fn run_hook(
     // at the same boundary; `perf`'s `passthrough` and `noop` arms are pre-tool
     // shapes and are untouched by this clause.
     let adjudicable = is_adjudicable(&envelope);
-    // A BYPASSED CALL NOW PAYS THE CONFIG READ, and that invariant is retired
-    // deliberately rather than eroded.
-    //
-    // `BYPASS_ENV`'s own doc said "a bypassed call must never pay a config read",
-    // and that was the reason this arm handed `adjudicate` a policy declaring
-    // nothing. It cannot survive the protected gate becoming non-bypassable:
-    // deciding whether a path is protected requires the `protected` and `[[verb]]`
-    // tables, which ARE the config. An empty policy short-circuits `adjudicate` at
-    // `policy.is_empty()` before any gate runs, so leaving this arm alone made the
-    // narrowing inside `adjudicate` inert — measured, not reasoned: the unit cases
-    // over `adjudicate` passed while the compiled binary allowed the write, and
-    // `mediated_admission.rs`'s binary-level case is what caught it.
-    //
-    // THE COST, stated rather than left for a profile to find. A bypassed call
-    // pays one config load — the difference between `perf`'s `noop` and `check`
-    // arms, ~0.7 ms against a 100 ms budget. `!adjudicable` keeps its old
-    // behaviour, because an event with nothing to adjudicate has no protected
-    // gate to run either, and that is the arm the hot path actually rides.
     // A DECLARATION NOTHING COULD READ IS THE ONE FAULT THAT REFUSES, and the
     // narrowness is the decision rather than caution (CLOUD-1677).
     //
@@ -13313,16 +13293,24 @@ fn run_hook(
     //
     // `Native::ConfigUnreadable` is the one class with no partial function left:
     // the file is not TOML, so no row is readable and none can be enforced. Then
-    // the refusal is the only signal available, and the hatch below is how the
-    // container gets back.
+    // the refusal is the only signal available, and the repair lane below is how
+    // the container gets back.
     //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
     //MUTANT unloadable-config-allows|s@            Err(unreadable) if unreadable_declaration(\&unreadable) => {@            Err(unreadable) if false \&\& unreadable_declaration(\&unreadable) => {@|a_config_this_build_cannot_load_denies_rather_than_failing_open
     let (policy, waivers) = if adjudicable {
         match load_policy(overrides, harness) {
             Ok(loaded) => loaded,
-            // The declared hatch, read before the refusal so a stale binary
-            // meeting a newer config leaves a container recoverable, not bricked.
-            Err(_) if bypass => (hook::Policy::declaring_nothing(harness), Vec::new()),
+            // THE REPAIR LANE replaces the general hatch here, and is narrower:
+            // a call whose only effect is writing the config file itself is
+            // allowed, so an unparseable `batten.toml` can be fixed in place and
+            // a container is recoverable rather than bricked. Anything else —
+            // including a shell command, whose effects cannot be bounded — stays
+            // refused until the config reads again.
+            Err(unreadable) if unreadable_declaration(&unreadable) && repairs_config(&envelope) => {
+                // Answered HERE, because every later step (actions, handlers)
+                // reads the same config and would fail on it.
+                return Ok(ExitCode::Success);
+            }
             Err(unreadable) if unreadable_declaration(&unreadable) => {
                 return deny_unadjudicable(harness, &envelope, &unreadable, mode, out, err);
             }
@@ -13335,17 +13323,10 @@ fn run_hook(
     } else {
         (hook::Policy::declaring_nothing(harness), Vec::new())
     };
-    // THE PER-ROW HATCHES (CLOUD-437), resolved here and nowhere earlier.
-    //
-    // `BYPASS_ENV` is read before the config load above, because a bypassed call
-    // must never pay for one. These cannot be: which hatches exist is a property
-    // of the loaded rows, so the read has to follow the load. That ordering is
-    // the whole reason the general hatch survives as a separate switch rather
-    // than becoming just another row's name.
-    //
-    // Cheap when irrelevant (§4): a ruleset declaring no `bypass_env` — every
-    // ruleset until one opts in — collects an empty set, reads no environment,
-    // and clones no policy.
+    // THE PER-ROW HATCHES (CLOUD-437), resolved here and nowhere earlier: which
+    // hatches exist is a property of the loaded rows, so the read has to follow
+    // the load. Cheap when irrelevant (§4): a ruleset declaring no `bypass_env`
+    // collects an empty set, reads no environment, and clones no policy.
     let policy = without_set_hatches(policy);
     // The receipt facts, resolved HERE because `adjudicate` is contractually
     // pure — no I/O, no environment, no clock — and a receipt predicate reads a
@@ -13433,7 +13414,7 @@ fn run_hook(
     // parsing. And after the capability check above, which is what makes "a host
     // lacking the capability fires nothing" structural rather than a second
     // check this call site could get wrong.
-    fire_actions(&envelope, bypass, overrides, err)?;
+    fire_actions(&envelope, overrides, err)?;
     // The end-of-turn facts (CLOUD-85) are NOT resolved, because nothing reads
     // them (CLOUD-906). They used to be, on the stop event only, for `receipts`'
     // reason: `adjudicate` is contractually pure and this reads git and the
@@ -13466,7 +13447,6 @@ fn run_hook(
     let (tasks, extracted) = session_facts(&policy, &envelope);
     let (discards, singleton) = destructive_call_facts(&envelope);
     let facts = hook::Facts {
-        bypass,
         singleton: &singleton,
         discards: &discards,
         receipts: &receipts,
@@ -13491,7 +13471,7 @@ fn run_hook(
     // handler can — running the ones that cannot first keeps the ordering a
     // reader would guess. Before, because `decide` owns stdout and a handler's
     // refusal has to reach the same rendering the engine's own does.
-    let handled = dispatch_handlers(&envelope, &raw, bypass, overrides, &mut advice)?;
+    let handled = dispatch_handlers(&envelope, &raw, overrides, &mut advice)?;
     // THE END-OF-TURN NUDGE (CLOUD-1051), and it is a SEPARATE call from
     // `adjudicate` rather than a widening of it. `adjudicate` returns `Allow` at
     // `Stop` before any rule is read — CLOUD-889's runaway removed by
@@ -13565,9 +13545,7 @@ fn run_hook(
     let decision = settle_repair(&policy, &envelope, decision);
     let ceiling = policy.advisory.as_ref();
     emit_channel(harness, &envelope, out, err, advice, ceiling, &decision)?;
-    let hatch = hatch_for(&policy, &decision);
     let rendering = Rendering {
-        hatch: &hatch,
         ceiling: policy.refusal.as_ref(),
     };
     render(harness, &envelope, decision, &rendering, mode, out, err)
@@ -13672,6 +13650,19 @@ fn unreadable_declaration(err: &anyhow::Error) -> bool {
         .is_some_and(|class| class == verdict::Native::ConfigUnreadable)
 }
 
+/// Whether this call's only effect is writing the config file itself.
+///
+/// The repair lane for an unreadable declaration, and the replacement for the
+/// general hatch in the one state that needed it: with `batten.toml` unparseable
+/// every call is refused, so the file must stay writable or nothing can fix it.
+///
+/// **A write tool, not a shell command.** A command's effects are not bounded by
+/// what it names, so `envelope.command` must be empty; the target is compared
+/// after [`hook::Envelope::relativise_writes`], so it is repo-relative here.
+fn repairs_config(envelope: &hook::Envelope) -> bool {
+    envelope.command.is_empty() && envelope.writes.as_deref() == Some(config::CONFIG_FILE)
+}
+
 /// Refuse a call whose rules this build could not load (CLOUD-1677).
 ///
 /// Lifted out of [`run_hook`] rather than left inline because that function is
@@ -13704,12 +13695,12 @@ fn unreadable_declaration(err: &anyhow::Error) -> bool {
 /// mediated boundary is the one place where "cannot judge" must not resolve to
 /// "proceed", because here the alternative is a tool call nobody looked at.
 ///
-/// # The hatch is read before this is reached
+/// # The repair lane is read before this is reached
 ///
-/// [`run_hook`] takes the bypass arm first, and that is what keeps a container
-/// recoverable rather than bricked: a stale binary meeting a newer config
-/// refuses every call until one of them moves, so the operator's declared escape
-/// has to survive exactly the state that needs it.
+/// [`run_hook`] allows a call that only writes the config file ([`repairs_config`])
+/// first, and that is what keeps a container recoverable rather than bricked: a
+/// stale binary meeting a newer config refuses every call until one of them
+/// moves, and editing the config is the move the session can make itself.
 ///
 /// **A DECISION, NOT AN ERROR, WHICH IS WHY IT RENDERS.** [`render`] owns the
 /// per-harness deny channel: Claude Code answers in its JSON decision object at
@@ -13717,8 +13708,8 @@ fn unreadable_declaration(err: &anyhow::Error) -> bool {
 /// [`ExitCode::Violation`]. Raising a [`Denial`] here would send `2` to the one
 /// host that reads the document instead of the number.
 ///
-/// **The rendering carries no ceiling and the general hatch**, because both live
-/// on the policy that would not load. `None` reads downstream as "no declared
+/// **The rendering carries no ceiling and no hatch**, because both live on the
+/// policy that would not load. `None` reads downstream as "no declared
 /// bound" rather than as a bound of zero, which is the direction that keeps a
 /// refusal about an unreadable config from being truncated by a value nobody
 /// could read.
@@ -13762,10 +13753,7 @@ fn deny_unadjudicable(
         // consumer's own command (non-negotiable rule 1).
         Fix::None,
     );
-    let rendering = Rendering {
-        hatch: hook::BYPASS_ENV,
-        ceiling: None,
-    };
+    let rendering = Rendering { ceiling: None };
     // WHICH CHANNEL CARRIED THE REFUSAL IS `render`'S OWN ANSWER, and reading it
     // here is what lets the number say could-not-look without ever spending the
     // refusal to do it (CLOUD-1677's exit-code half).
@@ -13859,30 +13847,6 @@ fn settle_repair(
             repaired: token.to_owned(),
             subject: key,
         }),
-    }
-}
-
-/// The hatch a refusal advertises, by name.
-///
-/// RESOLVED HERE RATHER THAN INSIDE [`render`], because `render` deliberately
-/// cannot see the policy (CLOUD-898) and that property is worth more than the
-/// convenience: a renderer that cannot see the inputs cannot re-decide by
-/// accident. A hatch NAME is not such an input — it is a string the renderer
-/// prints and never branches on — so handing it over costs nothing.
-///
-/// Its own function rather than a block in the caller, because the caller reached
-/// `clippy::too_many_lines` and a length limit is answered by moving a nameable
-/// step out, never by widening the limit.
-fn hatch_for(policy: &hook::Policy, decision: &hook::Decision) -> String {
-    match decision {
-        hook::Decision::Deny(refusal) | hook::Decision::Ask(refusal) => {
-            policy.bypass_env_for(refusal.rule()).to_owned()
-        }
-        // Nothing is being refused, so nothing advertises a hatch. The general
-        // name stands in rather than an empty string: the value is unread on
-        // these arms, and a blank one would render as `Bypass with =1.` if a
-        // later arm ever did read it.
-        _ => hook::BYPASS_ENV.to_owned(),
     }
 }
 
@@ -14306,13 +14270,9 @@ fn expire_wiring_record(envelope: &hook::Envelope) {
 fn dispatch_handlers(
     envelope: &hook::Envelope,
     raw: &str,
-    bypass: bool,
     overrides: &Overrides,
     advice: &mut Vec<advisory::Advice>,
 ) -> Result<Option<hook::Decision>> {
-    if bypass {
-        return Ok(None);
-    }
     // `fire_actions`' reading, for `fire_actions`' reason: a handler table is a
     // per-repository declaration, so it comes from the REPOSITORY's authority
     // rather than the cwd's (CLOUD-824).
@@ -14552,17 +14512,12 @@ fn stop_facts(overrides: &Overrides) -> Result<stop::StopFacts> {
 /// The hot path is preserved all the same, and structurally: `action::validate`
 /// refuses an action on `pre-tool`, so this returns before touching config for
 /// the one event that runs on every mediated tool call.
-///
-/// A bypassed run fires nothing. `BATTEN_HOOK_BYPASS` means "do not mediate this
-/// call", and spawning the operator's cleanup command while claiming not to be
-/// mediating would be the surprising reading.
 fn fire_actions(
     envelope: &hook::Envelope,
-    bypass: bool,
     overrides: &Overrides,
     err: &mut dyn Write,
 ) -> Result<()> {
-    if bypass || envelope.event == hook::Event::PreTool {
+    if envelope.event == hook::Event::PreTool {
         return Ok(());
     }
     // The REPOSITORY's authority, not the cwd's (CLOUD-824). Same reading as
@@ -16774,8 +16729,6 @@ fn load_exec_settings(
 /// the renderer only prints or measures it, and belongs nowhere near here if the
 /// renderer would have to branch on it to decide.
 struct Rendering<'a> {
-    /// The environment variable that suppresses this refusal, by name.
-    hatch: &'a str,
     /// What one emitted mediated line may cost, or no declared bound.
     ceiling: Option<&'a refusal::Ceiling>,
 }
@@ -16789,7 +16742,7 @@ fn render(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let Rendering { hatch, ceiling } = *rendering;
+    let Rendering { ceiling } = *rendering;
     // THE DECISION ARRIVES AS A VALUE, which is what makes this a renderer
     // rather than a second adjudicator (CLOUD-898). A handler's refusal and the
     // engine's own reach the host through the identical match below: a
@@ -16868,7 +16821,7 @@ fn render(
             // right key and what was measured in each direction.
             let first_sighting =
                 refusal::first_sighting(hook_authority_root(), &refusal.sighting_key());
-            let reason = hook::deny_text(&refusal, hatch, first_sighting, ceiling);
+            let reason = hook::deny_text(&refusal, first_sighting, ceiling);
             match hook::encode_deny(harness, &envelope.raw_event, &reason)? {
                 Some(body) => {
                     writeln!(out, "{body}")?;
