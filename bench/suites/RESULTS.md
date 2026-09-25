@@ -48,7 +48,6 @@ to it pays.
 | 1.0 | 0.6% | `tests/commit-attribution.bats` |
 | 1.0 | 0.6% | `tests/awk-regex-check.bats` |
 | 0.9 | 0.5% | `tests/render-cli.bats` |
-| 0.8 | 0.5% | `tests/release-backfill.bats` |
 | 0.8 | 0.5% | `tests/module-map-check.bats` |
 | 0.8 | 0.4% | `tests/mcp-attach-check.bats` |
 | 0.8 | 0.4% | `tests/done-pr-check.bats` |

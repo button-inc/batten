@@ -3087,6 +3087,129 @@ run = [
   "cargo run --quiet -p batten -- check --rule 'release grade early'",
 ]
 
+# CLOUD-618's sweep, ported off `mise-tasks/release-backfill.sh` under CLOUD-1717.
+# NOT A GATE: an operator effect that dispatches `linear-release-backfill.yml`
+# once per tag. The workflow's shape is `release wire other`'s business
+# (`policy/release-tracking.rego`); this decides only order and when to stop.
+#
+# OLDEST FIRST AND SERIALLY: the action derives a release's issues from the tag's
+# commit range, so `sort -V`, never lexical (v0.0.110 sorts after v0.0.78).
+# STOP ON THE FIRST FAILURE: a refused credential fails every tag identically,
+# and `sync` is create-or-update, so the sweep is resumable where it stopped.
+# WAIT ON THE RUN, NOT THE DISPATCH: a dispatch returning 0 means accepted, not
+# recorded. The newest run id is read BEFORE the dispatch so the previous tag's
+# completed run is never taken for this one; the poll cap is a COUNT backstop.
+# Arguments arrive through `usage`; `RELEASE_BACKFILL_GH`, `_TAGS`, `_WORKFLOW`,
+# `_POLL_INTERVAL` and `_MAX_POLLS` stay injectable.
+[tasks.release-backfill]
+description = "Effect: record historical tags in the Linear release pipeline: dispatch the backfill workflow once per tag, oldest first, stopping on the first failure"
+shell = "bash -c"
+usage = '''
+flag "--dry-run" help="print the plan, oldest first, and dispatch nothing"
+arg "[tag]..." var=#true help="release tags to record; the injected list or the repository's tags when omitted"
+'''
+run = '''
+{% raw %}
+set -euo pipefail
+WORKFLOW="${RELEASE_BACKFILL_WORKFLOW:-linear-release-backfill.yml}"
+GH_BIN="${RELEASE_BACKFILL_GH:-gh}"
+POLL_INTERVAL="${RELEASE_BACKFILL_POLL_INTERVAL:-5}"
+MAX_POLLS="${RELEASE_BACKFILL_MAX_POLLS:-240}"
+dry_run=0
+[[ "${usage_dry_run:-}" = "true" ]] && dry_run=1
+tags=()
+read -ra tags <<<"${usage_tag:-}"
+# Arguments win, then the injected list, then the repository's own tags.
+if [[ "${#tags[@]}" -eq 0 ]]; then
+	if [[ -n "${RELEASE_BACKFILL_TAGS:-}" ]]; then
+		while IFS= read -r tag; do
+			[[ -n "$tag" ]] && tags+=("$tag")
+		done < <(tr ' ' '\n' <<<"$RELEASE_BACKFILL_TAGS" | sort -V)
+	else
+		while IFS= read -r tag; do
+			[[ -n "$tag" ]] && tags+=("$tag")
+		done < <(git tag --list 'v[0-9]*' | sort -V)
+	fi
+fi
+if [[ "${#tags[@]}" -eq 0 ]]; then
+	echo "::error:: release-backfill: no tags to record. Nothing here can tell an empty repository from a bad pattern, so this is a refusal rather than a clean sweep of nothing." >&2
+	exit 1
+fi
+# The whole bad list at once, before the workflow's tag probe finds one per run.
+bad=()
+for tag in "${tags[@]}"; do
+	case "$tag" in
+	v[0-9]*) ;;
+	*) bad+=("$tag") ;;
+	esac
+done
+if [[ "${#bad[@]}" -ne 0 ]]; then
+	echo "::error:: release-backfill: ${#bad[@]} argument(s) are not release tags: ${bad[*]}" >&2
+	exit 2
+fi
+if [[ "$dry_run" = 1 ]]; then
+	echo "release-backfill: would dispatch $WORKFLOW for ${#tags[@]} tag(s), oldest first:"
+	printf '  %s\n' "${tags[@]}"
+	exit 0
+fi
+if ! command -v "$GH_BIN" >/dev/null 2>&1; then
+	echo "::error:: release-backfill: no forge client at '$GH_BIN' (\$RELEASE_BACKFILL_GH overrides), so nothing can be dispatched. Run: mise install aqua:cli/cli" >&2
+	exit 2
+fi
+newest_run() {
+	"$GH_BIN" run list --workflow "$WORKFLOW" --limit 1 \
+		--json databaseId --jq '.[0].databaseId // ""' 2>/dev/null || true
+}
+run_state() { # run_state <id> -> "<status> <conclusion>"
+	"$GH_BIN" run view "$1" --json status,conclusion \
+		--jq '"\(.status) \(.conclusion // "")"' 2>/dev/null || true
+}
+recorded=0
+for tag in "${tags[@]}"; do
+	before=$(newest_run)
+	if ! "$GH_BIN" workflow run "$WORKFLOW" -f "tag=$tag" >/dev/null; then
+		echo "::error:: release-backfill: the dispatch for $tag was refused, after recording $recorded tag(s). \`sync\` is create-or-update, so re-run this task once the cause is fixed — the tags already recorded cost nothing to repeat." >&2
+		exit 1
+	fi
+	# Wait for THIS run: a different id than the one read before the dispatch.
+	id=""
+	polls=0
+	while [[ -z "$id" ]]; do
+		polls=$((polls + 1))
+		if [[ "$polls" -gt "$MAX_POLLS" ]]; then
+			echo "::error:: release-backfill: the run dispatched for $tag never appeared after $MAX_POLLS poll(s). A dispatch GitHub accepted and never scheduled is a platform failure, not a slow run; $recorded tag(s) were recorded before this." >&2
+			exit 1
+		fi
+		candidate=$(newest_run)
+		if [[ -n "$candidate" ]] && [[ "$candidate" != "$before" ]]; then
+			id="$candidate"
+			break
+		fi
+		sleep "$POLL_INTERVAL"
+	done
+	status=""
+	conclusion=""
+	while :; do
+		polls=$((polls + 1))
+		if [[ "$polls" -gt "$MAX_POLLS" ]]; then
+			echo "::error:: release-backfill: run $id for $tag did not finish within $MAX_POLLS poll(s); $recorded tag(s) were recorded before this." >&2
+			exit 1
+		fi
+		read -r status conclusion <<<"$(run_state "$id")"
+		[[ "$status" = "completed" ]] && break
+		sleep "$POLL_INTERVAL"
+	done
+	if [[ "$conclusion" != "success" ]]; then
+		echo "::error:: release-backfill: $tag concluded '$conclusion' in run $id, so the sweep stops here with $recorded tag(s) recorded. Read that run before re-running: a credential the action refuses fails every tag identically, and pressing on would queue $((${#tags[@]} - recorded - 1)) more of them." >&2
+		exit 1
+	fi
+	recorded=$((recorded + 1))
+	echo "release-backfill: $tag recorded (run $id)"
+done
+echo "release-backfill: ${#tags[@]} tag(s) recorded, oldest first"
+{% endraw %}
+'''
+
 [tasks.done-check]
 description = "Gate: no issue sits Done while no release tag contains its commits (reads get_issue payloads on stdin)"
 run = [

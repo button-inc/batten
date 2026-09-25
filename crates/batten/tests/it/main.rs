@@ -242,6 +242,7 @@ mod reference_coverage;
 mod refusal_ceiling;
 mod refusal_render_bench;
 mod release_assets;
+mod release_backfill;
 mod release_due;
 mod release_provision_parity;
 mod release_token_precedence;
