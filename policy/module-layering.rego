@@ -587,6 +587,20 @@ declared_modules := {
 	# harness that knew about one of its own instances is the drift the extraction
 	# removed.
 	"install", "tokens",
+	# `ripcord` arrived with CLOUD-1847 and this rule named it on the gate before
+	# landing — module written, clippy green, the mutations killed, and nobody had
+	# placed it.
+	#
+	# It is a LEAF in `secret`'s and `environment`'s class: a path predicate, a
+	# name predicate and an identity constructor, reaching `identity` and nothing
+	# else. Its signature was narrowed to take the write target alone precisely so
+	# that it holds no edge onto `hook` — the operation check is its caller's.
+	#
+	# IT DECIDES NOTHING. Whether a pull is admitted is composed in `lib` from this
+	# module's two predicates and `recoverable_without_rules`, and keeping that
+	# decision out of here is what stops the break-glass becoming a second
+	# authority on its own scope — `wiring`'s argument, one domain over.
+	"ripcord",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
