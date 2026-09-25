@@ -2465,9 +2465,26 @@ impl<'a> Header<'a> {
         self.name().split('.').next().unwrap_or(self.name())
     }
 
-    /// Whether this header is a dotless `[[name]]` — the only droppable shape.
+    /// Whether this header is a `[[name]]` — an array-of-tables element.
+    ///
+    /// **Dotted or not (CLOUD-1775).** This asked `!name.contains('.')` and so
+    /// equated *droppable* with *dotless*, which is true of one dotted shape and
+    /// false of the other. `[[hook.handler]]` is an array under a plain table,
+    /// addressable as the path `hook.handler` and droppable a row at a time;
+    /// `[[provision.env]]` is an array inside the last `[[provision]]` ELEMENT,
+    /// where the droppable unit is that element. Conflating them cost the whole
+    /// file: `owning_row` declined the handler, so the row arm never ran, and
+    /// `drop_key` then looked for a top-level key spelled `hook.handler` and found
+    /// `hook`, so the key arm declined too. A `[[hook.handler]]` is where the
+    /// stale-binary detector lives, so the first schema addition a running binary
+    /// predates unregistered the detector for exactly that staleness.
+    ///
+    /// Which of the two shapes a dotted row is cannot be read off the header
+    /// alone — it is a fact about the DOCUMENT, namely whether the root is itself
+    /// an array row — so that question lives in [`owning_row`], which has the text.
+    //MUTANT dotted-row-not-droppable|s@        matches!(self, Self::Row(_))@        matches!(self, Self::Row(name) if !name.contains('.'))@|an_unknown_key_in_a_dotted_row_costs_the_row_not_the_file
     fn is_row(self) -> bool {
-        matches!(self, Self::Row(name) if !name.contains('.'))
+        matches!(self, Self::Row(_))
     }
 }
 
@@ -2808,6 +2825,54 @@ fn key_extent(text: &str, at: usize) -> (usize, usize) {
 /// counts this section's rows as the author wrote them, so two rows dropped in
 /// one load still report distinct pointers. Reading it off the working copy is
 /// how two `[[verb]]` rows both reported `#0`, caught in review.
+/// Walk a dotted path of plain tables, from `table` down.
+///
+/// `None` the moment a segment is missing or is not a table, which is the
+/// fail-closed direction: the caller abandons the drop rather than guessing
+/// where the row it is charging actually lives.
+fn table_at<'a>(table: &'a mut toml::Table, path: &str) -> Option<&'a mut toml::Table> {
+    let mut at = table;
+    for segment in path.split('.') {
+        at = at.get_mut(segment)?.as_table_mut()?;
+    }
+    Some(at)
+}
+
+/// Whether `header` names a row that can be addressed — and therefore dropped —
+/// as a path from the top-level table.
+///
+/// A dotless `[[name]]` always can. A dotted one can only when its root is NOT
+/// itself an array row in this document: `[[hook.handler]]` sits under a plain
+/// `hook` table and is reachable as `hook.handler`, while `[[provision.env]]`
+/// sits inside whichever `[[provision]]` ELEMENT precedes it, and no path from
+/// the root names it — the element that holds it is the unit, which is what the
+/// caller's walk resolves to.
+///
+/// **The answer is a property of the document, not of the header**, which is why
+/// [`Header::is_row`] cannot decide it. It is also the fail-closed direction: a
+/// root that is a row anywhere makes the dotted header un-droppable and the
+/// caller falls back to the owning element, so a misread here costs a wider unit
+/// rather than a wrong blank.
+//MUTANT every-dotted-row-droppable|s@    !nests_in_a_row(text, header.root())@    true@|a_dotted_row_nested_in_an_array_element_still_charges_its_owner
+fn addressable_row(text: &str, header: Header<'_>) -> bool {
+    if !header.is_row() {
+        return false;
+    }
+    if !header.name().contains('.') {
+        return true;
+    }
+    !nests_in_a_row(text, header.root())
+}
+
+/// Whether `root` is itself declared as an array-of-tables anywhere in `text`.
+///
+/// Named rather than inlined for the `//MUTANT` row above's reason: a mutation
+/// row is `id|script|case` split on `|`, so an anchor carrying a closure yields
+/// five fields and the declaration can only ever report `malformed-row`.
+fn nests_in_a_row(text: &str, root: &str) -> bool {
+    headers(text).any(|(_, other)| other.is_row() && other.name() == root)
+}
+
 fn owning_row(text: &str, at: usize) -> Option<(String, usize, usize)> {
     // The nearest header at or before `at`, then back through any dotted
     // headers it nests under.
@@ -2817,7 +2882,7 @@ fn owning_row(text: &str, at: usize) -> Option<(String, usize, usize)> {
         if offset > at {
             continue;
         }
-        if header.is_row() && want.is_none_or(|root| root == header.name()) {
+        if addressable_row(text, header) && want.is_none_or(|root| root == header.name()) {
             found = Some((offset, header.name()));
             break;
         }
@@ -2988,6 +3053,13 @@ fn drop_key(
     // A key under a `[[row]]` header that `owning_row` declined for some other
     // reason is not this arm's business: dropping one key out of a row would
     // leave that row enforcing something nobody wrote.
+    //
+    // DOTTED OR NOT (CLOUD-1775). This guard read `is_row` when that predicate
+    // meant *dotless* row, so a key inside a `[[hook.handler]]` reached the
+    // paragraph below and asked the top-level table for a key spelled
+    // `hook.handler` — which decided nothing, since the answer was `Declined`
+    // either way. It is a guard rather than an accident now: the row arm owns
+    // every `[[name]]`, and key granularity never reaches one.
     if header.is_row() {
         return KeyDrop::Declined;
     }
@@ -3197,10 +3269,24 @@ fn prune_unresolvable<T: serde::de::DeserializeOwned>(source: &str, behind: bool
             })
             .count();
         let mut expected = current.clone();
-        let Some(rows) = expected
-            .get_mut(&section)
-            .and_then(toml::Value::as_array_mut)
-        else {
+        // A SECTION IS A PATH, NOT A KEY (CLOUD-1775). `hook.handler` is a key
+        // `handler` inside the table `hook`; asking the top-level table for it
+        // finds nothing, which is half of why the handler rows fell through both
+        // granularities. A dotless section still resolves in one step, so this is
+        // the same lookup for every row that already worked.
+        let (holder_path, leaf) = section
+            .rsplit_once('.')
+            .map_or((None, section.as_str()), |(holder, leaf)| {
+                (Some(holder), leaf)
+            });
+        let Some(holder) = (match holder_path {
+            Some(path) => table_at(&mut expected, path),
+            None => Some(&mut expected),
+        }) else {
+            break;
+        };
+        //MUTANT dotted-section-read-as-a-key|s@        let Some(rows) = holder.get_mut(leaf).and_then(toml::Value::as_array_mut) else {@        let Some(rows) = holder.get_mut(section.as_str()).and_then(toml::Value::as_array_mut) else {@|an_unknown_key_in_a_dotted_row_costs_the_row_not_the_file
+        let Some(rows) = holder.get_mut(leaf).and_then(toml::Value::as_array_mut) else {
             break;
         };
         let Some(position) = index.checked_sub(shift).filter(|at| *at < rows.len()) else {
@@ -3209,8 +3295,34 @@ fn prune_unresolvable<T: serde::de::DeserializeOwned>(source: &str, behind: bool
         rows.remove(position);
         // A section whose last row goes leaves no header at all, so the parsed
         // document loses the key rather than keeping an empty array.
+        //
+        // Under a DOTTED section that reaches one table further (CLOUD-1775): a
+        // file whose only `hook` headers were `[[hook.handler]]` rows parses,
+        // once they are all blanked, to a document with no `hook` key at all —
+        // not to `hook = {}`. So an emptied holder is removed from ITS holder in
+        // turn, up to the root. Leaving the husk behind would fail this loop's
+        // own exactness guard and abandon a prune that was otherwise right.
         if rows.is_empty() {
-            expected.remove(&section);
+            holder.remove(leaf);
+            let mut path = holder_path;
+            while let Some(above) = path {
+                let (next, key) = above
+                    .rsplit_once('.')
+                    .map_or((None, above), |(next, key)| (Some(next), key));
+                let emptied = match next {
+                    Some(next) => table_at(&mut expected, next),
+                    None => Some(&mut expected),
+                }
+                .filter(|holder| {
+                    holder
+                        .get(key)
+                        .and_then(toml::Value::as_table)
+                        .is_some_and(toml::Table::is_empty)
+                });
+                let Some(emptied) = emptied else { break };
+                emptied.remove(key);
+                path = next;
+            }
         }
 
         let mut candidate = text.clone();
