@@ -1,8 +1,8 @@
 # Fan-out: one planner, N implementers, the board as the only coordinator
 
 Read when: running more than one agent session against this repo at once, or
-deciding whether to. The gates this protocol leans on are `mise run ready-lint`
-and `mise run graph-check` (CLOUD-179, CLOUD-175); the board model is
+deciding whether to. The gates this protocol leans on are `batten ready lint`
+(never the frozen `mise run ready-lint`, which passes rows it refuses) and `mise run graph-check` (CLOUD-179, CLOUD-175); the board model is
 `mem:workflow/board-states`.
 
 ## READ FIRST: you cannot open the sessions. `create_session` is blocked upstream.

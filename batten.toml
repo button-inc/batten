@@ -12699,7 +12699,7 @@ target = "put it in the row that already owns it — comments are recorded and n
 [[verdict.route]]
 id = "task run other"
 kind = "command"
-target = "mise run ready-lint"
+target = "batten ready lint --issue <key>"
 
 [[verdict]]
 id = "issue file same"
