@@ -665,12 +665,11 @@ pub fn sources_for(root: &Path, name: &str) -> Vec<String> {
     // THE INLINE-TASK ARM (CLOUD-1909), LAST OF ALL, for the engine arm's reason:
     // a name that resolved to anything before still resolves to exactly that, so
     // no landed gate changes meaning by growing a same-named task block.
-    if let Some(task) = name.strip_prefix(TASK_PREFIX) {
-        if let Some(manifest) = task_manifest() {
-            if lines_of(root, &manifest).is_some_and(|lines| task_block(&lines, task).is_some()) {
-                return vec![manifest];
-            }
-        }
+    if let Some(task) = name.strip_prefix(TASK_PREFIX)
+        && let Some(manifest) = task_manifest()
+        && lines_of(root, &manifest).is_some_and(|lines| task_block(&lines, task).is_some())
+    {
+        return vec![manifest];
     }
     Vec::new()
 }

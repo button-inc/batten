@@ -174,15 +174,25 @@ pub(crate) fn task_block(name: &str) -> Option<String> {
     batten::mutate::task_block(&lines, name).map(|block| block.join("\n"))
 }
 
-/// One declared key's value out of a task block, triple-quoted or not.
+/// One declared key's value out of a task block: a string as its contents, any
+/// other value in its TOML spelling, and an absent key as empty.
+///
+/// PARSED, because a block is a standalone TOML table — it ends at the next table
+/// header — and the manifest spells `run` as a basic string, a `"""` block and a
+/// `'''` literal in different tasks. A text split handles whichever quoting its
+/// author had in front of them and silently returns the delimiters for the rest.
 pub(crate) fn task_value(block: &str, key: &str) -> String {
-    let Some(rest) = block.split(&format!("\n{key} = ")).nth(1) else {
-        return String::new();
-    };
-    rest.strip_prefix("\"\"\"").map_or_else(
-        || rest.lines().next().unwrap_or_default().to_owned(),
-        |triple| triple.split("\"\"\"").next().unwrap_or(triple).to_owned(),
-    )
+    let parsed: toml::Value = toml::from_str(block).expect("a task block is a TOML table");
+    let value = parsed
+        .get("tasks")
+        .and_then(toml::Value::as_table)
+        .and_then(|tasks| tasks.values().next())
+        .and_then(|task| task.get(key));
+    match value {
+        None => String::new(),
+        Some(toml::Value::String(text)) => text.clone(),
+        Some(other) => other.to_string(),
+    }
 }
 
 /// Every `BATTEN_` variable the command surface declares, derived from the

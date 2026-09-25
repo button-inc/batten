@@ -2321,7 +2321,6 @@ fn a_floor_carrying_no_measurement_date_is_refused_at_load() {
 /// forever — that arm always worked, and is why the gap stayed latent. Read
 /// through `common::task_block`, so under `mutate sweep` this is the STAGED
 /// manifest and the declared mutation is what runs.
-#[cfg(unix)]
 fn shipped_body() -> String {
     let block = common::task_block("target-prune").expect("target-prune is a declared task");
     let body = common::task_value(&block, "run");
@@ -2333,19 +2332,20 @@ fn shipped_body() -> String {
 }
 
 /// A stub program on the constructed `PATH`.
-#[cfg(unix)]
 fn stub(dir: &Path, name: &str, body: &str) {
-    use std::os::unix::fs::PermissionsExt as _;
     std::fs::create_dir_all(dir).unwrap();
     let path = dir.join(name);
     std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
 }
 
 /// The `PATH` every case runs under: the stubs, then the base system and nothing
 /// else — which is what makes "no `batten`" a state this case can construct
 /// rather than one it has to hope for.
-#[cfg(unix)]
 fn stub_path(repo: &Path) -> String {
     format!("{}:/usr/bin:/bin", repo.join("stub-bin").display())
 }
@@ -2356,7 +2356,6 @@ fn stub_path(repo: &Path) -> String {
 ///
 /// `cargo` is always a stub that leaves a marker and exits 0: whether the build
 /// RAN is the observable, and a real one would build this workspace per case.
-#[cfg(unix)]
 fn run_shipped(repo: &Path, free: &str, batten: Option<&str>) -> std::process::Output {
     let bin = repo.join("stub-bin");
     stub(&bin, "cargo", ": > \"$PWD/cargo-ran\"");
@@ -2376,7 +2375,6 @@ fn run_shipped(repo: &Path, free: &str, batten: Option<&str>) -> std::process::O
 /// The premise the absent-engine cases stand on, asserted rather than assumed: on
 /// the constructed `PATH`, no `batten` resolves. Without it a case could pass on
 /// a binary that leaked in from the runner's own environment.
-#[cfg(unix)]
 fn assert_no_engine_resolves(repo: &Path) {
     let found = std::process::Command::new("/bin/sh")
         .args(["-c", "command -v batten"])
@@ -2398,9 +2396,13 @@ fn assert_no_engine_resolves(repo: &Path) {
 /// only reachable arm was `cargo run`, so this case saw the build run and exit 0 —
 /// which in production is the build writing to a full disk and dying on cargo's
 /// `ENOSPC` with the reclaim never having spoken.
-#[cfg(unix)]
 #[test]
 fn an_absent_engine_on_a_short_disk_is_refused_without_a_build() {
+    // The subject is a POSIX `sh` body and Windows has no `/bin/sh`, so there
+    // the contract is that nothing runs; every item still compiles on it.
+    if !cfg!(unix) {
+        return;
+    }
     let repo = repo("target-prune-absent-short");
     assert_no_engine_resolves(&repo);
 
@@ -2422,9 +2424,13 @@ fn an_absent_engine_on_a_short_disk_is_refused_without_a_build() {
 /// **MIRROR: the same absent engine with room to build builds, exactly as before.**
 /// Without it the fix is indistinguishable from an arm that refuses every
 /// unprovisioned clone.
-#[cfg(unix)]
 #[test]
 fn an_absent_engine_on_an_ample_disk_builds_as_before() {
+    // The subject is a POSIX `sh` body and Windows has no `/bin/sh`, so there
+    // the contract is that nothing runs; every item still compiles on it.
+    if !cfg!(unix) {
+        return;
+    }
     let repo = repo("target-prune-absent-ample");
     assert_no_engine_resolves(&repo);
 
@@ -2436,9 +2442,13 @@ fn an_absent_engine_on_an_ample_disk_builds_as_before() {
 /// **MIRROR: an absent engine whose floor cannot be read falls through rather than
 /// inventing a verdict.** The arm refuses only on evidence; a manifest with no
 /// `[prune.cold]` has none, so the behaviour is today's.
-#[cfg(unix)]
 #[test]
 fn an_absent_engine_with_no_readable_floor_falls_through_to_the_build() {
+    // The subject is a POSIX `sh` body and Windows has no `/bin/sh`, so there
+    // the contract is that nothing runs; every item still compiles on it.
+    if !cfg!(unix) {
+        return;
+    }
     let repo = repo("target-prune-absent-no-floor");
     std::fs::write(repo.join("batten.toml"), "version = 1\n").unwrap();
 
@@ -2449,9 +2459,13 @@ fn an_absent_engine_with_no_readable_floor_falls_through_to_the_build() {
 
 /// **MIRROR: a present engine that answers needs no build** — the arm that carries
 /// the fleet, unchanged.
-#[cfg(unix)]
 #[test]
 fn a_present_engine_that_answers_needs_no_build() {
+    // The subject is a POSIX `sh` body and Windows has no `/bin/sh`, so there
+    // the contract is that nothing runs; every item still compiles on it.
+    if !cfg!(unix) {
+        return;
+    }
     let repo = repo("target-prune-present-answers");
     let output = run_shipped(&repo, "1000", Some("exit 0"));
     assert!(output.status.success(), "{}", said(&output));
@@ -2461,9 +2475,13 @@ fn a_present_engine_that_answers_needs_no_build() {
 /// **MIRROR: a present engine that refuses still falls through to the build** —
 /// the arm `mise.toml` argues for (a released binary that cannot parse a key this
 /// branch added), which CLOUD-1838 puts out of scope and must not have disturbed.
-#[cfg(unix)]
 #[test]
 fn a_present_engine_that_refuses_still_falls_through_to_the_build() {
+    // The subject is a POSIX `sh` body and Windows has no `/bin/sh`, so there
+    // the contract is that nothing runs; every item still compiles on it.
+    if !cfg!(unix) {
+        return;
+    }
     let repo = repo("target-prune-present-refuses");
     let output = run_shipped(&repo, "1000", Some("exit 2"));
     assert!(output.status.success(), "{}", said(&output));
