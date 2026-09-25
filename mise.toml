@@ -830,6 +830,17 @@ if ./mise-tasks/step-receipt.sh check lint:clippy; then exit 0; fi
 if ! cargo clippy --all-targets --all-features -- -D warnings; then exit 1; fi
 ./mise-tasks/step-receipt.sh record lint:clippy || true
 '''
+# ITS OWN BUILD DIRECTORY, and the cargo statement above stays byte-identical so
+# no CI parity reading moves. `verify` runs this beside `test:cargo`, the narrow
+# nextest lanes and the cross builds, all in `target/`, and clippy's
+# `--all-targets --all-features` check build shares dependency units with them.
+# Measured on four of five landing laps: clippy failed compiling a DEPENDENCY
+# whose artifact had just been rewritten under it (`extern location for
+# cpufeatures does not exist`, then `bstr`, `const_oid`, `sha1_checked`), and
+# never once when run alone. The cost is one extra check-mode build of the
+# dependency graph, paid once and then cached; the alternative was a gate that
+# failed by timing. CLOUD-1913 records the investigation.
+env = { CARGO_TARGET_DIR = "target/clippy" }
 
 [tasks."lint:fmt"]
 description = "rustfmt in check mode"
