@@ -203,11 +203,6 @@ fn the_parent_survives_its_own_collection() {
 // the config" this file's header argues for, applied to what the run removes.
 
 /// The `clear-scratch` command exactly as `.config/nextest.toml` declares it.
-///
-/// `cfg(unix)` with its only callers: the command is `sh` and the liveness probe
-/// is `kill -0`, so the cases that run it are Unix-only, and an uncalled helper
-/// is a denied warning on the Windows type-check (`cross-check`, CLOUD-397).
-#[cfg(unix)]
 fn declared_collector() -> String {
     let text = std::fs::read_to_string(crate::common::at_root(".config/nextest.toml"))
         .expect("read the nextest config");
@@ -219,7 +214,6 @@ fn declared_collector() -> String {
 }
 
 /// A pid no process holds: one spawned, reaped, and so gone.
-#[cfg(unix)]
 fn a_dead_pid() -> u32 {
     #[expect(
         clippy::disallowed_types,
@@ -235,7 +229,6 @@ fn a_dead_pid() -> u32 {
 
 /// Seed a scratch parent under `root/tmp` and run the declared collector over it
 /// with `lane` as the invocation's lane. Returns what the collector published.
-#[cfg(unix)]
 fn collect(root: &std::path::Path, lane: Option<&str>) -> String {
     let env_file = root.join("nextest-env");
     #[expect(
@@ -261,7 +254,6 @@ fn collect(root: &std::path::Path, lane: Option<&str>) -> String {
     std::fs::read_to_string(env_file).expect("the collector publishes a reading")
 }
 
-#[cfg(unix)]
 fn seed(root: &std::path::Path) -> (String, String, String, String, String) {
     let live = format!("fixture.lane-narrow-{}", std::process::id());
     let dead = format!("fixture.lane-narrow-{}", a_dead_pid());
@@ -275,9 +267,18 @@ fn seed(root: &std::path::Path) -> (String, String, String, String, String) {
     (live, dead, staging, template, stale)
 }
 
-#[cfg(unix)]
 #[test]
 fn the_default_run_spares_a_live_lane_and_the_shared_template() {
+    // UNIX-ONLY BY SUBJECT, STATED HERE RATHER THAN IN AN ATTRIBUTE. The
+    // collector's liveness probe is `kill -0`, and on Windows that asks the shell's
+    // own process table, which cannot see a native pid, so there is no contract to
+    // assert on that target. Every symbol below compiles everywhere, so this stays
+    // a `cfg!` arm and the Windows leg keeps type-checking it — the preference
+    // `policy/cfg-gated-test.rego` enforces and its waivers reserve the attribute
+    // against.
+    if !cfg!(unix) {
+        return;
+    }
     let root = crate::common::scratch("hygiene-default-run");
     let (live, dead, staging, template, stale) = seed(&root);
 
@@ -307,9 +308,12 @@ fn the_default_run_spares_a_live_lane_and_the_shared_template() {
     assert_eq!(published.trim(), format!("{COLLECTED}=3"));
 }
 
-#[cfg(unix)]
 #[test]
 fn a_lane_run_collects_nothing() {
+    // The same contract, for the reason stated on the case above.
+    if !cfg!(unix) {
+        return;
+    }
     // A lane cannot know what the concurrent `test:cargo` still holds open, and
     // its own names are pid-qualified, so it has nothing it may safely remove.
     let root = crate::common::scratch("hygiene-lane-run");
