@@ -1796,6 +1796,37 @@ fn a_reclaimed_copy_takes_its_cargo_fingerprint_with_it() {
     );
 }
 
+// CLOUD-1913's second declared mutation, here for the same reason: a contended
+// build lock read as free is the race that removed `target/clippy` under clippy.
+/*
+#MUTANT-SUITE crates/batten/tests/it/target_prune.rs
+#MUTANT running-build-reclaimed|s@^            Err(std::fs::TryLockError::WouldBlock) => return None,$@            Err(std::fs::TryLockError::WouldBlock) => {}@|a_tree_a_running_build_holds_is_not_reclaimed
+*/
+
+#[test]
+fn a_tree_a_running_build_holds_is_not_reclaimed() {
+    // The lock is held by THIS process and the prune runs in another, which is
+    // the shape of the race: a `verify` step building while a sibling's
+    // `build:release` prunes first. Released, the same tree is reclaimed, so the
+    // case cannot pass by the pass doing nothing.
+    let repo = repo("target-prune-running-build");
+    let deps = repo.join("target/debug/deps");
+    artifact(&deps, "cli", "aaaaaaaaaaaa", 3600);
+    artifact(&deps, "cli", "bbbbbbbbbbbb", 1800);
+    artifact(&deps, "cli", "cccccccccccc", 60);
+    let lock = std::fs::File::create(repo.join("target/debug/.cargo-lock")).unwrap();
+    lock.lock().unwrap();
+
+    let output = prune(&repo, "99999", &["-y"]);
+    assert!(output.status.success(), "{}", said(&output));
+    assert_eq!(survivors(&deps), 3, "a building tree loses nothing");
+
+    drop(lock);
+    let output = prune(&repo, "99999", &["-y"]);
+    assert!(output.status.success(), "{}", said(&output));
+    assert_eq!(survivors(&deps), 2, "released, keep = 2 applies again");
+}
+
 #[test]
 fn a_stem_with_fewer_than_keep_copies_is_untouched() {
     // CARRIED, and it had no home in either tier until #734's review said so —
