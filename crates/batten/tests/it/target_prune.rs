@@ -2356,6 +2356,10 @@ fn stub_path(repo: &Path) -> String {
 ///
 /// `cargo` is always a stub that leaves a marker and exits 0: whether the build
 /// RAN is the observable, and a real one would build this workspace per case.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the subject is the shipped task body, a POSIX `sh` program, so running it under `sh` exactly as mise does is the test; there is no in-process equivalent"
+)]
 fn run_shipped(repo: &Path, free: &str, batten: Option<&str>) -> std::process::Output {
     let bin = repo.join("stub-bin");
     stub(&bin, "cargo", ": > \"$PWD/cargo-ran\"");
@@ -2375,6 +2379,10 @@ fn run_shipped(repo: &Path, free: &str, batten: Option<&str>) -> std::process::O
 /// The premise the absent-engine cases stand on, asserted rather than assumed: on
 /// the constructed `PATH`, no `batten` resolves. Without it a case could pass on
 /// a binary that leaked in from the runner's own environment.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: `command -v` is the shell's own resolution, the same one the shipped body's guard performs, so asking `sh` is what makes the premise the body's premise"
+)]
 fn assert_no_engine_resolves(repo: &Path) {
     let found = std::process::Command::new("/bin/sh")
         .args(["-c", "command -v batten"])
