@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.182](https://github.com/button-inc/batten/compare/v0.0.181...v0.0.182) - 2026-09-25
+
+### Added
+
+- *(traversal)* [**breaking**] declare the walk in config, not in a module
+- *(graph)* a bounded, call-by-need walk that stops on a node property
+
+### Fixed
+
+- *(prune)* skip a zero refusal count without a lint escape
+- *(prune)* a learned floor the volume has refused twice re-bases
+- *(admission)* a path-less class's admission binds to the head
+- *(graph)* a test helper that always returns Some is not an Option
+
 ## [0.0.181](https://github.com/button-inc/batten/compare/v0.0.180...v0.0.181) - 2026-09-25
 
 ### Added
