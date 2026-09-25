@@ -2090,6 +2090,9 @@ fn reclaim_superseded(root: &Path, keep: usize) -> (usize, u64) {
     let mut pruned = 0;
     let mut bytes = 0;
     for deps in directories_named(root, "deps") {
+        let Some(_building) = claim(root, &deps) else {
+            continue;
+        };
         let fingerprints = deps.parent().map(|profile| profile.join(".fingerprint"));
         for victims in superseded_in(&deps, keep).values() {
             for victim in victims {
@@ -2431,6 +2434,9 @@ fn drop_regrowable(root: &Path, declared: &[Regrowable], basis_moving: bool) -> 
             continue;
         }
         for cache in directories_named(root, &declared_root.name) {
+            let Some(_building) = claim(root, &cache) else {
+                continue;
+            };
             let size = directory_bytes(&cache);
             // `directories_named` only yields directories that exist, so reaching
             // here means a cache was there and this run went at it.
@@ -2465,6 +2471,9 @@ fn drop_regrowable(root: &Path, declared: &[Regrowable], basis_moving: bool) -> 
             if !std::fs::symlink_metadata(&tree).is_ok_and(|meta| meta.is_dir()) {
                 continue;
             }
+            let Some(_building) = claim(root, &tree) else {
+                continue;
+            };
             let size = directory_bytes(&tree);
             removed += 1;
             if std::fs::remove_dir_all(&tree).is_ok() {
@@ -2474,6 +2483,44 @@ fn drop_regrowable(root: &Path, declared: &[Regrowable], basis_moving: bool) -> 
     }
 
     (removed, freed, basis_moved)
+}
+
+/// The lock cargo holds on a profile directory for the whole of a build.
+const BUILD_LOCK: &str = ".cargo-lock";
+
+/// Take the build lock of every profile `path` sits in or holds, or `None` if a
+/// build holds any of them.
+///
+/// **A RUNNING BUILD'S TREE IS NEVER RECLAIMED** (CLOUD-1913). `verify` runs
+/// clippy beside `test:bats`, whose `provision:startup` can repair a stale hook
+/// binary through `build:release`, which runs this prune first. Measured: the
+/// warm tier `remove_dir_all`ed `target/clippy` — a nested build tree — while
+/// clippy compiled into it, and clippy failed on `couldn't create a temp dir` in
+/// its own `deps/`. The earlier `extern location … does not exist` failures were
+/// the same race over a shared `deps/`.
+///
+/// The guards are HELD ACROSS THE REMOVAL, not just probed: a probe that let go
+/// before deleting would leave a build free to start in the gap. Cargo takes the
+/// same lock blocking, so a build starting mid-reclaim waits, then finds a tree
+/// that is simply colder. A lock that cannot be opened is no lock at all — a tree
+/// cargo never built into, which is exactly what the pass already handled.
+fn claim(root: &Path, path: &Path) -> Option<Vec<std::fs::File>> {
+    let enclosing = path.ancestors().take_while(|dir| dir.starts_with(root));
+    let nested = PROFILE_DIRS.iter().map(|profile| path.join(profile));
+    let mut held = Vec::new();
+    for profile in enclosing.map(Path::to_path_buf).chain(nested) {
+        let Ok(lock) = std::fs::File::open(profile.join(BUILD_LOCK)) else {
+            continue;
+        };
+        match lock.try_lock() {
+            Ok(()) => held.push(lock),
+            Err(std::fs::TryLockError::WouldBlock) => return None,
+            // An error that is not contention says nothing about a build, and
+            // refusing on it would let one unreadable lock wedge every reclaim.
+            Err(std::fs::TryLockError::Error(_)) => {}
+        }
+    }
+    Some(held)
 }
 
 /// The profile directories cargo lays down inside any build tree.
@@ -3485,5 +3532,80 @@ mod tests {
         );
         assert!(!prints.join("sha1-checked-c0ffee00c0ffee00").exists());
         assert!(prints.join("sha1-checked-c0ffee00c0ffee01").is_dir());
+    }
+
+    // --- a running build's tree is never reclaimed (CLOUD-1913) --------------
+
+    /// Hold `profile`'s build lock the way a running cargo does, until dropped.
+    fn building(profile: &Path) -> std::fs::File {
+        mkdir(profile);
+        let lock = profile.join(BUILD_LOCK);
+        let held = std::fs::File::create(&lock).and_then(|file| file.lock().map(|()| file));
+        match held {
+            Ok(file) => file,
+            Err(why) => panic!("fixture: could not lock {}: {why}", lock.display()),
+        }
+    }
+
+    #[test]
+    fn a_nested_tree_a_build_holds_is_never_reclaimed() {
+        // The measured race: the warm tier took `target/clippy` while clippy was
+        // compiling into it. The released control is what makes the held arm
+        // mean something rather than a reclaim that never ran.
+        let root = build_root("claim-nested");
+        let tree = root.join("clippy");
+        mkdir(&tree.join("debug/deps"));
+        let build = building(&tree.join("debug"));
+
+        let (removed, freed, _) = drop_regrowable(&root, &[], false);
+        assert_eq!(
+            (removed, freed),
+            (0, 0),
+            "a held tree is skipped, not counted"
+        );
+        assert!(tree.join("debug/deps").is_dir(), "and it is still there");
+
+        drop(build);
+        let (removed, _, _) = drop_regrowable(&root, &[], false);
+        assert_eq!(removed, 1, "released, the same tree is reclaimed");
+        assert!(!tree.exists());
+    }
+
+    #[test]
+    fn a_declared_cache_inside_a_building_profile_is_left_alone() {
+        // `build` is a declared root that lives INSIDE a profile, so its lock is
+        // an ancestor's rather than a child's.
+        let root = build_root("claim-declared");
+        mkdir(&root.join("debug/build/crc32fast-383b9aaeeb86df18"));
+        let declared = [Regrowable {
+            name: "build".to_owned(),
+            cold: false,
+        }];
+        let build = building(&root.join("debug"));
+
+        let (removed, _, _) = drop_regrowable(&root, &declared, false);
+        assert_eq!(removed, 0, "the build writing into it keeps it");
+
+        drop(build);
+        let (removed, _, _) = drop_regrowable(&root, &declared, false);
+        assert_eq!(removed, 1, "released, the cache regrows as declared");
+    }
+
+    #[test]
+    fn superseded_artifacts_under_a_running_build_are_kept() {
+        let root = build_root("claim-superseded");
+        let profile = root.join("debug");
+        variant(&profile, "demo", "d1d1d1d1d1d1d1d1", 3000);
+        variant(&profile, "demo", "d2d2d2d2d2d2d2d2", 1000);
+        let build = building(&profile);
+
+        assert_eq!(
+            reclaim_superseded(&root, 1),
+            (0, 0),
+            "nothing under a held lock"
+        );
+
+        drop(build);
+        assert_eq!(reclaim_superseded(&root, 1).0, 1, "released, keep 1 of 2");
     }
 }
