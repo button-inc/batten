@@ -299,6 +299,10 @@ pub enum Verdict {
     MalformedRow { fields: usize },
     /// The filter matched no case, on either the clean or the mutated run.
     NamesNoCase { want: String },
+    /// The runner printed no summary, so it never ran the suite — a build that
+    /// failed or was contended (CLOUD-1910). Not the row's fault, and reported
+    /// apart from [`Verdict::NamesNoCase`] so nobody fixes the wrong thing.
+    SuiteDidNotRun { want: String },
     /// The case was already red before the mutation, so its redness afterwards
     /// is not evidence.
     CaseAlreadyRed { want: String },
@@ -336,6 +340,7 @@ impl Verdict {
             Verdict::NoSuchGate
                 | Verdict::NoSuite { .. }
                 | Verdict::NamesNoCase { .. }
+                | Verdict::SuiteDidNotRun { .. }
                 | Verdict::CaseAlreadyRed { .. }
                 | Verdict::UnappliableMutation
         )
@@ -354,6 +359,7 @@ impl fmt::Display for Verdict {
                 write!(out, "malformed-row ({fields} fields, want 3)")
             }
             Verdict::NamesNoCase { want } => write!(out, "names-no-case ({want})"),
+            Verdict::SuiteDidNotRun { want } => write!(out, "suite-did-not-run ({want})"),
             Verdict::CaseAlreadyRed { want } => write!(out, "case-already-red ({want})"),
             Verdict::FilterNamesEveryCase { want } => {
                 write!(out, "filter-names-every-case ({want})")
@@ -1125,6 +1131,8 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
 struct Selection {
     selected: usize,
     ok: bool,
+    /// Whether the runner reached its summary at all (CLOUD-1910).
+    ran: bool,
 }
 
 /// Run a gate's suite filtered to `want`, inside the staged tree.
@@ -1142,6 +1150,7 @@ fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Result<
             Ok(Selection {
                 selected: tap_lines(&ran.output),
                 ok: ran.ok,
+                ran: tap_ran(&ran.output),
             })
         }
         Suite::Cargo { .. } => {
@@ -1159,6 +1168,7 @@ fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Result<
             Ok(Selection {
                 selected: libtest_lines(&ran.output),
                 ok: ran.ok && !ran.output.contains("error: could not compile"),
+                ran: libtest_ran(&ran.output),
             })
         }
     }
@@ -1182,6 +1192,17 @@ fn libtest_lines(output: &str) -> usize {
         .lines()
         .filter(|line| line.starts_with("test ") && line.contains(" ... "))
         .count()
+}
+
+/// Whether a bats run reached its TAP plan line (`1..N`).
+fn tap_ran(output: &str) -> bool {
+    output.lines().any(|line| line.starts_with("1.."))
+}
+
+/// Whether a libtest run printed a summary. Every test target prints one, even
+/// one that filters out every case, so its absence means nothing ran.
+fn libtest_ran(output: &str) -> bool {
+    output.lines().any(|line| line.contains("test result: "))
 }
 
 /// How many cases a suite declares in total.
@@ -1273,6 +1294,11 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
     // way, and every mutation aimed at it reads as caught. Costs one extra
     // filtered run per row, which is what an anti-vacuity term is worth.
     let clean = run_suite(staged, root, &gate.suite, &row.want)?;
+    if !clean.ran {
+        return Ok(Verdict::SuiteDidNotRun {
+            want: row.want.clone(),
+        });
+    }
     // "Named no case" is read BEFORE the status, because a filter matching
     // nothing is itself a non-zero exit on both runners — and reporting that as
     // "already red" would name the wrong defect to whoever has to fix it.
@@ -1308,6 +1334,11 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
     }
 
     let mutated = run_suite(staged, root, &gate.suite, &row.want)?;
+    if !mutated.ran {
+        return Ok(Verdict::SuiteDidNotRun {
+            want: row.want.clone(),
+        });
+    }
     if mutated.selected == 0 {
         return Ok(Verdict::NamesNoCase {
             want: row.want.clone(),
@@ -1739,6 +1770,26 @@ mod tests {
             Some(Suite::Cargo {
                 path: String::from("deep/nested/group/toy.rs"),
             })
+        );
+    }
+
+    #[test]
+    fn a_run_with_no_summary_did_not_run_rather_than_naming_no_case() {
+        // CLOUD-1910: a contended build printed no case lines, the row was blamed
+        // as naming no case, and a re-run on the same tree caught every row.
+        assert!(!libtest_ran(
+            "   Compiling batten v0.1.0\nerror: could not compile\n"
+        ));
+        assert!(libtest_ran(
+            "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out\n"
+        ));
+        assert!(!tap_ran("bats: command not found\n"));
+        assert!(tap_ran("1..0\n"));
+        assert!(
+            Verdict::SuiteDidNotRun {
+                want: String::new()
+            }
+            .could_not_look()
         );
     }
 
