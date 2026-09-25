@@ -1757,6 +1757,45 @@ fn the_newest_k_copies_survive_and_the_rest_are_removed() {
     );
 }
 
+// CLOUD-1913's declared mutation, in THIS file for the reason CLOUD-1885's block
+// above gives: `test name undefined` cannot see `crates/batten/src/**`. The
+// expression belongs to `prune.rs`'s `reclaim_superseded`; inert under the sweep,
+// its kill was demonstrated by hand against the case below.
+/*
+#MUTANT-SUITE crates/batten/tests/it/target_prune.rs
+#MUTANT fingerprint-left-behind|s@^                        forget_fingerprint(fingerprints, victim);$@                        let _ = (fingerprints, victim);@|a_reclaimed_copy_takes_its_cargo_fingerprint_with_it
+*/
+
+#[test]
+fn a_reclaimed_copy_takes_its_cargo_fingerprint_with_it() {
+    // CLOUD-1913. A fingerprint naming a deleted artifact tells cargo the crate is
+    // fresh, so the next build links against a file that is gone (E0460/E0463).
+    // The survivor's fingerprint is the control: the case cannot pass by the
+    // reclaim sweeping `.fingerprint` wholesale.
+    let repo = repo("target-prune-fingerprint");
+    let deps = repo.join("target/debug/deps");
+    let fingerprints = repo.join("target/debug/.fingerprint");
+    for (hash, age) in [
+        ("aaaaaaaaaaaa", 3600),
+        ("bbbbbbbbbbbb", 1800),
+        ("cccccccccccc", 60),
+    ] {
+        artifact(&deps, "cli", hash, age);
+        std::fs::create_dir_all(fingerprints.join(format!("cli-{hash}"))).unwrap();
+    }
+
+    let output = prune(&repo, "99999", &["-y"]);
+    assert!(output.status.success(), "{}", said(&output));
+    assert!(
+        !fingerprints.join("cli-aaaaaaaaaaaa").exists(),
+        "the reclaimed copy's fingerprint goes with it"
+    );
+    assert!(
+        fingerprints.join("cli-cccccccccccc").exists(),
+        "a survivor's fingerprint is untouched"
+    );
+}
+
 #[test]
 fn a_stem_with_fewer_than_keep_copies_is_untouched() {
     // CARRIED, and it had no home in either tier until #734's review said so —
