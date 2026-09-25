@@ -169,7 +169,36 @@ base_verbs := verbs_in(base_lines)
 code_text(path) := concat(" ", [line |
 	some line in input.tree.lines[path]
 	not startswith(trim_space(line), "#")
+	invocation_line(path, line)
 ])
+
+# IN HARNESS JSON, ONLY A `"command"` VALUE IS AN INVOCATION (review of #928).
+#
+# `.claude/**` is a call surface because hook registrations live there, and a
+# registration names the program it runs under `"command"`. The same files also
+# carry PROSE: `autoMode.allow` rules are sentences telling a classifier what is
+# ordinary, and one of them mentions `batten ... lease status` as a read-only
+# question. Read as code, that sentence made `lease status` reached, so the
+# stale arm refused its true `// unreached:` declaration. That is this file's own
+# header in reverse: "a verb whose only mention is a remedy string is dead code
+# with documentation".
+#
+# Measured before narrowing: seven verbs' reach rested only on `.claude` JSON
+# prose (`lease status`, `mcp`, `mcp call`, `override request`,
+# `override spend`, `policy explain`, `policy rule`), and all seven are on the
+# trunk. So the missing arm, which judges only verbs a branch ADDS, gains no
+# finding, and the stale arm stops reading sentences as callers.
+invocation_line(path, _) if not harness_json(path)
+
+invocation_line(path, line) if {
+	harness_json(path)
+	contains(line, "\"command\"")
+}
+
+harness_json(path) if {
+	startswith(path, ".claude/")
+	endswith(path, ".json")
+}
 
 # Something in a production surface invokes this verb.
 #
@@ -441,6 +470,30 @@ test_a_verb_on_a_continuation_line_is_reached if {
 		surface_with("lease guard"),
 		[],
 		{".github/workflows/test.yml": ["  \"$BIN/batten\" --config-in \"$CFG\" \\", "    lease guard \\", "    \"$SHA\""]},
+	)
+}
+
+# PROSE IN HARNESS JSON IS NOT A CALLER (review of #928). The measured shape: an
+# `autoMode.allow` sentence naming `batten ... lease status` made that verb read
+# reached, so its true `// unreached:` declaration was refused as stale.
+test_a_permission_sentence_naming_a_verb_does_not_reach_it if {
+	count(violation) == 0 with input as tree_with(
+		array.concat(
+			["    // unreached: \"lease status\" CLOUD-1338 no caller yet"],
+			surface_with("lease status"),
+		),
+		[],
+		{".claude/settings.json": ["      \"`batten lease status` IS A READ-ONLY QUESTION and is allowed.\","]},
+	)
+}
+
+# AND A HOOK'S `"command"` IN THE SAME FILE STILL IS ONE, or the narrowing has
+# disabled the surface it was meant to sharpen.
+test_a_hook_command_in_harness_json_reaches_its_verb if {
+	count(violation) == 0 with input as tree_with(
+		surface_with("adjudicate"),
+		[],
+		{".claude/settings.json": ["            \"command\": \"batten adjudicate --harness claude-code\""]},
 	)
 }
 
