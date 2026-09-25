@@ -905,9 +905,9 @@ struct Observed {
 }
 
 /// `skip_serializing_if` needs a function, and zero is the unremarkable count.
-#[allow(clippy::trivially_copy_pass_by_ref)]
-const fn is_zero(count: &u32) -> bool {
-    *count == 0
+/// Generic so serde's by-reference call shape needs no lint escape.
+fn is_zero<T: Default + PartialEq>(count: &T) -> bool {
+    *count == T::default()
 }
 
 impl Ratchet {
