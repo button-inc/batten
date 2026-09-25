@@ -329,6 +329,11 @@ uv = "0.12.5"                                       # fast Rust installer the pi
 
 [env]
 CARGO_TERM_COLOR = "always"
+# THE CHECKSUM MANIFEST'S ONE NAME (CLOUD-278). `checksums` writes it and
+# `release-assets-record` looks for it on the release; both read it from here, so
+# the two cannot drift. It replaced asking `checksums.sh --names` by path when
+# that program moved inline under CLOUD-1717.
+BATTEN_CHECKSUM_MANIFEST = "SHA256SUMS"
 # bats comes from the tests/bats submodule, not a mise tool, and this is what
 # puts it on PATH. A tool pin would be the obvious choice and is the wrong one:
 # the published package is a GitHub *source archive*, and those are not
@@ -617,7 +622,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "mise,attestation,timeout-drift,engine-checks-green,engine-cargo-graph,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age,done,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,denials-outlive-the-turn,digest-major-agreement,doctor,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure,evaluator-io-probe,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,linear-check,lock-complete,macos-link,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-callable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules,deferral,closing-key"
+MUTANT_GATES = "mise,attestation,timeout-drift,engine-checks-green,engine-cargo-graph,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age,done,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,denials-outlive-the-turn,digest-major-agreement,doctor,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure,evaluator-io-probe,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,linear-check,lock-complete,macos-link,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-callable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules,deferral,closing-key,release-assets"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -2563,6 +2568,460 @@ printf '%scensus\tissues=%d\n' "$out" "$n" | "${record[@]}"
 # THE NAME STAYS CALLABLE: `AGENTS.md` and the release workflow's summary tell a
 # reader to run `mise run done-check`, and it keeps meaning the same gate — read
 # the piped board, then decide over what was read.
+# CLOUD-278's manifest, moved off `mise-tasks/checksums.sh` under CLOUD-1717. An
+# EFFECT with no decision in it — download a release's own assets, hash them in
+# byte order, write `SHA256SUMS` — so there is no module to move anything into and
+# the body moves whole. The release workflow calls it by this name, and
+# `release-assets-check` asks `--names` for the asset path rather than spelling it.
+[tasks.checksums]
+description = "Effect: derive the SHA256 manifest of a release's own assets, read back after upload"
+shell = "bash -c"
+# ARGUMENTS ARRIVE THROUGH `usage`, not `$1`: an inline body is a template, and
+# mise appends raw arguments to its TEXT, so `--names` ran as a command and an
+# empty `$1` hashed the latest release instead. `usage` hands them over by name.
+usage = '''
+flag "--names" help="print the manifest path and exit, with no tag, network or download"
+arg "[tag]" help="the release to hash; the latest when omitted or empty"
+'''
+run = '''
+{% raw %}
+set -euo pipefail
+
+# The asset name. One authority: `release-assets-check` asks `--names` rather
+# than spelling it a second time, the way it already asks `sbom --names`.
+readonly MANIFEST="${BATTEN_CHECKSUM_MANIFEST:?the manifest name is declared in [env]}"
+
+# Where the manifest lands. Overridable so a caller can stage it outside the
+# tree; git-ignored either way, like `dist/` and `sbom/`.
+OUT_DIR="${CHECKSUMS_OUT_DIR:-checksums}"
+SUMS="${OUT_DIR}/${MANIFEST}"
+
+# Answered before the tag lookup and before any network, so a gate can ask from
+# any directory and pay nothing for the answer.
+if [[ "${usage_names:-}" = "true" ]]; then
+	echo "sums=$SUMS"
+	exit 0
+fi
+
+# An empty first argument is "no tag", not a tag named "": the release workflow
+# passes `"$TAG"` quoted, so the argument always arrives.
+tag="${usage_tag:-}"
+if [[ -z "$tag" ]]; then
+	if ! tag=$(gh release view --json tagName --jq .tagName 2>/dev/null) || [[ -z "$tag" ]]; then
+		echo "::error:: checksums: no tag given and no latest release readable. Pass one: mise run checksums <tag>" >&2
+		exit 2
+	fi
+fi
+
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+
+# gh writes progress to stderr already; its stdout goes there too so the KEY=VALUE
+# channel this script owns cannot be polluted by a future gh that prints on it.
+if ! gh release download "$tag" --dir "$scratch" --clobber >&2; then
+	echo "::error:: checksums: cannot download the assets of release $tag, so there is nothing to hash. That is a lookup failure, not an empty release." >&2
+	exit 2
+fi
+
+# A manifest must never hash itself. Re-running against a release that already
+# carries one would otherwise digest the previous run's output, and the file
+# could never be reproduced from the release it describes.
+rm -f "$scratch/$MANIFEST"
+
+# LC_ALL=C so the order is byte order on every machine: two runs over one release
+# produce identical bytes, which is what makes the published artifact a function
+# of the release rather than of who cut it.
+#
+# A `read` loop rather than `mapfile` (CLOUD-282): `mapfile` is bash 4 and macOS
+# ships 3.2, so it would die here on the one platform whose release artifacts
+# this manifest covers. `no-bash4-mapfile` in batten.toml is the standing gate —
+# it caught this line the day the file landed.
+assets=()
+while IFS= read -r asset; do
+	assets+=("$asset")
+done < <(cd "$scratch" && shopt -s nullglob && for f in *; do printf '%s\n' "$f"; done | LC_ALL=C sort)
+
+if [[ "${#assets[@]}" -eq 0 ]]; then
+	echo "::error:: checksums: release $tag carries no assets to hash. A manifest that covers nothing is indistinguishable from no manifest, so none is written." >&2
+	exit 1
+fi
+
+# Written inside the scratch directory first and moved into place only on success:
+# a failed run must not leave a truncated manifest for the upload step to publish.
+# Safe to write there — the argument list is already fixed, so this file is not
+# among the ones being hashed.
+if ! (cd "$scratch" && LC_ALL=C sha256sum -- "${assets[@]}" >"$MANIFEST"); then
+	echo "::error:: checksums: could not hash the assets of release $tag, so no manifest was produced." >&2
+	exit 1
+fi
+
+mkdir -p "$OUT_DIR"
+mv "$scratch/$MANIFEST" "$SUMS"
+
+echo "checksums: $tag — ${#assets[@]} asset(s) hashed" >&2
+
+# stdout is the answer: a pointer to the artifact, never its bytes (rule 4).
+# KEY=VALUE so the release workflow appends it to $GITHUB_OUTPUT unchanged.
+echo "sums=$SUMS"
+{% endraw %}
+'''
+
+# CLOUD-518's gate and CLOUD-790's actor, moved off `mise-tasks/pr-unsubscribed.sh`
+# under CLOUD-1717. `drop` and `record` are effects that mint a receipt under
+# `$GIT_DIR`; `check`'s decision is `policy/pr-unsubscribed.rego`, over what this
+# body reads from that store. `land` runs `pr-unsubscribed drop` and then `check`
+# as entry gates (`LAND_ENTRY_GATES`), by this name.
+[tasks.pr-unsubscribed]
+description = "Gate: this session has dropped the PR's webhook subscription (records unsubscribe_pr_activity's answer, then decides) — CLOUD-518"
+shell = "bash -c"
+usage = '''
+arg "<verb>" help="drop | record | check"
+arg "<pr>" help="the pull request number"
+'''
+run = '''
+{% raw %}
+set -uo pipefail
+
+fail_input() {
+	echo "::error:: pr-unsubscribed: $*" >&2
+	exit 2
+}
+
+verb="${usage_verb:-}"
+pr="${usage_pr:-}"
+if [[ -n "${BATTEN_BIN:-}" ]]; then batten=("$BATTEN_BIN"); else batten=(cargo run --quiet -p batten --); fi
+
+case "$verb" in
+drop | record | check) ;;
+*) fail_input "usage: pr-unsubscribed drop|record|check <pr>" ;;
+esac
+
+case "$pr" in
+'' | *[!0-9]*) fail_input "\"$pr\" is not a pull request number" ;;
+esac
+
+git_dir=$(git rev-parse --git-dir 2>/dev/null) ||
+	fail_input "not a git repository — cannot read or write a receipt"
+
+# THE SESSION, BY PRESENCE OF THE INJECTED CONFIG. The directory is overridable so
+# the suite can supply one without ever reading a real session's, and the FILENAME
+# shape is the anchor — CLOUD-191's endpoint-anchoring pattern, reduced to the one
+# question that needs no credential: is there a session here at all.
+#
+# Returns non-zero when there is none, which both verbs read as "nothing to drop".
+session_id() {
+	local candidate base session=
+	for candidate in "${BATTEN_MCP_CONFIG_DIR:-/tmp}"/mcp-config-cse_*.json; do
+		[[ -f "$candidate" ]] || continue
+		base=${candidate##*/}
+		base=${base#mcp-config-}
+		session=${base%.json}
+	done
+	if [[ -z "$session" ]]; then
+		return 1
+	fi
+	printf '%s' "$session"
+}
+
+receipt_path() {
+	printf '%s' "$git_dir/batten-receipts/pr-unsubscribed.$1.$2"
+}
+
+# Present for THIS session and THIS pr. A session that cannot be identified has no
+# subscription to have dropped, so the absence of one is not a missing receipt.
+receipt_present() {
+	local session
+	session=$(session_id) || return 0
+	[[ -f "$(receipt_path "$session" "$1")" ]]
+}
+
+# ONE MINTER FOR BOTH WRITERS. `drop` and `record` differ only in where the answer
+# came from — this endpoint's response body, or the agent's own tool call pasted
+# on stdin — and the receipt they leave must be identical, or `check` would be
+# reading two facts through one filename. Factored out when `drop` landed rather
+# than duplicated, so a change to the receipt's shape cannot apply to one path
+# and not the other.
+#
+# Pointer-only, in the receipt as well as on stdout: what was recorded, for which
+# PR, in which session, by which path, and a digest of the answer — never the
+# answer, which is a message about a webhook stream and has no business being
+# stored here.
+mint_receipt() { # mint_receipt <session> <pr> <answer> <via>
+	local session=$1 pr=$2 answer=$3 via=$4 digest
+
+	mkdir -p "$git_dir/batten-receipts" 2>/dev/null ||
+		fail_input "cannot create the receipt store"
+
+	digest=$(printf '%s' "$answer" | sha256sum 2>/dev/null | cut -c1-12) || digest=unhashed
+
+	{
+		echo "pr $pr"
+		echo "session $session"
+		echo "via $via"
+		echo "answer-sha256 $digest"
+		echo "answer-bytes ${#answer}"
+	} >"$(receipt_path "$session" "$pr")" 2>/dev/null ||
+		fail_input "cannot write the receipt for #$pr"
+
+	echo "pr-unsubscribed: recorded the drop of #$pr's webhook subscription via $via (answer $digest)"
+}
+
+# THE DECISION IS `policy/pr-unsubscribed.rego`'s. This reads the receipt store,
+# which a module cannot, records the session (or `-` where there is none), the PR,
+# and whether this session holds a receipt for it, then runs the one rule.
+if [[ "$verb" = check ]]; then
+	checked_session=$(session_id) || checked_session=-
+	receipt=absent
+	if [[ "$checked_session" != - ]] && receipt_present "$pr"; then
+		receipt=present
+	fi
+	printf 'session\t%s\npr\t%s\nreceipt\t%s\n' "$checked_session" "$pr" "$receipt" |
+		"${batten[@]}" record named pr-unsubscribed || fail_input "could not record the reading for #$pr"
+	exec "${batten[@]}" check --rule 'event watch other'
+fi
+
+# --- drop --------------------------------------------------------------------
+#
+# The actor. Everything here fails OPEN — every path that cannot establish its
+# input prints why and exits 0 without a receipt, leaving `check` to demand the
+# manual `record` exactly as before. That is not defensiveness: an actor that
+# could refuse would put a second way to wedge a landing in front of the gate it
+# exists to satisfy, and `land` runs this on every lap.
+#
+# The mutation mints a receipt whatever the endpoint answered, which is the whole
+# of the honest limit: a receipt must attest to an accepted call, not to an
+# attempted one. With it in place a 403 lands as silently as a 200.
+#MUTANT drop-mints-on-any-status|s/^\tif \[\[ "\$code" = 200 \]\] && \[\[ -n "\$body" \]\]; then$/\tif true; then/|a refused call mints NOTHING, and the gate still refuses
+# And the fail-open must hold in the other direction. A `drop` that exits non-zero
+# on a status it did not like turns `land`'s first step into a wedge on every
+# clone whose session cannot reach the endpoint.
+# Anchored on BOTH tabs, because the line lives inside `give_up` inside the verb
+# block — a one-tab pattern matched nothing and `mutant` called it `inert`, which
+# is the right verdict and a quieter failure than an unappliable one. Anchored on
+# `echo` too, so the pattern cannot also rewrite this declaration line into a
+# top-level `fail_input` call.
+#MUTANT drop-blocks-on-failure|s@^\t\techo "pr-unsubscribed: could not drop.*@\t\tfail_input "could not drop"@|drop NEVER blocks
+if [[ "$verb" = drop ]]; then
+	give_up() { # give_up <pointer-only reason>
+		echo "pr-unsubscribed: could not drop #$pr's webhook subscription ($1) — the manual path is unaffected"
+		exit 0
+	}
+
+	# No session means no subscription, the same reading `check` and `record`
+	# already take off harness.
+	dropping_session=$(session_id) ||
+		give_up "no injected client config, so this clone has no session"
+
+	# THE CREDENTIAL IS ONE THE CONTAINER IS GIVEN, never one scraped from another
+	# process — the line CLOUD-673 drew and this keeps. It is read here and passed
+	# to `curl` on stdin via `--config`, so it never appears in a command line any
+	# `ps` can read, and it is never printed, logged, or written to the receipt.
+	token_file="${CLAUDE_SESSION_INGRESS_TOKEN_FILE:-}"
+	[[ -n "$token_file" ]] && [[ -f "$token_file" ]] ||
+		give_up "no session-ingress token file"
+
+	command -v curl >/dev/null 2>&1 || give_up "no curl on PATH"
+
+	# `{owner, repo, pullNumber}` is the tool's whole input schema. The remote is
+	# the authority on the first two; a shape this cannot parse is a clone this
+	# has no business guessing about.
+	remote=$(git remote get-url origin 2>/dev/null) ||
+		give_up "no origin remote"
+	slug=${remote#*github.com}
+	slug=${slug#:}
+	slug=${slug#/}
+	slug=${slug%.git}
+	owner=${slug%%/*}
+	repo=${slug#*/}
+	case "$owner/$repo" in
+	*[!A-Za-z0-9._/-]* | */*/* | */ | /*) give_up "origin is not a github owner/repo" ;;
+	esac
+	[[ -n "$owner" ]] && [[ -n "$repo" ]] || give_up "origin is not a github owner/repo"
+
+	# THE ROUTE IS `/github/mcp`, NOT THE TOOLBOX ONE — see the header's table.
+	# Overridable so the suite can point it at a stub without a credential or a
+	# network; the default is a public vendor address, committable by the same
+	# reasoning `connector-allow-resolve` records for its endpoint constant.
+	endpoint="${BATTEN_CCR_ENDPOINT:-https://api.anthropic.com}/v2/ccr-sessions/${dropping_session}/github/mcp"
+
+	body_file="$git_dir/batten-receipts/.drop-$$.body"
+	mkdir -p "$git_dir/batten-receipts" 2>/dev/null ||
+		give_up "cannot create the receipt store"
+
+	# `--config -` reads the header from stdin, keeping the bearer out of argv.
+	code=$(printf '%s\n' "header = \"Authorization: Bearer $(cat "$token_file")\"" |
+		curl -sS --max-time 30 -o "$body_file" -w '%{http_code}' \
+			--config - \
+			-X POST "$endpoint" \
+			-H 'Content-Type: application/json' \
+			-H 'Accept: application/json, text/event-stream' \
+			--data "$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unsubscribe_pr_activity","arguments":{"owner":"%s","repo":"%s","pullNumber":%s}}}' "$owner" "$repo" "$pr")" 2>/dev/null) || code=""
+
+	body=$(cat "$body_file" 2>/dev/null) || body=""
+	rm -f "$body_file" 2>/dev/null
+
+	# An MCP error is carried in a 200 as `isError`, so the status alone is not the
+	# verdict — a tool that refused must not mint a receipt saying it complied.
+	case "$body" in
+	*'"isError":true'* | *'"isError": true'*) give_up "the tool reported an error (http ${code:-none})" ;;
+	esac
+
+	if [[ "$code" = 200 ]] && [[ -n "$body" ]]; then
+		mint_receipt "$dropping_session" "$pr" "$body" endpoint
+		exit 0
+	fi
+
+	give_up "http ${code:-none}"
+fi
+
+# --- record ------------------------------------------------------------------
+
+session=$(session_id) || session=
+# A `record` off-harness is a caller doing the right thing in a place where there
+# was nothing to do. Silent success, for the same reason `check` passes there: a
+# gate that scolds the honest case teaches its own bypass.
+[[ -n "$session" ]] || {
+	echo "pr-unsubscribed: no injected client config, so this clone has no session and no subscription — nothing to record for #$pr"
+	exit 0
+}
+
+# THE ANSWER MUST NAME THIS PULL REQUEST, as a named predicate so the mutation
+# that removes it is a one-line substitution carrying no pipe. The declaration
+# grammar is three pipe-separated fields, so a script containing one is parsed as a
+# fourth and truncated — measured on this file: three rows came back
+# `unappliable-mutation` and `names-no-case` because their scripts matched lines
+# written with `||`.
+#
+# `case` rather than a regex: the only question is whether `#<pr>` appears, and a
+# pattern would invite exactly the prose-judging this refuses below.
+answer_names_pr() {
+	case "$answer" in
+	*"#$pr"*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+answer=$(cat 2>/dev/null) || fail_input "could not read the answer on stdin"
+[[ -n "${answer//[[:space:]]/}" ]] ||
+	fail_input "stdin is empty; pipe \`unsubscribe_pr_activity\`'s answer for #$pr"
+
+# THE ANSWER MUST NAME THIS PULL REQUEST. Both observed shapes carry it — the
+# no-active-subscription reading names `<owner>/<repo>#<n>` — and requiring it is
+# what stops the honest error this is built for: pasting the answer from the
+# previous PR, on a branch name the harness reuses for a whole engagement.
+#
+# It deliberately does NOT judge the answer's prose beyond that. Matching phrasing
+# would be a gate estimating an outcome from wording (non-negotiable 3), and the
+# outcome it would be guessing at is the one only CLOUD-673 can observe.
+if ! answer_names_pr; then
+	echo "::error:: pr-unsubscribed: that answer does not name #$pr, so it is not evidence about this pull request. Call \`unsubscribe_pr_activity\` for #$pr and pipe what it returns." >&2
+	exit 1
+fi
+
+mint_receipt "$session" "$pr" "$answer" agent
+{% endraw %}
+'''
+
+# CLOUD-258/262/278's reading half, ported off `mise-tasks/release-assets-check.sh`
+# under CLOUD-1717. The decisions are `policy/release-assets.rego`'s; this records
+# NAMES only — the matrix targets, the platform-independent assets the release job
+# uploads, the release's assets, the manifest's name and entries, and
+# `sha256sum -c`'s failures — and refuses, writing nothing, wherever the retired
+# program exited 2.
+[tasks.release-assets-record]
+description = "Effect: record a release's expected targets and assets, what it carries, and its checksum manifest's entries and byte failures (CLOUD-258)"
+shell = "bash -c"
+usage = """
+arg "[tag]" help="the release to read; the latest when omitted or empty"
+"""
+run = '''
+{% raw %}
+set -euo pipefail
+if [[ -n "${BATTEN_BIN:-}" ]]; then batten=("$BATTEN_BIN"); else batten=(cargo run --quiet -p batten --); fi
+refuse() { echo "::error:: release-assets-record: $*. Nothing recorded." >&2; exit 2; }
+WORKFLOW="${BATTEN_RELEASE_WORKFLOW:-.github/workflows/release-artifacts.yml}"
+MANIFEST="${BATTEN_CHECKSUM_MANIFEST:-}"
+[[ -n "$MANIFEST" ]] || refuse "no manifest name declared in [env]"
+[[ -f "$WORKFLOW" ]] || refuse "cannot read $WORKFLOW, so the target list is unknown"
+# `- target: <triple>` list items only, so a `target:` in prose cannot widen it.
+targets=$(sed -nE 's/^[[:space:]]*-[[:space:]]+target:[[:space:]]*([A-Za-z0-9_.-]+)[[:space:]]*$/\1/p' "$WORKFLOW" | sort -u)
+[[ -n "$targets" ]] || refuse "no matrix targets found in $WORKFLOW"
+# The legs whose build-tool is not `cross` also publish a binary-level SBOM.
+composed=$(awk '
+	/^[[:space:]]*-[[:space:]]+target:[[:space:]]*/ { t = $NF; next }
+	/^[[:space:]]*build-tool:[[:space:]]*/ { if (t != "" && $NF != "cross") print t; t = "" }
+' "$WORKFLOW" | sort -u)
+TASKS="${BATTEN_TASKS_DIR:-mise-tasks}"
+uploads=$(grep -F 'gh release upload' "$WORKFLOW" || true)
+literal=$(tr ' ' '\n' <<<"$uploads" | sed -nE 's#^"?([A-Za-z0-9_./-]+\.(json|sh))"?$#\1#p' || true)
+# Guarded on the SCRAPE: the derived names always contribute, so a union test
+# could never reach zero.
+[[ -n "$literal" ]] || refuse "no literal asset operand on a 'gh release upload' line in $WORKFLOW"
+derived=""
+[[ -x "$TASKS/sbom.sh" ]] && derived=$("$TASKS/sbom.sh" --names | sed -nE 's/^(spdx|cdx)=//p' || true)
+[[ -x "$TASKS/render/cli.sh" ]] && derived=$(printf '%s\n%s\n' "$derived" "$("$TASKS/render/cli.sh" --names | sed -nE 's/^reference=//p' || true)")
+if [[ -x "$TASKS/sbom-binary.sh" ]] && [[ -n "$composed" ]]; then
+	while IFS= read -r leg; do
+		[[ -n "$leg" ]] || continue
+		derived=$(printf '%s\n%s\n' "$derived" "$("$TASKS/sbom-binary.sh" --names "$leg" | sed -nE 's/^sbom=//p' || true)")
+	done <<<"$composed"
+fi
+extras=$(printf '%s\n%s\n' "$literal" "$derived" | sed 's#^.*/##' | sed '/^$/d' | sort -u)
+tag="${usage_tag:-}"
+if [[ -z "$tag" ]]; then
+	tag=$(gh release view --json tagName --jq .tagName 2>/dev/null) || tag=""
+	[[ -n "$tag" ]] || refuse "no tag given and no latest release readable"
+fi
+assets=$(gh release view "$tag" --json assets --jq '.assets[].name' 2>/dev/null) || refuse "cannot read release $tag"
+covered=""
+mismatch=""
+if grep -qxF -- "$MANIFEST" <<<"$assets"; then
+	scratch=$(mktemp -d)
+	trap 'rm -rf "$scratch"' EXIT
+	gh release download "$tag" --dir "$scratch" --clobber >/dev/null 2>&1 || refuse "cannot download the assets of release $tag"
+	# `sha256sum`'s own line format, anchored, so an unreadable line is no entry.
+	covered=$(sed -nE 's/^[0-9a-fA-F]{64} [ *](.+)$/\1/p' "$scratch/$MANIFEST" | LC_ALL=C sort -u)
+	if [[ -n "$covered" ]]; then
+		if ! bad=$(cd "$scratch" && LC_ALL=C sha256sum -c --quiet -- "$MANIFEST" 2>/dev/null); then
+			[[ -n "$bad" ]] || refuse "sha256sum could not read $MANIFEST on $tag"
+			mismatch=$(sed -nE 's/^(.*): FAILED.*$/\1/p' <<<"$bad" | LC_ALL=C sort -u)
+		fi
+	fi
+fi
+out=""
+counts=""
+emit() { # emit <kind> <newline-separated values>
+	local kind=$1 n=0 value
+	while IFS= read -r value; do
+		[[ -n "$value" ]] || continue
+		out+="${kind}"$'\t'"${value}"$'\n'
+		n=$((n + 1))
+	done <<<"$2"
+	counts+="${counts:+$'\t'}${kind}=${n}"
+}
+emit target "$targets"
+emit extra "$extras"
+emit asset "$assets"
+emit manifest "$MANIFEST"
+emit covered "$covered"
+emit mismatch "$mismatch"
+printf '%scensus\t%s\n' "$out" "$counts" | "${batten[@]}" record named release-assets
+{% endraw %}
+'''
+
+# The name `release-assets.yml` runs on its clock, kept: read the release, decide.
+[tasks.release-assets-check]
+description = "Gate: a release carries one archive per target the dist matrix builds, every uploaded asset, and a covering checksum manifest (CLOUD-258)"
+usage = """
+arg "[tag]" help="the release to check; the latest when omitted or empty"
+"""
+shell = "bash -c"
+run = '''
+set -e
+mise run release-assets-record ${usage_tag:+"$usage_tag"}
+exec cargo run --quiet -p batten -- check --rule 'release grade other'
+'''
+
 [tasks.done-check]
 description = "Gate: no issue sits Done while no release tag contains its commits (reads get_issue payloads on stdin)"
 run = [

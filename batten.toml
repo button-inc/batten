@@ -2219,6 +2219,23 @@ writer = "mise run deferral-record"
 record = "closing-key"
 writer = "mise run closing-key-record"
 
+# CLOUD-518's reading, ported off `pr-unsubscribed.sh`'s `check` under CLOUD-1717.
+[[record]]
+record = "pr-unsubscribed"
+writer = "mise run pr-unsubscribed check"
+
+# CLOUD-258/262/278's reading, ported off `release-assets-check.sh` under CLOUD-1717.
+[[record]]
+record = "release-assets"
+writer = "mise run release-assets-record"
+
+# A release ARCHIVE, as `policy/release-assets.rego` reads one: the name ends in
+# a packed extension. A composed leg's `<stem>.spdx.json` carries the same triple,
+# so it must not satisfy this, and the extension is what keeps it out.
+[[pattern]]
+id = "release-archive"
+regex = '[.](tar[.]gz|zip)$'
+
 # CLOUD-492's measuring half, ported off `land-divergence.sh` under CLOUD-1717.
 # The decider half is `policy/land-divergence.rego`; the split is the retired
 # pair's own, for the reason the `nonverdict` pair's is.
@@ -6738,6 +6755,27 @@ id = "diff key other"
 kind = "policy"
 scope = "tree"
 module = "policy/closing-key.rego"
+severity = "deny"
+
+# CLOUD-518, ported off `mise-tasks/pr-unsubscribed.sh` under CLOUD-1717. `deny`,
+# as `check`'s exit 1 was: `land` runs it as an entry gate on every lap. Silent
+# with no record, so an ordinary `check` is unaffected.
+[[rule]]
+id = "event watch other"
+kind = "policy"
+scope = "tree"
+module = "policy/pr-unsubscribed.rego"
+severity = "deny"
+
+# CLOUD-258, ported off `mise-tasks/release-assets-check.sh` under CLOUD-1717.
+# `deny`, as the program's exit 1 was: it runs on `release-assets.yml`'s clock via
+# `mise run release-assets-check`, which produces then checks this one rule. A
+# property of the world, so with no record it is silent and no branch is judged.
+[[rule]]
+id = "release grade other"
+kind = "policy"
+scope = "tree"
+module = "policy/release-assets.rego"
 severity = "deny"
 
 # CLOUD-492, ported off `mise-tasks/land-divergence-assert.sh` under CLOUD-1717.
@@ -13796,6 +13834,73 @@ samples and propose tightening a release job on it.
 id = "task run first"
 kind = "command"
 target = "mise run timeout-drift-record"
+
+# CLOUD-258/262/278's readings, ported off `release-assets-check.sh` under
+# CLOUD-1717.
+[[verdict]]
+id = "release ship missing"
+gloss = "a release is missing an archive for a matrix target, or an asset the release job uploads"
+class = """
+A `release`-triggered run reaches no PR and no gate, so a workflow failing on \
+every release looks exactly like one that never fired: six releases shipped no \
+binary unnoticed. Re-run `release-artifacts.yml` via workflow_dispatch against the \
+tag; uploads are `--clobber` idempotent.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run release-assets-record"
+
+[[verdict]]
+id = "release pin broken"
+gloss = "a release's checksum manifest is missing, lists itself, covers nothing, omits or orphans an asset, or disagrees on bytes"
+class = """
+A manifest a packager cannot trust pins nothing. Uploads are `--clobber` \
+idempotent and the recovery is a per-target re-run, so an asset can be replaced \
+after the manifest was cut; re-run `mise run checksums <tag>` and re-upload it.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run release-assets-record"
+
+[[verdict]]
+id = "release read partial"
+gloss = "the release-assets record carries no census, or one that disagrees with its lines"
+class = "A record torn mid-write judges part of a release as if it were all of it."
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run release-assets-record"
+
+# CLOUD-518's readings, ported off `pr-unsubscribed.sh` under CLOUD-1717.
+[[verdict]]
+id = "event watch held"
+gloss = "this session carries no receipt that it dropped the PR's webhook subscription"
+class = """
+The harness arms a subscription on every PR this repo opens, and AGENTS.md \
+forbids babysitting one. `mise run pr-unsubscribed drop <pr>` makes the call; \
+where it cannot, call `unsubscribe_pr_activity` and pipe its answer to \
+`mise run pr-unsubscribed record <pr>`.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run pr-unsubscribed drop"
+
+[[verdict]]
+id = "event read partial"
+gloss = "the pr-unsubscribed record is missing one of its three readings"
+class = "A record missing a reading decides over part of the answer."
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run pr-unsubscribed check"
 
 # CLOUD-323's readings, ported off `deferral-check.sh` under CLOUD-1717.
 [[verdict]]

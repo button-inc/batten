@@ -115,12 +115,10 @@ commit, and a named ref resolves a declared one.
 | `perf-compare.sh`              | tree   | —                            |
 | `perf-gate.sh`                 | tree   | —                            |
 | `pipefail-grep-check.sh`       | git    | `tracked`                    |
-| `pr-unsubscribed.sh`           | git    | `location`, `remote`         |
 | `publish-credential-check.sh`  | tree   | —                            |
 | `ready-cites-check.sh`         | git    | `head`, `tracked`            |
 | `ready-lint.sh`                | tree   | —                            |
 | `reference-check.sh`           | git    | `location`                   |
-| `release-assets-check.sh`      | forge  | —                            |
 | `release-due.sh`               | forge  | —                            |
 | `release-tracking-check.sh`    | git    | `location`                   |
 | `renovate-config-validator.sh` | tree   | —                            |
