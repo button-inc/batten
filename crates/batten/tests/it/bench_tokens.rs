@@ -69,7 +69,7 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use crate::common::{batten, stderr, stdout};
+use crate::common::{Fixture, batten, stderr, stdout};
 
 use std::path::Path;
 use std::process::Output;
@@ -137,14 +137,45 @@ fn two_checks_at_once_do_not_measure_each_other() {
     );
 }
 
+/// Copy `from` into `to`, recursively, files only.
+fn copy_tree(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).expect("create the copy's directory");
+    for entry in std::fs::read_dir(from).expect("read the benchmark tree") {
+        let entry = entry.expect("a directory entry");
+        let target = to.join(entry.file_name());
+        if entry.file_type().expect("an entry type").is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).expect("copy a benchmark file");
+        }
+    }
+}
+
 /// THE HONESTY HALF FIRES, and this is the case the withdrawn rego module could
-/// never give: it runs over the REAL table with its baselines removed, which is
-/// the engine-fed path rather than a fabricated input.
+/// never give: it runs the engine-fed path over a table with its baselines
+/// removed, rather than a fabricated input.
+///
+/// OVER A COPY, NEVER THE COMMITTED TABLE (CLOUD-1913). This case wrote the
+/// stripped table over the real `bench/tokens/RESULTS.md` and restored it after.
+/// Every concurrent reader in that window judged the damaged file: its sibling
+/// `the_committed_table_reproduces` failed under `verify` with "4 published
+/// figure(s) do not state their method" while passing alone, and a process
+/// killed between the two writes would have left the published table damaged in
+/// the tree. So the benchmark is copied into a repository of its own, the binary
+/// linked beside it, and only the copy is perturbed.
 #[test]
 fn an_unmethodical_table_is_refused() {
-    let root = repo();
-    let published = root.join("bench/tokens/RESULTS.md");
-    let original = std::fs::read_to_string(&published).expect("the committed table");
+    let copy = Fixture::new("bench-tokens-unmethodical").git().build();
+    copy_tree(&repo().join("bench/tokens"), &copy.join("bench/tokens"));
+    std::fs::create_dir_all(copy.join("target/debug")).expect("a binary directory");
+    std::fs::hard_link(
+        repo().join("target/debug/batten"),
+        copy.join("target/debug/batten"),
+    )
+    .expect("link the binary under test");
+
+    let published = copy.join("bench/tokens/RESULTS.md");
+    let original = std::fs::read_to_string(&published).expect("the copied table");
     let mut stripped = String::new();
     for line in original
         .lines()
@@ -154,13 +185,9 @@ fn an_unmethodical_table_is_refused() {
         stripped.push('\n');
     }
     assert_ne!(stripped, original, "the fixture must actually differ");
+    std::fs::write(&published, &stripped).expect("perturb the copy");
 
-    std::fs::write(&published, &stripped).expect("perturb the table");
-    let outcome = check(root);
-    // RESTORED BEFORE ASSERTING, so a failing assertion cannot leave this
-    // repository's own published table damaged.
-    std::fs::write(&published, &original).expect("restore the table");
-
+    let outcome = check(&copy);
     let cause = stderr(&outcome);
     assert_eq!(
         outcome.status.code(),
