@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.181](https://github.com/button-inc/batten/compare/v0.0.180...v0.0.181) - 2026-09-25
+
+### Added
+
+- *(policy)* refuse a new call that launders this engine's could-not-look
+
 ## [0.0.180](https://github.com/button-inc/batten/compare/v0.0.179...v0.0.180) - 2026-09-20
 
 ### Fixed
