@@ -1354,7 +1354,8 @@ checks_any = ["claim", "bot", "carry"]
 key = "branch"
 reason = """
 Pull the issue first: search the board (`mise run graph-check` prints the ready \
-frontier), then pipe the issue's `get_issue` payload to `mise run claim-check`. \
+frontier), then read it with `batten mcp call Linear get_issue '{"id":"<KEY>"}'` and pipe \
+`batten capture find <KEY> --tool get_issue --raw` to `mise run claim-check`. \
 It exits non-zero if someone is already on it, and mints the receipt if not. \
 Then move it Todo -> In Progress and assign yourself — the tracker automation \
 will not, since it fires on the PR event. Scratch work is not gated: anything \
@@ -1375,7 +1376,7 @@ how you browse. On a host with a transcript, `mise run board-payloads <id>` \
 works too.
 
 If the row has never been read here, nothing is stored yet: read it \
-(`get_issue <key>`) and the capture mints itself. Every route hands over \
+(`batten mcp call Linear get_issue '{"id":"<KEY>"}'`) and the capture mints itself. Every route hands over \
 bytes the tracker returned, never a re-typed copy; do NOT re-type one by hand."""
 
 # CLOUD-1390's refusing half — the punt receipt.
@@ -3026,8 +3027,8 @@ reason = """
 In Review means the code is on `main`. `graph-check` decides that from the row's \
 PR attachments and it is the only thing that does — reading `git log --grep` does \
 not, because a commit can CITE a row without implementing it. Adjudicate the \
-closure, then move it: `get_issue` for each row with `includeRelations: true`, \
-KEEPING attachments, then pipe that array to `mise run graph-check`. Exit 0 \
+closure, then move it: `batten mcp call Linear get_issue` for each row with \
+`includeRelations: true`, KEEPING attachments, then pipe that array to `mise run graph-check`. Exit 0 \
 records which ids it judged and that is what authorises the move; exit 1 means the \
 board is signalling falsely, so fix that first; exit 2 means it could not look, so \
 re-fetch with attachments. The payload comes from `mise run board-payloads <key>` \
@@ -3113,8 +3114,8 @@ Todo is the ready queue, so this move claims the row's Ready block satisfies the
 refinement gate — and the last read of it says otherwise. Groom the row, then \
 re-read it: `batten ready lint --issue <key>` prints exactly what fails, pointer \
 by pointer, off the payload already in the capture store and with no board call \
-at all. Fix those clauses with `save_issue`, then `get_issue <key>` with \
-`includeRelations: true` — the receipt re-mints itself from that result, \
+at all. Fix those clauses with `save_issue`, then \
+`batten mcp call Linear get_issue '{"id":"<KEY>","includeRelations":true}'` — the receipt re-mints itself from that result, \
 carrying the new verdict, and there is no second call and no payload to pipe \
 anywhere. Reading the row again WITHOUT changing it does not help and is not \
 meant to: the verdict comes from the body the tracker stored, so only a groom \
@@ -3176,8 +3177,8 @@ key_from = "input-id"
 key_shape = "^[A-Z][A-Z0-9]*-[0-9]+$"
 max_age = 300
 reason = """
-Re-read the row. That is the whole remedy: `get_issue <key>` with \
-`includeRelations: true`, and the receipt mints itself from that result — there \
+Re-read the row. That is the whole remedy: \
+`batten mcp call Linear get_issue '{"id":"<KEY>","includeRelations":true}'` (the raw tool is refused), and the receipt mints itself from that result — there \
 is no second call and no payload to pipe anywhere. Then make the write from what \
 you just read, not from the plan you built earlier: if the row changed, that is \
 the point, so decide again. This bounds how old the read was; it cannot prove the \
