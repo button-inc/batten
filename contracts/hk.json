@@ -51,6 +51,7 @@
             "batten-glob-check",
             "skill-check",
             "macos-link-check",
+            "ntia-check",
             "shfmt",
             "shellcheck",
             "test:bats",
@@ -307,105 +308,111 @@
           "parallelGroupId": "group_0"
         },
         {
-          "name": "shfmt",
+          "name": "ntia-check",
           "status": "included",
           "orderIndex": 39,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "shellcheck",
+          "name": "shfmt",
           "status": "included",
           "orderIndex": 40,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "test:bats",
+          "name": "shellcheck",
           "status": "included",
           "orderIndex": 41,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "taplo",
+          "name": "test:bats",
           "status": "included",
           "orderIndex": 42,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "taplo-format",
+          "name": "taplo",
           "status": "included",
           "orderIndex": 43,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "pkl",
+          "name": "taplo-format",
           "status": "included",
           "orderIndex": 44,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "pkl-format",
+          "name": "pkl",
           "status": "included",
           "orderIndex": 45,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "prettier",
+          "name": "pkl-format",
           "status": "included",
           "orderIndex": 46,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "deno-fmt",
+          "name": "prettier",
           "status": "included",
           "orderIndex": 47,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "rego",
+          "name": "deno-fmt",
           "status": "included",
           "orderIndex": 48,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "actionlint",
+          "name": "rego",
           "status": "included",
           "orderIndex": 49,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "cargo-fmt",
+          "name": "actionlint",
           "status": "included",
           "orderIndex": 50,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "cargo-clippy",
+          "name": "cargo-fmt",
           "status": "included",
           "orderIndex": 51,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "test",
+          "name": "cargo-clippy",
           "status": "included",
           "orderIndex": 52,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "batten-check",
+          "name": "test",
           "status": "included",
           "orderIndex": 53,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "policy-test",
+          "name": "batten-check",
           "status": "included",
           "orderIndex": 54,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "memories-check",
+          "name": "policy-test",
           "status": "included",
           "orderIndex": 55,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "memories-check",
+          "status": "included",
+          "orderIndex": 56,
           "parallelGroupId": "group_0"
         }
       ]
@@ -524,6 +531,7 @@
             "batten-glob-check",
             "skill-check",
             "macos-link-check",
+            "ntia-check",
             "shfmt",
             "shellcheck",
             "test:bats",
@@ -779,99 +787,105 @@
           "parallelGroupId": "group_0"
         },
         {
-          "name": "shfmt",
+          "name": "ntia-check",
           "status": "included",
           "orderIndex": 39,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "shellcheck",
+          "name": "shfmt",
           "status": "included",
           "orderIndex": 40,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "test:bats",
+          "name": "shellcheck",
           "status": "included",
           "orderIndex": 41,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "taplo",
+          "name": "test:bats",
           "status": "included",
           "orderIndex": 42,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "taplo-format",
+          "name": "taplo",
           "status": "included",
           "orderIndex": 43,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "pkl",
+          "name": "taplo-format",
           "status": "included",
           "orderIndex": 44,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "pkl-format",
+          "name": "pkl",
           "status": "included",
           "orderIndex": 45,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "prettier",
+          "name": "pkl-format",
           "status": "included",
           "orderIndex": 46,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "deno-fmt",
+          "name": "prettier",
           "status": "included",
           "orderIndex": 47,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "rego",
+          "name": "deno-fmt",
           "status": "included",
           "orderIndex": 48,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "actionlint",
+          "name": "rego",
           "status": "included",
           "orderIndex": 49,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "cargo-fmt",
+          "name": "actionlint",
           "status": "included",
           "orderIndex": 50,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "cargo-clippy",
+          "name": "cargo-fmt",
           "status": "included",
           "orderIndex": 51,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "test",
+          "name": "cargo-clippy",
           "status": "included",
           "orderIndex": 52,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "batten-check",
+          "name": "test",
           "status": "included",
           "orderIndex": 53,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "policy-test",
+          "name": "batten-check",
           "status": "included",
           "orderIndex": 54,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "policy-test",
+          "status": "included",
+          "orderIndex": 55,
           "parallelGroupId": "group_0"
         }
       ]

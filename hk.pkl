@@ -732,6 +732,22 @@ local gate = new Mapping<String, Step> {
     check = "mise run macos-link-record && mise run batten -- check --rule 'workspace carry unsafe'"
   }
 
+  // The SBOM's NTIA conformance (CLOUD-580). Two `command` rows in batten.toml ran
+  // `ntia-check` on every enforce; since CLOUD-1717 the decision is a policy row
+  // over a record, so this step is what produces it on the inputs that move the
+  // document. The producer spawns syft and the checker, which `check` cannot.
+  ["ntia-check"] {
+    glob =
+      List(
+        "Cargo.toml",
+        "Cargo.lock",
+        "crates/**/Cargo.toml",
+        "mise-tasks/sbom.sh",
+        "policy/ntia.rego",
+      )
+    check = "mise run ntia-check"
+  }
+
   // --- shell: the mise-tasks/ programs and the bats suite -------------------
 
   // The builtins match on shebang as well as extension, which is what the

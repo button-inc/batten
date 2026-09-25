@@ -110,7 +110,6 @@ commit, and a named ref resolves a declared one.
 | `msrv-pin-agreement.sh`        | tree   | —                            |
 | `mutant.sh`                    | git    | `location`, `tracked`        |
 | `no-doctests.sh`               | git    | `location`, `tracked`        |
-| `ntia-check.sh`                | git    | `location`                   |
 | `perf-assert.sh`               | tree   | —                            |
 | `perf-compare.sh`              | tree   | —                            |
 | `perf-gate.sh`                 | tree   | —                            |

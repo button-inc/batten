@@ -26,7 +26,6 @@ to it pays.
 | 3.5 | 2.0% | `tests/landed-check.bats` |
 | 3.5 | 2.0% | `tests/with-lock.bats` |
 | 3.3 | 1.9% | `tests/hk-selection.bats` |
-| 3.0 | 1.7% | `tests/ntia-check.bats` |
 | 3.0 | 1.7% | `tests/ready-cites-check.bats` |
 | 2.8 | 1.6% | `tests/target-ensure.bats` |
 | 2.8 | 1.6% | `tests/lint-rego.bats` |

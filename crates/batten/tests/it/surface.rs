@@ -29,7 +29,6 @@
 // subsumed: "committed artifacts matching the surface exit 0" crates/batten/tests/it/surface.rs
 // subsumed: "a drifted completion is reported with a pointer" crates/batten/tests/it/surface.rs
 // subsumed: "a drifted man page is reported with a pointer" crates/batten/tests/it/surface.rs
-// subsumed: "the gate leaves the tree it judges unmodified" crates/batten/tests/it/surface.rs
 // subsumed: "every committed page's filename matches the .TH title inside it" crates/batten/tests/it/surface.rs
 // subsumed: "this repo's committed artifacts match its surface — the gate on the real tree" crates/batten/tests/it/surface.rs
 

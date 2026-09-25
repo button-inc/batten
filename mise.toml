@@ -622,7 +622,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "mise,attestation,timeout-drift,engine-checks-green,engine-cargo-graph,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age,done,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,denials-outlive-the-turn,digest-major-agreement,doctor,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure,evaluator-io-probe,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,linear-check,lock-complete,macos-link,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-due,release-provision-parity,release-tag-shape,release-tracking,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-callable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules,deferral,closing-key,release-assets"
+MUTANT_GATES = "mise,attestation,timeout-drift,engine-checks-green,engine-cargo-graph,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age,done,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,denials-outlive-the-turn,digest-major-agreement,doctor,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure,evaluator-io-probe,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land-divergence,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,linear-check,lock-complete,macos-link,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict,ntia,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-due,release-provision-parity,release-tag-shape,release-tracking,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-callable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules,deferral,closing-key,release-assets"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -3079,6 +3079,73 @@ printf 'activity-age\t%d\nrelease-age\t%s\nquiet\t%d\nmax-wait\t%d\n' \
 [tasks.release-tracking-check]
 description = "Gate: a shipped tag reaches Linear — both release-tracking invocations present, pinned, and bound to the tag, on the release path and the backfill path alike"
 run = "cargo run --quiet -p batten -- check --rule 'release wire other'"
+
+# CLOUD-580/666's reading half, ported off `mise-tasks/ntia-check.sh` under
+# CLOUD-1717. The decision is `policy/ntia.rego`; this derives the document through
+# `mise-tasks/sbom.sh` into scratch and records its name, its `spdxVersion`, and the
+# checker's EXIT CODE per standard (report counts beside it, for a reader only).
+# Every mechanism arm the program exited 2 on refuses here at EXIT 3 and records
+# nothing, so could-not-look can never read as `check`'s finding code. Injectable:
+# `NTIA_SBOM` (the producer), `SBOMCHECK` (the checker — a mise shim cannot be made
+# absent by shadowing PATH), `NTIA_STANDARDS` (default `ntia` alone, CLOUD-666).
+[tasks.ntia-record]
+description = "Effect: derive the SBOM and record the NTIA checker's exit code per standard plus the document's spdxVersion (CLOUD-580)"
+shell = "bash -c"
+run = '''
+{% raw %}
+set -euo pipefail
+if [[ -n "${BATTEN_BIN:-}" ]]; then batten=("$BATTEN_BIN"); else batten=(cargo run --quiet -p batten --); fi
+refuse() { echo "::error:: ntia-record: $*. Nothing recorded." >&2; exit 3; }
+SBOM="${NTIA_SBOM:-$PWD/mise-tasks/sbom.sh}"
+CHECKER="${SBOMCHECK:-sbomcheck}"
+read -r -a standards <<<"${NTIA_STANDARDS:-ntia}"
+[[ ${#standards[@]} -gt 0 ]] || refuse "NTIA_STANDARDS names no standard"
+[[ -x "$SBOM" ]] || refuse "cannot execute $SBOM, so no document can be derived and conformance is unverified"
+command -v "$CHECKER" >/dev/null 2>&1 || refuse "no checker at '$CHECKER' (\$SBOMCHECK overrides), so conformance is unverified. Run: mise install pipx:ntia-conformance-checker"
+"$CHECKER" --version >/dev/null 2>&1 || refuse "$CHECKER does not answer --version, so no verdict it gave could be trusted"
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+derived=$(SBOM_OUT_DIR="$scratch/sbom" "$SBOM") || refuse "could not derive the SBOM, so its conformance is unverified"
+spdx=$(sed -n 's/^spdx=//p' <<<"$derived")
+[[ -n "$spdx" && -f "$spdx" ]] || refuse "sbom did not report a readable SPDX document, so there is nothing to judge"
+# An absent or unparseable version is RECORDED empty: the module raises it.
+version=$(jq -r '.spdxVersion // ""' "$spdx" 2>/dev/null) || version=""
+version=${version//[$'\t\n']/ }
+out=$(printf 'document\t%s\nspdx-version\t%s' "${spdx##*/}" "$version")
+for standard in "${standards[@]}"; do
+	json="$scratch/report-$standard.json"
+	rc=0
+	# `--output-file` keeps the human report, which names every component, off
+	# every stream (rule 4).
+	"$CHECKER" "$spdx" --comply "$standard" --output json --output-file "$json" >/dev/null 2>&1 || rc=$?
+	counts="-"
+	if [[ "$rc" -ne 0 && -s "$json" ]] && c=$(jq -r '"components=\(.totalNumberComponents // 0)"
+		+ " no-supplier=\(.componentSuppliers.nonconformantComponents // [] | length)"
+		+ " no-license=\(.componentConcludedLicenses.nonconformantComponents // [] | length)"
+		+ " no-copyright=\(.componentCopyrightTexts.nonconformantComponents // [] | length)"' "$json" 2>/dev/null); then
+		counts="$c"
+	fi
+	out+=$(printf '\nstandard\t%s\t%d\t%s' "$standard" "$rc" "$counts")
+done
+printf '%s\n' "$out" | "${batten[@]}" record named ntia
+{% endraw %}
+'''
+
+# `ntia-check`'s name, kept for every hand that types it: record, then decide.
+# THE RECEIPT IS NOT A VERDICT (CLOUD-631): it caches an answer already given, so
+# a runner whose transcript is unreadable reports the miss and still exits 0.
+[tasks.ntia-check]
+description = "Gate: the SBOM this tree produces meets the NTIA minimum elements — the checker's exit code, never its report"
+shell = "bash -c"
+run = '''
+set -e
+if [[ -n "${BATTEN_BIN:-}" ]]; then batten=("$BATTEN_BIN"); else batten=(cargo run --quiet -p batten --); fi
+mise run ntia-record
+"${batten[@]}" check --rule 'manifest cover other'
+if ! "${batten[@]}" receipt record sbom-ntia; then
+	echo "ntia-check: the document conforms, but the replay receipt could not be recorded; this is not a verdict about the document." >&2
+fi
+'''
 
 [tasks.release-due]
 description = "Gate: may the release PR land now? Debounce — quiet minutes on main, or hours since the last release, whichever comes first"

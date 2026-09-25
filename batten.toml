@@ -5708,29 +5708,51 @@ scope = "tree"
 # published inventory DESCRIBES this tree; these two ask whether it is USABLE by
 # whoever receives it — the NTIA 2021 minimum elements and CISA's 2024 FSCT
 # minimum expectation, which is what a procurement review actually checks.
-# `mise-tasks/ntia-check.sh` carries the reasoning and the measurements; what belongs
-# here is why this is TWO rows at two severities.
+# `policy/ntia.rego` carries the reasoning; `[tasks.ntia-record]` the reading.
 #
 # The clause set is the tool's, named by its own `--comply` flag: no clause list
-# in the engine and no crosswalk table (CLOUD-279 verdict 2). `policy_url` would
-# be the natural home for the standard's URL and a `command` row does not permit
-# one (`RuleKind::permits` — it is a shape-row column), so the standard travels in
-# the check itself, which is also the only place that could keep it honest.
+# in the engine and no crosswalk table (CLOUD-279 verdict 2).
 #
-# ROW 1 IS THE MECHANISM, and it is `deny` because it is the half that can stop
-# working silently: an unresolvable checker or an underivable document would
-# otherwise make row 2 pass by never asking anything (non-negotiable rule 2, and
-# `sbom-empty`'s lesson one layer up).
-[[rule]]
-id = "manifest check unread"
-kind = "command"
-glob = "Cargo.lock"
-check = "mise run ntia-check --precondition"
-severity = "deny"
-scope = "tree"
-no_fix_reason = "install the pinned checker (`mise install pipx:ntia-conformance-checker`) or fix why `mise run sbom` cannot derive a document; neither is a change to this tree's content"
+# ONE ROW, TWO CLASSES, since CLOUD-1717 collapsed the two `command` rows. THE
+# MECHANISM half (`manifest check unread`) is a document whose spec cannot be read
+# or a standard it can never satisfy; an unresolvable checker or an underivable
+# document is the producer's exit 3, loud and unrecorded, rather than a row 2 that
+# passes by never asking anything (non-negotiable rule 2, and `sbom-empty`'s
+# lesson one layer up). THE VERDICT half is `manifest cover partial`. hk's
+# `ntia-check` step produces the record on the inputs that move the document.
+[[record]]
+record = "ntia"
+writer = "mise run ntia-record"
 
-# ROW 2 IS THE VERDICT, and it is `deny` as of CLOUD-631 — promoted in the change
+[[verdict]]
+id = "manifest check unread"
+gloss = "the SBOM's spec could not be read, or a configured standard can never be satisfied by it"
+class = """
+Could we even ask: a document declaring no or an unclassifiable `spdxVersion`, \
+or a standard requiring SPDX 3 over a document that is not one (CLOUD-666). A \
+constant refusal is not a verdict about this tree; drop the standard from \
+`NTIA_STANDARDS` or change the producer.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run ntia-record"
+
+[[verdict]]
+id = "manifest cover partial"
+gloss = "the NTIA checker refused the SBOM this tree produces under the named standard"
+class = """
+The checker's exit code, never its report. The per-standard counts are on the \
+`ntia` record's line; the fix is enriching the document, not re-running this.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run ntia-record"
+
+# THE VERDICT is `deny` as of CLOUD-631 — promoted in the change
 # that makes it pass, which is that row's own acceptance clause rather than a
 # preference about when to tighten.
 #
@@ -5772,12 +5794,11 @@ no_fix_reason = "install the pinned checker (`mise install pipx:ntia-conformance
 # a tuning question. Taking the rate to zero is what this change does; the `deny`
 # is what keeps it there.
 [[rule]]
-id = "manifest cover partial"
-kind = "command"
-glob = "Cargo.lock"
-check = "mise run ntia-check"
-severity = "deny"
+id = "manifest cover other"
+kind = "policy"
 scope = "tree"
+module = "policy/ntia.rego"
+severity = "deny"
 no_fix_reason = "the missing fields do not exist in a cargo lockfile, so no command over this tree can add them: the SBOM has to be enriched from `cargo metadata` first"
 
 # Release provenance, adopted as `gh attestation verify` (CLOUD-583, CLOUD-279
