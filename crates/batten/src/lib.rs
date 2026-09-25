@@ -14147,9 +14147,22 @@ fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook:
     let hook::Decision::Deny(refusal) = &decision else {
         return Ok(decision);
     };
-    let (Some(class), Some(subject)) = (refusal.verdict(), refusal.subject()) else {
+    let Some(class) = refusal.verdict() else {
         return Ok(decision);
     };
+    // A CLASS WHOSE REFUSAL NAMES NO PATH BINDS TO ITS OWN TOKEN (CLOUD-1889).
+    // `Refusal::declared` keeps `Artifact` subjects out of `subject`, deliberately:
+    // an admission bound to one "would name something the store cannot compare
+    // against the tree". Every receipt-kind refusal carries only `Artifact`
+    // subjects, so requiring a path here returned early for the whole class, and
+    // the `admit(...)` route CLOUD-1823 declared could never fire — the
+    // declaration took `BATTEN_HOOK_BYPASS` away and nothing replaced it.
+    //
+    // The class token is a subject both sides can name without reading the call,
+    // so no payload reaches the refusal. What pins the admission to a situation is
+    // the anchor below: `Anchor::Call { head }`, the head a receipt is keyed to, so
+    // one commit unbinds it exactly as it voids the receipt.
+    let subject = refusal.subject().unwrap_or(class);
     let root = hook_authority_root();
     let Ok(head) = git::head_commit(root) else {
         return Ok(decision);

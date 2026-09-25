@@ -292,6 +292,108 @@ fn the_class_declares_the_route_that_makes_the_wedge_escapable() {
     );
 }
 
+/// The three answers `override request` asks of `receipt read other`, one
+/// `<id>=<text>` line each, on stdin — the spelling `run-shape` blesses.
+const ANSWERS: &str = "precondition=verify is red on this head for a reason only a write repairs\n\
+                       lost=the write that repairs it cannot be made\n\
+                       rejected-route=re-running verify cannot change its answer on this head\n";
+
+/// Run a `batten override` verb for the superseded receipt's own situation.
+///
+/// The subject is the CLASS TOKEN because a receipt refusal names no path
+/// (CLOUD-1889): `admit_mediated` binds such a class to its token, and the head
+/// the anchor carries is what pins the admission to one situation.
+fn override_verb(dir: &Path, verb: &[&str], stdin: &str) -> std::process::Output {
+    let mut args = vec!["override"];
+    args.extend_from_slice(verb);
+    args.extend_from_slice(&[
+        "--rule",
+        "turn mint ahead",
+        "--verdict",
+        "receipt read other",
+        "--subject",
+        "receipt read other",
+    ]);
+    run_with_stdin(dir, &args, stdin)
+}
+
+// CLOUD-1889's declared mutation, and why the row is in THIS file.
+//
+// `test name undefined` reads the declared file for a line carrying
+// `MUTANT <slug>|`, and its `line_sources` cover `crates/batten/tests/**` and not
+// `crates/batten/src/**` — so the row lives here although the expression it applies
+// belongs to `lib.rs`'s `admit_mediated`. It reinstates the early return on a
+// path-less refusal, which is the defect exactly.
+//
+// INERT UNDER THE SWEEP, as `rebase.rs` records for its own rows (CLOUD-1486):
+// `mutate::apply` seds the file that DECLARED the row, so this row rewrites this
+// file and never reaches the engine. The kill was demonstrated BY HAND at
+// implementation — the expression applied to `lib.rs`, the case below observed
+// red, the file restored — and this paragraph is the only record of it.
+/*
+#MUTANT-SUITE crates/batten/tests/it/punt_receipt.rs
+#MUTANT admission-not-honoured|s@    let subject = refusal.subject().unwrap_or(class);@    let Some(subject) = refusal.subject() else { return Ok(decision); };@|a_spent_admission_clears_a_superseded_receipt
+*/
+
+#[test]
+fn a_spent_admission_clears_a_superseded_receipt() {
+    // CLOUD-1889 — the half this file never had. The three cases above prove the
+    // route is DECLARED, that an unarticulated write is still refused, and that the
+    // bare variable stopped working. None of them proved the route could be TAKEN,
+    // and it could not: `admit_mediated` returned early on a refusal with no path
+    // subject, which is every receipt refusal, so `spend` reported "spent" and the
+    // write was refused identically. That is how the dead branch landed green.
+    let dir = superseded("punt-superseded-admitted");
+
+    let requested = override_verb(&dir, &["request"], ANSWERS);
+    assert!(
+        requested.status.success(),
+        "the class declares an articulation route, so a request answering it is issued: {}",
+        stderr(&requested)
+    );
+    let admission = String::from_utf8(requested.stdout)
+        .expect("stdout is UTF-8")
+        .trim()
+        .to_owned();
+    assert!(
+        !admission.is_empty(),
+        "the request prints its admission address"
+    );
+
+    let spent = override_verb(&dir, &["spend", "--admission", &admission], "");
+    assert!(
+        spent.status.success(),
+        "the admission spends: {}",
+        stderr(&spent)
+    );
+
+    let output = run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "exit-code"],
+        &write_payload("src/tracked.rs"),
+    );
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        stderr(&output)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a spent admission clears the write it was issued for: {said}"
+    );
+    // POINTER, NEVER THE ANSWERS (rule 4): the run names which record admitted the
+    // call, so the suppression is auditable rather than the silent bypass again.
+    assert!(
+        said.contains(&admission),
+        "the admitting record is named: {said}"
+    );
+    assert!(
+        !said.contains("re-running verify"),
+        "the articulation stays in the store: {said}"
+    );
+}
+
 #[test]
 fn a_marker_no_sweep_clears_is_refused_at_load() {
     // THE SPEND IS WHAT MAKES THE REFUSAL FINITE. A `while_marker` naming a family
