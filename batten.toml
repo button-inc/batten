@@ -1647,14 +1647,6 @@ body = "{git:HEAD} {now}"
 path = "mise-tasks/board-diff-overlap.sh"
 args = ["--named"]
 
-# THE CLOSING KEYS A PR BODY NAMES (CLOUD-1051, phase B0). `--list` prints them
-# and decides nothing, which is the mode CLOUD-774 added to this file for exactly
-# this caller: `$CLOSING_VERBS` has one home, and a second copy of that regex
-# would be one value in two files with no gate holding them equal.
-[program.closing-keys]
-path = "mise-tasks/closing-key-check.sh"
-args = ["--list"]
-
 # ─── THE LANDING LEASE, GRADED WHERE THE CLOCK ALREADY IS (CLOUD-1280) ─────────
 #
 # `lease-authorises-the-branch` (the `landing-loop` preset) reads a resolved
@@ -2215,6 +2207,17 @@ writer = "mise run nonverdict-record"
 [[record]]
 record = "done"
 writer = "mise run done-record"
+
+# The two landing body gates' reading halves, ported off `deferral-check.sh` and
+# `closing-key-check.sh` under CLOUD-1717. Their decisions are
+# `policy/deferral.rego` and `policy/closing-key.rego`.
+[[record]]
+record = "deferral"
+writer = "mise run deferral-record"
+
+[[record]]
+record = "closing-key"
+writer = "mise run closing-key-record"
 
 # CLOUD-492's measuring half, ported off `land-divergence.sh` under CLOUD-1717.
 # The decider half is `policy/land-divergence.rego`; the split is the retired
@@ -3014,7 +3017,10 @@ value = { literal = "closes" }
 # differently: the first exempts no row, the second is could-not-look.
 [[recorder.columns]]
 name = "keys"
-value = { program = { run = "closing-keys", read = "stdout", stdin = { result = "stdout" } } }
+# THE ENGINE GRAMMAR'S OWN CLOSING-KEY READING (CLOUD-1717), which replaced a
+# spawn of `closing-key-check.sh --list` when that program retired: the verb set
+# has one home, and it is the grammar every other key reader already uses.
+value = { authority = { ask = "closing-keys", read = "stdout", stdin = { result = "stdout" } } }
 counted-with = ":"
 zero-is-a-count = true
 
@@ -6713,6 +6719,25 @@ id = "issue grade other"
 kind = "policy"
 scope = "tree"
 module = "policy/done.rego"
+severity = "deny"
+
+# CLOUD-323 and CLOUD-192, ported off the two landing body gates under
+# CLOUD-1717. `deny`, as each program's exit 1 was: `land` pipes the PR body
+# through `mise run deferral-check` and `mise run closing-key-check` before
+# readying, and each wrapper produces its record and checks its one rule. With
+# no record they are silent, so an ordinary `check` is unaffected.
+[[rule]]
+id = "prose own other"
+kind = "policy"
+scope = "tree"
+module = "policy/deferral.rego"
+severity = "deny"
+
+[[rule]]
+id = "diff key other"
+kind = "policy"
+scope = "tree"
+module = "policy/closing-key.rego"
 severity = "deny"
 
 # CLOUD-492, ported off `mise-tasks/land-divergence-assert.sh` under CLOUD-1717.
@@ -13771,6 +13796,76 @@ samples and propose tightening a release job on it.
 id = "task run first"
 kind = "command"
 target = "mise run timeout-drift-record"
+
+# CLOUD-323's readings, ported off `deferral-check.sh` under CLOUD-1717.
+[[verdict]]
+id = "prose own unnamed"
+gloss = "a PR-body paragraph defers a decision and names no issue that owns it, other than the one the PR claims"
+class = """
+A PR body is not a durable home: nothing sweeps merged bodies, and the board is \
+what others read. File the decision and name its key in the same paragraph; the \
+key this PR claims names the work in hand, not a home for what it leaves open.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run deferral-record"
+
+[[verdict]]
+id = "prose read partial"
+gloss = "the deferral record carries no closing census, or one that disagrees with its lines"
+class = """
+A record torn mid-write judges part of a body as if it were all of it.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run deferral-record"
+
+# CLOUD-192's and CLOUD-674's readings, ported off `closing-key-check.sh` under
+# CLOUD-1717.
+[[verdict]]
+id = "diff key missing"
+gloss = "the PR body names its issue but never in closing form, so the merge moves nothing"
+class = """
+The tracker's merged-event automation fires only for a closing pull request: \
+`Refs: CLOUD-192` merged and never moved, `Closes CLOUD-192` moved in two \
+seconds. Write `Closes <key>`, or a line-anchored `DO-NOT-CLOSE` if this PR is \
+not meant to complete it.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run closing-key-record"
+
+[[verdict]]
+id = "diff key dropped"
+gloss = "the PR body closes some of the keys its commits served and strands the rest"
+class = """
+A served key the body does not close never reaches In Review while its work is \
+on main. Write `Closes <key>` for each, or `DO-NOT-CLOSE <key>` on its own line \
+to decline just that one.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run closing-key-record"
+
+[[verdict]]
+id = "diff read partial"
+gloss = "the closing-key record is missing one of its four readings"
+class = """
+A record missing a reading decides over part of the answer.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run closing-key-record"
 
 # CLOUD-192's two readings, ported off `done-check.sh` under CLOUD-1717.
 [[verdict]]

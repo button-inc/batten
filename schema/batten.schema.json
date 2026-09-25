@@ -639,6 +639,11 @@
           "description": "[`crate::lease::Asked::Successor`] — which branch the live holder\nadmitted behind it, on stdout, or nothing where no reservation stands.",
           "type": "string",
           "const": "lease-successor"
+        },
+        {
+          "description": "The keys a text names in CLOSING form, one per line on stdout — the\ngrammar's own [`crate::ready::Grammar::keys_closed_in`] (CLOUD-1717).\n\n**It replaces a spawn of the program whose `--list` mode was the only\nhome of the closing-verb regex.** That program is retired, and a second\ncopy of the verb set here would be one concept with two spellings; the\ngrammar already owns it, including the disclaimer a regex never saw\n(`does not close CLOUD-1` names the key and closes nothing).",
+          "type": "string",
+          "const": "closing-keys"
         }
       ]
     },

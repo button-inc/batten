@@ -74,12 +74,10 @@ commit, and a named ref resolves a declared one.
 | `ci-tools-check.sh`            | git    | `location`                   |
 | `claim-check.sh`               | git    | `head`, `location`, `log`    |
 | `claim-race-check.sh`          | forge  | `location`                   |
-| `closing-key-check.sh`         | tree   | —                            |
 | `coderabbit-config-check.sh`   | tree   | —                            |
 | `config-lint.sh`               | git    | `head`, `location`, `log`    |
 | `container-preflight.sh`       | git    | `location`                   |
 | `darwin-link.sh`               | build  | —                            |
-| `deferral-check.sh`            | tree   | —                            |
 | `derived-check.sh`             | git    | `location`                   |
 | `digest-major-agreement.sh`    | tree   | —                            |
 | `doctor.sh`                    | git    | `head`, `location`           |

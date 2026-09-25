@@ -865,8 +865,20 @@ pub struct Ran {
     pub output: String,
 }
 
-/// Run a program to completion in `dir`, capturing what it said.
+/// Run a program to completion in `dir`, capturing what it said, bounded by
+/// [`suite_bound`].
 fn spawn(dir: &Path, program: &str, args: &[String], env: &[(String, String)]) -> Result<Ran> {
+    spawn_within(dir, program, args, env, suite_bound())
+}
+
+/// [`spawn`], under an explicit bound.
+fn spawn_within(
+    dir: &Path,
+    program: &str,
+    args: &[String],
+    env: &[(String, String)],
+    bound: std::time::Duration,
+) -> Result<Ran> {
     #[expect(
         clippy::disallowed_types,
         reason = "stays: staging a tree and re-running a suite against it IS this module's effect (CLOUD-1267). A mutation cannot be shown to redden a case without running the case, and the spawning side is where §5 puts that — the same disposition `perf.rs` carries for hyperfine"
@@ -973,7 +985,7 @@ fn spawn(dir: &Path, program: &str, args: &[String], env: &[(String, String)]) -
         // would have carried is the kill this function reports.
         let _ = send_status.send(status);
     });
-    let Ok(reported) = statuses.recv_timeout(suite_bound()) else {
+    let Ok(reported) = statuses.recv_timeout(bound) else {
         // The bound ran out, so the suite is hung. Kill it and take the status
         // the worker's `wait` returns once it does.
         reap(pid);
@@ -1031,6 +1043,25 @@ fn suite_bound() -> std::time::Duration {
             .and_then(|value| value.parse::<u64>().ok())
             .filter(|seconds| *seconds > 0)
             .unwrap_or(30),
+    )
+}
+
+/// How long the one staged BUILD may take, before any row runs (CLOUD-1910).
+///
+/// **The per-case bound was paying for the compile.** A Cargo suite's first
+/// filtered run built the whole staged tree inside [`suite_bound`]'s 30 seconds,
+/// so any change touching engine source made row one exceed it: the run was
+/// killed before libtest printed a summary, and every later row passed on the
+/// warm cache. Measured twice on one branch, first as `names-no-case` on every
+/// row, then as `suite-did-not-run` on the first row alone. The build is paid
+/// once, here, under a bound sized for a build rather than for one case.
+fn build_bound() -> std::time::Duration {
+    std::time::Duration::from_secs(
+        std::env::var("BATTEN_MUTATE_BUILD_TIMEOUT")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|seconds| *seconds > 0)
+            .unwrap_or(1800),
     )
 }
 
@@ -1359,6 +1390,23 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
 /// A tree that cannot be staged is could-not-look (→ exit `3`).
 pub fn sweep(root: &Path, names: &[String], work: PathBuf) -> Result<Sweep> {
     let mut staged = Staged::new(root, work)?;
+    // BUILD ONCE, BEFORE ANY ROW IS TIMED (CLOUD-1910). Best effort: a build that
+    // fails leaves every Cargo row to report `suite-did-not-run` on its own, which
+    // is the honest verdict, so nothing is decided here.
+    if names
+        .iter()
+        .filter_map(|name| resolve(root, name))
+        .any(|gate| matches!(gate.suite, Suite::Cargo { .. }))
+    {
+        let args = vec![String::from("test"), String::from("--no-run")];
+        let _ = spawn_within(
+            staged.dir(),
+            "cargo",
+            &args,
+            &suite_env(root),
+            build_bound(),
+        );
+    }
     let mut findings = Vec::new();
     let mut declared = 0;
     for name in names {

@@ -372,6 +372,15 @@ pub enum Ask {
     /// [`crate::lease::Asked::Successor`] — which branch the live holder
     /// admitted behind it, on stdout, or nothing where no reservation stands.
     LeaseSuccessor,
+    /// The keys a text names in CLOSING form, one per line on stdout — the
+    /// grammar's own [`crate::ready::Grammar::keys_closed_in`] (CLOUD-1717).
+    ///
+    /// **It replaces a spawn of the program whose `--list` mode was the only
+    /// home of the closing-verb regex.** That program is retired, and a second
+    /// copy of the verb set here would be one concept with two spellings; the
+    /// grammar already owns it, including the disclaimer a regex never saw
+    /// (`does not close CLOUD-1` names the key and closes nothing).
+    ClosingKeys,
 }
 
 /// What a recorder reads back from a program it ran.
@@ -700,6 +709,16 @@ pub fn evaluate(value: &Value, context: &Context<'_>) -> Option<serde_json::Valu
                     context.root,
                     context.now,
                 )?,
+                Ask::ClosingKeys => {
+                    let text = as_text(&payload)?;
+                    let keys: Vec<String> = context
+                        .grammar?
+                        .keys_closed_in(&text)
+                        .iter()
+                        .map(|key| key.as_str().to_owned())
+                        .collect();
+                    (0, keys.iter().map(|key| format!("{key}\n")).collect())
+                }
             };
             read_back(read, status, &out)
         }
