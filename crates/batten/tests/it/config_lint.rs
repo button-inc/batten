@@ -368,6 +368,41 @@ fn the_claim_armed_run_admits_what_the_board_groomed_before_any_trailer_exists()
     assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
 }
 
+/// The claim arms the ROOT's authority and nothing below it.
+///
+/// A `batten.toml` in a subdirectory of a claimed repository is a different
+/// config from the one the claim and the history are about; arming it at the
+/// root's fork point would diff it against the ROOT's base config and charge it
+/// the root's groom. Measured before this boundary existed: a scratch fixture
+/// under `target/` — no `.git` of its own, so git discovery resolved it to the
+/// enclosing checkout — was armed from that checkout's claim and reported the
+/// checkout's own groomed smells as its own.
+#[test]
+fn a_config_below_the_repository_root_is_not_armed_by_the_roots_claim() {
+    let dir = weakening_pr(
+        "lint-admit-nested",
+        Some("severity-lowered rule[no-todo].severity"),
+    );
+    groom(&dir, &[]);
+    // The premise: at the root, this claimed branch IS armed and refuses.
+    assert_eq!(lint(&dir, &[]).status.code(), Some(2));
+
+    let nested = dir.join("nested");
+    fs::create_dir_all(&nested).unwrap();
+    fs::write(
+        nested.join("batten.toml"),
+        "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"warn\"\n",
+    )
+    .unwrap();
+    let out = lint(&nested, &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "a nested config is judged single-tree, never against the root's history: {}",
+        stdout(&out)
+    );
+}
+
 /// Why the FORK POINT and not the trunk's tip: a trunk that moved after the
 /// branch was cut must not be charged to the branch.
 ///
