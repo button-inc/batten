@@ -35,37 +35,23 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::path::PathBuf;
+use crate::common;
 
-fn mise_toml() -> String {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("mise.toml");
-    std::fs::read_to_string(&path).expect("the workspace mise.toml is readable")
-}
-
-/// The `run = '''…'''` body of one `[tasks.<name>]` table.
+/// The `run` body of one task, through the shared extractor (CLOUD-1914).
 ///
-/// Keyed on the table header and terminated by the closing `'''`, which is the
-/// same span `tests/task-fail-closed.bats` takes with `awk`. Written as a scan
-/// rather than a TOML parse so a body that stops being a literal block — the shape
-/// every assertion here depends on — fails loudly instead of resolving to some
-/// other string.
-fn task_body(toml: &str, header: &str) -> String {
-    let mut lines = toml.lines().skip_while(|line| line.trim_end() != header);
-    assert!(lines.next().is_some(), "{header} is present in mise.toml");
-    let mut body = lines.skip_while(|line| !line.starts_with("run = '''"));
-    assert!(
-        body.next().is_some(),
-        "{header} carries a `run = '''` literal block"
-    );
-    body.take_while(|line| line.trim_end() != "'''")
-        .collect::<Vec<_>>()
-        .join("\n")
+/// This file used to carry its own scan, keyed on the header and ended at the
+/// closing `'''`. It was a second definition of where a task starts and ends, one
+/// of four such copies. `common::task_block` is the sweep's own boundary, so a
+/// mutation staged under `mutate sweep` is what these cases read.
+fn task_body(name: &str) -> String {
+    let block = common::task_block(name).unwrap_or_else(|| panic!("{name} is a declared task"));
+    let body = common::task_value(&block, "run");
+    assert!(!body.is_empty(), "[tasks.{name}] carries a `run` body");
+    body
 }
 
 fn batten_check_body() -> String {
-    task_body(&mise_toml(), "[tasks.batten-check]")
+    task_body("batten-check")
 }
 
 /// ANTI-VACUITY, and it is not ceremony: every assertion below is over a string
@@ -147,8 +133,7 @@ fn the_engine_status_is_captured_and_re_exited_unchanged() {
 /// and must not be read as licence to reverse that.
 #[test]
 fn verify_still_reserves_exit_2_for_the_rebase_race() {
-    let toml = mise_toml();
-    let body = task_body(&toml, "[tasks.verify]");
+    let body = task_body("verify");
     assert!(
         body.contains("exit 2"),
         "verify still has an exit-2 path — CLOUD-407's rebase-race signal"

@@ -63,20 +63,13 @@ const BENCH_TASKS: &[(&str, &str)] = &[
     ("refusal-render-bench", "--example refusal-render-bench"),
 ];
 
+/// The `run` body of one task, through the shared extractor (CLOUD-1914), which
+/// parses the task's own table as TOML rather than the whole manifest.
 fn task_body(task: &str) -> String {
-    let manifest = std::fs::read_to_string(common::at_root("mise.toml"))
-        .expect("the manifest is where every task in this repository is declared");
-    // `toml::from_str`, which is the idiom every reader in `config.rs` and
-    // `facts.rs` uses. `str::parse` resolves to a different impl here and reports
-    // "unexpected content, expected nothing" over a manifest that is valid.
-    let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
-    parsed
-        .get("tasks")
-        .and_then(|tasks| tasks.get(task))
-        .and_then(|declared| declared.get("run"))
-        .and_then(toml::Value::as_str)
-        .unwrap_or_else(|| panic!("[tasks.{task}] declares a run body"))
-        .to_owned()
+    let block = common::task_block(task).unwrap_or_else(|| panic!("{task} is a declared task"));
+    let body = common::task_value(&block, "run");
+    assert!(!body.is_empty(), "[tasks.{task}] declares a run body");
+    body
 }
 
 fn stamp_of(task: &str, body: &str) -> String {

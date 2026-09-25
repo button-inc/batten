@@ -288,39 +288,17 @@ fn the_refusal_carries_no_install_path() {
 
 // ─── The declaration's half: what the committed manifest actually says ──────
 
-/// The body of one task in the committed manifest.
+/// The table of one task in the committed manifest, header to next header.
 ///
-/// Text rather than a TOML parse, and only the executable surface: the committed
-/// manifest does not round-trip through the `toml` crate in scope, and a task's
-/// prose discusses tasks it deliberately does not run.
+/// Through `common::task_block` (CLOUD-1914), the sweep's own boundary. It
+/// matches both header spellings (bare `[tasks.verify]` and quoted
+/// `[tasks."session:install"]`) and anchors each to its own line. The manifest's
+/// prose names `[tasks.verify]` hundreds of lines above the table, and this file's
+/// earlier private copy learned both of those facts the hard way. That was caught by
+/// `the_extracted_verify_body_is_the_task_and_not_the_whole_file`, which is why the
+/// case exists: every other assertion in this tier is a `contains` over this string.
 fn task_body(name: &str) -> String {
-    let manifest = std::fs::read_to_string(common::at_root("mise.toml"))
-        .expect("the task manifest is readable");
-    // BOTH HEADER SPELLINGS, AND BOTH ANCHORED TO THEIR OWN LINE — which is
-    // `session_provisioning.rs`'s shape, arrived at here the hard way.
-    //
-    // The manifest writes `[tasks.verify]` bare and `[tasks."session:install"]`
-    // quoted, so a reader handling one spelling panics on the other. And a
-    // reader matching the header as a bare SUBSTRING finds the manifest's own
-    // PROSE first: `[tasks.verify]` appears in two comments (mise.toml:1064 and
-    // :1107) hundreds of lines above the real table at :3909, so the extraction
-    // silently returned a neighbouring task's body instead.
-    //
-    // Both were caught by `the_extracted_verify_body_is_the_task_and_not_the_whole_file`,
-    // which is the whole reason that case exists: every other assertion in this
-    // tier is a `contains` over this string, and all of them would have passed
-    // just as well over the wrong region.
-    [
-        format!("\n[tasks.\"{name}\"]\n"),
-        format!("\n[tasks.{name}]\n"),
-    ]
-    .iter()
-    .find_map(|header| manifest.split(header.as_str()).nth(1))
-    .unwrap_or_else(|| panic!("{name} is a declared task"))
-    .split("\n[tasks")
-    .next()
-    .expect("the task body ends at the next table")
-    .to_owned()
+    common::task_block(name).unwrap_or_else(|| panic!("{name} is a declared task"))
 }
 
 /// CLOUD-1683. THE ANTI-VACUITY CASE for this whole tier, and the one the
