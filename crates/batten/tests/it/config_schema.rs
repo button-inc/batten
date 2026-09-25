@@ -66,8 +66,16 @@ fn as_json(toml_text: &str) -> serde_json::Value {
 }
 
 /// Create a temp repo containing a `batten.toml` with `contents`.
+/// A fixture with its own `batten.toml` AND its own repository.
+///
+/// THE REPOSITORY IS NOT DECORATION (CLOUD-1913). Without one, a verb that
+/// resolves a repository walks up to the enclosing checkout: `enforce` here
+/// journalled 297 evaluations of the developer's real branch into its real
+/// `.git`, taking ~37 s where the rest of this file takes milliseconds, and
+/// did it concurrently with the rest of `verify`. The case then failed under
+/// the gate with a spawn `NotFound` it never showed alone.
 fn repo_with_config(name: &str, contents: &str) -> PathBuf {
-    Fixture::new(name).config(contents).build()
+    Fixture::new(name).config(contents).git().build()
 }
 
 fn check_in(dir: &std::path::Path) -> Output {
@@ -321,11 +329,22 @@ fn every_verb_that_reads_config_reports_a_too_old_build() {
         "version = 1\nmin_batten_version = \"99.0.0\"\n",
     );
     for args in [&["check"][..], &["enforce"][..], &["config", "show"][..]] {
+        // A SPAWN THAT FAILS SAYS WHICH PATH WAS MISSING (CLOUD-1913). `NotFound`
+        // is the answer for a vanished working directory and for a vanished
+        // program alike, and this case failed that way under `verify` three laps
+        // running while passing alone, so the bare `expect` could not tell the
+        // two concurrency failures apart.
         let output = batten()
             .args(args)
             .current_dir(&dir)
             .output()
-            .expect("run batten");
+            .unwrap_or_else(|error| {
+                panic!(
+                    "run batten {args:?}: {error}; working directory present: {}, program present: {}",
+                    dir.is_dir(),
+                    std::path::Path::new(env!("CARGO_BIN_EXE_batten")).is_file()
+                )
+            });
         assert_ne!(
             output.status.code(),
             Some(1),
