@@ -891,6 +891,23 @@ struct Observed {
     /// which is a truer report than "could not read".
     #[serde(default)]
     capped: bool,
+    /// Consecutive laps this observation ALONE refused (CLOUD-1885).
+    ///
+    /// Counts only a lap where the learned floor was the sole refuser — the
+    /// declaration would have passed and this number did not. Reset by `raise`,
+    /// which replaces the whole record. See [`Ratchet::note_refusal`] for why a
+    /// count of refusals is the discriminator and a capacity derivation is not.
+    ///
+    /// Skipped when zero, so a journal that never met the case keeps the bytes it
+    /// always had.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    refused: u32,
+}
+
+/// `skip_serializing_if` needs a function, and zero is the unremarkable count.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+const fn is_zero(count: &u32) -> bool {
+    *count == 0
 }
 
 impl Ratchet {
@@ -951,7 +968,69 @@ impl Ratchet {
         standing.mb = free_mb;
         Some(stood_at)
     }
+
+    /// Count a lap this observation alone refused, and re-base it once the count
+    /// shows no lap can clear it (CLOUD-1885).
+    ///
+    /// Returns what it stood at when it re-bases, as [`Ratchet::lower_capacity`]
+    /// does and for the same reason: an adjusted floor nobody can see is the same
+    /// class of defect as the wedge this repairs.
+    ///
+    /// # Why a count, not a derivation
+    ///
+    /// `lower_capacity` re-reads only a `capped` record, and `capped` is decided
+    /// against what ONE lap left. An escalation inflates exactly that reading — it
+    /// drops regrowable roots accumulated over the clone's whole life — so a
+    /// cost-kind floor can be recorded at a level only that one cleanup made
+    /// reachable. Measured: a standing warm floor of 20669MB, `capped: false`, on a
+    /// volume leaving ~19.8GB warm, refusing a 591MB lap. Nothing that lap or any
+    /// later one did could move it, because `raise` only climbs.
+    ///
+    /// Telling "temporarily below the floor" from "can never reach it" by
+    /// arithmetic needs the volume's irreducible resident footprint, which nothing
+    /// models. A lap that has run its full reclaim and escalation and STILL cannot
+    /// clear has demonstrated it instead, and this counts those demonstrations.
+    ///
+    /// # Why it cannot make the gate vacuous
+    ///
+    /// It counts only when the LEARNED floor is the sole refuser — `free_mb` at or
+    /// above the declaration and below this observation. A volume short of its own
+    /// declaration never reaches the count. And the re-based number is still
+    /// combined as `declared.max(observed)` by the caller, so no re-base takes the
+    /// floor below what `[prune]` declares.
+    fn note_refusal(&mut self, basis: Basis, declared_mb: u64, free_mb: u64) -> Option<u64> {
+        let slot = match basis {
+            Basis::Warm => &mut self.warm,
+            Basis::Cold => &mut self.cold,
+        };
+        let standing = slot.as_mut()?;
+        if standing.mb <= declared_mb || free_mb < declared_mb {
+            return None;
+        }
+        if free_mb >= standing.mb {
+            standing.refused = 0;
+            return None;
+        }
+        standing.refused += 1;
+        if standing.refused < REFUSALS_PROVING_UNREACHABLE {
+            return None;
+        }
+        let stood_at = standing.mb;
+        standing.mb = free_mb;
+        standing.refused = 0;
+        Some(stood_at)
+    }
 }
+
+/// Consecutive sole-refuser laps that prove a learned floor unreachable.
+///
+/// TWO, because one refusal can be transient — a concurrent build, a download
+/// mid-flight — while two in a row, each after a full reclaim and escalation, is
+/// the floor refusing rather than the moment. It is an engine fact, not a
+/// consumer's: how many demonstrations make a proof does not vary by repository.
+/// The cost of it being low is bounded by the declared floor, which no re-base
+/// crosses.
+const REFUSALS_PROVING_UNREACHABLE: u32 = 2;
 
 impl LapJournal {
     /// The journal's path under `$GIT_DIR`.
@@ -1368,7 +1447,7 @@ impl Outcome {
             )
         });
         format!(
-            "target-prune: below the measured {basis} disk floor, and {because}\n  {boundary}\n  free {free}MB\n  floor {floor}MB ({basis} basis{provenance}){lap}\n  A build started here fails as a rustc IO error inside a test run, which reads as a suite regression rather than a full disk. Free space outside {root}, or start a fresh session.",
+            "target-prune: below the measured {basis} disk floor, and {because}\n  {boundary}\n  free {free}MB\n  floor {floor}MB ({basis} basis{provenance}){lap}\n  A build started here fails as a rustc IO error inside a test run, which reads as a suite regression rather than a full disk. A learned floor this volume keeps refusing re-bases on its own; one below the declaration needs more room on the volume holding {root}.",
             basis = self.basis.as_str(),
             free = self.free_mb,
             floor = self.floor_mb,
@@ -1848,7 +1927,16 @@ fn lap(
     let lowered = journal
         .open
         .as_ref()
-        .and_then(|_| journal.ratchet.lower_capacity(floor_basis, free_mb))
+        .and_then(|_| {
+            journal
+                .ratchet
+                .lower_capacity(floor_basis, free_mb)
+                .or_else(|| {
+                    journal
+                        .ratchet
+                        .note_refusal(floor_basis, declared_mb, free_mb)
+                })
+        })
         .map(|stood_at| (stood_at, free_mb));
     let standing = journal.ratchet.of(floor_basis).cloned();
     let floor_mb = standing
@@ -1938,6 +2026,7 @@ fn lap(
                 // reading rather than a cost. Derived from the same comparison the
                 // cap is, on the line above, so the two cannot disagree.
                 capped: spent > free_mb,
+                refused: 0,
             },
         );
         let raised = (recorded && observed_mb > opened_declared).then_some(observed_mb);
@@ -2786,6 +2875,7 @@ mod tests {
                 head: String::from("abcdef12"),
                 measured: String::from("2026-08-31"),
                 capped: false,
+                refused: 0,
             },
         );
         if let Err(why) = next.write(&git_dir) {
@@ -2875,6 +2965,7 @@ mod tests {
                 head: String::from("abcdef12"),
                 measured: String::from("2026-08-31"),
                 capped: false,
+                refused: 0,
             },
         );
         journal

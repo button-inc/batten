@@ -509,6 +509,104 @@ fn an_observed_floor_names_the_file_that_holds_it() {
     );
 }
 
+/// A journal whose LEARNED warm floor is the only thing refusing: 9000MB of
+/// observation over the declared 6000MB, an open lap, and `refused` sole-refuser
+/// laps already counted against it.
+///
+/// `capped: false` on purpose — this is the kind `lower_capacity` will not touch,
+/// which is the shape that wedged a real container at 20669MB (CLOUD-1885).
+fn unreachable_floor(repo: &Path, refused: u32) {
+    let journal = repo.join(".git/batten-prune");
+    std::fs::create_dir_all(&journal).unwrap();
+    std::fs::write(
+        journal.join("laps.json"),
+        format!(
+            r#"{{"taken_by":"2026-09-06.cleanup-is-not-cost","open":{{"free_mb":8000,"basis":"warm","tree_basis":"warm","head":"abcd1234","measured":"2026-09-20"}},"ratchet":{{"warm":{{"mb":9000,"head":"abcd1234","measured":"2026-09-20","capped":false,"refused":{refused}}},"cold":null}}}}"#
+        ),
+    )
+    .unwrap();
+}
+
+// CLOUD-1885's declared mutation, and why the row is in THIS file.
+//
+// `test name undefined` reads the declared file for a line carrying
+// `MUTANT <slug>|`, and its `line_sources` cover `crates/batten/tests/**` and not
+// `crates/batten/src/**` — so the row lives here although the expression belongs to
+// `prune.rs`'s `Ratchet::note_refusal`. It makes the threshold unreachable, which is
+// the wedge exactly: a floor the volume keeps refusing that nothing re-bases.
+//
+// INERT UNDER THE SWEEP, as `rebase.rs` records for its own rows (CLOUD-1486):
+// `mutate::apply` seds the file that DECLARED the row, so this row rewrites this
+// file and never reaches the engine. The kill was demonstrated BY HAND at
+// implementation — the expression applied to `prune.rs`, the case below observed
+// red, the file restored — and this paragraph is the only record of it.
+/*
+#MUTANT-SUITE crates/batten/tests/it/target_prune.rs
+#MUTANT unreachable-floor-not-rebased|s@        if standing.refused < REFUSALS_PROVING_UNREACHABLE {@        if true {@|a_learned_floor_the_volume_keeps_refusing_re_bases_at_the_threshold
+*/
+
+#[test]
+fn a_learned_floor_the_volume_keeps_refusing_re_bases_at_the_threshold() {
+    // CLOUD-1885. The learned floor is 9000MB, the declaration 6000MB, and the
+    // volume shows 8000MB however much is reclaimed — so the declaration would pass
+    // and only the observation refuses. One such lap can be transient and must
+    // still refuse; the next one proves the floor unreachable and re-bases it.
+    let repo = lapped("target-prune-unreachable-rebases");
+    built(&repo);
+    unreachable_floor(&repo, 0);
+
+    let first = prune(&repo, "8000", &["-y"]);
+    assert_ne!(
+        first.status.code(),
+        Some(0),
+        "one refusal can be transient, so the first lap still refuses: {}",
+        said(&first)
+    );
+    assert!(
+        journal(&repo).contains(r#""mb":9000"#) && journal(&repo).contains(r#""refused":1"#),
+        "the floor stands and the refusal is counted: {}",
+        journal(&repo)
+    );
+
+    let second = prune(&repo, "8000", &["-y"]);
+    assert_eq!(
+        second.status.code(),
+        Some(0),
+        "the second sole-refuser lap proves the floor unreachable and re-bases it: {}",
+        said(&second)
+    );
+    assert!(
+        !journal(&repo).contains(r#""mb":9000"#),
+        "the learned floor no longer stands at a number the volume cannot present: {}",
+        journal(&repo)
+    );
+}
+
+#[test]
+fn a_volume_short_of_its_declaration_never_re_bases() {
+    // ANTI-VACUITY, and the half that keeps this from being a way to switch the
+    // floor off. At 5000MB the volume is short of the 6000MB DECLARATION, so the
+    // learned floor is not the sole refuser and no count of laps may lower it.
+    let repo = lapped("target-prune-short-of-declaration");
+    built(&repo);
+    unreachable_floor(&repo, 1);
+
+    for lap in 0..3 {
+        let output = prune(&repo, "5000", &["-y"]);
+        assert_ne!(
+            output.status.code(),
+            Some(0),
+            "lap {lap}: a volume short of its declaration still refuses: {}",
+            said(&output)
+        );
+    }
+    assert!(
+        journal(&repo).contains(r#""mb":9000"#),
+        "no refusal below the declaration re-bases the learned floor: {}",
+        journal(&repo)
+    );
+}
+
 /// CLOUD-1246 over the COMPILED BINARY, which the unit tier cannot reach.
 ///
 /// `prune.rs`'s own cases call `LapJournal::read` directly, so they prove the
