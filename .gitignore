@@ -73,3 +73,8 @@ batten.local.toml
 fuzz/target/
 fuzz/work/
 __pycache__/
+
+# The break-glass sentinel (CLOUD-1847). Armed in one tree by one operator to
+# escape a config that denies its own repair; never committed — `no-armed-ripcord`
+# refuses a tracked one, and this keeps reaching that gate deliberate.
+.batten-ripcord

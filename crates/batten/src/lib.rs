@@ -112,6 +112,7 @@ pub mod repair;
 pub mod resolve;
 pub mod rest;
 pub mod review;
+pub mod ripcord;
 pub mod rules;
 pub mod scratch;
 pub mod secret;
@@ -14141,7 +14142,7 @@ fn run_hook(
     // in that same commit: before it, `encode_advice` answered `None` here and
     // the advice went to the operator's stream. The other three delivering
     // events carry no verdict, so none of them can collide.
-    let decision = admit_mediated(compose(handled, &policy, &envelope, &facts), out)?;
+    let decision = admitted(handled, &policy, &envelope, &facts, out, err)?;
     // A REFUSAL OUTRANKS ADVICE ABOUT THE SAME CALL, which is this function's own
     // rule rather than a new one: the nudge block above keeps a module's line out
     // of a buffer a handler already filled because that turn "has been told
@@ -14726,6 +14727,174 @@ fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook:
     // bypass again, wearing a record's clothes.
     writeln!(out, "batten: {class} admitted by {address} — {subject}")?;
     Ok(hook::Decision::Allow)
+}
+
+/// The break-glass, applied to a refusal a LOADED policy produced (CLOUD-1847).
+///
+/// # Why this is not [`recoverable_without_rules`]'s caller one line over
+///
+/// That floor answers on the `ConfigUnreadable` arm, where there is no policy at
+/// all. Here the config parses, loads and lints clean, and the refusal is a rule
+/// doing exactly what it was told — so nothing upstream is faulted and the floor
+/// is never consulted. A `mediated_call` `policy` row whose body is bare
+/// truthiness on `input.call` refuses `Read`, refuses `Bash`, and refuses the
+/// `Edit` of `batten.toml` that would remove it. Measured; the session it
+/// happened in ended by abandonment.
+///
+/// # The two arms, and the first one is the bootstrap
+///
+/// **Creating the sentinel is admitted whether or not the sentinel exists**, and
+/// without that the mechanism is circular: a config denying every write denies
+/// the write that arms the escape. Arming it grants no call by itself — the next
+/// call still has to be inside the repair floor — so the door is narrow enough to
+/// leave open and the record is what it costs.
+///
+/// **A pull admits the repair floor and nothing else.** Same predicate as the
+/// unreadable arm, deliberately: a classified read, and a write onto the config
+/// authority. `Execute`, `Mcp`, `Subagent` and every unclassified operation stay
+/// refused with the sentinel in place, which is the falsifier CLOUD-1847 names —
+/// a ripcord that admitted `Bash` would be a global allow wearing a record.
+///
+/// # `Ask` is untouched, on [`admit_mediated`]'s reason
+///
+/// An escalation is a question put to a person, and a file the asker created is
+/// not an answer to it.
+///
+/// # Errors
+///
+/// Propagates a failure to emit the pointer line. A finding that cannot be
+/// written is reported and does not withhold the admission: the alternative is a
+/// container that stays bricked because its audit trail is unwritable, which is
+/// the fault this row exists to remove.
+/// The two audited routes past a refusal, in the order they are owed.
+///
+/// **The admission first**, because it is the ordinary route: a call that already
+/// carries one owes no ripcord record, and charging it a finding for a way
+/// through it did not take would make the audit trail lie about how often the
+/// break-glass is needed.
+///
+/// **Then the ripcord**, before the repair and the emit. A pull CHANGES WHICH
+/// DECISION IS EMITTED, so a repair composed against the refusal — or an advisory
+/// about it — would describe a call that no longer happens. That is
+/// `settle_repair`'s own ordering argument, one seam earlier.
+///
+/// They sit together here rather than as two statements in `run_hook` because
+/// that function is under `clippy::too_many_lines` and the second route tipped it
+/// over. Pairing them is what the lint asked for and what the ordering wanted
+/// anyway: neither is meaningful without the other's position.
+///
+/// # Errors
+///
+/// Propagates from either route; see each.
+///
+/// Composes the handler's answer with the engine's first, so the call site in
+/// `run_hook` stays one line under `rustfmt`: measured, the four-argument form
+/// wrapped to six lines and put `run_hook` back over `too_many_lines`.
+fn admitted(
+    handled: Option<hook::Decision>,
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+    facts: &hook::Facts<'_>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<hook::Decision> {
+    let decision = compose(handled, policy, envelope, facts);
+    pull_ripcord(envelope, admit_mediated(decision, out)?, out, err)
+}
+
+//MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
+//MUTANT ripcord-reaches-a-loaded-deny-all|s@    let admits = bootstrap || (ripcord::present(root) \&\& recoverable_without_rules(envelope));@    let admits = false;@|the_ripcord_admits_a_read_a_loaded_rule_refused
+//MUTANT ripcord-becomes-a-global-allow|s@    let admits = bootstrap || (ripcord::present(root) \&\& recoverable_without_rules(envelope));@    let admits = bootstrap || ripcord::present(root);@|the_ripcord_is_not_a_global_allow
+fn pull_ripcord(
+    envelope: &hook::Envelope,
+    decision: hook::Decision,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<hook::Decision> {
+    let hook::Decision::Deny(refusal) = &decision else {
+        return Ok(decision);
+    };
+    // THE OPERATION CHECK IS OURS, so `ripcord` stays a leaf with no edge onto
+    // `hook`. `writes` is already `None` for anything but a classified write;
+    // the `matches!` states that rather than leaning on it.
+    let bootstrap = matches!(envelope.operation, hook::Operation::Write)
+        && ripcord::creates_the_sentinel(envelope.writes.as_deref());
+    let root = hook_authority_root();
+    // NAMED AND POSITIVE, rather than a negated conjunction inline. The two arms
+    // are the whole contract — arming is unconditional, a pull is floored — and a
+    // reader checking that the ripcord is not a global allow should be able to see
+    // the floor in the predicate rather than reconstruct it through a `!`.
+    let admits = bootstrap || (ripcord::present(root) && recoverable_without_rules(envelope));
+    if !admits {
+        return Ok(decision);
+    }
+    // POINTER, NEVER THE PAYLOAD (rule 4), and the same shape `admit_mediated`
+    // emits: what admitted the call and which refusal it stood down, so a reader
+    // can find the record. The tool's own input never appears.
+    let class = refusal.verdict().unwrap_or_else(|| refusal.rule());
+    let how = if bootstrap { "armed" } else { "pulled" };
+    writeln!(
+        out,
+        "batten: {class} admitted by the ripcord — {} {how}",
+        ripcord::SENTINEL
+    )?;
+    record_ripcord(root, envelope, err);
+    Ok(hook::Decision::Allow)
+}
+
+/// Write the pull into the findings store, or say why it could not be.
+///
+/// **Never fails the admission**, which is [`pull_ripcord`]'s stated contract: a
+/// break-glass withheld because its own record could not be written leaves the
+/// container in exactly the state the break-glass exists to end. The failure is
+/// reported on the operator's stream instead, where a missing audit trail is
+/// news.
+fn record_ripcord(root: &Path, envelope: &hook::Envelope, err: &mut dyn Write) {
+    let recorded = store::resolve(root)
+        .ok()
+        .and_then(|opened| store::bound_dir(&opened))
+        .zip(git::head_commit(root).ok())
+        .map(|(dir, head)| {
+            let advisory = findings::Advisory {
+                rule: ripcord::RULE_ID.to_owned(),
+                identity: ripcord::identity(envelope.session.as_deref()),
+                tier: crate::severity::AdvisoryTier::Advisory,
+                path: ripcord::SENTINEL.to_owned(),
+                line: None,
+                // RE-EVALUATION IS THE HONEST `check` AND IT WILL NOT CLEAR THIS,
+                // which is the property rather than a defect. The subject is a
+                // pull that happened; disarming the sentinel afterwards does not
+                // unhappen it, so the record settles by disposition the way every
+                // `Sequence` finding does (`crate::completion`, CLOUD-78).
+                check: findings::Check::Reevaluate,
+                // `NoFix` because there is no argv that repairs having needed a
+                // break-glass. What an operator does next is a judgement about
+                // the config that forced it, which the engine may not name
+                // (non-negotiable rule 1).
+                remediation: findings::Remediation::NoFix(format!(
+                    "the boundary refused a call that would repair it, and {} admitted it; \
+                     remove the rule that forced this, then disarm the sentinel",
+                    ripcord::SENTINEL
+                )),
+            };
+            findings::record_sequence(
+                &dir,
+                &findings::Context::new(format!("ripcord/{}", envelope.raw_tool)),
+                &head,
+                None,
+                &advisory,
+                findings::Observation::Observed(1),
+                findings::FINDINGS_SCHEMA,
+            )
+        });
+    if !matches!(recorded, Some(Ok(_))) {
+        let _ = writeln!(
+            err,
+            "batten: the ripcord was honoured and its record could not be written — \
+             {} is armed and this pull is unaudited",
+            ripcord::SENTINEL
+        );
+    }
 }
 
 /// The two producers that ride the DECISION rather than a batch boundary.

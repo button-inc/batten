@@ -3742,6 +3742,30 @@ fi
 echo "no-docs-tree: no committed docs/ tree"
 '''
 
+[tasks.no-armed-ripcord]
+description = "Gate: the break-glass sentinel is never committed. An armed ripcord in the index hands every clone the bypass (CLOUD-1847)."
+shell = "bash -c"
+# THE AUDIT IS WHAT KEEPS THE RIPCORD FROM BEING A PASSWORD, and this is half of
+# it. `.batten-ripcord` opens the repair floor over a config that loads and
+# denies — which is the right answer for a container that would otherwise be
+# abandoned, and the wrong thing entirely to hand to every clone of the
+# repository. A sentinel is a thing one operator arms in one tree, for as long as
+# it takes to remove the rule that forced it.
+#
+# GLOB-LESS, on `no-docs-tree`'s reason (CLOUD-224): the input genuinely is the
+# whole index. It fails on a tracked sentinel whatever commit introduced it,
+# where a glob would let one persist unreported for every commit that did not
+# touch it. `.gitignore` carries the same name, so reaching this gate takes a
+# deliberate `git add -f` — which is exactly the case a gate is for.
+run = '''
+tracked=$(git ls-files '.batten-ripcord' | head -n1)
+if [ -n "$tracked" ]; then
+  echo "::error:: the break-glass sentinel is tracked ($tracked). It admits the repair floor over a config that loads and denies, so committing one ships that bypass to every clone. Remove it from the index and disarm it; the lockout it was pulled for is fixed in the config, not here." >&2
+  exit 1
+fi
+echo "no-armed-ripcord: the break-glass is not committed"
+'''
+
 [tasks.bats-submodule]
 description = "Check out the vendored bats runner if it is missing — `bats-submodule-checked-out`'s check and repair, for `test:bats`"
 run = "test -f tests/bats/bin/bats || git submodule update --init --recursive tests/bats"

@@ -1490,6 +1490,39 @@ transcript CONTENT needs 1029 first, and nothing landed authorises one.
   row would override four correct per-verb answers with one weaker sentence.
   Per-path beats per-verb only where the path fact dominates. It makes a message
   specific; it does not make the named surface reachable (CLOUD-663).
+- `ripcord.rs` — the break-glass a locked-out container can reach (CLOUD-1847).
+  `recoverable_without_rules` gives the UNREADABLE-config arm a floor — a `Read`
+  still answers, a write to the authority still lands — and its own doc scopes it
+  there: _"everywhere else a policy exists and this question is not asked"_. **A
+  config that LOADS can brick a container just as completely**, and once did: a
+  `mediated_call` `policy` row whose body was bare truthiness on `input.call`
+  passed `config lint` at rc=0, _"0 smell(s)"_, then refused `Bash`, `Read` and
+  the `Edit` of `batten.toml` that would undo it. The session ended by
+  abandonment; nothing had been committed, so the next container was clean by
+  luck rather than by design.
+  **The scope is a STATE, never a parse verdict** — the boundary is refusing the
+  calls that would repair the boundary — which is the correction this makes to
+  CLOUD-1844's `ConfigUnreadable` scoping, where the config loads perfectly and a
+  sentinel honoured on that arm does nothing. The sentinel is a FILE because the
+  env hatch is unreachable from inside the state it is advertised for: it is read
+  from the hook process's own environment, and the `Bash` call carrying it is
+  itself adjudicated (CLOUD-1605).
+  **Arming is admitted unconditionally, and that is the bootstrap rather than a
+  hole**: a sentinel honoured only once it exists can never come into existence
+  under a config that denies every write. Arming grants nothing by itself — the
+  next call still has to fall inside the repair floor, so `Execute`, `Mcp` and
+  `Subagent` stay refused with it armed. That pair is the falsifier: a ripcord
+  admitting `Bash` would be the password CLOUD-1357 retired, wearing a record.
+  **One floor predicate, two callers**, deliberately: the unreadable arm and this
+  one both ask `recoverable_without_rules`, so they cannot drift the way
+  `BRANCH_KEYED_RECEIPTS` did three times (CLOUD-1894).
+  **The audit is what keeps it from being a password** — a `Sequence` finding
+  that does not self-clear (disarming does not unhappen the pull), a pointer line
+  naming the class it stood down, and `no-armed-ripcord` refusing a TRACKED
+  sentinel so an armed one cannot ship. A finding that cannot be written is
+  reported and does **not** withhold the admission: a break-glass refused because
+  its own audit trail is unwritable leaves the container in exactly the state the
+  break-glass exists to end.
 - `review.rs` — the vendored-prompt dispatch tier (CLOUD-472): the SECOND
   occupant of `Cost::Effect` and the third adopter of `secrets.rs`'
   delegated-analyser shape, after `symbols.rs`. It answers one narrow question —
