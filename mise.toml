@@ -4412,6 +4412,12 @@ if ! mise run target-prune; then
   echo "::error:: verify: not enough disk to run the gate, and pruning did not recover it — the refusal above names free space and the floor. No receipt written." >&2
   exit 1
 fi
+# THE LAP IS OPEN, AND ONLY ITS OWN CLOSE MAY PRUNE IT (CLOUD-1913). Everything
+# the gate spawns inherits this, so a `build:release` reached from inside —
+# `test:bats`'s startup repair — no longer escalates mid-gate over the suite's
+# fixtures and clippy's tree. The value names this tree, so a fixture elsewhere
+# prunes as before. `verify:gated`'s close clears it for its own call.
+export BATTEN_PRUNE_LAP_OPEN="$PWD"
 # THE TOOLCHAIN, BEFORE ANYTHING IS DECIDED OR WRITTEN (CLOUD-1683). Measured:
 # `mise install` wrote `mise ERROR` and exited 0 on a credential failure,
 # provisioning reported success, and this task then returned 0 without running a
@@ -4765,7 +4771,7 @@ fi
 # LAST OF THE CONTENT STEPS AND BEFORE THE RECEIPT, deliberately: a lap that ended
 # below its floor must leave no receipt, exactly like any other refusal here.
 lap_rc=0
-mise run target-prune || lap_rc=$?
+BATTEN_PRUNE_LAP_OPEN= mise run target-prune || lap_rc=$?
 if [ "$lap_rc" = 2 ]; then
   echo "::error:: verify: this lap ended below the disk floor it was ADMITTED under — the refusal above names what it consumed. That is the environment rather than this branch: there is nothing in the diff to reproduce. No receipt written." >&2
   exit 1
