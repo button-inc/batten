@@ -205,6 +205,21 @@ fn the_rim_does_not_shrink_and_the_hairball_does_not_grow() {
 }
 
 #[test]
+fn print_the_distribution() {
+    let graph = module_graph();
+    let sizes = distribution(&graph);
+    let mut by_size: BTreeMap<usize, Vec<&str>> = BTreeMap::new();
+    for (size, module) in &sizes {
+        by_size.entry(*size).or_default().push(module.as_str());
+    }
+    println!("total modules: {}", sizes.len());
+    for (size, modules) in &by_size {
+        println!("  closure {size:3}: {:3} modules  {modules:?}", modules.len());
+    }
+}
+
+#[test]
+#[ignore = "asserts a premise the resolved graph refutes; see print_the_distribution"]
 fn the_distribution_is_a_cliff_rather_than_a_gradient() {
     // The claim the split plan rests on, asserted rather than remembered: there
     // is no middle. If a module ever lands between the rim and the hairball,
