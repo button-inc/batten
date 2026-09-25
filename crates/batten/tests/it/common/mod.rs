@@ -155,6 +155,36 @@ pub(crate) fn at_root(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// One task's table out of this repository's `mise.toml`, header included.
+///
+/// **THE ENGINE'S DEFINITION, NOT A COPY OF IT** (CLOUD-1909). Where a task's table
+/// begins and ends is decided once, by `batten::mutate::task_block`, because the
+/// sweep reads a `task-` gate's declarations through exactly that boundary. A suite
+/// pinning a task's body through a second definition could disagree with the sweep
+/// about which lines are the task — and four suites had grown private copies,
+/// one of which ended a block at the first column-zero `[`, which is also how a
+/// shell test line begins.
+///
+/// Read through [`at_root`], so under `mutate sweep` it is the STAGED manifest and
+/// a mutation of the body is what the suite sees.
+pub(crate) fn task_block(name: &str) -> Option<String> {
+    let manifest =
+        std::fs::read_to_string(at_root("mise.toml")).expect("the task manifest is readable");
+    let lines: Vec<String> = manifest.lines().map(str::to_owned).collect();
+    batten::mutate::task_block(&lines, name).map(|block| block.join("\n"))
+}
+
+/// One declared key's value out of a task block, triple-quoted or not.
+pub(crate) fn task_value(block: &str, key: &str) -> String {
+    let Some(rest) = block.split(&format!("\n{key} = ")).nth(1) else {
+        return String::new();
+    };
+    rest.strip_prefix("\"\"\"").map_or_else(
+        || rest.lines().next().unwrap_or_default().to_owned(),
+        |triple| triple.split("\"\"\"").next().unwrap_or(triple).to_owned(),
+    )
+}
+
 /// Every `BATTEN_` variable the command surface declares, derived from the
 /// surface itself so the set cannot drift behind a new flag.
 fn declared_env_vars() -> Vec<&'static str> {

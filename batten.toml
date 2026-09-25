@@ -6316,7 +6316,18 @@ kind = "policy"
 scope = "tree"
 base = "origin/main"
 delta_sources = ["**"]
-line_sources = ["crates/batten/tests/**/*.rs", "policy/*.rego", "tests/**/*.bats", "mise-tasks/**"]
+# `mise.toml` and `crates/batten/src` since CLOUD-1909: an inline task declares
+# its mutation in the manifest and an engine module in its own source, because a
+# row mutates the file it is written in. Without them an obligation naming either
+# file reads as undeclared however plainly the row is there.
+line_sources = [
+  "crates/batten/tests/**/*.rs",
+  "policy/*.rego",
+  "tests/**/*.bats",
+  "mise-tasks/**",
+  "mise.toml",
+  "crates/batten/src/**/*.rs",
+]
 module = "policy/obligations-bound.rego"
 severity = "deny"
 
@@ -6343,6 +6354,9 @@ line_sources = [
   "policy/*.rego",
   "tests/**/*.bats",
   "mise-tasks/**",
+  # The declaring side for an inline task (CLOUD-1909); its suites are already
+  # in the set above.
+  "mise.toml",
 ]
 module = "policy/mutation-declared-case.rego"
 severity = "deny"

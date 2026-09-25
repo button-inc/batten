@@ -533,30 +533,11 @@ fn task_surface(name: &str) -> Option<String> {
     ))
 }
 
-/// One task's declared block, from its own header line to the next table.
-fn task_block(name: &str) -> Option<String> {
-    let manifest =
-        std::fs::read_to_string(at_root("mise.toml")).expect("the task manifest is readable");
-    let headers = [
-        format!("\n[tasks.\"{name}\"]\n"),
-        format!("\n[tasks.{name}]\n"),
-    ];
-    let block = headers
-        .iter()
-        .find_map(|header| manifest.split(header.as_str()).nth(1))?;
-    Some(block.split("\n[").next().unwrap_or(block).to_owned())
-}
-
-/// One declared key's value out of a task block, triple-quoted or not.
-fn task_value(block: &str, key: &str) -> String {
-    let Some(rest) = block.split(&format!("\n{key} = ")).nth(1) else {
-        return String::new();
-    };
-    rest.strip_prefix("\"\"\"").map_or_else(
-        || rest.lines().next().unwrap_or_default().to_owned(),
-        |triple| triple.split("\"\"\"").next().unwrap_or(triple).to_owned(),
-    )
-}
+// `task_block` and `task_value` moved to `common` (CLOUD-1909), where the block
+// boundary is the engine's own `batten::mutate::task_block` rather than a second
+// definition — this file's copy ended a block at the first column-zero `[`, which
+// is also how a shell test line begins.
+use common::{task_block, task_value};
 
 /// The tasks one task DECLARES as dependencies, as separate entries.
 ///

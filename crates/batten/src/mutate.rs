@@ -157,6 +157,112 @@ const ENGINE: &str = "crates/batten/src";
 /// the collision was the first thing the route hit rather than a hypothetical.
 const ENGINE_PREFIX: &str = "engine-";
 
+/// The namespace an inline task's name carries (CLOUD-1909).
+///
+/// **A PREFIX FOR `ENGINE_PREFIX`'s REASON, one file over.** The retirement
+/// campaign keeps a program's name when it moves the body inline, so
+/// `mise-tasks/<name>.sh` and `[tasks."<name>"]` routinely name the same gate
+/// across a retirement. A bare name would resolve the shell program and leave the
+/// inline block's declared rows unread while they read as declared.
+const TASK_PREFIX: &str = "task-";
+
+/// The file inline tasks are declared in, as the consumer names it.
+///
+/// **NAMED BY THE CONSUMER, NEVER BY THE CRATE** — non-negotiable rule 1, and
+/// `document_facts::no_artifact_name_reaches_the_core` refused the first draft of
+/// this route for spelling the manifest's filename here. Which file carries a
+/// task table is a fact about the repository, so it arrives the way the enforced
+/// set already does: `$MUTANT_TASKS`, declared beside `$MUTANT_GATES`.
+///
+/// **UNSET SWITCHES THE ROUTE OFF, and that is the safe direction.** A `task-`
+/// name then resolves to nothing, which the sweep reports `no-such-gate` and the
+/// census reports as a name resolving to no subject — a could-not-look, never a
+/// quiet pass. Read from the environment for `suite_bound`'s reason: the runner's
+/// own knobs arrive there, and this is one.
+fn task_manifest() -> Option<String> {
+    std::env::var("MUTANT_TASKS")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+/// The lines of one inline task's table, header included, or `None` where the
+/// manifest declares no such task (CLOUD-1909).
+///
+/// **THE BLOCK, NEVER THE FILE, and that is the whole of the route.** Every inline
+/// gate shares one source file, so a reader that took the file would let each
+/// `task-` gate claim every `#MUTANT` row in it — and a sweep would then apply one
+/// task's mutation against another task's suite and call the result coverage.
+///
+/// **ANCHORED TO A LINE THAT IS THE HEADER.** `[tasks.verify]` is spelled inside
+/// comments hundreds of lines above the table it names; a substring search reads
+/// the wrong region, which is the measured failure on CLOUD-1329. Both spellings
+/// are accepted because both are valid TOML and the manifest uses both.
+///
+/// **THE BLOCK ENDS AT THE NEXT TABLE HEADER, NOT AT THE NEXT `[`.** A task body is
+/// shell, and shell opens lines with `[` and `[[` at column zero — `ci-wait`'s body
+/// does. A header carries no whitespace (`[tasks."build:release"]`, `[prune.cold]`),
+/// and a shell test always does (`[ -n "$x" ]`), so that is the discriminator. The
+/// opposite error would end the block inside a body and drop every declaration
+/// written below it.
+///
+/// Public because the suites that pin a task's own body read it through this, so
+/// there is one definition of where a task's table begins and ends rather than one
+/// per suite.
+#[must_use]
+pub fn task_block(lines: &[String], name: &str) -> Option<Vec<String>> {
+    let quoted = format!("[tasks.\"{name}\"]");
+    let bare = format!("[tasks.{name}]");
+    let start = lines.iter().position(|line| {
+        let trimmed = line.trim_end();
+        trimmed == quoted || trimmed == bare
+    })?;
+    let rest = lines[start + 1..]
+        .iter()
+        .take_while(|line| !is_table_header(line))
+        .cloned();
+    Some(std::iter::once(lines[start].clone()).chain(rest).collect())
+}
+
+/// Whether a manifest line opens a TOML table: `[` at column zero, `]` at the end,
+/// and no whitespace between — which no line of shell satisfies.
+fn is_table_header(line: &str) -> bool {
+    let trimmed = line.trim_end();
+    trimmed.starts_with('[') && trimmed.ends_with(']') && !trimmed.chars().any(char::is_whitespace)
+}
+
+/// Every task name the manifest declares a table for, in file order.
+fn task_names(lines: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .filter(|line| is_table_header(line))
+        .filter_map(|line| {
+            let inner = line.trim_end().strip_prefix("[tasks.")?.strip_suffix(']')?;
+            let name = inner
+                .strip_prefix('"')
+                .and_then(|quoted| quoted.strip_suffix('"'))
+                .unwrap_or(inner);
+            // A nested table (`[tasks.x.env]`) is part of its task, not a task.
+            (!name.contains('.') || inner.starts_with('"')).then(|| name.to_owned())
+        })
+        .collect()
+}
+
+/// The lines a gate's declarations are read from, out of one of its sources.
+///
+/// Every source but the manifest is read whole, exactly as before. The manifest is
+/// read as the named task's block alone — for a `task-` gate, so its reads cannot
+/// reach another task's rows (CLOUD-1909).
+//MUTANT-SUITE crates/batten/tests/it/mutate.rs
+//MUTANT task-block-unscoped|s@        Some(task) if task_manifest().as_deref() == Some(source) => task_block(&lines, task),@        Some(_) if task_manifest().as_deref() == Some(source) => Some(lines),@|a_task_gate_sweeps_only_its_own_block
+fn declaring_lines(root: &Path, name: &str, source: &str) -> Option<Vec<String>> {
+    let lines = lines_of(root, source)?;
+    match name.strip_prefix(TASK_PREFIX) {
+        Some(task) if task_manifest().as_deref() == Some(source) => task_block(&lines, task),
+        _ => Some(lines),
+    }
+}
+
 /// Strip a marker from a line, whatever comment opener introduced it.
 ///
 /// Returns the row's body, or `None` where this line is not that declaration.
@@ -539,20 +645,34 @@ pub fn sources_for(root: &Path, name: &str) -> Vec<String> {
         }
     }
     let dir = root.join(PRESETS).join(name);
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return Vec::new();
-    };
-    let mut found: Vec<String> = entries
-        .filter_map(std::result::Result::ok)
-        .filter_map(|entry| {
-            let file = entry.file_name().to_string_lossy().into_owned();
-            has_extension(&file, "rego").then(|| format!("{PRESETS}/{name}/{file}"))
+    let mut found: Vec<String> = std::fs::read_dir(&dir)
+        .map(|entries| {
+            entries
+                .filter_map(std::result::Result::ok)
+                .filter_map(|entry| {
+                    let file = entry.file_name().to_string_lossy().into_owned();
+                    has_extension(&file, "rego").then(|| format!("{PRESETS}/{name}/{file}"))
+                })
+                .collect()
         })
-        .collect();
+        .unwrap_or_default();
     // Sorted so the sweep is byte-stable: a directory read has no order, and a
     // report whose row order varies per run cannot be diffed.
     found.sort();
-    found
+    if !found.is_empty() {
+        return found;
+    }
+    // THE INLINE-TASK ARM (CLOUD-1909), LAST OF ALL, for the engine arm's reason:
+    // a name that resolved to anything before still resolves to exactly that, so
+    // no landed gate changes meaning by growing a same-named task block.
+    if let Some(task) = name.strip_prefix(TASK_PREFIX) {
+        if let Some(manifest) = task_manifest() {
+            if lines_of(root, &manifest).is_some_and(|lines| task_block(&lines, task).is_some()) {
+                return vec![manifest];
+            }
+        }
+    }
+    Vec::new()
 }
 
 /// Resolve one gate name against the tree.
@@ -571,7 +691,7 @@ pub fn resolve(root: &Path, name: &str) -> Option<Gate> {
     let mut suite = None;
     let mut owner = None;
     for source in &sources {
-        let Some(lines) = lines_of(root, source) else {
+        let Some(lines) = declaring_lines(root, name, source) else {
             continue;
         };
         suite = suite.or_else(|| declared(&lines, SUITE));
@@ -1639,6 +1759,25 @@ pub fn subjects(root: &Path) -> BTreeMap<String, String> {
             }
         }
     }
+    // INLINE TASKS, OPT-IN BY DECLARATION (CLOUD-1909), on the engine arm's terms
+    // above: most of the manifest's tasks run, build or report and owe nothing, so
+    // a block is a subject only once it declares something — and then it is held
+    // to the set, so a row nobody sweeps reads `uncovered` rather than covered.
+    if let Some((manifest, lines)) =
+        task_manifest().and_then(|manifest| Some((manifest.clone(), lines_of(root, &manifest)?)))
+    {
+        for task in task_names(&lines) {
+            let declares = task_block(&lines, &task).is_some_and(|block| {
+                !rows_in(&block, &manifest).is_empty()
+                    || [SUITE, OWNER, EXEMPT]
+                        .iter()
+                        .any(|marker| declared(&block, marker).is_some())
+            });
+            if declares {
+                found.insert(format!("{TASK_PREFIX}{task}"), manifest.clone());
+            }
+        }
+    }
     found
 }
 
@@ -1671,9 +1810,11 @@ pub fn census(root: &Path, names: &[String]) -> Census {
     let mut findings = Vec::new();
     for (name, path) in &subjects {
         let in_set = names.iter().any(|declared| declared == name);
+        // Through the block for a `task-` gate (CLOUD-1909): an exemption written
+        // in one task's table is not a statement about any other task.
         let exempt = sources_for(root, name)
             .iter()
-            .filter_map(|source| lines_of(root, source))
+            .filter_map(|source| declaring_lines(root, name, source))
             .find_map(|lines| declared(&lines, EXEMPT));
         match exempt {
             Some(row) if !exemption_is_filed(&row) => {

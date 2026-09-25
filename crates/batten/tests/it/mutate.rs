@@ -216,6 +216,11 @@ fn run(root: &Path, verb: &str, gates: &str) -> (i32, String, String) {
         .args(["mutate", verb])
         .current_dir(root)
         .env("MUTANT_GATES", gates)
+        // Declared explicitly rather than inherited, so a case's verdict does not
+        // depend on whether the runner happened to export the repository's own
+        // `[env]` (CLOUD-1909). A toy with no manifest resolves no `task-` gate
+        // either way.
+        .env("MUTANT_TASKS", "mise.toml")
         .output()
         .expect("run batten mutate");
     (
@@ -345,6 +350,124 @@ fn a_filter_naming_no_case_is_still_a_filter_fault_and_not_a_timeout() {
         !out.contains("suite-timed-out"),
         "a suite that answered in time did not time out: {out}"
     );
+}
+
+/// Two inline tasks in one manifest, each declaring one row over its own body,
+/// and a bats suite per task that reads the staged manifest (CLOUD-1909).
+///
+/// **The suites read the manifest rather than running the task**, and that is what
+/// keeps this tier a test of the ROUTE: whether the sweep can find, scope, apply
+/// and judge a row declared in `mise.toml`. Running a task body is a property of
+/// mise, which a toy repository does not have.
+#[cfg(unix)]
+fn two_task_repo(name: &str) -> PathBuf {
+    let root = toy(name);
+    write(
+        &root,
+        "mise.toml",
+        "[tasks.\"a\"]\n\
+         #MUTANT-SUITE tests/a.bats\n\
+         #MUTANT a-limit|s/^LIMIT_A=10$/LIMIT_A=999/|a keeps its limit\n\
+         run = '''\n\
+         LIMIT_A=10\n\
+         [ -n \"$LIMIT_A\" ]\n\
+         '''\n\
+         \n\
+         [tasks.b]\n\
+         #MUTANT-SUITE tests/b.bats\n\
+         #MUTANT b-limit|s/^LIMIT_B=10$/LIMIT_B=999/|b keeps its limit\n\
+         run = '''\n\
+         LIMIT_B=10\n\
+         '''\n",
+    );
+    for task in ["a", "b"] {
+        let upper = task.to_uppercase();
+        write(
+            &root,
+            &format!("tests/{task}.bats"),
+            &format!(
+                "#!/usr/bin/env bats\n\
+                 @test \"{task} keeps its limit\" {{\n\
+                 \tgrep -q '^LIMIT_{upper}=10$' \"$BATS_TEST_DIRNAME/../mise.toml\"\n\
+                 }}\n\
+                 @test \"{task} has a body\" {{\n\
+                 \tgrep -q 'LIMIT_{upper}' \"$BATS_TEST_DIRNAME/../mise.toml\"\n\
+                 }}\n"
+            ),
+        );
+    }
+    track(&root);
+    lend_bats(&root);
+    root
+}
+
+/// **CLOUD-1909's discriminating case: a `task-` gate sweeps its own block and no
+/// other.**
+///
+/// Scoped, `task-a` finds one row, its suite catches it, and the sweep is clean.
+/// Unscoped — the file read whole — it also finds `b-limit` and runs it against
+/// `a`'s suite, where no case is named `b keeps its limit`, so the sweep reports
+/// `names-no-case` and exits 3. The column-zero `[ -n … ]` line inside `a`'s body
+/// is deliberate: a reader that ended the block at the next `[` would stop there
+/// and still pass, so the fixture makes the header rule do the work.
+#[cfg(unix)]
+#[test]
+fn a_task_gate_sweeps_only_its_own_block() {
+    let root = two_task_repo("task-scoped");
+    let (code, out, err) = sweep(&root, "task-a");
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}");
+    assert!(
+        !out.contains("b-limit"),
+        "another task's row is not this gate's: {out}"
+    );
+}
+
+/// The census half: a block that declares rows and is absent from the set is
+/// `uncovered`, so an inline task cannot declare a mutation nobody sweeps.
+#[cfg(unix)]
+#[test]
+fn a_declaring_task_block_absent_from_the_set_is_uncovered() {
+    let root = two_task_repo("task-uncovered");
+    let (code, out, err) = census(&root, "task-a");
+    assert_ne!(code, 0, "{out}{err}");
+    assert!(out.contains("uncovered"), "{out}");
+    assert!(
+        out.contains("mise.toml"),
+        "the pointer names the manifest: {out}"
+    );
+}
+
+/// **THE MIRROR.** A `task-` name the manifest declares no table for is still
+/// `no-such-gate` — the route resolves real blocks, and does not turn every
+/// prefixed name into a gate over the whole manifest.
+/// **The route is the consumer's to switch on.** With no manifest named, a `task-`
+/// gate resolves to nothing and says so — the crate never guesses which file a
+/// repository keeps its tasks in (non-negotiable rule 1), and an unnamed manifest
+/// is a could-not-look rather than a quiet pass.
+#[cfg(unix)]
+#[test]
+fn an_unnamed_manifest_resolves_no_task_gate() {
+    let root = two_task_repo("task-unnamed");
+    let answer = common::batten()
+        .args(["mutate", "sweep"])
+        .current_dir(&root)
+        .env("MUTANT_GATES", "task-a")
+        .env_remove("MUTANT_TASKS")
+        .output()
+        .expect("run batten mutate");
+    let out = stdout(&answer);
+    assert_eq!(answer.status.code(), Some(3), "{out}");
+    assert!(out.contains("no-such-gate"), "{out}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_task_name_with_no_block_is_still_no_such_gate() {
+    let root = two_task_repo("task-absent");
+    let (code, out, err) = sweep(&root, "task-nope");
+    assert_eq!(code, 3, "{out}{err}");
+    assert!(out.contains("no-such-gate"), "{out}");
 }
 
 #[cfg(unix)]
