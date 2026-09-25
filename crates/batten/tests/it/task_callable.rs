@@ -39,7 +39,7 @@ scope = ["**"]
 
 [[pattern]]
 id = "mise-run-task"
-regex = 'mise run [a-z][a-z0-9:_-]*'
+regex = 'mise run [a-z][a-z0-9:_-]*(\.[a-z0-9_-]+)*'
 
 [[verdict]]
 id = "task run unknown"
@@ -76,7 +76,7 @@ id = "workflow run unknown"
 kind = "policy"
 scope = "tree"
 sources = [".github/workflows/*.yml", "mise.toml"]
-line_sources = [".github/workflows/*.yml"]
+line_sources = [".github/workflows/*.yml", "mise.toml", "hk.pkl"]
 module = "policy/task-callable.rego"
 severity = "deny"
 "#;
@@ -297,4 +297,99 @@ fn a_comment_naming_an_absent_task_is_not_judged() {
         "a comment explaining an absent task does not fire the gate\n{}",
         String::from_utf8_lossy(&quiet.stderr)
     );
+}
+
+/// A repository whose files are exactly these — for the manifest and `hk.pkl`
+/// caller populations, which a workflow-shaped fixture cannot reach.
+fn repo_files(name: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
+    let dir = scratch(&format!("task-callable-{name}"));
+    let module = std::fs::read_to_string("../../policy/task-callable.rego")
+        .expect("the module this tier exists for");
+    write(&dir, "policy/task-callable.rego", &module);
+    write(&dir, "batten.toml", CONFIG);
+    for (path, body) in files {
+        write(&dir, path, body);
+    }
+    init_repo(&dir);
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-qm", "register the module"]);
+    dir
+}
+
+#[test]
+fn a_depends_entry_naming_a_retired_file_task_is_refused() {
+    // THE DEFECT THIS BRANCH SHIPPED, as it shipped: `commit-lint` depended on
+    // `signing-posture`, a file task the retirement deleted, and `verify`'s body
+    // ran `mise run evaluator-io-check`, likewise. mise refused both at run time
+    // (`task not found`) and this gate, reading workflows only, passed both.
+    let dir = repo_files(
+        "manifest-dangling",
+        &[(
+            "mise.toml",
+            "[tasks.commit-attribution]\nrun = \"true\"\n\n\
+             [tasks.commit-lint]\ndepends = [\"commit-attribution\", \"signing-posture\"]\nrun = \"true\"\n\n\
+             [tasks.verify]\nrun = \"\"\"\n# mise run commented-out-is-prose\nmise run evaluator-io-check\n\"\"\"\n",
+        )],
+    );
+    let decided = run(&dir, &["check"]);
+    assert_eq!(
+        decided.status.code(),
+        Some(2),
+        "both callers dangle\n{}",
+        said(&decided)
+    );
+    // POINTER, NEVER PAYLOAD (rule 4): the report is `path:line`, never the task
+    // name. Line 5 is the `depends` entry, line 11 the body's `mise run`; line 10
+    // is the shell comment naming a task, which must not be reported.
+    let text = said(&decided);
+    assert!(
+        text.contains("mise.toml:5 "),
+        "the depends entry is placed\n{text}"
+    );
+    assert!(text.contains("mise.toml:11 "), "and the body call\n{text}");
+    assert!(
+        !text.contains("mise.toml:10 "),
+        "a shell comment in a task body is not a caller\n{text}"
+    );
+}
+
+#[test]
+fn an_hk_step_naming_an_undefined_task_is_refused() {
+    let dir = repo_files(
+        "hk-dangling",
+        &[
+            ("mise.toml", "[tasks.present]\nrun = \"true\"\n"),
+            (
+                "hk.pkl",
+                "  // This was `mise run long-retired`, and prose is not a caller\n\
+                 \x20   check = \"mise run present\"\n\
+                 \x20   check = \"mise run absent-task\"\n",
+            ),
+        ],
+    );
+    let decided = run(&dir, &["check"]);
+    assert_eq!(decided.status.code(), Some(2), "{}", said(&decided));
+    // Line 3 is the dangling step; line 1 is a `//` comment naming a task.
+    let text = said(&decided);
+    assert!(text.contains("hk.pkl:3 "), "{text}");
+    assert!(
+        !text.contains("hk.pkl:1 "),
+        "a comment names no caller\n{text}"
+    );
+}
+
+#[test]
+fn a_dotted_near_miss_is_refused_rather_than_read_as_its_prefix() {
+    let dir = repo_files(
+        "dotted",
+        &[
+            ("mise.toml", "[tasks.present]\nrun = \"true\"\n"),
+            (
+                ".github/workflows/probe.yml",
+                "on:\n  schedule:\n    - cron: \"0 0 * * 1\"\njobs:\n  probe:\n    runs-on: ubuntu-latest\n    steps:\n      - run: mise run present.typo\n",
+            ),
+        ],
+    );
+    let decided = run(&dir, &["check"]);
+    assert_eq!(decided.status.code(), Some(2), "{}", said(&decided));
 }

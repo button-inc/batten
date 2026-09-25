@@ -67,11 +67,11 @@
 // carried: "the divergent PRs are named on failure, pointer-only" policy/land-divergence.rego kind:mechanism
 // changed: "the ratio is reported in hundredths rather than rounded" policy/land-divergence.rego the unit is kept and the rounding is gone, which is what the case was really asking for. Bash has no floats, so the decider computed `$((x * 100 / n))` and DISCARDED the remainder — it could report a ratio marginally under a budget it was over. Rego divides exactly, so the comparison now agrees with the number a reader computes by hand, which is the property the case's own name states
 // changed: "empty stdin exits 2" mise.toml there is no stdin: the decider's input is the record family, and an ABSENT family is could-not-look, which on the engine's contract must read as silence rather than as the exit 2 that now means a finding. The property is kept on the producer's side of the door, where both total-blindness arms refuse and write nothing
-// changed: "records with no window summary exit 2" mise.toml the summary is emitted unconditionally by the producer and the producer refuses in every arm that cannot reach one, so a family with records and no summary is a torn store rather than an incomplete measurement; the module leaves it unjudged, which is what "no window to judge" means once could-not-look cannot be spelled as a finding
-// changed: "two concatenated measurements exit 2 rather than describing neither" policy/land-divergence.rego the reading is unchanged and only its spelling moved: a count over both still describes neither, so neither is judged. `record named` replaces a family rather than appending to it, so two DIFFERENT summaries can now arrive only through a torn store, and a torn store is silence here for the same reason an unparseable line is skipped
-// changed: "a non-numeric count exits 2" policy/land-divergence.rego the refusal to coerce is the whole of the case and it is kept — `count_of` is undefined for a value that is not digits, so no rule reading it fires. What changed is that undefinedness says "unjudged" where the shell's exit 2 would now say "violation"
-// changed: "a summary missing a count exits 2 rather than reading it as zero" policy/land-divergence.rego the same undefinedness: an absent key leaves `count_of` undefined and the rules that read it silent, rather than reading the gap as a zero that would pass
-// changed: "a summary missing the per-job count exits 2 rather than reading it as zero" policy/land-divergence.rego the same, for the one key CLOUD-501 added; it is spelled separately here for the reason the retired suite spelled it separately, which is that a per-job figure read as zero is exactly the reading that hides a matrix queueing on its own legs
+// carried: "records with no window summary exit 2" policy/land-divergence.rego `torn` refuses a record present with no summary as `lane read partial`. The first port read it as silence and recorded that here; that was the dropped refusal, restored
+// carried: "two concatenated measurements exit 2 rather than describing neither" policy/land-divergence.rego a count over both still describes neither, so neither is judged against a budget; the record is refused as torn instead of passing silent, as the retired arm did
+// carried: "a non-numeric count exits 2" policy/land-divergence.rego `count_of` still refuses to coerce, and `torn` reads the undefined count as a refusal rather than leaving the window unjudged
+// carried: "a summary missing a count exits 2 rather than reading it as zero" policy/land-divergence.rego a missing column is `not count_of(key)` for a key in `window_columns`, which `torn` refuses
+// carried: "a summary missing the per-job count exits 2 rather than reading it as zero" policy/land-divergence.rego `queue_job_p90` is in `window_columns`, so its absence is torn — spelled separately for the reason the retired suite gave
 // changed: "a clean per-job figure passes, and the success line reports it" policy/land-divergence.rego the pass is kept and the success line is not: a module emits findings, and non-negotiable rule 4 makes output a pointer rather than a report. The numbers a reader wanted from that line are in the record the producer writes and echoes to the step summary, which is where `land-divergence.yml` publishes them
 // changed: "a linear window measures one graded run against one landing" mise.toml the measurement is the producer's: it walks the Actions API per workflow and joins runs to landings by branch bounded by `merged_at`, which §5 keeps outside `check`
 // changed: "the conditional request actually sends If-None-Match once an ETag is cached" mise.toml an ETag is a property of an HTTP request, and the request is the producer's
@@ -353,6 +353,34 @@ fn a_partially_read_window_is_a_finding_rather_than_a_clean_one() {
         "a green verdict over a prefix would cover less than it claims\n{}",
         said(&reported)
     );
+}
+
+#[test]
+fn a_torn_record_is_a_finding_rather_than_a_clean_window() {
+    // THE REFUSAL THE FIRST PORT DROPPED, over the real projection: every shape
+    // here was a clean exit 0 before, because `fields` gated on exactly one
+    // summary and nothing refused the rest.
+    let concatenated = format!("{}{}", linear(), window(1, 9, 0, 0, 0, 1, 0, 0, 0, 0));
+    for (name, lines) in [
+        ("two", concatenated.as_str()),
+        ("none", "nonsense\n"),
+        ("short", "window\tsince=2026-08-12T00:00:00Z\tlandings=1\n"),
+    ] {
+        let dir = repo(&format!("torn-{name}"));
+        record(&dir, lines);
+        let decided = run(&dir, &["check", "--fail-on-warning"]);
+        assert_eq!(
+            decided.status.code(),
+            Some(2),
+            "a {name} record is torn, and torn is a finding\n{}",
+            said(&decided)
+        );
+        assert!(
+            said(&decided).contains("lane read partial"),
+            "under the partial-coverage class\n{}",
+            said(&decided)
+        );
+    }
 }
 
 #[test]

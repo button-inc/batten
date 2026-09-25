@@ -2096,6 +2096,15 @@ emit() {
 census=$(mktemp)
 trap 'rm -f "$census"' EXIT
 emit >"$census"
+# THE CLOSING LINE IS WHAT MAKES "FINISHED" A READING. It is written only here,
+# after `emit` returned 0, and names how many job lines precede it — so
+# `policy/timeout-drift.rego` can tell a finished census from a short one, and
+# refuse a record with no close or a count that disagrees.
+jobs=0
+while IFS= read -r line; do
+	case "$line" in job$'\t'*) jobs=$((jobs + 1)) ;; esac
+done <"$census"
+printf 'census\tjobs=%s\n' "$jobs" >>"$census"
 cargo run --quiet -p batten -- record named timeout-drift <"$census"
 '''
 

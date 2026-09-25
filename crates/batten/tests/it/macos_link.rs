@@ -84,6 +84,16 @@ id = "module read first"
 kind = "document"
 target = "policy/macos-link.rego"
 
+[[verdict]]
+id = "workspace read absent"
+gloss = "the platform graph resolved and the walk reached no built package, so nothing was inspected"
+class = "Could-not-look spelled as a record, which must not read as a clean graph."
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run macos-link-record"
+
 [[rule]]
 id = "workspace carry unsafe"
 kind = "policy"
@@ -102,6 +112,12 @@ writer = "mise run macos-link-record"
 [[pattern]]
 id = "sdk-framework-crate"
 regex = '^(security-framework|security-framework-sys|core-foundation|core-foundation-sys|native-tls|openssl-sys|cocoa|objc|objc2|system-configuration|system-configuration-sys)$'
+
+# The `scanned` count's guard, by id, exactly as this consumer declares it —
+# without it every record reads as a walk that reached nothing.
+[[pattern]]
+id = "whole-number"
+regex = '^[0-9]+$'
 
 [[pattern]]
 id = "vendored-links-crate"
@@ -276,6 +292,33 @@ fn an_absent_record_says_nothing_rather_than_passing() {
         Some(0),
         "an absent record is silence\n{}",
         String::from_utf8_lossy(&quiet.stderr)
+    );
+}
+
+#[test]
+fn a_walk_that_reached_nothing_is_could_not_look() {
+    // `scanned 0` is the producer saying it looked and resolved nothing. Before
+    // the module read `scanned`, this record was byte-identical to a clean graph
+    // and exited 0 — the vacuous pass the sibling family already refuses with
+    // `absent`. A non-zero count with no finding stays the clean answer.
+    let dir = repo("reached-nothing");
+    record(&dir, "scanned 0\n");
+    let decided = run(&dir, &["check"]);
+    assert_eq!(
+        decided.status.code(),
+        Some(2),
+        "a walk over nothing is not a clean graph\n{}",
+        String::from_utf8_lossy(&decided.stderr)
+    );
+    // The class is pinned by the module's own case; this tier proves the ENGINE
+    // builds the `scanned` line the arm reads, which the exit code shows.
+
+    let clean = repo("reached-some");
+    record(&clean, "scanned 200\n");
+    assert_eq!(
+        run(&clean, &["check"]).status.code(),
+        Some(0),
+        "a real walk with no finding is clean"
     );
 }
 

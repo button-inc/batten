@@ -39,6 +39,7 @@
 #
 #MUTANT-SUITE crates/batten/tests/it/transcript_corpus.rs
 #MUTANT thin-corpus-passes|s@^\tsessions < threshold$@\tfalse@|one_transcript_is_one_session_and_one_is_not_a_corpus
+#MUTANT torn-record-passes|s@^\tcount(values(label)) != 1$@\tfalse@|a_torn_corpus_record_is_reported_rather_than_passing
 
 # METADATA
 # description: |
@@ -62,12 +63,29 @@ rules contains "prose measure partial"
 # no transcripts, which is the answer zero.
 lines := input.tree.records["transcript-corpus"]
 
-counted(label) := value if {
+# Every numeric reading on the record, as a SET of `[label, value]` pairs.
+#
+# A PARTIAL SET, NOT A FUNCTION, and the difference was a live fault: `counted`
+# used to bind `some line in lines` inside a function body, so two `sessions`
+# lines with DIFFERENT values bound two outputs and regorus raised
+# `eval_conflict_error` — which the engine reads as a module fault, silencing
+# every predicate here at exit 0. `task-callable.rego` states the same rule for
+# its own reader. A set cannot conflict; it can only hold more than one value,
+# and that is now decided below rather than faulting.
+readings contains [label, to_number(raw)] if {
 	some line in lines
+	some label in {"sessions", "threshold"}
 	startswith(line, concat("", [label, " "]))
 	raw := trim_space(substring(line, count(label) + 1, -1))
 	regex.match(data.batten.patterns["whole-number"], raw)
-	value := to_number(raw)
+}
+
+values(label) := {value | some [l, value] in readings; l == label}
+
+# Exactly one value, or no value at all.
+counted(label) := value if {
+	count(values(label)) == 1
+	some value in values(label)
 }
 
 violation contains {
@@ -78,6 +96,20 @@ violation contains {
 	sessions := counted("sessions")
 	threshold := counted("threshold")
 	sessions < threshold
+}
+
+# A TORN RECORD IS THE SAME READING, NOT A PASS. With two different session
+# counts on file, or a record present with either number missing, this host has
+# not SHOWN the sessions the caller asked for — which is exactly this class's
+# gloss. Silence here would be a producer bug reading as a sufficient corpus.
+violation contains {
+	"rule": "prose measure partial",
+	"verdict": "prose measure partial",
+	"subjects": [{"count": count(values("sessions"))}],
+} if {
+	lines
+	some label in {"sessions", "threshold"}
+	count(values(label)) != 1
 }
 
 # --- cases -------------------------------------------------------------------
@@ -129,9 +161,22 @@ test_an_absent_record_says_nothing_rather_than_refusing if {
 	count(found) == 0
 }
 
-# A torn record — the producer never writes one without the other — leaves the
-# comparison undefined rather than deciding on half a reading.
+# A torn record — the producer never writes one without the other. This case
+# used to assert `count(found) == 0`, pinning a silence where the record is
+# present and the corpus unshown. The comparison is still not made on half a
+# reading; the record is reported as the partial reading it is.
 test_a_record_missing_a_column_decides_nothing if {
 	found := violation with input as {"tree": {"records": {"transcript-corpus": ["sessions 0"]}}}
-	count(found) == 0
+	found == {{"rule": "prose measure partial", "verdict": "prose measure partial", "subjects": [{"count": 1}]}}
+}
+
+# THE FAULT THIS SET EXISTS TO REMOVE: two different session counts used to
+# raise `eval_conflict_error` at evaluation. It now evaluates, and reports.
+test_two_conflicting_session_counts_are_a_finding_not_a_fault if {
+	found := violation with input as {"tree": {"records": {"transcript-corpus": [
+		"sessions 1",
+		"sessions 5",
+		"threshold 2",
+	]}}}
+	found == {{"rule": "prose measure partial", "verdict": "prose measure partial", "subjects": [{"count": 2}]}}
 }

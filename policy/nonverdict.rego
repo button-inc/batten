@@ -39,6 +39,7 @@
 #MUTANT-SUITE crates/batten/tests/it/nonverdict.rs
 #MUTANT over-budget-passes|s@^\tcount_of("nonverdict") > budget$@\tfalse@|an_over_budget_window_is_reported_over_the_engines_projection
 #MUTANT partial-window-passes|s@^\tcount_of("unreadable") > 0$@\tfalse@|a_partially_read_window_is_a_finding_rather_than_a_clean_one
+#MUTANT torn-record-passes|s@^\tcount(summaries) != 1$@\tfalse@|a_torn_record_is_a_finding_rather_than_a_clean_window
 #MUTANT verdict-failures-counted|s@^\tcolumns\[0\] == "nonverdict"$@\tcolumns[0] != "window"@|a_verdict_failure_is_never_named_however_many_there_are
 
 # METADATA
@@ -77,10 +78,13 @@ recorded := input.tree.records.nonverdict
 # The one summary line, held as a set so that a store carrying the same summary
 # twice is still one window.
 #
-# EXACTLY ONE, OR NOTHING IS JUDGED. Two DIFFERENT summaries mean two scans were
-# concatenated and a count over both describes neither — the retired decider's own
-# arm, kept, and reachable here only through a torn store because `record named`
-# replaces a family rather than appending to it.
+# EXACTLY ONE, OR THE RECORD IS TORN — AND TORN IS A FINDING. Two DIFFERENT
+# summaries mean two scans were concatenated and a count over both describes
+# neither; no summary means the window was never closed. The retired decider
+# refused both (`nonverdict-assert.sh:85-86,92-93`). The first port gated
+# `fields` on `count(summaries) == 1` and stopped there, so every rule below went
+# undefined and a torn store read GREEN — while this comment claimed the arm was
+# kept. `torn` below is that arm, actually kept.
 summaries contains raw if {
 	some raw in recorded
 	startswith(raw, "window\t")
@@ -101,12 +105,31 @@ fields[pair[0]] := pair[1] if {
 
 # A COUNT THAT IS NOT A NUMBER IS NOT A ZERO. The retired decider refused rather
 # than coercing, because a count silently read as zero is a clean window over input
-# nobody parsed. Here that refusal is undefinedness, which leaves both rules below
-# unfired and the window unjudged.
+# nobody parsed (`nonverdict-assert.sh:115-116`). Undefined here would leave both
+# rules below unfired and the window unjudged, so `torn` reads a missing or
+# non-numeric column as a refusal rather than letting it go silent.
 count_of(key) := number if {
 	raw := fields[key]
 	regex.match(data.batten.patterns["whole-number"], raw)
 	number := to_number(raw)
+}
+
+# The columns every closed window carries.
+window_columns := {"runs", "failed_jobs", "nonverdict", "verdict", "unreadable"}
+
+# A record is present but its summary cannot be trusted: none, more than one, or
+# one missing or garbling a column. `recorded` is DEFINED in every one of these,
+# which is exactly why they are distinguishable from could-not-look (no record at
+# all) and must not collapse into it.
+torn if {
+	recorded
+	count(summaries) != 1
+}
+
+torn if {
+	count(summaries) == 1
+	some key in window_columns
+	not count_of(key)
 }
 
 # `nonverdict\trun=<id>\tjob=<name>\tstep=<name>` — one per required job that
@@ -140,6 +163,18 @@ violation contains {
 	"subjects": [{"count": count_of("unreadable")}],
 } if {
 	count_of("unreadable") > 0
+}
+
+# A torn record — the same class, because it is the same false green one step
+# worse: not part of the window unread, but the window's own summary unusable.
+# The count is how many summaries the store held, which is what a reader needs to
+# tell "never closed" (0) from "two scans concatenated" (2+) from "one, garbled".
+violation contains {
+	"rule": "job read partial",
+	"verdict": "job read partial",
+	"subjects": [{"count": count(summaries)}],
+} if {
+	torn
 }
 
 # Each job that spent its minutes and answered nothing, once the window is over
@@ -246,13 +281,36 @@ test_a_non_numeric_count_leaves_the_window_unjudged if {
 	not count_of("nonverdict") with input as tree(["window\truns=10\tfailed_jobs=1\tnonverdict=lots\tverdict=0\tunreadable=0"])
 }
 
-# Two DIFFERENT summaries describe neither window, so nothing is judged over them.
+# Two DIFFERENT summaries describe neither window. This case used to assert
+# `count(violation) == 0` — it pinned the silence the port had dropped the
+# refusal for. The window is still not judged against the budget; it is refused
+# as torn, and ONLY as torn.
 test_two_concatenated_scans_judge_neither_window if {
-	count(violation) == 0 with input as tree([
+	found := violation with input as tree([
 		"window\truns=10\tfailed_jobs=4\tnonverdict=4\tverdict=0\tunreadable=0",
 		"window\truns=10\tfailed_jobs=9\tnonverdict=9\tverdict=0\tunreadable=0",
 		failure("111", "ci", "Run actions/checkout@3d3c42e"),
 	])
+	found == {{"rule": "job read partial", "verdict": "job read partial", "subjects": [{"count": 2}]}}
+}
+
+# THE MUTATION'S NAMED CASE: every torn shape is a finding, and a clean window is
+# not. Three torn shapes, because each reaches `torn` by a different arm.
+test_a_torn_record_is_a_finding_rather_than_a_clean_window if {
+	no_summary := violation with input as tree([failure("111", "ci", "Set up job")])
+	count(no_summary) == 1
+	garbled := violation with input as tree(["window\truns=10\tfailed_jobs=1\tnonverdict=lots\tverdict=0\tunreadable=0"])
+	count(garbled) == 1
+	missing := violation with input as tree(["window\truns=10\tfailed_jobs=1\tverdict=0\tunreadable=0"])
+	count(missing) == 1
+	count(violation) == 0 with input as window(10, 0, [])
+}
+
+# ABSENT IS NOT TORN. No record at all is could-not-look, which the producer
+# refuses at write time; this module must not read it as a finding, or every
+# checkout that never ran the producer refuses.
+test_an_absent_record_is_not_torn if {
+	count(violation) == 0 with input as {"tree": {"records": {}}}
 }
 
 # A line this reader cannot parse is skipped. The surviving good lines are part of

@@ -163,6 +163,28 @@ fn three_distinct_sessions_satisfy_the_default_threshold() {
 }
 
 #[test]
+fn a_torn_corpus_record_is_reported_rather_than_passing() {
+    // Two DIFFERENT session counts used to raise `eval_conflict_error` inside the
+    // module, which the engine reads as a fault — every predicate here silent at
+    // exit 0. And a record missing its threshold decided nothing. Both are the
+    // partial reading now, over the real projection.
+    for (name, lines) in [
+        ("conflict", "sessions 1\nsessions 5\nthreshold 2\n"),
+        ("half", "sessions 9\n"),
+    ] {
+        let dir = repo(&format!("torn-{name}"));
+        record(&dir, lines);
+        let decided = run(&dir, &["check"]);
+        assert_eq!(
+            decided.status.code(),
+            Some(2),
+            "a {name} record is reported, not passed\n{}",
+            String::from_utf8_lossy(&decided.stderr)
+        );
+    }
+}
+
+#[test]
 fn an_absent_record_says_nothing_rather_than_refusing() {
     // The producer writes nothing when the root does not exist, so a module that
     // refused here would refuse every host that has never run the census.

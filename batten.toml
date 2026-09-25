@@ -599,9 +599,15 @@ sha256 = "b2c822742e8cbf355ba0cb4cc690c3cd8fdc9ec1916c8148f27bd9098cb7aee4"
 # matching commit trailer, and CLOUD-437's block was groomed on 2026-08-14 without
 # one. Asserting it in the change that performs it is the exact shape §8 refuses.
 #
-# So until that row is groomed, these four take the general `BATTEN_HOOK_BYPASS`
-# like every other row. The column, the per-row lookup and the suppression all
-# ship; what waits is this repository's own use of them.
+# So until that row is groomed, these four declare no per-row hatch. That is a
+# statement about the column, NOT a remedy: the residual global hook hatch still
+# technically reaches them only because their class, `call name refused`,
+# declares no override route yet (CLOUD-1806), and CLOUD-1357 makes every class
+# that DOES declare one unsuppressible by it. A reader looking for the way past a
+# refusal reads the class's routes with `batten policy explain "<class>"` and,
+# where one is an override, walks `batten override request`/`spend`. This comment
+# used to say these rows "take the general" hatch "like every other row", which an
+# agent read as advice and proposed for a class it could not have suppressed.
 [[rule]]
 id = "commit ship other"
 kind = "shape"
@@ -1854,7 +1860,10 @@ regex = '\["init", "--?q'
 
 [[pattern]]
 id = "mise-run-task"
-regex = 'mise run [a-z][a-z0-9:_-]*'
+# A DOT CONTINUES A NAME when a character follows it: mise accepts a file task
+# with its extension, so `mise run present.typo` is one name and must not read
+# as the defined `present`. A trailing `.` (a sentence ending) is not captured.
+regex = 'mise run [a-z][a-z0-9:_-]*(\.[a-z0-9_-]+)*'
 
 [[pattern]]
 id = "mise-tool-reference"
@@ -6200,6 +6209,26 @@ id = "module read first"
 kind = "document"
 target = "policy/macos-link.rego"
 
+# The macOS walk's could-not-look, spelled as a record. The producer writes
+# `scanned <n>` for how many built packages the walk reached; zero means the
+# graph resolved and nothing was inspected, which must not read as a clean graph.
+# `layer read absent` is the evaluator family's version of the same reading.
+[[verdict]]
+id = "workspace read absent"
+gloss = "the platform graph resolved and the walk reached no built package, so nothing was inspected"
+class = """
+`scanned 0` is the producer saying it looked and resolved nothing. Before the \
+module read that count, the record was byte-identical to a fully walked clean \
+graph and exited 0 — the vacuous pass the retired `macos-link-check.sh` refused \
+and the evaluator family already refuses with `absent`. Re-run the producer; if \
+the count stays zero, the workspace member set or the platform filter is wrong.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run macos-link-record"
+
 # The contract half of the config deprecation grammar (CLOUD-360). A key that
 # leaves the published schema with no window breaks every consumer still carrying
 # it, and breaks them SILENTLY: their config stops loading with an unknown-key
@@ -7835,7 +7864,10 @@ id = "workflow run unknown"
 kind = "policy"
 scope = "tree"
 sources = [".github/workflows/*.yml", "mise.toml"]
-line_sources = [".github/workflows/*.yml"]
+# `mise.toml` and `hk.pkl` since the module reads all three caller populations.
+# `hk.pkl` is Pkl, which the boundary does not parse, so its callers are DECIDED
+# from lines — without it here that arm reads nothing and is silent.
+line_sources = [".github/workflows/*.yml", "mise.toml", "hk.pkl"]
 module = "policy/task-callable.rego"
 severity = "deny"
 

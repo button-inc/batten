@@ -43,6 +43,7 @@
 #MUTANT-SUITE crates/batten/tests/it/land_divergence.rs
 #MUTANT partial-window-passes|s@^\tcount_of("unreadable") > 0$@\tfalse@|a_partially_read_window_is_a_finding_rather_than_a_clean_one
 #MUTANT graded-over-budget-passes|s@^\tratio("graded") > graded_budget$@\tfalse@|a_loop_buying_more_than_one_matrix_per_landing_is_reported
+#MUTANT torn-record-passes|s@^\tcount(summaries) != 1$@\tfalse@|a_torn_record_is_a_finding_rather_than_a_clean_window
 #MUTANT refusal-budget-loosened|s@^\tcount_of("ff_refused") > 0$@\tfalse@|any_fast_forward_refusal_at_all_is_reported
 
 # METADATA
@@ -104,10 +105,13 @@ queue_budget := 30
 # could-not-look the header describes, and every rule below inherits it.
 recorded := input.tree.records["land-divergence"]
 
-# EXACTLY ONE SUMMARY, OR NOTHING IS JUDGED. Two DIFFERENT summaries mean two
-# measurements were concatenated and a count over both describes neither — the
-# retired decider's own arm, kept, and reachable here only through a torn store
-# because `record named` replaces a family rather than appending to it.
+# EXACTLY ONE SUMMARY, OR THE RECORD IS TORN — AND TORN IS A FINDING. Two
+# DIFFERENT summaries mean two measurements were concatenated and a count over both
+# describes neither; none means the window was never closed. The retired decider
+# refused both (`land-divergence-assert.sh:88-89,93-94`). The first port gated
+# `fields` on exactly one summary and stopped, so all eight rules went undefined
+# and a torn store read GREEN while this comment claimed the arm was kept. `torn`
+# below is that arm, actually kept.
 summaries contains raw if {
 	some raw in recorded
 	startswith(raw, "window\t")
@@ -123,12 +127,34 @@ fields[pair[0]] := pair[1] if {
 }
 
 # A COUNT THAT IS NOT A NUMBER IS NOT A ZERO. The retired decider refused rather
-# than coercing, because a count silently read as zero is a clean window over input
-# nobody parsed. Here that refusal is undefinedness, which leaves the rule unfired.
+# than coercing (`land-divergence-assert.sh:115-116`), because a count silently
+# read as zero is a clean window over input nobody parsed. Undefined alone would
+# leave every rule unfired, so `torn` reads it as a refusal.
 count_of(key) := number if {
 	raw := fields[key]
 	regex.match(data.batten.patterns["whole-number"], raw)
 	number := to_number(raw)
+}
+
+# The columns some rule below decides over — every one the producer emits as a
+# whole number. `since` is a timestamp and is not required to parse as one.
+window_columns := {
+	"landings", "graded", "red", "cancel_p50", "peak_concurrency",
+	"queue_p90", "queue_job_p90", "ff_refused", "unreadable",
+}
+
+# Present but untrustworthy: no summary, more than one, or one missing or
+# garbling a column a rule reads. `recorded` is DEFINED in every case, which is
+# what separates these from could-not-look and why they must not collapse into it.
+torn if {
+	recorded
+	count(summaries) != 1
+}
+
+torn if {
+	count(summaries) == 1
+	some key in window_columns
+	not count_of(key)
 }
 
 # Per-landing, in hundredths.
@@ -153,6 +179,17 @@ violation contains {
 	"subjects": [{"count": count_of("unreadable")}],
 } if {
 	count_of("unreadable") > 0
+}
+
+# A torn record, under the same class: not part of the window unread, but the
+# window's own summary unusable. The count distinguishes never-closed (0) from
+# concatenated (2+) from one-but-garbled.
+violation contains {
+	"rule": "lane read partial",
+	"verdict": "lane read partial",
+	"subjects": [{"count": count(summaries)}],
+} if {
+	torn
 }
 
 # ANTI-VACUITY IS `ratio`'s GUARD, not an arm of its own: with no landings the
@@ -318,12 +355,25 @@ test_a_non_numeric_count_leaves_the_window_unjudged if {
 	not count_of("graded") with input as tree(["window\tsince=2026-08-12T00:00:00Z\tlandings=1\tgraded=lots\tgreen=1\tred=0\tcancelled=0\tcancel_p50=0\tpeak_concurrency=1\tqueue_p90=0\tqueue_job_p90=0\tretries=0\tff_refused=0\tff_success=1\tunreadable=0"])
 }
 
+# This case used to assert `count(violation) == 0` — it pinned the silence the
+# port had dropped the refusal for. Neither window is judged against a budget;
+# the record is refused as torn, and only as torn.
 test_two_concatenated_measurements_judge_neither_window if {
 	lines := array.concat(
 		window({"graded": 9}).tree.records["land-divergence"],
 		window({"graded": 3, "landings": 2}).tree.records["land-divergence"],
 	)
-	count(violation) == 0 with input as tree(lines)
+	found := violation with input as tree(lines)
+	found == {{"rule": "lane read partial", "verdict": "lane read partial", "subjects": [{"count": 2}]}}
+}
+
+# THE MUTATION'S NAMED CASE: each torn shape is a finding, and the clean window
+# is not. Three shapes, one per arm of `torn`.
+test_a_torn_record_is_a_finding_rather_than_a_clean_window if {
+	count(violation) == 1 with input as tree(["nonsense"])
+	count(violation) == 1 with input as tree(["window\tsince=2026-08-12T00:00:00Z\tlandings=1\tgraded=lots\tgreen=1\tred=0\tcancelled=0\tcancel_p50=0\tpeak_concurrency=1\tqueue_p90=0\tqueue_job_p90=0\tretries=0\tff_refused=0\tff_success=1\tunreadable=0"])
+	count(violation) == 1 with input as tree(["window\tsince=2026-08-12T00:00:00Z\tlandings=1"])
+	count(violation) == 0 with input as window({})
 }
 
 # A line this reader cannot parse is skipped; the summary survives, so this passes

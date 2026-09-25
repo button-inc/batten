@@ -59,9 +59,9 @@
 // carried: "ANTI-VACUITY: an empty window exits 0 and says it judged nothing" policy/nonverdict.rego kind:mechanism
 // carried: "POINTER, NEVER PAYLOAD: the report carries no step output, only coordinates" policy/nonverdict.rego kind:mechanism
 // changed: "empty stdin is exit 2, not a clean window" mise.toml there is no stdin: the decider's input is the record family, and an ABSENT family is could-not-look, which on the engine's contract must read as silence rather than as the exit 2 that now means a finding. The property the case was protecting is kept on the other side of the door — the producer refuses and writes nothing rather than recording an empty window
-// changed: "records with no window summary are exit 2 — there is no window to judge" mise.toml the summary is emitted unconditionally by the producer in window mode and the producer refuses in every arm that cannot reach one, so a family with records and no summary is a torn store rather than an incomplete scan; the module leaves it unjudged, which is what "there is no window to judge" means once could-not-look cannot be spelled as a finding
-// changed: "two concatenated scans are exit 2 — a count over both describes neither" policy/nonverdict.rego the reading is unchanged and only its spelling moved: a count over both still describes neither, so neither is judged. `record named` replaces a family rather than appending to it, so two DIFFERENT summaries can now arrive only through a torn store, and a torn store is silence here for the same reason an unparseable line is skipped
-// changed: "a non-numeric count is exit 2 rather than being coerced to zero" policy/nonverdict.rego the refusal to coerce is the whole of the case and it is kept — `count_of` is undefined for a value that is not digits, so neither rule fires. What changed is that undefinedness says "unjudged" where the shell's exit 2 would now say "violation"
+// carried: "records with no window summary are exit 2 — there is no window to judge" policy/nonverdict.rego `torn` refuses a record present with no summary as `job read partial`. The first port read it as silence and said so here; that was the dropped refusal, restored
+// carried: "two concatenated scans are exit 2 — a count over both describes neither" policy/nonverdict.rego a count over both still describes neither, so neither is judged against the budget; the record is refused as torn instead of passing silent, which is what the retired arm did
+// carried: "a non-numeric count is exit 2 rather than being coerced to zero" policy/nonverdict.rego `count_of` still refuses to coerce, and `torn` now reads the undefined count as a refusal rather than leaving the window unjudged
 // changed: "the budget is raise-only overridable, which is how the window is retuned" policy/nonverdict.rego the override had exactly one reader — the suite, pointing the budget at a fixture. A module's cases vary the COUNTS against a fixed `budget := 2` instead, which is `timeout-drift.rego`'s placement for its multipliers, so the knob is gone because the reader it existed for is
 // changed: "THE ACCEPTANCE CASE: a job that died before any mise step is a non-verdict failure" mise.toml the classification reads the Actions API's own per-step conclusions, which §5 makes `check` incapable of fetching; it is the producer's jq, verbatim
 // changed: "a job that failed IN a mise step rendered a verdict and is not counted" mise.toml the same jq over the same payload: naming the verdict-bearing step is the producer's half of the closed predicate
@@ -254,6 +254,40 @@ fn a_partially_read_window_is_a_finding_rather_than_a_clean_one() {
 }
 
 #[test]
+fn a_torn_record_is_a_finding_rather_than_a_clean_window() {
+    // THE REFUSAL THE FIRST PORT DROPPED, over the real projection. Each shape
+    // reaches `torn` by a different arm, and every one was a clean exit 0 before:
+    // `fields` gated on exactly one summary and nothing refused the rest.
+    for (name, lines) in [
+        (
+            "two",
+            "window\truns=10\tfailed_jobs=0\tnonverdict=0\tverdict=0\tunreadable=0\n\
+             window\truns=10\tfailed_jobs=9\tnonverdict=9\tverdict=0\tunreadable=0\n",
+        ),
+        ("none", "nonverdict\trun=111\tjob=ci\tstep=Set up job\n"),
+        (
+            "garbled",
+            "window\truns=10\tfailed_jobs=0\tnonverdict=lots\tverdict=0\tunreadable=0\n",
+        ),
+    ] {
+        let dir = repo(&format!("torn-{name}"));
+        record(&dir, lines);
+        let decided = run(&dir, &["check", "--fail-on-warning"]);
+        assert_eq!(
+            decided.status.code(),
+            Some(2),
+            "a {name} record is torn, and torn is a finding\n{}",
+            said(&decided)
+        );
+        assert!(
+            said(&decided).contains("job read partial"),
+            "under the partial-coverage class\n{}",
+            said(&decided)
+        );
+    }
+}
+
+#[test]
 fn a_verdict_failure_is_never_named_however_many_there_are() {
     // A judged branch is the branch's problem. Counting verdicts here would make
     // every genuinely red PR look like a platform fault.
@@ -271,6 +305,31 @@ fn a_verdict_failure_is_never_named_however_many_there_are() {
         Some(0),
         "a window of verdicts judges nothing here\n{}",
         said(&quiet)
+    );
+
+    // AND NOT NAMED WHEN THE WINDOW IS OVER BUDGET. The half above cannot see a
+    // module that reads verdict lines as failures, because nothing is named
+    // until the non-verdict count passes the budget.
+    let dir = repo("verdicts-over");
+    record(
+        &dir,
+        "nonverdict\trun=111\tjob=ci\tstep=Set up job\n\
+         nonverdict\trun=222\tjob=msrv\tstep=Set up job\n\
+         nonverdict\trun=333\tjob=cross\tstep=Set up job\n\
+         verdict\trun=444\tjob=lint\tstep=Run mise run lint\n\
+         window\truns=10\tfailed_jobs=4\tnonverdict=3\tverdict=1\tunreadable=0\n",
+    );
+    let over = run(&dir, &["check", "--fail-on-warning"]);
+    assert_eq!(
+        over.status.code(),
+        Some(2),
+        "over budget decides\n{}",
+        said(&over)
+    );
+    assert!(
+        !said(&over).contains("lint"),
+        "a verdict job is never named\n{}",
+        said(&over)
     );
 }
 

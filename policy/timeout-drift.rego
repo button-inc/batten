@@ -36,8 +36,9 @@
 # budget as drifted on a network blip is the failure mode that gets a scheduled
 # gate switched off, and an absent record cannot do it.
 #MUTANT-SUITE crates/batten/tests/it/timeout_drift.rs
-#MUTANT loose-budget-passes|s@^\tentry.declared > (entry.justified + slack)$@\tfalse@|a_slack_budget_is_reported_as_loose_over_the_engines_projection
+#MUTANT loose-budget-passes|s@^\tentry.declared > entry.justified + slack$@\tfalse@|a_slack_budget_is_reported_as_loose_over_the_engines_projection
 #MUTANT tight-budget-passes|s@^\tentry.declared < entry.justified$@\tfalse@|a_budget_the_measurement_has_outgrown_is_reported_as_tight
+#MUTANT torn-census-passes|s@^\tcount(census) != 1$@\tfalse@|a_census_that_did_not_finish_is_not_a_short_census
 #MUTANT small-sample-yields-a-number|s@^\tentry.samples < minimum$@\tfalse@|a_job_with_too_few_samples_is_unmeasurable_rather_than_fast
 
 # METADATA
@@ -97,6 +98,66 @@ jobs contains entry if {
 		"samples": to_number(columns[5]),
 		"basis": columns[6],
 	}
+}
+
+# A CENSUS THAT DID NOT FINISH IS NOT A SHORT CENSUS.
+#
+# The producer used to pipe `emit` straight into `record named`, so an unreadable
+# page mid-loop left every workflow already processed in the store, and this
+# module adjudicated the partial census as whole — no completeness column, and a
+# torn `job` line silently skipped by the `count(columns) == 7` guard above. The
+# retired `timeout-drift.sh:132-133,142-143` exited 2 before emitting anything.
+#
+# The producer now buffers and writes only on success, and closes the census with
+# `census<TAB>jobs=<n>`. So a record present without exactly one closing line, a
+# closing count that disagrees with the job lines, or a job line this reader
+# cannot parse is TORN — present, so not could-not-look, and untrustworthy, so
+# not clean.
+census contains raw if {
+	some raw in recorded
+	startswith(raw, "census\t")
+}
+
+job_lines contains raw if {
+	some raw in recorded
+	startswith(raw, "job\t")
+}
+
+# Guarded by `whole-number` BEFORE `to_number`: regorus's `to_number` FAULTS on
+# a non-numeric string rather than going undefined, and a fault here would
+# silence every predicate in the module — the torn census this arm exists to
+# report would become the thing that switches the module off.
+closing_count := to_number(value) if {
+	count(census) == 1
+	some raw in census
+	value := trim_prefix(raw, "census\tjobs=")
+	regex.match(data.batten.patterns["whole-number"], value)
+}
+
+torn if {
+	recorded
+	count(census) != 1
+}
+
+torn if {
+	count(census) == 1
+	not closing_count
+}
+
+torn if {
+	closing_count != count(job_lines)
+}
+
+torn if {
+	count(jobs) != count(job_lines)
+}
+
+violation contains {
+	"rule": "bound measure partial",
+	"verdict": "bound measure partial",
+	"subjects": [{"artifact": "census"}, {"count": count(job_lines)}],
+} if {
+	torn
 }
 
 # `ceil(p95 * multiplier / 60)`, the same arithmetic `timeout-check` gates.
@@ -165,10 +226,22 @@ tree(lines) := {"tree": {"records": {"timeout-drift": lines}}}
 
 # `justified(120) == 6`, so a declared 6 is exactly right, 5 is tight, and 12 is
 # loose once the five-minute slack is spent.
-job(declared, p95, samples, basis) := tree([sprintf(
-	"job\tci.yml\tbats\t%d\t%d\t%d\t%s",
-	[declared, p95, samples, basis],
-)])
+job(declared, p95, samples, basis) := tree([
+	sprintf("job\tci.yml\tbats\t%d\t%d\t%d\t%s", [declared, p95, samples, basis]),
+	"census\tjobs=1",
+])
+
+# THE MUTATION'S NAMED CASE. Four torn shapes, one per arm of `torn`, and a closed
+# census that is not torn — so the arm cannot pass by firing on everything.
+test_a_census_that_did_not_finish_is_not_a_short_census if {
+	line := "job\tci.yml\tbats\t6\t120\t25\tmeasured"
+	torn_only := {{"rule": "bound measure partial", "verdict": "bound measure partial", "subjects": [{"artifact": "census"}, {"count": 1}]}}
+	torn_only == violation with input as tree([line])
+	torn_only == violation with input as tree([line, "census\tjobs=2"])
+	torn_only == violation with input as tree([line, "census\tjobs=lots"])
+	count(violation) == 1 with input as tree(["job\tci.yml\ttorn", "census\tjobs=1"])
+	count(violation) == 0 with input as job(6, 120, 25, "measured")
+}
 
 test_a_budget_matching_its_measurement_is_clean if {
 	count(violation) == 0 with input as job(6, 120, 25, "measured")
@@ -225,13 +298,21 @@ test_no_record_at_all_says_nothing if {
 	count(violation) == 0 with input as {"tree": {"records": {}}}
 }
 
-# A LINE THIS READER CANNOT PARSE IS SKIPPED — the producer refuses a malformed
-# line at write time, so an unparseable one at read time is a torn store. The
-# surviving good line keeps this from passing for want of any readable row.
+# A LINE THAT IS NOT A JOB IS SKIPPED; A JOB LINE THIS READER CANNOT PARSE IS
+# TORN. This case used to feed a garbled `job` line and assert zero findings —
+# its own comment called that line a torn store and then asserted the silence.
+# A job that silently drops out of the census is a census that is short without
+# saying so.
 test_a_line_this_reader_cannot_parse_is_skipped if {
 	count(violation) == 0 with input as tree([
 		"job\tci.yml\tbats\t6\t120\t25\tmeasured",
-		"job\tci.yml\tbroken\tnot-a-number\t120\t25\tmeasured",
 		"nonsense",
+		"census\tjobs=1",
 	])
+	some v in violation with input as tree([
+		"job\tci.yml\tbats\t6\t120\t25\tmeasured",
+		"job\tci.yml\tbroken\tnot-a-number\t120\t25\tmeasured",
+		"census\tjobs=2",
+	])
+	v.verdict == "bound measure partial"
 }

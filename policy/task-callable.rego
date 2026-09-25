@@ -1,5 +1,8 @@
-# A workflow step naming a `mise run <task>` resolves to a task this tree
-# defines (CLOUD-1833).
+# Every caller of a task resolves to a task this tree defines (CLOUD-1833): a
+# workflow step's `mise run <task>`, a manifest task's `depends` or body, and an
+# `hk.pkl` step. The rule id says "workflow" because that was the first population;
+# the second and third were added when the first alone passed two dangling
+# callers on the branch that introduced it.
 #
 # THE DEFECT, AND WHY NOTHING SAW IT. A retirement deletes a program; no clause
 # asked whether its CALLERS still resolve. Measured on this branch at the moment
@@ -59,6 +62,8 @@
 #
 #MUTANT-SUITE crates/batten/tests/it/task_callable.rs
 #MUTANT dangling-caller-passes|s@\tnot defined\[task\]@\tfalse@|a_workflow_step_naming_an_undefined_task_is_refused
+#MUTANT manifest-callers-unread|s@^\tsome key in {"depends", "depends_post"}$@\tsome key in set()@|a_depends_entry_naming_a_retired_file_task_is_refused
+#MUTANT hk-callers-unread|s@^\tcontains(line, "= \\"mise run ")$@\tfalse@|an_hk_step_naming_an_undefined_task_is_refused
 #MUTANT nested-task-unreachable|s@\tname := replace(rel, "/", ":")@\tname := rel@|a_task_backed_by_a_nested_program_resolves
 
 # METADATA
@@ -85,10 +90,12 @@ workflow[path] := doc if {
 	is_object(doc.jobs)
 }
 
-# The guard `hk-fix-selection` measured the need for: a tree with no workflow
-# declaring jobs is answering for nothing here, and an unguarded module reports
-# against a fixture that carries a copy of the config and none of its subjects.
-governed if count(object.keys(workflow)) > 0
+# NO WORKFLOW GUARD ANY MORE, and not by oversight. `governed` required a
+# workflow declaring jobs, which was right while workflows were the only caller
+# population; the manifest and `hk.pkl` callers exist without one. A tree that
+# answers for nothing still says nothing: with no caller in any population there
+# is no binding for any refusal below, and `uses_this_runner` keeps a tree
+# without a manifest silent.
 
 # ---------------------------------------------------------------------------
 # Tasks this tree defines. The same two sources `command-task-defined` and
@@ -132,16 +139,71 @@ defined contains stem if {
 # The callers, from the parsed document.
 # ---------------------------------------------------------------------------
 
+# THREE CALLER POPULATIONS, AND THE FIRST VERSION READ ONE.
+#
+# It bound callers from workflow `run:` steps alone, and was green over the two
+# callers this very branch left dangling — `[tasks.commit-lint].depends` naming
+# `signing-posture` and `[tasks.verify]`'s body running `mise run
+# evaluator-io-check`, both file tasks the retirement deleted. `verify` and
+# `commit-lint` could not run, and the gate filed for exactly that class reported
+# nothing. A retirement's callers live in the manifest itself and in `hk.pkl` as
+# often as in a workflow, so all three are read.
+#
 # A PARTIAL SET RATHER THAN A FUNCTION, for `ci-parity`'s reason: a step runs
 # many tasks, and a Rego function binding more than one output faults at
 # evaluation rather than returning them.
-step_task contains [path, task] if {
+caller contains [path, task] if {
 	some path, _ in workflow
 	some name, _ in workflow[path].jobs
 	some step in workflow[path].jobs[name].steps
 	some fragment in regex.find_n(data.batten.patterns["mise-run-task"], step.run, -1)
 	task := split(fragment, " ")[2]
 }
+
+# A `depends` / `depends_post` entry names one task, optionally followed by its
+# arguments. The manifest is read inline, per the header's `deny` measurement.
+caller contains ["mise.toml", task] if {
+	some _, body in input.tree.documents["mise.toml"].tasks
+	some key in {"depends", "depends_post"}
+	is_array(body[key])
+	some entry in body[key]
+	is_string(entry)
+	task := split(trim_space(entry), " ")[0]
+}
+
+# A `mise run <task>` inside another task's body. The parsed `run` scalar decides,
+# and a shell comment line inside it is prose, not a call.
+caller contains ["mise.toml", task] if {
+	some _, body in input.tree.documents["mise.toml"].tasks
+	some line in run_lines(body)
+	not commented(line)
+	some fragment in regex.find_n(data.batten.patterns["mise-run-task"], line, -1)
+	task := split(fragment, " ")[2]
+}
+
+# `hk.pkl` is Pkl, which the boundary does not parse into a document, so it is
+# read as lines — `hk-fix-selection.rego` reads it the same way. A step's command
+# is `check = "mise run <task>"` or `fix = "…"`; anchoring on the assignment is
+# what keeps a `//` comment that names a task from reading as a call.
+caller contains ["hk.pkl", task] if {
+	some line in input.tree.lines["hk.pkl"]
+	not commented(line)
+	contains(line, "= \"mise run ")
+	some fragment in regex.find_n(data.batten.patterns["mise-run-task"], line, -1)
+	task := split(fragment, " ")[2]
+}
+
+run_lines(body) := split(body.run, "\n") if is_string(body.run)
+
+run_lines(body) := [line | some command in body.run; is_string(command); some line in split(command, "\n")] if is_array(body.run)
+
+# A COMMENT IS NOT A CALLER, and the test is the comment MARKER, not a YAML
+# `run:` key: a `run: |` block scalar puts its command on a CONTINUATION line, so
+# requiring the key there would fail to place most multi-line steps. `#` covers
+# YAML, TOML and shell; `//` covers Pkl.
+commented(line) if startswith(trim_space(line), "#")
+
+commented(line) if startswith(trim_space(line), "//")
 
 # NOT A FUNCTION, AND THAT IS CORRECTNESS RATHER THAN STYLE — `ci-cache-declared`
 # states it at the same shape. A `pointer(path, line_of(path))` spelling makes
@@ -150,10 +212,22 @@ step_task contains [path, task] if {
 # that drifted would switch the gate off silently. As a set, a line that cannot
 # be placed costs the LINE and never the finding.
 task_line contains [path, task, number] if {
-	some [path, task] in step_task
+	some [path, task] in caller
 	some index, line in input.tree.lines[path]
+	not commented(line)
 	some fragment in regex.find_n(data.batten.patterns["mise-run-task"], line, -1)
 	split(fragment, " ")[2] == task
+	number := index + 1
+}
+
+# A `depends` entry is a quoted name, not a `mise run` fragment.
+task_line contains ["mise.toml", task, number] if {
+	some [path, task] in caller
+	path == "mise.toml"
+	some index, line in input.tree.lines["mise.toml"]
+	not commented(line)
+	startswith(trim_space(line), "depends")
+	contains(line, concat("", ["\"", task, "\""]))
 	number := index + 1
 }
 
@@ -172,13 +246,12 @@ violation contains {
 	"verdict": "task run unknown",
 	"subjects": [{"path": path, "line": number}, {"artifact": task}],
 } if {
-	governed
-
-	# Could-not-look guard, `command-task-defined`'s: with no task namespace there
-	# is nothing to judge against, and reporting there makes the rule fire on
-	# every tree that merely holds a copy of this config.
-	count(defined) > 0
-	some [path, task] in step_task
+	# Could-not-look guard: the MANIFEST must be readable, because it is what
+	# `defined` is read from. It used to be `count(defined) > 0`, which switched
+	# the gate off for a valid manifest declaring no tasks — the case where every
+	# caller is dangling. An unreadable manifest is its own loud class below.
+	uses_this_runner
+	some [path, task] in caller
 	not defined[task]
 	some placement in task_line
 	placement[0] == path
@@ -192,9 +265,8 @@ violation contains {
 	"verdict": "task run unknown",
 	"subjects": [{"path": path}, {"artifact": task}],
 } if {
-	governed
-	count(defined) > 0
-	some [path, task] in step_task
+	uses_this_runner
+	some [path, task] in caller
 	not defined[task]
 	not placed(path, task)
 }
@@ -287,6 +359,72 @@ test_a_task_backed_by_a_nested_program_resolves if {
 		"missing": {},
 	}}
 	count(found) == 0
+}
+
+# THE TWO DANGLING CALLERS THIS BRANCH SHIPPED, as the fixtures they were: a
+# `depends` entry and a task body, both naming a task the manifest no longer
+# defines. The first version of this module passed both.
+test_a_manifest_caller_naming_an_undefined_task_is_refused if {
+	found := violation with input as {"tree": {
+		"documents": {"mise.toml": {"tasks": {
+			"commit-lint": {"depends": ["commit-attribution", "signing-posture"]},
+			"commit-attribution": {},
+			"verify": {"run": "# mise run in-a-comment\nif ! mise run evaluator-io-check; then exit 1; fi"},
+		}}},
+		"lines": {"mise.toml": [
+			"depends = [\"commit-attribution\", \"signing-posture\"]",
+			"# mise run in-a-comment",
+			"if ! mise run evaluator-io-check; then exit 1; fi",
+		]},
+		"tracked": ["mise.toml"],
+		"missing": {},
+	}}
+	{entry.subjects[1].artifact | some entry in found} == {"signing-posture", "evaluator-io-check"}
+	{entry.subjects[0].line | some entry in found} == {1, 3}
+}
+
+test_an_hk_step_naming_an_undefined_task_is_refused if {
+	found := violation with input as {"tree": {
+		"documents": {"mise.toml": {"tasks": {"present": {}}}},
+		"lines": {"hk.pkl": [
+			"  // This was `mise run gone-task`, until it retired",
+			"    check = \"mise run present\"",
+			"    check = \"mise run absent-task\"",
+		]},
+		"tracked": ["mise.toml"],
+		"missing": {},
+	}}
+	found == {{"rule": "workflow run unknown", "verdict": "task run unknown", "subjects": [{"path": "hk.pkl", "line": 3}, {"artifact": "absent-task"}]}}
+}
+
+# A DOTTED NAME IS ONE NAME. The pattern used to stop at `.`, so `mise run
+# present.typo` read as the defined `present` and passed.
+test_a_dotted_task_name_is_not_truncated if {
+	found := violation with input as {"tree": {
+		"documents": {
+			"mise.toml": {"tasks": {"present": {}}},
+			".github/workflows/w.yml": {"jobs": {"j": {"steps": [{"run": "mise run present.typo"}]}}},
+		},
+		"lines": {".github/workflows/w.yml": ["        run: mise run present.typo"]},
+		"tracked": ["mise.toml"],
+		"missing": {},
+	}}
+	count(found) == 1
+}
+
+# A MANIFEST WITH NO TASKS STILL JUDGES. The old `count(defined) > 0` guard read
+# an empty task table as could-not-look, where every caller is dangling.
+test_a_manifest_declaring_no_tasks_still_judges if {
+	found := violation with input as {"tree": {
+		"documents": {
+			"mise.toml": {"tasks": {}},
+			".github/workflows/w.yml": {"jobs": {"j": {"steps": [{"run": "mise run absent-task"}]}}},
+		},
+		"lines": {".github/workflows/w.yml": ["        run: mise run absent-task"]},
+		"tracked": ["mise.toml"],
+		"missing": {},
+	}}
+	count(found) == 1
 }
 
 # THE PROSE ARM. A comment naming a task in order to explain that it is ABSENT

@@ -120,13 +120,49 @@ writer = "mise run timeout-drift-record"
     dir
 }
 
+/// Write a FINISHED census, as `mise run timeout-drift-record` now does: the job
+/// lines, then the closing `census<TAB>jobs=<n>` it writes only after `emit`
+/// succeeded.
 fn record(dir: &std::path::Path, lines: &str) {
+    let jobs = lines
+        .lines()
+        .filter(|line| line.starts_with("job\t"))
+        .count();
+    record_raw(dir, &format!("{lines}census\tjobs={jobs}\n"));
+}
+
+/// Write exactly these lines — for the torn records a finished producer never
+/// writes.
+fn record_raw(dir: &std::path::Path, lines: &str) {
     let written = run_with_stdin(dir, &["record", "named", "timeout-drift"], lines);
     assert!(
         written.status.success(),
         "the setup write lands: {}",
         String::from_utf8_lossy(&written.stderr)
     );
+}
+
+#[test]
+fn a_census_that_did_not_finish_is_not_a_short_census() {
+    // THE TRUNCATION THE PIPE USED TO ALLOW: a record holding the jobs `emit`
+    // reached before its `return 2`, with no close. It read as a whole census.
+    for (name, lines) in [
+        ("unclosed", "job\tci.yml\tbats\t6\t120\t25\tmeasured\n"),
+        (
+            "miscounted",
+            "job\tci.yml\tbats\t6\t120\t25\tmeasured\ncensus\tjobs=4\n",
+        ),
+    ] {
+        let dir = repo(&format!("torn-{name}"));
+        record_raw(&dir, lines);
+        let decided = run(&dir, &["check", "--fail-on-warning"]);
+        assert_eq!(
+            decided.status.code(),
+            Some(2),
+            "an {name} census is torn, not clean\n{}",
+            said(&decided)
+        );
+    }
 }
 
 fn said(out: &std::process::Output) -> String {

@@ -40,6 +40,7 @@
 #
 #MUTANT-SUITE crates/batten/tests/it/macos_link.rs
 #MUTANT links-key-passes|s@^\tstartswith(line, "links ")$@\tfalse@|a_package_declaring_a_native_links_key_is_caught_without_being_listed
+#MUTANT scanned-zero-passes|s@^\tnot any_scanned$@\tfalse@|a_walk_that_reached_nothing_is_could_not_look
 #MUTANT framework-crate-passes|s@^\tstartswith(line, "framework ")$@\tfalse@|rule_2_still_fires_through_the_reachability_walk
 
 # METADATA
@@ -91,7 +92,50 @@ violation contains {
 	name != ""
 }
 
+# --- could not look: a walk that reached nothing ------------------------------
+#
+# THE PRODUCER WRITES `scanned <n>` AND NOTHING READ IT. `scanned 0` means the
+# graph resolved and the walk from the workspace members reached no built
+# package — the question was not askable over this graph. Without this arm that
+# record was byte-identical on the decision surface to a fully walked clean one,
+# and a case below used to assert exactly that. The retired
+# `macos-link-check.sh:190-191` refused an uninspectable graph; the sibling
+# family already does the same with `absent` (`evaluator-closure.rego`).
+#
+# NOT ANY OTHER COUNT. A non-zero `scanned` with no finding IS the clean answer,
+# so only zero — and a record present with no `scanned` line at all — refuse.
+# Guarded by `whole-number` before `to_number`, which FAULTS on a non-numeric
+# string in regorus rather than going undefined — a fault would silence every
+# predicate in this module, including the two that decide.
+scanned contains to_number(raw) if {
+	some line in lines
+	startswith(line, "scanned ")
+	raw := trim_space(substring(line, count("scanned "), -1))
+	regex.match(data.batten.patterns["whole-number"], raw)
+}
+
+violation contains {
+	"rule": "workspace carry unsafe",
+	"verdict": "workspace read absent",
+	"subjects": [{"count": 0}],
+} if {
+	lines
+	not any_scanned
+}
+
+any_scanned if {
+	some n in scanned
+	n > 0
+}
+
 # --- cases -------------------------------------------------------------------
+
+test_a_walk_that_reached_nothing_is_could_not_look if {
+	found := violation with input as {"tree": {"records": {"macos-link": ["scanned 0"]}}}
+	{entry.verdict | some entry in found} == {"workspace read absent"}
+	missing := violation with input as {"tree": {"records": {"macos-link": ["links a b"]}}}
+	"workspace read absent" in {entry.verdict | some entry in missing}
+}
 
 test_a_links_key_is_refused_and_names_the_library if {
 	found := violation with input as {"tree": {"records": {"macos-link": [
