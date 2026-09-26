@@ -8593,6 +8593,12 @@ fn unwind_lap(
             // Filtered out by `Pipeline::unwind`, and matched rather than
             // wildcarded so a new arm is a compile error here.
             pipeline::Compensation::Nothing => {}
+            pipeline::Compensation::Abandon if !land::abandons_the_runs(seen) => {
+                writeln!(
+                    out,
+                    "land: undo — the head is red, so its other runs are left to finish and report on this matrix"
+                )?;
+            }
             pipeline::Compensation::Abandon => {
                 let Ok(sha) = git::head_commit(root) else {
                     writeln!(

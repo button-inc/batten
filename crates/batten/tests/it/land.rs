@@ -28,6 +28,7 @@
 #MUTANT-SUITE crates/batten/tests/it/land.rs
 #MUTANT a-truncated-reading-reads-as-closed|s@        "repos/{}/commits/{}/check-runs?per_page={PER_PAGE}&page={number}",@        "repos/{}/commits/{}/check-runs?per_page={PER_PAGE}",@|a_truncated_reading_is_not_read_as_closed
 #MUTANT dead-end-believed-before-the-ready-registers|s@^    before_ready.is_none_or(|seen| {$@    true || before_ready.is_none_or(|seen| {@|a_dead_end_after_a_fresh_ready_waits_for_the_ready_s_own_runs
+#MUTANT red-head-runs-cancelled|s@^    !matches!(seen, Some(TapVerdict::Red))$@    true@|a_red_head_s_other_runs_finish_and_every_other_stop_cancels
 */
 
 #![cfg(unix)]
@@ -798,4 +799,32 @@ fn a_dead_end_after_a_fresh_ready_waits_for_the_ready_s_own_runs() {
         land::registered_since(Some(&before), &answered, &roster),
         "a required run the first look did not hold is"
     );
+}
+
+/// A RED HEAD'S OTHER RUNS FINISH; EVERY OTHER STOP CANCELS THEM.
+///
+/// Measured on #928: `windows` went red and the undo cancelled the run carrying
+/// `musl` and `macos` mid-flight, so the next lap bought a whole matrix to learn
+/// what they would have said minutes later. A red head needs a fix and a fresh
+/// matrix either way, so its siblings' remaining tail is the cheap half and
+/// their verdicts are the valuable one. Every verdict is enumerated, so a new
+/// arm that should not cancel cannot slip through by default.
+#[test]
+fn a_red_head_s_other_runs_finish_and_every_other_stop_cancels() {
+    use land::TapVerdict;
+    assert!(
+        !land::abandons_the_runs(Some(TapVerdict::Red)),
+        "a red head keeps its other runs, so every verdict it paid for arrives"
+    );
+    for seen in [
+        None,
+        Some(TapVerdict::Green),
+        Some(TapVerdict::Pending),
+        Some(TapVerdict::DeadEnd),
+    ] {
+        assert!(
+            land::abandons_the_runs(seen),
+            "{seen:?}: nothing on this head will be read, so its runs are cancelled"
+        );
+    }
 }

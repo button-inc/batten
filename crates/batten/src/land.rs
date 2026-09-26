@@ -612,6 +612,20 @@ pub enum Waited {
     Unanswered,
 }
 
+/// Whether the undo cancels the runs still spending on this head.
+///
+/// **NOT ON A RED HEAD.** A red check means the head needs a fix and a fresh
+/// matrix, so cancelling its siblings saves only their remaining tail, and it
+/// throws away the verdicts already paid for. Measured on #928: `windows` went red
+/// and the undo cancelled the run carrying `musl` and `macos` mid-flight, so the
+/// next lap bought a whole matrix to learn what those two would have said
+/// minutes later. Every other stop still cancels: a stale base makes the whole
+/// run waste, and an unanswered or dead-end wait has nothing to wait for.
+#[must_use]
+pub const fn abandons_the_runs(seen: Option<TapVerdict>) -> bool {
+    !matches!(seen, Some(TapVerdict::Red))
+}
+
 /// Whether a dead end read after a fresh ready is about the ready's own runs.
 ///
 /// **A READY'S RUNS REGISTER SECONDS AFTER IT FIRES** (CLOUD-497's dead end,
