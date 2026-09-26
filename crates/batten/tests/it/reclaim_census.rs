@@ -54,12 +54,7 @@ impl Clone {
         let root = common::scratch(&format!("reclaim-census-{name}"));
         let repo = root.join("clone");
         std::fs::create_dir_all(&repo).expect("the clone");
-        let out = common::program("git")
-            .args(["init", "-q", "."])
-            .current_dir(&repo)
-            .output()
-            .expect("git init");
-        assert!(out.status.success());
+        common::init_repo(&repo);
         std::fs::write(root.join("census.sh"), common::task_body("reclaim-census"))
             .expect("the census body");
         Self { root, repo }

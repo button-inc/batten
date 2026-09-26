@@ -154,8 +154,11 @@ fn origin(dir: &Path) -> PathBuf {
     };
     std::fs::create_dir_all(&origin).expect("origin dir");
     std::fs::create_dir_all(&seed).expect("seed dir");
-    git(&origin, &["init", "-q", "--bare"]);
-    git(&seed, &["init", "-q"]);
+    // Both from the shared template rather than a spawned `git init`. The
+    // origin takes pushes to its unborn default branch as a bare one would.
+    common::init_repo(&origin);
+    git(&origin, &["config", "receive.denyCurrentBranch", "ignore"]);
+    common::init_repo(&seed);
     git(&seed, &["config", "user.email", "t@example.com"]);
     git(&seed, &["config", "user.name", "t"]);
     git(&seed, &["config", "commit.gpgsign", "false"]);

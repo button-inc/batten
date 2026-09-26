@@ -84,7 +84,7 @@ fn commit(repo: &Path, subject: &str, body: &str) {
 
 fn repo(name: &str) -> PathBuf {
     let repo = common::scratch(&format!("released-{name}"));
-    git(&repo, &["init", "-q", "-b", "main"]);
+    common::init_repo(&repo);
     git(&repo, &["config", "user.email", "t@example.com"]);
     git(&repo, &["config", "user.name", "t"]);
     git(&repo, &["config", "commit.gpgsign", "false"]);

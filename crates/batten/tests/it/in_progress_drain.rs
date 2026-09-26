@@ -63,7 +63,8 @@ impl Board {
         let repo = root.join("repo");
         std::fs::create_dir_all(&repo).expect("repo");
         let board = Self { root, repo };
-        board.git(&["init", "-q", "-b", "work"]);
+        common::init_repo(&board.repo);
+        board.git(&["checkout", "-q", "-b", "work"]);
         // THE COMMITTED CONFIG: the claim derivation is an engine leaf that
         // resolves its key grammar from the `[[pattern]]` registry.
         std::fs::copy(

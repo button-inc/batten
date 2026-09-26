@@ -58,7 +58,8 @@ impl Board {
         let repo = root.join("repo");
         std::fs::create_dir_all(&repo).expect("repo dir");
         let board = Self { root, repo };
-        board.git(&["init", "-q", "-b", "work"]);
+        common::init_repo(&board.repo);
+        board.git(&["checkout", "-q", "-b", "work"]);
         std::fs::copy(
             common::at_root("batten.toml"),
             board.repo.join("batten.toml"),

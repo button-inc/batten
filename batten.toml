@@ -8911,11 +8911,20 @@ keep = 2
 # `**` matches zero directories as well as many and the glob reaches
 # `crates/batten/tests/policy_modules.rs` at the top level; git's pathspec `**`
 # does not. `count` is the number the GATE compares against, so it is the engine's.
+# THE 2026-09-26 WARM RESCALE, 266 -> 301, the same campaign's close. Wave 2
+# landed a tier per retired gate, and `target-prune` refused at `declared 266,
+# live 301, tolerance 10`: the staleness arm, not the disk (21893 MB free).
+#
+# WARM SCALES BY THE STEM MODEL, as the 2026-09-17 entry did: 45.65 per stem x
+# 301 is 13741. Derived rather than measured, for that entry's stated reason, and
+# the learned floor in $GIT_DIR/batten-prune/laps.json (18738 MB on this
+# container) still governs above it. Cold's basis moves with warm's and cold's
+# floor does not, per the known under-budget recorded at `[prune.cold.basis]`.
 [prune.warm]
-mb = 12144
-worst_mb = 12144
+mb = 13741
+worst_mb = 13741
 multiplier = 1
-measured = "2026-09-17"
+measured = "2026-09-26"
 
 [prune.cold]
 mb = 21455
@@ -9370,7 +9379,7 @@ measured = "2026-09-07"
 # makes the very next lap refuse on the other arm with warm never breached.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 266
+count = 301
 tolerance = 10
 
 # COLD'S BASIS MOVES AND COLD'S FLOOR DOES NOT, and that is the entry above
@@ -9390,7 +9399,7 @@ tolerance = 10
 # together.
 [prune.cold.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 266
+count = 301
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops

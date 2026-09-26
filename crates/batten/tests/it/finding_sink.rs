@@ -64,13 +64,8 @@ impl Turns {
     fn new(name: &str) -> Self {
         let root = common::scratch(&format!("finding-sink-{name}"));
         let repo = root.join("repo");
-        std::fs::create_dir_all(repo.join(".git")).expect("the clone");
-        let out = common::program("git")
-            .args(["init", "-q", "."])
-            .current_dir(&repo)
-            .output()
-            .expect("git init");
-        assert!(out.status.success());
+        std::fs::create_dir_all(&repo).expect("the clone");
+        common::init_repo(&repo);
         std::fs::create_dir_all(repo.join(".git/batten-receipts")).expect("receipts");
         Self {
             root,
