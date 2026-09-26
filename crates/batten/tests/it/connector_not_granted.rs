@@ -116,6 +116,25 @@ fn a_tree_granting_nothing_raw_is_clean() {
     );
 }
 
+/// A RAW WRITE GRANT IS CLEAN. `save_issue` has no reduced route that completes
+/// remotely, so leaving it ungranted does not steer anyone to the verb — it
+/// prompts, and an unattended session stops for a human. The read beside it in
+/// the next case must still refuse, or this exemption reopened the payload path.
+#[test]
+fn a_raw_write_grant_is_clean() {
+    let repo = fixture(
+        "write",
+        Some(r#"["mcp__Linear__save_issue", "mcp__Linear__save_comment"]"#),
+    );
+    let outcome = check(&repo);
+    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
+    assert_eq!(
+        outcome.status.code(),
+        Some(0),
+        "a raw write has no completing reduction and must be grantable\n{answer}{cause}"
+    );
+}
+
 #[test]
 fn a_named_raw_grant_is_refused() {
     // THE CLASS THIS ROW EXISTS FOR, and the reachability proof: this refusal is

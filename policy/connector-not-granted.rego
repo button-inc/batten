@@ -1,3 +1,6 @@
+#MUTANT-SUITE crates/batten/tests/it/connector_not_granted.rs
+#MUTANT write-grant-refused|s@^\tnot unreduced\[trim_prefix(entry, "mcp__Linear__")\]$@\ttrue@|a_raw_write_grant_is_clean
+
 # METADATA
 # description: |
 #   CLOUD-1260. Closing the raw path, as a gate rather than as a convention.
@@ -60,9 +63,26 @@ allows := entries if {
 # puts the unreduced payload back on the model's surface.
 reduced_connector := "mcp__Linear"
 
+# The raw tools a grant may name, because nothing reduces them or the reduced
+# route cannot complete. `save_issue` is `always_ask` in the connector wiring, so
+# a write through `batten mcp call` is refused remotely (batten.toml, above the
+# `issue read loose` row) and the raw write is the only route that finishes. Left
+# ungranted, it prompts, and an unattended session stalls on a human. The status
+# reads return a few hundred bytes and have no `[[mcp.result]]` row at all.
+#
+# `list_issues` is here for the reason batten.toml gives above `issue read loose`:
+# it is already projected on every measured call and the search `issue list
+# unread` requires. `list_comments` has no `[[mcp.result]]` row at all. Only
+# `get_issue` has a reduction whose raw twin is worth refusing.
+unreduced := {
+	"save_issue", "save_comment", "get_issue_status", "list_issue_statuses",
+	"list_issues", "list_comments",
+}
+
 granted contains entry if {
 	some entry in allows
 	startswith(entry, reduced_connector)
+	not unreduced[trim_prefix(entry, "mcp__Linear__")]
 }
 
 # The reduction is declared and the raw route is granted beside it, so the
@@ -92,6 +112,10 @@ settings(entries) := {"tree": {"documents": {".claude/settings.json": {"permissi
 
 test_a_tree_granting_nothing_raw_is_clean if {
 	count(violation) == 0 with input as settings(["Bash(git:*)", "mcp__serena__*"])
+}
+
+test_a_write_grant_is_clean if {
+	count(violation) == 0 with input as settings(["mcp__Linear__save_issue", "mcp__Linear__save_comment"])
 }
 
 test_a_named_raw_tool_is_refused if {
