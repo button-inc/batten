@@ -923,3 +923,21 @@ inherits = "release"
 lto = false
 incremental = true
 codegen-units = 256
+
+# The profile `darwin-link` cross-builds under (CLOUD-1891). The gate proves the
+# macOS targets LINK with no Apple SDK, and optimisation does not change what a
+# binary links against — so the dev profile's `opt-level = 2` over every
+# dependency, which is what made one Darwin triple 501s of `verify`, buys this
+# gate nothing. Its own directory under `target/<triple>/`, so it never evicts
+# anything else.
+[profile.darwin-link]
+inherits = "dev"
+debug = 0
+opt-level = 0
+
+[profile.darwin-link.package."*"]
+debug = 0
+opt-level = 0
+
+[profile.darwin-link.package.batten]
+opt-level = 0

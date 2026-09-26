@@ -481,6 +481,10 @@ LAND_ENTRY_GATES = "?mise run pr-unsubscribed drop|mise run pr-unsubscribed chec
 # lap. The predecessor ran `mise run verify` directly, and this is that call site
 # moved into config rather than a new decision.
 LAND_VERIFY = "mise run verify"
+# The receipt `verify` records for HEAD on a pass (`receipt record verify`, the
+# last line of `verify:gated`). A lap whose HEAD already carries a valid one
+# answers from it instead of re-running the whole gate (CLOUD-1891).
+LAND_VERIFY_RECEIPT = "verify"
 # The workflow whose runs carry the fast-forward bot's answer, as the BARE FILE
 # NAME the endpoint takes. `fast_forward::answer_request` interpolates it as ONE
 # path segment of `actions/workflows/{workflow}/runs`, so a value carrying
@@ -651,7 +655,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,turn-ask,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,land-divergence,task-linear-check,macos-link,task-mcp-allow-check,nonverdict,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory"
+MUTANT_GATES = "agentic-experiment-record,answer-the-operator,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,land-divergence,task-linear-check,macos-link,task-mcp-allow-check,nonverdict,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory,turn-ask"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -1526,7 +1530,14 @@ description = "Gate: the API delta on this branch is compatible with the bump re
 # The defaults live in `crates/batten/src/lib.rs` beside the reasoning, not here:
 # `origin/main`, `patch` (the honest claim below 0.1.0, where release-plz bumps
 # the patch whatever the commit type says), and `batten`.
-run = "cargo run --quiet -p batten -- semver check"
+#
+# A STEP RECEIPT, KEYED ON BOTH SIDES OF THE COMPARISON (CLOUD-1891). 215s of
+# every `verify`, re-derived on each lap even when neither the branch's crates
+# nor `origin/main`'s had moved. The key is everything the verdict reads: this
+# tree's crates (the specs), the baseline's crate tree ids and the branch's
+# commit messages (a commit may declare the break) as `--arg`s, and the tool
+# versions. `step-receipt` answers "run" under CI, so CI still confirms.
+run = "export BATTEN_STEP_SPECS='crates Cargo.toml Cargo.lock batten.toml' BATTEN_STEP_TOOLS='cargo semver-checks --version && rustc --version'; b=$(printf '%s-%s-%s' \"$(git rev-parse -q --verify origin/main:crates)\" \"$(git rev-parse -q --verify origin/main:Cargo.toml)\" \"$(git rev-parse -q --verify origin/main:Cargo.lock)\"); m=$(git log --format=%B origin/main..HEAD | sha256sum | cut -c1-64); if [ \"$(mise run -q step-receipt check semver --arg \"$b\" --arg \"$m\" | cut -c1-3)\" = hit ]; then exit 0; fi; cargo run --quiet -p batten -- semver check || exit $?; mise run -q step-receipt record semver --arg \"$b\" --arg \"$m\" || true"
 
 [tasks."claim-check"]
 description = "Gate: the issue you are about to pull is actually unclaimed (reads get_issue payloads on stdin)"
@@ -1626,6 +1637,14 @@ description = "Gate: measure this branch against its merge base and refuse a reg
 # it, so a skip and a failed measurement are different variants rather than two
 # readings of one byte stream.
 run = "cargo run --quiet -p batten -- perf gate"
+
+[tasks."perf-seed"]
+description = "Effect: build the perf pair's arm profile, which perf.yml stages as every pull request's base-arm seed"
+# A TASK RATHER THAN A WORKFLOW-SPELLED CARGO LINE (CLOUD-1891): `cargo spelling
+# wrong` reads every workflow `mise exec -- cargo` line as a foreign runner's copy
+# of `test:cargo`, and naming the build here keeps the profile the pair builds
+# under in one place — `perf::PAIR_PROFILE`'s value, which `perf pair` passes.
+run = "cargo build --profile perf-arm -p batten"
 
 [tasks."mutant"]
 description = "Gate: every declared gate has a mutation its own suite is PROVEN to catch (CLOUD-418)"
@@ -6696,10 +6715,26 @@ run_pkl() {
 	fi
 }
 
+# THE THREE VALIDATOR RECORDS ARE A FUNCTION OF COMMITTED BYTES, SO ONE RUN
+# ANSWERS FOR ALL (CLOUD-1891). Measured: hk's `hook-profile-check`,
+# `renovate-config-validator` and `pkl` steps each spawned this task, and
+# `verify`'s body ran it a fourth time over the same bytes. The key is what the
+# three read — `hk.pkl`, `renovate.json5`, `mise.toml` through the hk plans —
+# and the three tools' versions. The forge arm below is a property of the
+# WORLD, not the tree, and stays outside the receipt: it runs every time.
+export BATTEN_STEP_SPECS='hk.pkl renovate.json5 mise.toml'
+export BATTEN_STEP_TOOLS='pkl --version && renovate-config-validator --version && hk --version'
+# A RECEIPT ONLY OVER CLEAN VERDICTS. A validator that errored (a network
+# flake reads the same as a bad config) must be asked again next run, never
+# cached: an error record under a receipt replays forever until an input moves.
+dirty=0
+if [ "$(mise run -q step-receipt check record-verdicts | cut -c1-3)" != hit ]; then
+
 if run_pkl hk.pkl; then
 	verdict="status clean"
 else
 	verdict="status error"
+	dirty=1
 fi
 printf '%s\n' "$verdict" | record config-validator
 
@@ -6717,6 +6752,7 @@ if renovate-config-validator --strict renovate.json5; then
 	verdict="status clean"
 else
 	verdict="status error"
+	dirty=1
 fi
 printf '%s\n' "$verdict" | record renovate-config
 
@@ -6752,6 +6788,10 @@ jq -r --slurpfile full "$full" '
 	| ($full[0].steps[] | select(.name == $name) | .status) as $under
 	| "\($name) \($under // "absent")"
 ' <"$fast" | record hk-plan
+
+if [ "$dirty" = 0 ]; then mise run -q step-receipt record record-verdicts || true; fi
+fi
+unset BATTEN_STEP_SPECS BATTEN_STEP_TOOLS
 
 # THE FORGE'S OWN VERDICT, and the row it feeds had never been fed (CLOUD-1707).
 # `crates/batten/src/forge.rs` reads `.git/batten-forge/<sha>` and
@@ -8469,7 +8509,7 @@ run = "cargo run --quiet -p batten -- doctor target"
 
 [tasks."darwin-link"]
 description = "Gate: the macOS targets actually LINK from Linux, which is what proves no dependency needs an Apple SDK"
-run = "darwin_link() { t=\"${1:-${DARWIN_TARGET:-aarch64-apple-darwin}}\"; case \"$t\" in *-apple-darwin) ;; *) echo \"::error:: darwin-link: expected an *-apple-darwin target, got '$t'\" >&2; exit 2 ;; esac; if [ \"$(mise run -q step-receipt check darwin-link --arg \"$t\" | cut -c1-3)\" = hit ]; then exit 0; fi; mise run target-ensure \"$t\" || exit 1; cargo zigbuild --workspace --target \"$t\" || exit 1; mise run -q step-receipt record darwin-link --arg \"$t\" || true; echo \"darwin-link: $t links with no macOS SDK\"; }; darwin_link"
+run = "darwin_link() { t=\"${1:-${DARWIN_TARGET:-aarch64-apple-darwin}}\"; case \"$t\" in *-apple-darwin) ;; *) echo \"::error:: darwin-link: expected an *-apple-darwin target, got '$t'\" >&2; exit 2 ;; esac; if [ \"$(mise run -q step-receipt check darwin-link --arg \"$t\" | cut -c1-3)\" = hit ]; then exit 0; fi; mise run target-ensure \"$t\" || exit 1; cargo zigbuild --workspace --profile darwin-link --target \"$t\" || exit 1; mise run -q step-receipt record darwin-link --arg \"$t\" || true; echo \"darwin-link: $t links with no macOS SDK\"; }; darwin_link"
 
 [tasks."cross-turn"]
 description = "One turn's cross-triple type-check, detached — reports the previous run's failure and never blocks the turn"
@@ -9500,6 +9540,17 @@ shell = "bash -c"
 # `cross-check` first buys nothing. `tree-clean`'s fail-fast is unaffected: it is
 # still in `verify:gated`'s `depends`, which mise runs in parallel.
 run = '''
+# A HEAD THIS GATE ALREADY PROVED IS NOT PROVED TWICE (CLOUD-1891). The receipt
+# the last line of `verify:gated` writes is valid only for THIS head, taken in
+# THIS checkout, against the `origin/main` that resolves now — so fetch first,
+# as `linear-check` would, and a trunk that moved invalidates it. A clean tree
+# too, because the receipt attests HEAD's bytes and a dirty tree is not them.
+# Anything short of all three falls through to the full gate below.
+if git fetch -q origin main 2>/dev/null && mise run tree-clean >/dev/null 2>&1 \
+  && cargo run --quiet -p batten -- receipt status verify >/dev/null 2>&1; then
+  echo "verify: fast-forward-green — a valid receipt already covers this HEAD against current origin/main"
+  exit 0
+fi
 # A task body does not run under `set -e` (see rules/toolchain.md), so
 # every step whose failure changes the verdict is guarded by hand. Unguarded,
 # a failed linear-check let this body run commit-lint against a stale
