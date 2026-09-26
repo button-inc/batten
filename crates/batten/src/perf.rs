@@ -522,10 +522,12 @@ pub fn perf_dir(repo: &Path) -> PathBuf {
 ///
 /// The base binary is a pure function of the merge-base SHA, the pinned
 /// toolchain and `[profile.release]`, so rebuilding it per run buys nothing:
-/// `main` advances only by fast-forward to already-judged SHAs, so consecutive
-/// pull requests share a merge base for hours and every one of them was
-/// compiling the identical binary from nothing — 13.5 minutes of the `perf` job's
-/// 13.7 (CLOUD-1331, measured over runs 33586699312 and 33584118886).
+/// pull requests that share a merge base were each compiling the identical
+/// binary from nothing — 13.5 minutes of the `perf` job's 13.7 (CLOUD-1331,
+/// measured over runs 33586699312 and 33584118886). The key only pays while the
+/// merge base holds still, and it does not hold for hours: measured 2026-09-26,
+/// `main` moved several times an hour, so a miss is the common case and
+/// [`seed_base_target_dir`] is what keeps a miss warm (CLOUD-1891).
 ///
 /// It used to live at `out.join("base-target")`, and that placement made the
 /// build **unreusable by construction** rather than merely unreused: [`out_dir`]
@@ -570,6 +572,60 @@ pub fn base_binary(perf_dir: &Path, base_sha: &str) -> PathBuf {
 #[must_use]
 pub fn base_arm_is_built(perf_dir: &Path, base_sha: &str) -> bool {
     base_binary(perf_dir, base_sha).is_file()
+}
+
+/// Warm-start a missing base target directory from the newest sibling base build.
+///
+/// # Why the key alone did not buy reuse
+///
+/// [`base_target_dir`]'s key assumed consecutive pull requests share a merge
+/// base for hours. Measured 2026-09-25/26 that is false: `main` advanced several
+/// times an hour, release commits included, so the key missed on almost every lap
+/// and each miss was a COLD release build into an empty directory — 3m46s of a
+/// 38-minute `verify` (CLOUD-1891).
+///
+/// # Why a rename is safe
+///
+/// The SHA is still in the path, so a stale arm still cannot answer to this name:
+/// the directory is renamed BEFORE the build, and the build runs against this
+/// base's own tree. What carries over is only what cargo's fingerprints judge
+/// unchanged — dependencies, almost always — so correctness rests on cargo, not
+/// on the key. A RENAME, never a copy: the superseded key is dead once `main`
+/// has moved past it, and a copy would double the heaviest directory under
+/// `target/`.
+///
+/// No sibling, or this key already present, does nothing and the build runs as
+/// before.
+///
+/// # Errors
+///
+/// A failed rename. An unreadable `perf_dir` is treated as having no siblings.
+pub fn seed_base_target_dir(perf_dir: &Path, base_sha: &str) -> Result<()> {
+    let target = base_target_dir(perf_dir, base_sha);
+    if target.exists() {
+        return Ok(());
+    }
+    let Ok(entries) = std::fs::read_dir(perf_dir) else {
+        return Ok(());
+    };
+    let newest = entries
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("base-"))
+        .filter_map(|entry| {
+            let modified = entry.metadata().and_then(|meta| meta.modified()).ok()?;
+            Some((modified, entry.path()))
+        })
+        .max_by_key(|(modified, _)| *modified);
+    if let Some((_, previous)) = newest {
+        std::fs::rename(&previous, &target).with_context(|| {
+            format!(
+                "perf-pair: could not warm-start {} from {}",
+                target.display(),
+                previous.display()
+            )
+        })?;
+    }
+    Ok(())
 }
 
 /// The out directory this run owns, emptied first so a previous run's records
@@ -841,6 +897,7 @@ fn measure(repo: &Path, options: Options, base_sha: &str) -> Result<Vec<Record>>
         let perf = perf_dir(repo);
         let base_bin = base_binary(&perf, base_sha);
         if !base_arm_is_built(&perf, base_sha) {
+            seed_base_target_dir(&perf, base_sha)?;
             build(&base_tree, Some(&base_target_dir(&perf, base_sha)), "base")?;
             // A cargo that exits 0 without leaving the binary is could-not-look,
             // never a measurement: hyperfine would report the missing path as a
@@ -2909,6 +2966,108 @@ pub fn refusal_render_report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A perf dir nothing else in this process writes, keyed on pid and thread.
+    #[expect(
+        clippy::expect_used,
+        reason = "test-only: a failed fixture write should fail the case loudly"
+    )]
+    fn perf_scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "batten-perf-{name}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("perf scratch");
+        dir
+    }
+
+    /// A sibling base build with a marker file and a fixed modification time.
+    #[expect(
+        clippy::expect_used,
+        reason = "test-only: a failed fixture write should fail the case loudly"
+    )]
+    fn sibling(perf: &Path, sha: &str, age_secs: u64) {
+        let dir = base_target_dir(perf, sha);
+        std::fs::create_dir_all(&dir).expect("sibling");
+        std::fs::write(dir.join("marker"), sha).expect("marker");
+        let when = std::time::SystemTime::now() - std::time::Duration::from_secs(age_secs);
+        // WINDOWS OPENS A DIRECTORY ONLY WITH BACKUP SEMANTICS, and a plain
+        // `File::open` of one fails there — measured red on the `windows` job,
+        // green everywhere else. The flag is what `CreateFileW` requires to hand
+        // back a directory handle, and write access is what setting its time needs.
+        #[cfg(windows)]
+        let handle = {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(&dir)
+        };
+        #[cfg(not(windows))]
+        let handle = std::fs::File::open(&dir);
+        handle
+            .and_then(|handle| handle.set_modified(when))
+            .expect("set the sibling's mtime");
+    }
+
+    /// CLOUD-1891: the base key misses whenever `main` moves, so a miss must
+    /// warm-start from the NEWEST previous base build rather than compile cold.
+    ///
+    /// MUTANT: seeding from the oldest sibling (`min_by_key`) moves `base-a`
+    /// instead and this case goes red.
+    #[test]
+    #[expect(
+        clippy::expect_used,
+        reason = "test-only: a failed fixture write should fail the case loudly"
+    )]
+    fn a_missing_base_is_seeded_from_the_newest_previous_build() {
+        let perf = perf_scratch("seed-newest");
+        sibling(&perf, "a", 600);
+        sibling(&perf, "b", 60);
+        seed_base_target_dir(&perf, "c").expect("seed");
+        let seeded = base_target_dir(&perf, "c").join("marker");
+        assert_eq!(std::fs::read_to_string(seeded).expect("seeded"), "b");
+        assert!(
+            !base_target_dir(&perf, "b").exists(),
+            "a rename, not a copy"
+        );
+        assert!(
+            base_target_dir(&perf, "a").exists(),
+            "the older build is untouched"
+        );
+    }
+
+    /// ANTI-VACUITY: with nothing to seed from, nothing is invented and the
+    /// build runs cold exactly as before.
+    #[test]
+    #[expect(
+        clippy::expect_used,
+        reason = "test-only: a failed fixture write should fail the case loudly"
+    )]
+    fn with_no_previous_build_nothing_is_created() {
+        let perf = perf_scratch("seed-none");
+        seed_base_target_dir(&perf, "c").expect("seed");
+        assert!(!base_target_dir(&perf, "c").exists());
+    }
+
+    /// A key that is already present is never overwritten by a sibling.
+    #[test]
+    #[expect(
+        clippy::expect_used,
+        reason = "test-only: a failed fixture write should fail the case loudly"
+    )]
+    fn a_present_key_is_left_alone() {
+        let perf = perf_scratch("seed-present");
+        sibling(&perf, "c", 600);
+        sibling(&perf, "d", 60);
+        seed_base_target_dir(&perf, "c").expect("seed");
+        let kept = base_target_dir(&perf, "c").join("marker");
+        assert_eq!(std::fs::read_to_string(kept).expect("kept"), "c");
+        assert!(base_target_dir(&perf, "d").exists());
+    }
 
     fn changed(paths: &[&str]) -> BTreeSet<String> {
         paths.iter().map(|p| (*p).to_owned()).collect()
