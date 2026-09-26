@@ -197,14 +197,17 @@ fn the_lock_is_released_when_the_child_fails() {
 }
 
 #[test]
-fn an_empty_holder_file_is_held_not_free() {
-    // DISCRIMINATING. A holder caught between its create and its write has an
-    // empty pid file, and absence of evidence is "held", never "free" —
-    // reclaiming there robs a live process of a lock it is about to stamp.
-    // `--lock-attempts 1` is what makes this one ask rather than the full queue.
+fn an_empty_holder_file_is_reclaimed_after_the_recheck() {
+    // CLOUD-1895. An empty pid file that is STILL empty after the recheck is a
+    // holder killed between its create and its write, not one mid-write: a live
+    // holder stamps the file microseconds after creating it, well inside the
+    // `LOCK_POLL` interval separating the two sightings, and `take` now removes
+    // its lock when the write fails, so no live holder is left unstamped. Read as
+    // held, this lock wedged every later caller for the life of the checkout.
+    // `--lock-attempts 1` is one ask, and that one ask reclaims it.
     let dir = repo("exec-lock-empty-holder");
     let lock = lock_dir(&dir, "k");
-    std::fs::create_dir_all(&lock).expect("stage a holder mid-write");
+    std::fs::create_dir_all(&lock).expect("stage a holder that died mid-write");
     std::fs::write(lock.join("pid"), "").expect("an empty pid file");
 
     let output = common::run(
@@ -213,8 +216,8 @@ fn an_empty_holder_file_is_held_not_free() {
     );
     assert_eq!(
         output.status.code(),
-        Some(2),
-        "an empty holder file was read as free: {}",
+        Some(0),
+        "an unstamped lock was held forever: {}",
         common::stderr(&output)
     );
 }

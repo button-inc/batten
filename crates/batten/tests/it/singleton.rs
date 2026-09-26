@@ -174,20 +174,51 @@ fn a_lock_whose_holder_is_dead_is_reclaimed_rather_than_waited_out() {
 }
 
 #[test]
-fn an_empty_pid_file_is_held_and_a_lock_with_no_pid_file_at_all_is_too() {
-    // ABSENCE OF EVIDENCE IS NEVER "FREE". Both shapes are a holder caught
-    // between its create and its write, so reading either as free hands the lock
-    // to a second caller while the first is mid-acquire — the exact interleaving
-    // a lock exists to prevent.
-    let repo = lock_repo("singleton-midwrite");
-    std::fs::create_dir_all(lock(&repo, "land")).expect("a lock");
+fn a_lock_naming_no_pid_is_reclaimed_after_the_recheck() {
+    // CLOUD-1895. A lock with no pid file, or an empty one, is what a process
+    // killed between `take`'s create and its write leaves behind. It used to read
+    // as held FOREVER — the refusal returned before the reclaim was consulted, so
+    // the task was unstartable for the life of the checkout. Two sightings that
+    // both find no pid are the corroboration: a holder mid-write has stamped the
+    // file long before the recheck ends. Both shapes, on every platform, because
+    // this arm needs no liveness probe.
+    for shape in ["no-file", "empty"] {
+        let repo = lock_repo(&format!("singleton-unstamped-{shape}"));
+        std::fs::create_dir_all(lock(&repo, "land")).expect("a lock");
+        if shape == "empty" {
+            std::fs::write(lock(&repo, "land").join("pid"), "").expect("an empty pid file");
+        }
 
-    let no_file = singleton(&repo, &["acquire", "land", "4242", "--recheck-ms", "1"]);
-    assert_eq!(no_file.status.code(), Some(2), "{}", stdout(&no_file));
+        let output = singleton(&repo, &["acquire", "land", "4242", "--recheck-ms", "1"]);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{shape}: {}",
+            stderr(&output)
+        );
+        assert!(
+            stdout(&output).contains("reclaimed"),
+            "{shape}: {}",
+            stdout(&output)
+        );
+        let held = std::fs::read_to_string(lock(&repo, "land").join("pid")).expect("a pid file");
+        assert_eq!(held.trim(), "4242", "{shape}");
+    }
+}
 
-    std::fs::write(lock(&repo, "land").join("pid"), "").expect("an empty pid file");
-    let empty = singleton(&repo, &["acquire", "land", "4242", "--recheck-ms", "1"]);
-    assert_eq!(empty.status.code(), Some(2), "{}", stdout(&empty));
+#[test]
+fn a_readable_live_holder_is_still_refused_beside_the_unstamped_reclaim() {
+    // THE MIRROR: the reclaim above must not become "any lock may be stolen". A
+    // lock that names a live pid refuses, and the refusal names that pid — never
+    // "unknown".
+    let repo = lock_repo("singleton-stamped-live");
+    let live = std::process::id().to_string();
+    singleton(&repo, &["acquire", "land", &live]);
+
+    let output = singleton(&repo, &["acquire", "land", "4242", "--recheck-ms", "1"]);
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    assert!(stderr(&output).contains(&live), "{}", stderr(&output));
+    assert!(!stderr(&output).contains("unknown"), "{}", stderr(&output));
 }
 
 #[test]
