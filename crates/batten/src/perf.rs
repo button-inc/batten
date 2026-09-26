@@ -2968,6 +2968,10 @@ mod tests {
     use super::*;
 
     /// A perf dir nothing else in this process writes, keyed on pid and thread.
+    #[expect(
+        clippy::expect_used,
+        reason = "test-only: a failed fixture write should fail the case loudly"
+    )]
     fn perf_scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "batten-perf-{name}-{}-{:?}",
@@ -2980,6 +2984,10 @@ mod tests {
     }
 
     /// A sibling base build with a marker file and a fixed modification time.
+    #[expect(
+        clippy::expect_used,
+        reason = "test-only: a failed fixture write should fail the case loudly"
+    )]
     fn sibling(perf: &Path, sha: &str, age_secs: u64) {
         let dir = base_target_dir(perf, sha);
         std::fs::create_dir_all(&dir).expect("sibling");
@@ -2996,6 +3004,10 @@ mod tests {
     /// MUTANT: seeding from the oldest sibling (`min_by_key`) moves `base-a`
     /// instead and this case goes red.
     #[test]
+    #[expect(
+        clippy::expect_used,
+        reason = "test-only: a failed fixture write should fail the case loudly"
+    )]
     fn a_missing_base_is_seeded_from_the_newest_previous_build() {
         let perf = perf_scratch("seed-newest");
         sibling(&perf, "a", 600);
@@ -3016,6 +3028,10 @@ mod tests {
     /// ANTI-VACUITY: with nothing to seed from, nothing is invented and the
     /// build runs cold exactly as before.
     #[test]
+    #[expect(
+        clippy::expect_used,
+        reason = "test-only: a failed fixture write should fail the case loudly"
+    )]
     fn with_no_previous_build_nothing_is_created() {
         let perf = perf_scratch("seed-none");
         seed_base_target_dir(&perf, "c").expect("seed");
@@ -3024,6 +3040,10 @@ mod tests {
 
     /// A key that is already present is never overwritten by a sibling.
     #[test]
+    #[expect(
+        clippy::expect_used,
+        reason = "test-only: a failed fixture write should fail the case loudly"
+    )]
     fn a_present_key_is_left_alone() {
         let perf = perf_scratch("seed-present");
         sibling(&perf, "c", 600);
