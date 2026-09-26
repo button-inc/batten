@@ -300,10 +300,29 @@ const ANSWERS: &str = "precondition=verify is red on this head for a reason only
 
 /// Run a `batten override` verb for the superseded receipt's own situation.
 ///
-/// The subject is the CLASS TOKEN because a receipt refusal names no path
-/// (CLOUD-1889): `admit_mediated` binds such a class to its token, and the head
-/// the anchor carries is what pins the admission to one situation.
+/// The subject is READ OFF THE REFUSAL, the only spelling an agent has: the
+/// artifacts it renders between the verdict and the rule, comma-joined. A receipt
+/// refusal names no path, so it binds every artifact it names (CLOUD-1871) — which
+/// is also what keeps an admission taken for one situation from covering another.
 fn override_verb(dir: &Path, verb: &[&str], stdin: &str) -> std::process::Output {
+    let refused = run_with_stdin(
+        dir,
+        &["adjudicate", "--harness", "exit-code"],
+        &write_payload("src/tracked.rs"),
+    );
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refused.stdout),
+        stderr(&refused)
+    );
+    let subject = said
+        .lines()
+        .find_map(|line| {
+            let rest = line.split("receipt read other ").nth(1)?;
+            let artifacts = rest.split(" turn mint ahead").next()?;
+            Some(artifacts.split_whitespace().collect::<Vec<_>>().join(","))
+        })
+        .unwrap_or_else(|| panic!("the write is refused as `receipt read other`: {said}"));
     let mut args = vec!["override"];
     args.extend_from_slice(verb);
     args.extend_from_slice(&[
@@ -312,7 +331,7 @@ fn override_verb(dir: &Path, verb: &[&str], stdin: &str) -> std::process::Output
         "--verdict",
         "receipt read other",
         "--subject",
-        "receipt read other",
+        &subject,
     ]);
     run_with_stdin(dir, &args, stdin)
 }
