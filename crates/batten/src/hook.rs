@@ -4533,11 +4533,13 @@ fn command_line_gates(policy: &Policy, envelope: &Envelope, receipts: &ReceiptFa
 /// `SessionStart` as the session identity. This function stays pure and stays the
 /// one place the two renderings are chosen between.
 ///
-/// **A fresh session and a compacted one are the same reader.** Batten cannot
-/// observe compaction; what it can observe is the session-start event, and the
-/// record is cleared there. So the guarantee is per session, which is the
-/// implementable approximation of "the first time this reader sees it" — and it
-/// errs toward saying it again rather than assuming it was retained.
+/// **A fresh session and a compacted one are the same reader**, and the host says
+/// so: compaction fires `SessionStart` again (Claude Code's `source` is
+/// `"compact"`, beside `"startup"`, `"resume"` and `"clear"`). The record is
+/// cleared on every `SessionStart` whatever its source, so a compacted context —
+/// which may no longer hold the paragraph — is told again. The guarantee is per
+/// context rather than per reader, and it errs toward saying it again rather than
+/// assuming it was retained; that is also why the source needs no parsing here.
 ///
 /// # EVERY route, because "the first one" is a choice nobody made
 ///
