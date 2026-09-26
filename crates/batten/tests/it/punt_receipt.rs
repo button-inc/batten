@@ -246,7 +246,9 @@ fn the_bare_variable_no_longer_clears_a_superseded_receipt() {
     command
         .current_dir(&dir)
         .args(["adjudicate", "--harness", "exit-code"])
-        .env(batten::hook::BYPASS_ENV, "1")
+        // The retired variable, spelled as a literal: the engine no longer names
+        // it, and this asserts it opens nothing.
+        .env("BATTEN_HOOK_BYPASS", "1")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());

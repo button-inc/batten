@@ -6,68 +6,28 @@ runner measured it; the suite runs `--no-parallelize-within-files`, so a
 file's number is its own serial cost and is what an author adding a case
 to it pays.
 
-- suites: 60
-- serial total: 130.5s
+- suites: 20
+- serial total: 138.4s
 
 | seconds | share | suite |
 | ---: | ---: | --- |
-| 20.7 | 15.9% | `tests/graph-check.bats` |
-| 8.3 | 6.4% | `tests/ready-lint.bats` |
-| 7.3 | 5.6% | `tests/board-sweep.bats` |
-| 6.9 | 5.3% | `tests/released.bats` |
-| 5.9 | 4.5% | `tests/in-progress-drain.bats` |
-| 5.7 | 4.4% | `tests/release-tracking-check.bats` |
-| 5.5 | 4.2% | `tests/release-assets-check.bats` |
-| 5.0 | 3.8% | `tests/mcp-allow-check.bats` |
-| 4.7 | 3.6% | `tests/sbom.bats` |
-| 4.0 | 3.1% | `tests/step-receipt.bats` |
-| 3.8 | 2.9% | `tests/closing-key-check.bats` |
-| 3.6 | 2.8% | `tests/land-divergence.bats` |
-| 3.5 | 2.7% | `tests/ntia-check.bats` |
-| 3.5 | 2.7% | `tests/ready-cites-check.bats` |
-| 3.0 | 2.3% | `tests/lint-rego.bats` |
-| 2.8 | 2.1% | `tests/hk-selection.bats` |
-| 2.6 | 2.0% | `tests/install.bats` |
-| 1.8 | 1.4% | `tests/finding-sink-check.bats` |
-| 1.8 | 1.4% | `tests/lint-deno.bats` |
-| 1.7 | 1.3% | `tests/reclaim-census.bats` |
-| 1.6 | 1.2% | `tests/spec-ref-check.bats` |
-| 1.6 | 1.2% | `tests/deferral-check.bats` |
-| 1.5 | 1.1% | `tests/signing-posture.bats` |
-| 1.5 | 1.1% | `tests/ready-lint-deferral.bats` |
-| 1.3 | 1.0% | `tests/spawn-census.bats` |
-| 1.2 | 0.9% | `tests/verify.bats` |
-| 1.1 | 0.8% | `tests/land-divergence-assert.bats` |
-| 1.1 | 0.8% | `tests/nonverdict-scan.bats` |
-| 1.1 | 0.8% | `tests/linear-check.bats` |
-| 1.0 | 0.8% | `tests/done-check.bats` |
-| 1.0 | 0.8% | `tests/release-backfill.bats` |
-| 0.9 | 0.7% | `tests/evaluator-closure-check.bats` |
-| 0.9 | 0.7% | `tests/attestation-check.bats` |
-| 0.9 | 0.7% | `tests/commit-attribution.bats` |
-| 0.9 | 0.7% | `tests/render-cli.bats` |
-| 0.8 | 0.6% | `tests/pr-unsubscribed.bats` |
-| 0.8 | 0.6% | `tests/done-pr-check.bats` |
-| 0.8 | 0.6% | `tests/sbom-binary.bats` |
-| 0.7 | 0.5% | `tests/duplicate-close-check.bats` |
-| 0.7 | 0.5% | `tests/mcp-attach-check.bats` |
-| 0.7 | 0.5% | `tests/timeout-drift.bats` |
-| 0.6 | 0.5% | `tests/macos-link-check.bats` |
-| 0.6 | 0.5% | `tests/checksums.bats` |
-| 0.5 | 0.4% | `tests/branch-age-check.bats` |
-| 0.5 | 0.4% | `tests/board-payloads.bats` |
-| 0.5 | 0.4% | `tests/commit-convention.bats` |
-| 0.5 | 0.4% | `tests/connector-allow-guard.bats` |
-| 0.4 | 0.3% | `tests/sonar-gate.bats` |
-| 0.4 | 0.3% | `tests/release-due.bats` |
-| 0.4 | 0.3% | `tests/serena-mcp.bats` |
-| 0.4 | 0.3% | `tests/nonverdict-assert.bats` |
-| 0.3 | 0.2% | `tests/transcript-corpus-check.bats` |
-| 0.3 | 0.2% | `tests/connector-allow-resolve.bats` |
-| 0.2 | 0.2% | `tests/git-hook.bats` |
-| 0.2 | 0.2% | `tests/remedy-payload-source.bats` |
-| 0.2 | 0.2% | `tests/evaluator-io-check.bats` |
-| 0.1 | 0.1% | `tests/dist.bats` |
-| 0.1 | 0.1% | `tests/task-fail-closed.bats` |
-| 0.1 | 0.1% | `tests/cross-check.bats` |
-| 0.0 | 0.0% | `tests/zizmor-split.bats` |
+| 42.8 | 31.0% | `tests/graph-check.bats` |
+| 19.3 | 13.9% | `tests/ready-lint.bats` |
+| 12.8 | 9.3% | `tests/lint-rego.bats` |
+| 9.1 | 6.6% | `tests/spawn-census.bats` |
+| 8.9 | 6.4% | `tests/hk-selection.bats` |
+| 8.5 | 6.1% | `tests/step-receipt.bats` |
+| 7.6 | 5.5% | `tests/ready-cites-check.bats` |
+| 6.9 | 5.0% | `tests/lint-deno.bats` |
+| 5.6 | 4.0% | `tests/install.bats` |
+| 4.5 | 3.2% | `tests/ready-lint-deferral.bats` |
+| 3.3 | 2.4% | `tests/spec-ref-check.bats` |
+| 3.3 | 2.4% | `tests/verify.bats` |
+| 1.9 | 1.3% | `tests/commit-attribution.bats` |
+| 1.2 | 0.9% | `tests/serena-mcp.bats` |
+| 1.0 | 0.7% | `tests/commit-convention.bats` |
+| 0.8 | 0.5% | `tests/git-hook.bats` |
+| 0.6 | 0.4% | `tests/dist.bats` |
+| 0.3 | 0.2% | `tests/task-fail-closed.bats` |
+| 0.2 | 0.1% | `tests/cross-check.bats` |
+| 0.1 | 0.1% | `tests/zizmor-split.bats` |

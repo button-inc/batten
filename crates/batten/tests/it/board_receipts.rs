@@ -1218,6 +1218,21 @@ fn an_adjudication_of_one_row_does_not_authorise_another() {
 /// The three spellings are one move because the tracker's parameter takes a type,
 /// a name or an id; the engine folds case and drops spaces, underscores and
 /// hyphens.
+///
+/// # The receipt is minted before EACH adjudication, not once
+///
+/// `issue-read` carries a recency bound, and this case makes eleven mediated
+/// calls. Minting once made every later assertion a function of how long the case
+/// took to run rather than of the rule it is about: measured failing under a
+/// loaded `test:musl` at 318s wall, where the same case passes in 109s alone, and
+/// reproduced deterministically by minting the receipt 400s old — the `Todo`
+/// assertion then flips from `0` to `2` because the row refuses a call whose read
+/// has gone stale, which is the row working.
+///
+/// A fresh mint per call is what makes the case assert which COLUMN this row
+/// governs. It is not a slower suite being accommodated: a case whose verdict
+/// depends on the wall clock is one that reports a defect nobody introduced, and
+/// the campaign that lengthens the suite is what made this reachable.
 #[test]
 fn only_the_move_to_in_review_is_this_rows_business() {
     let repo = repo("row3-columns");

@@ -555,7 +555,6 @@ fn seed_write_response(dir: &Path, home: &Path, document: &serde_json::Value) {
     command
         .args(["adjudicate", "--harness", "claude-code"])
         .current_dir(dir)
-        .env_remove("BATTEN_HOOK_BYPASS")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

@@ -41,6 +41,7 @@ fn vocabulary() -> batten::policy::Vocabulary<'static> {
         verdicts: &[],
         words: None,
         recorders: &[],
+        records: &[],
     }
 }
 

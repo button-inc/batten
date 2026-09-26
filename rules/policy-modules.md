@@ -333,7 +333,8 @@ over an arbitrary timestamp, that is its own row with its own argument to make.
 
 A **mediated-call** module (`scope = "mediated_call"`, run by `batten hook`)
 reads `input.call.command`, `input.call.segments`, `input.call.programs`,
-`input.call.event`, `input.call.operation`, `input.call.writes`,
+`input.call.event`, `input.call.operation`, `input.call.tool`,
+`input.call.arguments`, `input.call.writes`,
 `input.call["run-in-background"]`, `input.call["final-message"]`,
 `input.call.transcript` and `input.call["stop-repeat"]`, plus the `facts` object.
 
@@ -378,7 +379,7 @@ emitted"_, because a transcript is the richest source of secrets the engine can
 be pointed at. So the stream a member reduces holds no prose to match.
 
 `finding-sink-check` is the measured instance and its first arm is a regex over
-assistant prose (`mise-tasks/finding-sink-check.sh:254`), joined per turn
+assistant prose (the `CITATION` match in `[tasks.finding-sink-check]`), joined per turn
 against that turn's own tool calls with a negated arm. An extraction expressing
 that join would have to retain the prose to match it — and a predicate built on
 prose is a classifier wearing a gate's clothes, which is non-negotiable rule 3

@@ -2243,7 +2243,7 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   unrelated trajectory — the direction that hides an alert. A warm fork inherits
   its parent's environment, which is what makes env the honest channel and costs
   no new command, flag, or envelope field (§3). Bare consts rather than a
-  `resolve.rs` `SETTINGS` row (`hook::BYPASS_ENV`'s shape): ambient context has no
+  `resolve.rs` `SETTINGS` row (the shape `session.rs`'s consts take): ambient context has no
   config spelling, so no precedence ladder to declare. Absent is unconfigured and
   silent, and the record file is named by a FINGERPRINT of the key — a host
   session id is somebody else's arbitrary string and must not name this crate's
@@ -2565,6 +2565,73 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   appearing after the record moves the key instead of being invisible. Every
   failure is could-not-look, which allows; a fact naming every program in a
   project must never refuse on a failure to see.
+- `signer_posture.rs` — whether a git signing configuration names a key anyone
+  can verify (CLOUD-669, CLOUD-1717). NOT AN ARGUMENT AGAINST SIGNING: signing
+  in CI with a published public half is the desired end state and CLOUD-591 owns
+  getting there. What this names is narrower — a signature from a key that
+  cannot be verified or reproduced, which is WORSE than no signature because it
+  looks like provenance and carries none. Two measured conditions: a
+  `gpg.ssh.program` under `/tmp`, which the container reclaims, and a
+  `user.signingkey` naming a file that is empty, unreadable, absent or a
+  DIRECTORY. Four file tests rather than one, because a size test alone calls a
+  directory healthy — a measured defect, not thoroughness. A literal inline key
+  is not a path and is the most publishable form there is, so it short-circuits
+  before any file test; the `/tmp` test outranks everything, because a reclaimed
+  signer breaks verification whatever the key is. It also owns the RECORD'S
+  SHAPE, including truncating each sha to eight characters — the difference
+  between a pointer and a payload (rule 4) — which was a sequence of `printf`
+  calls in a task body that nothing tested. It reaches NOTHING and never runs
+  `git config`: the two values arrive as `&str`, which keeps the reading
+  testable against a scratch path and a developer's real configuration out of
+  the tests. Ported off `mise-tasks/signing-posture.sh`; `signing-posture-repair`
+  no longer classifies a second time but reads the posture off the record the
+  producer just wrote. **It never passed through a `.py`, whatever this entry
+  said first**: that sibling was created and deleted inside the same branch, so
+  naming it here recorded branch-internal churn as provenance. The detour is
+  real and belongs on `shell-retirement.rego`'s arm F, which now refuses it —
+  not in the module's own history.
+- `cargo_graph.rs` — the ACTIVATED dependency graph, read from a `cargo metadata`
+  document (CLOUD-1717). ONE WALK, TWO GATES, and that is the whole reason it
+  exists: `evaluator-closure` asks whether an IO-bearing crate is reachable from
+  one package's node, `macos-link` whether anything built needs a platform SDK to
+  link; the questions differ only in their ROOTS and in what they look for once
+  there. Both programs carried their own copy and both headers said so in prose —
+  _"if one is corrected, correct both"_ — which is a rule with no mechanism, and
+  this is the mechanism. THE ACTIVATION FILTER, never the whole resolve: `cargo
+metadata` lists every package the resolver CONSIDERED, so scanning it asks
+  "could some configuration reach X" where both callers mean "does this one".
+  Reverting that is the measured defect — an unactivated optional dependency
+  reaching no framework and never compiled made the link gate refuse a link
+  `darwin-link` then completed on the same tree. Three rules live here and
+  nowhere else: an optional dep is an edge only if activated; the weak form
+  `foo?/bar` is NOT an activation; a `dev`-only edge is dropped unless its owner
+  is a workspace member. A fourth is the fail-safe: an edge the manifest does not
+  explain is KEPT, because unexplained means unmeasured. NO CRATE NAME REACHES
+  IT — which package is the evaluator, which bear IO, which need an SDK and which
+  vendor what they link are consumer facts in `[[pattern]]` rows (rule 1), so
+  roots are chosen by a PREDICATE the caller supplies. Ported off
+  `mise-tasks/evaluator-closure-check.sh` and `macos-link-check.sh`, the two
+  callers that each carried a copy of the walk; carries the three `#MUTANT`
+  rows that used to be stated twice, now stated once over the code they mutate.
+  A `cargo_graph.py` sibling existed for part of that branch and never reached
+  `main` — the detour belongs to `shell-retirement.rego`'s arm F, not here.
+- `probe_verdict.rs` — which of three things a probe build did, from its exit
+  status and its log (CLOUD-418, CLOUD-1717). THE VERDICT IS THE HARNESS'S OWN
+  LINE, NEVER THE EXIT CODE ALONE: `cargo test` exits non-zero for a compile
+  error, an unresolved feature, an absent toolchain and a panic in some other
+  test, every one of which would read as "the probe falsified the assertion" and
+  hand the gate a pass it did not earn — and that pass gets MORE likely as the
+  crate breaks, so a gate written to the obvious shape is loudest exactly when it
+  is lying. Anchored on the `failures:` listing rather than the per-test line,
+  which is not stable across `--quiet`. It reaches NOTHING, not even `error`:
+  one total function to a three-valued enum, where a log it cannot make sense of
+  is `Unread` — the could-not-look the caller already handles, so a `Result`
+  would add a state with no distinct handling. Ported off
+  `mise-tasks/evaluator-io-check.sh`. A `probe_verdict.py` sibling stood between
+  the two for part of that branch and never reached `main`: that was the
+  campaign to delete bash routing a reading into another interpreter, and
+  `shell-retirement.rego`'s arm F now refuses the shape. Its caller is `record derive`, which SPAWNS NOTHING — the probe
+  build stays in the producer task (§5) and the log arrives on stdin.
 - `prune.rs` — the build tree's reclaim and its disk floor (CLOUD-766/861/1030),
   retired out of `mise-tasks/target-prune.sh` under CLOUD-1059.
   `Effect::Destructive` on `Surface::VerifyOnly`, beside `capture prune` — §5's

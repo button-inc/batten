@@ -413,6 +413,10 @@ pub enum Verdict {
     /// thing that is not wrong. The declaration is correct, the case exists, and
     /// what ran out was the clock.
     SuiteTimedOut { seconds: u64 },
+    /// The runner printed no summary, so it never ran the suite — a build that
+    /// failed or was contended (CLOUD-1910). Not the row's fault, and reported
+    /// apart from [`Verdict::NamesNoCase`] so nobody fixes the wrong thing.
+    SuiteDidNotRun { want: String },
     /// The case was already red before the mutation, so its redness afterwards
     /// is not evidence.
     CaseAlreadyRed { want: String },
@@ -451,6 +455,7 @@ impl Verdict {
                 | Verdict::NoSuite { .. }
                 | Verdict::NamesNoCase { .. }
                 | Verdict::SuiteTimedOut { .. }
+                | Verdict::SuiteDidNotRun { .. }
                 | Verdict::CaseAlreadyRed { .. }
                 | Verdict::UnappliableMutation
         )
@@ -472,6 +477,7 @@ impl fmt::Display for Verdict {
             Verdict::SuiteTimedOut { seconds } => {
                 write!(out, "suite-timed-out ({seconds}s)")
             }
+            Verdict::SuiteDidNotRun { want } => write!(out, "suite-did-not-run ({want})"),
             Verdict::CaseAlreadyRed { want } => write!(out, "case-already-red ({want})"),
             Verdict::FilterNamesEveryCase { want } => {
                 write!(out, "filter-names-every-case ({want})")
@@ -1222,6 +1228,25 @@ fn suite_bound(suite: &Suite) -> std::time::Duration {
     )
 }
 
+/// How long the one staged BUILD may take, before any row runs (CLOUD-1910).
+///
+/// **The per-case bound was paying for the compile.** A Cargo suite's first
+/// filtered run built the whole staged tree inside [`suite_bound`]'s 30 seconds,
+/// so any change touching engine source made row one exceed it: the run was
+/// killed before libtest printed a summary, and every later row passed on the
+/// warm cache. Measured twice on one branch, first as `names-no-case` on every
+/// row, then as `suite-did-not-run` on the first row alone. The build is paid
+/// once, here, under a bound sized for a build rather than for one case.
+fn build_bound() -> std::time::Duration {
+    std::time::Duration::from_secs(
+        std::env::var("BATTEN_MUTATE_BUILD_TIMEOUT")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|seconds| *seconds > 0)
+            .unwrap_or(1800),
+    )
+}
+
 /// Stop the child, best effort.
 ///
 /// THE DIRECT CHILD ONLY, AND NEVER ITS PROCESS GROUP. An earlier version made
@@ -1324,6 +1349,8 @@ struct Selection {
     /// selects nothing and that is a fact about the clock, never about the
     /// filter.
     timed_out: bool,
+    /// Whether the runner reached its summary at all (CLOUD-1910).
+    ran: bool,
 }
 
 /// Run a gate's suite filtered to `want`, inside the staged tree.
@@ -1385,6 +1412,7 @@ fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Result<
                 selected: tap_lines(&ran.output),
                 ok: ran.ok,
                 timed_out: ran.timed_out,
+                ran: tap_ran(&ran.output),
             })
         }
         Suite::Cargo { .. } => {
@@ -1414,6 +1442,7 @@ fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Result<
                 selected: libtest_lines(&ran.output),
                 ok: ran.ok && !ran.output.contains("error: could not compile"),
                 timed_out: ran.timed_out,
+                ran: libtest_ran(&ran.output),
             })
         }
     }
@@ -1437,6 +1466,17 @@ fn libtest_lines(output: &str) -> usize {
         .lines()
         .filter(|line| line.starts_with("test ") && line.contains(" ... "))
         .count()
+}
+
+/// Whether a bats run reached its TAP plan line (`1..N`).
+fn tap_ran(output: &str) -> bool {
+    output.lines().any(|line| line.starts_with("1.."))
+}
+
+/// Whether a libtest run printed a summary. Every test target prints one, even
+/// one that filters out every case, so its absence means nothing ran.
+fn libtest_ran(output: &str) -> bool {
+    output.lines().any(|line| line.contains("test result: "))
 }
 
 /// How many cases a suite declares in total.
@@ -1538,6 +1578,11 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
             seconds: suite_bound(&gate.suite).as_secs(),
         });
     }
+    if !clean.ran {
+        return Ok(Verdict::SuiteDidNotRun {
+            want: row.want.clone(),
+        });
+    }
     // "Named no case" is read BEFORE the status, because a filter matching
     // nothing is itself a non-zero exit on both runners — and reporting that as
     // "already red" would name the wrong defect to whoever has to fix it.
@@ -1584,6 +1629,11 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
             seconds: suite_bound(&gate.suite).as_secs(),
         });
     }
+    if !mutated.ran {
+        return Ok(Verdict::SuiteDidNotRun {
+            want: row.want.clone(),
+        });
+    }
     if mutated.selected == 0 {
         return Ok(Verdict::NamesNoCase {
             want: row.want.clone(),
@@ -1604,6 +1654,23 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
 /// A tree that cannot be staged is could-not-look (→ exit `3`).
 pub fn sweep(root: &Path, names: &[String], work: PathBuf) -> Result<Sweep> {
     let mut staged = Staged::new(root, work)?;
+    // BUILD ONCE, BEFORE ANY ROW IS TIMED (CLOUD-1910). Best effort: a build that
+    // fails leaves every Cargo row to report `suite-did-not-run` on its own, which
+    // is the honest verdict, so nothing is decided here.
+    if names
+        .iter()
+        .filter_map(|name| resolve(root, name))
+        .any(|gate| matches!(gate.suite, Suite::Cargo { .. }))
+    {
+        let args = vec![String::from("test"), String::from("--no-run")];
+        let _ = spawn(
+            staged.dir(),
+            "cargo",
+            &args,
+            &suite_env(root),
+            build_bound(),
+        );
+    }
     let mut findings = Vec::new();
     let mut declared = 0;
     for name in names {
@@ -2036,6 +2103,26 @@ mod tests {
             Some(Suite::Cargo {
                 path: String::from("deep/nested/group/toy.rs"),
             })
+        );
+    }
+
+    #[test]
+    fn a_run_with_no_summary_did_not_run_rather_than_naming_no_case() {
+        // CLOUD-1910: a contended build printed no case lines, the row was blamed
+        // as naming no case, and a re-run on the same tree caught every row.
+        assert!(!libtest_ran(
+            "   Compiling batten v0.1.0\nerror: could not compile\n"
+        ));
+        assert!(libtest_ran(
+            "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out\n"
+        ));
+        assert!(!tap_ran("bats: command not found\n"));
+        assert!(tap_ran("1..0\n"));
+        assert!(
+            Verdict::SuiteDidNotRun {
+                want: String::new()
+            }
+            .could_not_look()
         );
     }
 

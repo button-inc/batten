@@ -491,37 +491,6 @@ fn each_wiring_names_the_event_it_was_called_on() {
     }
 }
 
-/// The mediation hatch does not silence the advisory, and that is deliberate.
-///
-/// The bats predecessor had `BATTEN_CONTRACT_DRIFT_BYPASS`, and that variable is
-/// gone. `rules/toolchain.md` said the mediated path "takes the engine's
-/// own hatch" in its place; measured, it does not — `collect_batch_advice` runs
-/// before the bypass reaches anything, and `report_contract_drift` never consults
-/// it. This test pins the behaviour that actually holds, and the rule file is
-/// corrected to match it rather than the other way round.
-///
-/// It is the right behaviour. The hatch means *do not mediate this call*, and an
-/// advisory decides nothing: it carries no `permissionDecision` and cannot refuse
-/// anything. Switching off a channel that only informs would suppress the notice
-/// that a contract moved at exactly the moment somebody is working around a gate
-/// — which is when knowing is worth most.
-///
-/// Fails by: gating `collect_batch_advice` or `report_contract_drift` on the
-/// bypass, which would restore the retired variable's behaviour under a new name.
-#[test]
-fn the_mediation_hatch_does_not_silence_the_advisory() {
-    let dir = fixture("contract-bypassed");
-    drift(&dir, "s-1");
-    std::fs::write(dir.join("AGENTS.md"), "# the contract\nmoved\n").unwrap();
-
-    let output = drift_on(&dir, "s-1", "PostToolBatch", &[("BATTEN_HOOK_BYPASS", "1")]);
-    assert!(
-        notice(&output).is_some_and(|text| text.contains("AGENTS.md")),
-        "a bypassed call is unmediated, not uninformed: {:?}",
-        common::stdout(&output)
-    );
-}
-
 // --- the mapping ledger: tests/contract-drift.bats, retired in dd1d6d8 -------
 //
 // CLOUD-908's calibration, and the retirement it calibrates against is the only

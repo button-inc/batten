@@ -95,6 +95,7 @@ fn scan(root: &Path, rule: Rule) -> rules::Scan {
             verdicts: &verdicts,
             words: None,
             recorders: &[],
+            records: &[],
         },
         root,
     )

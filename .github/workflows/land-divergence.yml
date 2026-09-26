@@ -17,8 +17,10 @@ name: land-divergence
 # truncated rather than merely stale.
 #
 # THIS MUST NOT RUN IN THE GATE OR IN `verify`. It is a property of the world,
-# and a property of the world must not red a branch — `tests/land-divergence.bats`
-# asserts its absence from both.
+# and a property of the world must not red a branch. Two things hold that now
+# (CLOUD-1717): the producer below is in no gate list, and the row that replaced
+# the decider is `severity = "warn"`, so `lane grade other` reports without
+# failing any run that does not ask it to. This job is the one caller that asks.
 
 on:
   schedule:
@@ -74,7 +76,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BATTEN_DIVERGENCE_SINCE: ${{ inputs.since }}
-        run: mise run land-divergence > "$RUNNER_TEMP/divergence.txt"
+        run: mise run land-divergence-record > "$RUNNER_TEMP/divergence.txt"
       - name: Publish the records
         shell: bash
         run: |
@@ -88,7 +90,13 @@ jobs:
       # Always, so the records above are published even when a budget is broken —
       # the number is the point, and a summary that only appears on green is a
       # report nobody reads at the moment it matters.
+      # `--fail-on-warning` IS WHAT KEEPS THE GATE A GATE. The row is
+      # `severity = "warn"` so that every `check` and every `verify` stays green
+      # over a property of the fleet no branch causes. This job is the one reader
+      # that must red on it, which is the retired decider's posture exactly: a
+      # number that rises has to fail something or it becomes another artifact
+      # nobody opens.
       - name: Judge the divergence against its budgets
         if: always()
         shell: bash
-        run: mise run land-divergence-assert < "$RUNNER_TEMP/divergence.txt"
+        run: mise run batten -- check --rule 'lane grade other' --fail-on-warning

@@ -9,7 +9,7 @@
 #
 #   THE SCAN STAYS OUTSIDE, and that is house style §5 rather than a workaround:
 #   `check` is `read` and structurally cannot spawn, so `syft` remains a command on
-#   PATH (§9's prior art) and `mise-tasks/sbom.sh` remains the producer that
+#   PATH (§9's prior art) and `[tasks.sbom]` remains the producer that
 #   derives the documents. What moved here is the ADJUDICATION — the half that had
 #   no successor, because a module asking what a scan found read undefined and
 #   decided nothing.
@@ -188,7 +188,7 @@ violation contains {
 # REFERENCE SITE, so the document once claimed 340 entries for 290 distinct
 # things: 57 `pkg:github` entries for 9 unique actions, plus a `./action`
 # component that is a relative path in this repository rather than a dependency of
-# it. `sbom.sh` normalises that; this keeps it normalised, and it is deliberately a
+# it. `[tasks.sbom]` normalises that; this keeps it normalised, and it is deliberately a
 # property of the DOCUMENT rather than of the normaliser — a cataloger that starts
 # emitting a new inflated shape is caught without anyone having predicted which.
 violation contains {

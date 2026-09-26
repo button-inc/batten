@@ -358,6 +358,15 @@ test_an_unready_row_is_refused if {
 	v.verdict == "issue file unclear"
 }
 
+# The class's first route: a row closed after it was filed carries the tracker's
+# own closed status as its latest verdict, which is not `unready`.
+test_a_row_closed_after_filing_is_silent if {
+	count(violation) == 0 with input as board([
+		"issue CLOUD-1 2026-01-01T00:00:00Z unready - - -",
+		"issue CLOUD-1 2026-01-01T00:00:00Z Canceled - - -",
+	])
+}
+
 test_a_ready_row_is_silent if {
 	count(violation) == 0 with input as board(["issue CLOUD-1 2026-01-01T00:00:00Z ready - - -"])
 }

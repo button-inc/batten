@@ -34,11 +34,11 @@ fn a_content_block_envelope_unwraps_to_the_payload_a_bare_one_carries() {
 }
 
 use batten::facts::{
-    AGENT_SOURCED, BASE_DELTA, BYPASS, CAPTURED, COMMIT_META, Class, Cost, DOCUMENT, EXTERNAL,
-    EXTRACTED, FORGE, Fact, GIT_HEAD, GIT_HISTORY, GIT_RANGE, GIT_REF, GIT_REMOTE, GIT_STATUS,
-    GIT_WORKTREES, INSTANT, INVOCATIONS, KEYS, LANDING, LINES, Look, MINTED, PINNED, PLAN,
-    PRODUCED, PROSPECTIVE, RECEIPTS, RECORDS, RECORDS_BLOCKED, REVIEW, STAGED, STATE, STOP,
-    SYMBOLS, Surface, TASKS, TOOL_VERDICT, TRACKED, USES, WAIVED,
+    AGENT_SOURCED, BASE_DELTA, CAPTURED, COMMIT_META, Class, Cost, DOCUMENT, EXTERNAL, EXTRACTED,
+    FORGE, Fact, GIT_HEAD, GIT_HISTORY, GIT_RANGE, GIT_REF, GIT_REMOTE, GIT_STATUS, GIT_WORKTREES,
+    INSTANT, INVOCATIONS, KEYS, LANDING, LINES, Look, MINTED, PINNED, PLAN, PRODUCED, PROSPECTIVE,
+    RECEIPTS, RECORDS, RECORDS_BLOCKED, REVIEW, STAGED, STATE, STOP, SYMBOLS, Surface, TASKS,
+    TOOL_VERDICT, TRACKED, USES, WAIVED,
 };
 
 #[test]
@@ -111,7 +111,6 @@ fn every_fact_returns_its_stated_const() {
     // somebody states its pairing.
     let expected = |fact: Fact| -> Class {
         match fact {
-            Fact::Bypass => BYPASS,
             Fact::Receipts => RECEIPTS,
             Fact::Keys => KEYS,
             Fact::Stop => STOP,
@@ -162,7 +161,7 @@ fn every_fact_returns_its_stated_const() {
     // rather than quietly shrinking the census.
     assert_eq!(
         Fact::ALL.len(),
-        39,
+        38,
         "the census covers every fact; update this count deliberately when the \
          model gains or loses one"
     );

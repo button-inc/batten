@@ -379,6 +379,15 @@ pub enum Ask {
     /// `board-diff-overlap` was one repository's file name for a sensor that
     /// also had a second mode nothing reached.
     NamedPaths,
+    /// The keys a text names in CLOSING form, one per line on stdout — the
+    /// grammar's own [`crate::ready::Grammar::keys_closed_in`] (CLOUD-1717).
+    ///
+    /// **It replaces a spawn of the program whose `--list` mode was the only
+    /// home of the closing-verb regex.** That program is retired, and a second
+    /// copy of the verb set here would be one concept with two spellings; the
+    /// grammar already owns it, including the disclaimer a regex never saw
+    /// (`does not close CLOUD-1` names the key and closes nothing).
+    ClosingKeys,
 }
 
 /// What a recorder reads back from a program it ran.
@@ -710,6 +719,16 @@ pub fn evaluate(value: &Value, context: &Context<'_>) -> Option<serde_json::Valu
                 // The payload IS the subject here, unlike both lease arms: the
                 // question is about the body the tracker stored.
                 Ask::NamedPaths => crate::ready::named_paths(&payload, context.root)?,
+                Ask::ClosingKeys => {
+                    let text = as_text(&payload)?;
+                    let lines: String = context
+                        .grammar?
+                        .keys_closed_in(&text)
+                        .iter()
+                        .flat_map(|key| [key.as_str(), "\n"])
+                        .collect();
+                    (0, lines)
+                }
             };
             read_back(read, status, &out)
         }

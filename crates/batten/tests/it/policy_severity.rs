@@ -139,7 +139,6 @@ fn hook(dir: &Path, payload: &str) -> Output {
     command
         .current_dir(dir)
         .args(["adjudicate", "--harness", "claude-code"])
-        .env_remove("BATTEN_HOOK_BYPASS")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

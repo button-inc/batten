@@ -221,7 +221,7 @@ fn declared_env_vars() -> Vec<&'static str> {
 /// class of variable whose entire purpose is **to stop the engine refusing** is
 /// the one class that survived the scrub.
 ///
-/// Measured on `ccb40a13`: with `BATTEN_HOOK_BYPASS=1` exported, `test:cargo` was
+/// Measured on `ccb40a13`: with the since-retired general hatch exported, `test:cargo` was
 /// 1543 passed / **2 failed** — both `board_receipts` cases asserting a refusal,
 /// each expecting exit `2` and getting exit `0`. The same tree with nothing
 /// exported was 3270/3270. Four `test:bats` record-keying cases went the same way
@@ -255,7 +255,7 @@ fn bypass_env_vars() -> Vec<String> {
     // covering the next row somebody adds, silently, in the direction that
     // weakens the suite". The signature is unchanged so no caller has to know.
     static NAMES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
-        let mut names = vec![batten::hook::BYPASS_ENV.to_owned()];
+        let mut names = Vec::new();
         if let Ok(config) = batten::config::load(&at_root("batten.toml")) {
             names.extend(
                 config
@@ -279,8 +279,8 @@ fn bypass_env_vars() -> Vec<String> {
 /// # `BATTEN_BIN` names the binary UNDER TEST, and it is set here for the same
 /// reason
 ///
-/// A `[[hook.handler]]` the binary dispatches can shell out to
-/// `mise-tasks/payload-field.sh`, whose documented resolution order is
+/// A `[[hook.handler]]` the binary dispatches can shell out to a batten
+/// resolved the way the retired `payload-field` wrapper documented it:
 /// `$BATTEN_BIN`, then `<root>/target/{release,debug}/batten`, then whatever
 /// `command -v batten` finds — where `<root>` is resolved beside the SCRIPT, so
 /// in a fixture repository it is the fixture, which has no `target/`. Without
@@ -317,6 +317,185 @@ pub(crate) fn batten() -> Command {
 
 /// The state root a suite whose subject is the REAL repository must run under.
 ///
+/// `[tasks.<name>]`'s `run` body from the committed `mise.toml`, `{% raw %}`
+/// fences stripped — the bytes mise hands bash.
+///
+/// One reader for every task-body tier, so a suite asserts the committed task
+/// rather than a copy of it.
+#[must_use]
+pub(crate) fn task_body(name: &str) -> String {
+    let manifest = fs::read_to_string(at_root("mise.toml")).expect("the manifest");
+    let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
+    parsed["tasks"][name]["run"]
+        .as_str()
+        .unwrap_or_else(|| panic!("[tasks.{name}] declares a run body"))
+        .lines()
+        .filter(|line| !line.contains("{% raw %}") && !line.contains("{% endraw %}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// `[env].<name>` from the committed `mise.toml` — the one declaration a task
+/// body and its tier both read, so a tier never restates a shared name.
+pub(crate) fn task_env(name: &str) -> String {
+    let manifest = fs::read_to_string(at_root("mise.toml")).expect("the manifest");
+    let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
+    parsed["env"][name]
+        .as_str()
+        .unwrap_or_else(|| panic!("[env] declares {name}"))
+        .to_owned()
+}
+
+/// `bash -c <body>` in `dir`, with `dir/bin` first on `PATH` for the stubs a
+/// tier plants there.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: a mise task body is shell, so running it is a spawn by definition, and this is the one site every task-body tier shares"
+)]
+#[must_use]
+pub(crate) fn task_bash(dir: &Path, body: &str) -> std::process::Command {
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let path = std::env::join_paths(
+        std::iter::once(dir.join("bin")).chain(std::env::split_paths(&inherited)),
+    )
+    .expect("a PATH entry carries no separator");
+    let mut command = std::process::Command::new("bash");
+    command
+        .args(["-c", body])
+        .current_dir(dir)
+        .env("PATH", path);
+    command
+}
+
+/// `[tasks.<task>]` ready to run in `dir` under [`batten`]'s scrubbed
+/// environment, for a tier that sets its own readings before running it.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: returns the one shared task-body spawn for the caller to finish configuring"
+)]
+pub(crate) fn task_command(dir: &Path, task: &str) -> std::process::Command {
+    let mut command = task_bash(dir, &task_body(task));
+    let template = batten();
+    for (name, value) in template.get_envs() {
+        match value {
+            Some(value) => command.env(name, value),
+            None => command.env_remove(name),
+        };
+    }
+    // The stubs stay first even when the template carries a `PATH` of its own.
+    let base = template
+        .get_envs()
+        .find(|(name, _)| *name == "PATH")
+        .and_then(|(_, value)| value.map(std::ffi::OsStr::to_os_string))
+        .or_else(|| std::env::var_os("PATH"))
+        .unwrap_or_default();
+    // The engine under test follows the stubs, ahead of any installed release.
+    let engine = Path::new(env!("CARGO_BIN_EXE_batten"))
+        .parent()
+        .map(Path::to_path_buf);
+    let path = std::env::join_paths(
+        std::iter::once(dir.join("bin"))
+            .chain(engine)
+            .chain(std::env::split_paths(&base)),
+    )
+    .expect("a PATH entry carries no separator");
+    command.env("PATH", path);
+    command
+}
+
+/// Run `[tasks.<task>]` in `dir` the way `mise run <task>` would, with the
+/// engine the suite built and [`batten`]'s scrubbed environment, `stdin` piped
+/// in — so a developer's shell cannot move a producer's reading.
+pub(crate) fn produce(dir: &Path, task: &str, stdin: &str) -> Output {
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    let mut child = task_command(dir, task)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn the producer");
+    let _ = child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(stdin.as_bytes());
+    child.wait_with_output().expect("run the producer")
+}
+
+/// A system program a tier drives as a consumer would (`sha256sum -c`, a
+/// retired script under comparison).
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: the tier's subject is the program's own verdict over the artifact"
+)]
+#[must_use]
+pub(crate) fn program(name: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    std::process::Command::new(name)
+}
+
+/// Whether the committed authority declares its protected-path set.
+///
+/// The owner switched that gate off until admission statements are adjudicated.
+/// Cases asserting the COMMITTED gate refuses hold only while it is declared, and
+/// return to force the moment it is; an undeclared set must carry the owner's
+/// marker, so a set that silently vanished still reds.
+#[must_use]
+pub(crate) fn committed_protected_declared() -> bool {
+    let authority = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml"),
+    )
+    .expect("read the committed config");
+    let declared = authority
+        .lines()
+        .any(|line| line.starts_with("protected = ["));
+    assert!(
+        declared || authority.contains("# DISABLED by the owner."),
+        "the committed protected set vanished without the owner's marker"
+    );
+    declared
+}
+
+/// A fixture carrying the committed `batten.toml` and policy modules, with the
+/// protected-path set DECLARED — the engine's protected-path mechanism under
+/// this repository's own rows, independent of whether the owner has the
+/// committed gate switched on.
+#[must_use]
+pub(crate) fn committed_fixture_with_protected(name: &str) -> PathBuf {
+    let committed = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let authority =
+        std::fs::read_to_string(committed.join("batten.toml")).expect("read the committed config");
+    let config = if committed_protected_declared() {
+        authority
+    } else {
+        authority.replacen(
+            "must_land_on = \"origin/main\"\n",
+            "must_land_on = \"origin/main\"\nprotected = [\".serena/memories/**\", \
+             \"batten.toml\", \".github/workflows/**\"]\n",
+            1,
+        )
+    };
+    let dir = Fixture::new(name)
+        .config(&config)
+        .git()
+        .base_commit()
+        .build();
+    let modules = dir.join("policy");
+    std::fs::create_dir_all(&modules).expect("the fixture's policy directory is creatable");
+    for entry in std::fs::read_dir(committed.join("policy")).expect("read committed policy") {
+        let path = entry.expect("a policy entry").path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "rego")
+        {
+            std::fs::copy(&path, modules.join(path.file_name().expect("a file name")))
+                .expect("copy a policy module");
+        }
+    }
+    dir
+}
+
 /// **A THIRD SUPPRESSION CHANNEL, AND THE ONE NEITHER SCRUB IN [`batten`] CAN
 /// SEE.** That function removes every `BATTEN_` variable the surface declares and
 /// every bypass name beside it, and both of those are walks over ENVIRONMENT

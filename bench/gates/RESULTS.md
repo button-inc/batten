@@ -64,11 +64,9 @@ commit, and a named ref resolves a declared one.
 
 | task                           | bucket | git variants                 |
 | ------------------------------ | ------ | ---------------------------- |
-| `attestation-check.sh`         | git    | `location`, `remote`         |
 | `awk-regex-check.sh`           | git    | `tracked`                    |
 | `batten-glob-check.sh`         | git    | `location`                   |
 | `board-sweep.sh`               | forge  | `location`, `log`            |
-| `branch-age-check.sh`          | forge  | —                            |
 | `cap-drift.sh`                 | tree   | —                            |
 | `checks-green.sh`              | forge  | `head`                       |
 | `ci-drift.sh`                  | forge  | `location`                   |
@@ -76,16 +74,13 @@ commit, and a named ref resolves a declared one.
 | `ci-tools-check.sh`            | git    | `location`                   |
 | `claim-check.sh`               | git    | `head`, `location`, `log`    |
 | `claim-race-check.sh`          | forge  | `location`                   |
-| `closing-key-check.sh`         | tree   | —                            |
 | `coderabbit-config-check.sh`   | tree   | —                            |
 | `config-lint.sh`               | git    | `head`, `location`, `log`    |
 | `container-preflight.sh`       | git    | `location`                   |
 | `darwin-link.sh`               | build  | —                            |
-| `deferral-check.sh`            | tree   | —                            |
 | `derived-check.sh`             | git    | `location`                   |
 | `digest-major-agreement.sh`    | tree   | —                            |
 | `doctor.sh`                    | git    | `head`, `location`           |
-| `done-check.sh`                | git    | `head`, `log`                |
 | `done-pr-check.sh`             | tree   | —                            |
 | `evaluator-closure-check.sh`   | git    | `location`                   |
 | `evaluator-io-check.sh`        | git    | `location`                   |
@@ -99,7 +94,6 @@ commit, and a named ref resolves a declared one.
 | `install-check.sh`             | git    | `tracked`                    |
 | `issue-read-check.sh`          | git    | `location`, `log`            |
 | `issue-search-check.sh`        | git    | `head`, `location`           |
-| `land-divergence-assert.sh`    | tree   | —                            |
 | `land-lock-check.sh`           | git    | `log`, `remote`              |
 | `landed-check.sh`              | git    | `head`, `log`                |
 | `license-table-check.sh`       | tree   | —                            |
@@ -116,20 +110,14 @@ commit, and a named ref resolves a declared one.
 | `msrv-pin-agreement.sh`        | tree   | —                            |
 | `mutant.sh`                    | git    | `location`, `tracked`        |
 | `no-doctests.sh`               | git    | `location`, `tracked`        |
-| `nonverdict-assert.sh`         | tree   | —                            |
-| `ntia-check.sh`                | git    | `location`                   |
 | `perf-assert.sh`               | tree   | —                            |
 | `perf-compare.sh`              | tree   | —                            |
 | `perf-gate.sh`                 | tree   | —                            |
 | `pipefail-grep-check.sh`       | git    | `tracked`                    |
-| `pr-unsubscribed.sh`           | git    | `location`, `remote`         |
 | `publish-credential-check.sh`  | tree   | —                            |
 | `ready-cites-check.sh`         | git    | `head`, `tracked`            |
 | `ready-lint.sh`                | tree   | —                            |
 | `reference-check.sh`           | git    | `location`                   |
-| `release-assets-check.sh`      | forge  | —                            |
-| `release-due.sh`               | forge  | —                            |
-| `release-tracking-check.sh`    | git    | `location`                   |
 | `renovate-config-validator.sh` | tree   | —                            |
 | `report-only-check.sh`         | tree   | —                            |
 | `rules-drift.sh`               | git    | `location`, `tracked`        |

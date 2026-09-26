@@ -5153,6 +5153,28 @@ mod tests {
     fn the_base_is_subtracted_rather_than_resent() {
         // The whole economy of the push. Without the subtraction a lap would
         // re-send the repository's entire history every time.
+        //
+        // AGAINST `None`, NEVER AGAINST A WIDER BASE (CLOUD-1825). This compared
+        // `HEAD~3` with `HEAD~1` and asserted the wider range enumerated at least
+        // as much — monotonicity in the base, which `objects_to_send` does not
+        // have and never claimed. Its subtraction is against the base's OWN TREE,
+        // so a base whose tree carries MORE subtracts more: one commit that
+        // deletes a path and a later one that restores it makes the WIDER base
+        // strictly smaller, because it still holds the blobs and the narrow one
+        // does not.
+        //
+        // Measured rather than imagined: it fired on this repository's own
+        // history when a commit deleted 105 generated `man/*.1` pages and the
+        // next restored them, and what it reported was a defect in this assertion
+        // rather than in the function. It reds `verify`, which is what mints the
+        // receipt `turn mint ahead` demands before any further write — and that
+        // row declares no override route — so a false failure here locks a
+        // session out of editing the very assertion that is wrong.
+        //
+        // `None` is the honest comparand. It is the state the first comment
+        // describes and the one `objects_to_send` documents as "a ref the remote
+        // does not have yet … nothing is hidden, nothing is subtracted", so no
+        // base can ever enumerate more than it, for any history shape.
         let repo = std::path::Path::new(".");
         let Ok(head) = crate::git::head_commit(repo) else {
             return;
@@ -5160,13 +5182,13 @@ mod tests {
         let Ok(narrow) = crate::git::objects_to_send(repo, Some("HEAD~1"), &head) else {
             return;
         };
-        let Ok(wide) = crate::git::objects_to_send(repo, Some("HEAD~3"), &head) else {
+        let Ok(whole) = crate::git::objects_to_send(repo, None, &head) else {
             return;
         };
         assert!(
-            wide.len() >= narrow.len(),
-            "a wider range cannot enumerate fewer objects: {} vs {}",
-            wide.len(),
+            whole.len() >= narrow.len(),
+            "subtracting a base cannot enumerate more than sending everything: {} vs {}",
+            whole.len(),
             narrow.len()
         );
     }

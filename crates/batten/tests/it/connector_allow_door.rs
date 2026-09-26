@@ -44,9 +44,9 @@
 
 use crate::common;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use common::{at_root, git_in, scratch, stderr, stdout, write};
+use common::{git_in, scratch, stderr, stdout, write};
 
 /// ONE ROW. No `[[rule]]` at all, so nothing in the engine can produce a verdict
 /// of its own and be mistaken for the handler's.
@@ -55,7 +55,7 @@ const CONFIG: &str = r#"version = 1
 [[hook.handler]]
 id = "connector-allow-guard"
 on = "pre-tool"
-run = ["mise-tasks/connector-allow-guard.sh"]
+run = ["bash", "connector-allow.sh", "--guard"]
 matcher = "^mcp__"
 timeout_ms = 5000
 preapproves = true
@@ -133,15 +133,15 @@ impl Bench {
 fn bench(name: &str) -> Bench {
     let dir = scratch(name);
     let repo = dir.join("repo");
-    std::fs::create_dir_all(repo.join("mise-tasks")).expect("the fixture repo");
-    // Copied from the suite's own tree, so `mise run mutant` reaches this tier
-    // too: under `mutant` that tree is the mutated one.
-    for task in ["connector-allow-guard.sh", "connector-allow-resolve.sh"] {
-        let to = repo.join("mise-tasks").join(task);
-        std::fs::copy(at_root("mise-tasks").join(task), &to)
-            .expect("the guard is copied from this tree");
-        make_executable(&to);
-    }
+    std::fs::create_dir_all(&repo).expect("the fixture repo");
+    // The committed task body, read from this tree's manifest, so a mutated
+    // manifest is the one that runs here too. The row runs it with `bash`, so
+    // mise's own startup is not what this tier measures.
+    write(
+        &repo,
+        "connector-allow.sh",
+        &common::task_body("connector-allow-resolve"),
+    );
     write(&repo, "batten.toml", CONFIG);
     git_in(&repo, &["init", "-q", "-b", "main", "."]);
 
@@ -157,17 +157,6 @@ fn bench(name: &str) -> Bench {
     }
 }
 
-// No `#[cfg(unix)]` pair here: the module gate above already decides the target,
-// so a `#[cfg(not(unix))]` twin would be a definition nothing can reach.
-fn make_executable(path: &Path) {
-    use std::os::unix::fs::PermissionsExt as _;
-    let mut mode = std::fs::metadata(path)
-        .expect("the copy exists")
-        .permissions();
-    mode.set_mode(0o755);
-    std::fs::set_permissions(path, mode).expect("the copy is runnable");
-}
-
 /// Replace the copied guard with a stub that answers on the handler contract.
 ///
 /// **The door's own channels are asserted through this rather than through the
@@ -177,56 +166,55 @@ fn make_executable(path: &Path) {
 /// case driving it would assert the door's capability and fail for the guard's
 /// reason. Stubbed, each case fails only when the thing it names breaks.
 fn stub_guard(bench: &Bench, body: &str) {
-    write(
-        &bench.repo,
-        "mise-tasks/connector-allow-guard.sh",
-        &format!("#!/usr/bin/env bash\n{body}\n"),
-    );
-    make_executable(&bench.repo.join("mise-tasks/connector-allow-guard.sh"));
+    write(&bench.repo, "connector-allow.sh", &format!("{body}\n"));
 }
 
 #[test]
-fn the_committed_guard_writes_a_host_document_so_its_verdict_is_dropped() {
-    // THE MEASURED DEFECT, asserted rather than described (2026-08-26, still true).
-    // `mise-tasks/connector-allow-guard.sh` is dispatched as a handler and emits
-    // `hookSpecificOutput` on stdout with exit 0. `impersonates_host` reads that
-    // shape BEFORE the exit code, so the outcome is `Broke(ImpersonatedHost)` —
-    // and every `Broke` variant ALLOWS. The verdict never reaches the host.
-    //
-    // Stated over the violation LINE rather than over the missing verdict,
-    // because a missing verdict is also what a handler that never ran produces,
-    // and this suite's whole subject is telling those two apart.
-    //
-    // WHY IT IS ASSERTED RATHER THAN FIXED: the repair is one `case` in a
-    // governed shell file, which `shell retire partial` refuses unless the file is
-    // retired — and it cannot be, because it reads `/tmp/mcp-config-cse_*.json`
-    // per call, which no Rego module may do and no Rust port may carry into the
-    // core (rule 1). So this case is the finding's durable home, and it FLIPS the
-    // day the guard is repaired: that is what makes it evidence rather than a
-    // note.
-    // THE DIAGNOSTIC MOVED STREAMS, AND THAT IS NOT THIS SUITE'S SUBJECT
-    // (CLOUD-1131). It used to be asserted on stderr, which read as a statement
-    // about audience and was not one: `emit_advisory` puts advice on stdout when
-    // the event's channel is reachable and falls back to the operator's stream
-    // only when it is NOT, and `PreToolUse` was unreachable for its whole life on
-    // an unprobed assumption. Now that it is probed and open, this notice lands
-    // where the same notice at `PostToolBatch` always did. So the assertion reads
-    // BOTH streams: what this case is evidence for is that the guard still
-    // impersonates the host, never which pipe carries the complaint.
-    let bench = bench("cad-measured-defect");
+fn the_committed_guards_deny_reaches_the_host_as_the_engines_own_refusal() {
+    // THE MEASURED DEFECT, FLIPPED (CLOUD-1717). The retired guard wrote a
+    // `hookSpecificOutput` document, which the door reads as impersonation and
+    // drops, so its verdict never reached the host. Retired into
+    // `[tasks.connector-allow-resolve] --guard`, it answers on the door's own
+    // contract, and the committed body's deny now travels.
+    let bench = bench("cad-committed-deny");
     let answer = bench.door(&format!("{RESOLVABLE}__archive_session"));
     let reported = format!("{}{}", answer.out, answer.err);
     assert!(
-        reported.contains("hook.handler connector-allow-guard: wrote a host decision document"),
-        "the committed guard still impersonates the host; if this now fails, the \
-         guard was repaired and this suite's other cases should be restored to \
-         asserting the real guard: {reported}"
+        !reported.contains("wrote a host decision document"),
+        "{reported}"
     );
-    // And nothing it wrote became a verdict — neither arm reaches the host.
-    assert!(!answer.out.contains(r#""deny""#), "{}", answer.out);
-    assert!(!answer.out.contains(r#""allow""#), "{}", answer.out);
-    // Non-negotiable 4 holds even on the dropped path: the live key never travels.
-    assert!(!answer.out.contains("bbbbbbbb"), "{}", answer.err);
+    assert!(
+        answer.out.contains(r#""permissionDecision":"deny""#),
+        "{}",
+        answer.out
+    );
+    assert!(
+        answer.out.contains("hook.handler.connector-allow-guard"),
+        "{}",
+        answer.out
+    );
+    // Non-negotiable 4 holds: the live key never travels.
+    assert!(!answer.out.contains("bbbbbbbb"), "{}", answer.out);
+}
+
+#[test]
+fn the_committed_guards_allow_reaches_the_host_as_a_preapproval() {
+    // The half nothing else provides, and the one the drop actually cost: the
+    // approval prompt CLOUD-191 exists to remove.
+    let bench = bench("cad-committed-allow");
+    let answer = bench.door(&format!("{RESOLVABLE}__create_session"));
+    assert!(
+        answer.out.contains(r#""permissionDecision":"allow""#),
+        "{}",
+        answer.out
+    );
+    assert!(
+        answer
+            .out
+            .contains("already allows create_session on Claude_Code_Remote"),
+        "{}",
+        answer.out
+    );
 }
 
 #[test]

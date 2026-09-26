@@ -127,9 +127,20 @@ jobs:
       # offering the feature at all, and the task exits 0 having judged no
       # artifact. It starts verifying on its own the moment CLOUD-585 makes the
       # repository public, with no edit here.
-      - name: Check the release's binaries carry build provenance
+      #
+      # THE SPLIT THE PORT FORCED (CLOUD-1717), and this caller is what CLOUD-1833
+      # was filed for. `attestation-check` was one program making the probe and
+      # adjudicating it; section 5 makes `check` `read` and incapable of spawning,
+      # so the `gh` reads are the producer's and the verdict is the engine's. The
+      # step above went on calling the deleted task for as long as nothing asked
+      # whether a workflow's callers still resolve — `workflow run unknown` is
+      # that clause, and it reported this line.
+      - name: Record the platform's attestation posture and each archive's verdict
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
-        run: mise run attestation-check "$TAG"
+        run: mise run attestation-record -- "$TAG"
+      - name: Check the release's binaries carry build provenance
+        shell: bash
+        run: mise run batten -- check --rule 'release grade unsafe'

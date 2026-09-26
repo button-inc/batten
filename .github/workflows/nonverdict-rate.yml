@@ -20,8 +20,9 @@ name: nonverdict-rate
 # THIS MUST NOT RUN IN THE GATE OR IN `verify`. It is a property of the world, and
 # a branch must not go red because the platform had a bad afternoon —
 # coverage.yml:15-18 states the same boundary for the same reason. What IS gated is
-# the decision: `tests/nonverdict-assert.bats` runs on every commit, because the
-# decider is a pure function of records.
+# the decision: `crates/batten/tests/it/nonverdict.rs` and
+# `policy/nonverdict.rego`'s own cases run on every commit, because the decider
+# is a pure function of records.
 #
 # Failure here is informational: it means the rate crossed its budget and wants
 # looking at, not that anything in the tree is broken. Nothing here writes to the
@@ -73,11 +74,16 @@ jobs:
       # GH_TOKEN through env, never interpolated into the run block: a `${{ }}`
       # expansion is textual substitution into the shell script, which zizmor gates
       # at high severity.
+      # THE SPLIT THE PORT FORCED (CLOUD-1717). The producer makes the
+      # conditional `gh` reads and classifies each failed job from its own
+      # per-step conclusions; the engine adjudicates what it recorded. Neither
+      # half can hold the other: section 5 makes `check` `read` and incapable of
+      # spawning the reads below.
       - name: Measure which required-check failures never reached a verdict
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: mise run nonverdict-scan > "$RUNNER_TEMP/nonverdict.txt"
+        run: mise run nonverdict-record > "$RUNNER_TEMP/nonverdict.txt"
       - name: Publish the records
         shell: bash
         run: |
@@ -91,7 +97,14 @@ jobs:
       # Always, so the records above are published even when the budget is broken —
       # the number is the point, and a summary that only appears on green is a
       # report nobody reads at the moment it matters.
+      # `--fail-on-warning` IS WHAT KEEPS THE GATE A GATE. The row is
+      # `severity = "warn"` so that an ordinary `check` — and therefore every
+      # `verify` and every branch — stays green over a property of the runner
+      # fleet no branch causes. This job is the one reader that must red on it,
+      # which is the posture the retired decider had and the reason it exists:
+      # "a rate that rises has to fail something, or it becomes another artifact
+      # nobody opens".
       - name: Judge the rate against its budget
         if: always()
         shell: bash
-        run: mise run nonverdict-assert < "$RUNNER_TEMP/nonverdict.txt"
+        run: mise run batten -- check --rule 'job grade other' --fail-on-warning

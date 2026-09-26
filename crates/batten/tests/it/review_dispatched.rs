@@ -164,6 +164,7 @@ fn verdicts_for(root: &Path, declared: bool) -> Vec<String> {
             verdicts: &verdicts,
             words: None,
             recorders: &[],
+            records: &[],
         },
         root,
     )
@@ -224,6 +225,7 @@ fn the_mediated_surface_resolves_no_effect_fact_and_withholds_the_rule() {
         verdicts: &verdicts,
         words: None,
         recorders: &[],
+        records: &[],
     };
     let rows = [row(&root, true)];
 
@@ -489,6 +491,7 @@ fn verdicts_with(root: &Path, extra: &serde_json::Value) -> Vec<String> {
             verdicts: &verdicts,
             words: None,
             recorders: &[],
+            records: &[],
         },
         root,
     )

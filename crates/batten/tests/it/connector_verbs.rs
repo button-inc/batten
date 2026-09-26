@@ -29,7 +29,7 @@
 // carried: "connector-verb-guard.bats::a verb with no server prefix is still decided" crates/batten/tests/it/connector_verbs.rs
 // carried: "connector-verb-guard.bats::a tool merely CONTAINING a decided verb is not decided" crates/batten/tests/it/connector_verbs.rs
 // carried: "connector-verb-guard.bats::an unrelated tool gets no decision" crates/batten/tests/it/connector_verbs.rs
-// carried: "connector-verb-guard.bats::every deny rule in the committed settings names a covered suffix" tests/mcp-allow-check.bats
+// carried: "connector-verb-guard.bats::every deny rule in the committed settings names a covered suffix" crates/batten/tests/it/mcp_allow.rs
 //!
 //! SUBSUMED — the plumbing became the engine's, which is what a migration should
 //! produce.
@@ -41,14 +41,14 @@
 //! because the fact they published is the engine's now (`batten policy tools`).
 //!
 // changed: "connector-verb-guard.bats::--covers prints every suffix the guard decides, and nothing else" crates/batten/tests/it/cli.rs the guard's `--covers` is `batten policy tools`, which reads the committed rows rather than a script's `case` arms — one authority for the fact instead of two. Asserted over the real config in `policy_tools_names_every_mediated_selector`
-// changed: "connector-verb-guard.bats::--covers-allow publishes the arm a connector control can override" tests/mcp-allow-check.bats the engine has no allow arm to publish: a row is `deny` or `warn`, so the set this flag existed to expose is empty BY CONSTRUCTION rather than by measurement. `mcp-allow-check` still probes any surviving guard for it, and its own stand-in case is what keeps that half exercised
+// changed: "connector-verb-guard.bats::--covers-allow publishes the arm a connector control can override" crates/batten/tests/it/mcp_allow.rs the engine has no allow arm to publish: a row is `deny` or `warn`, so the set this flag existed to expose is empty BY CONSTRUCTION rather than by measurement. `mcp-allow-check` still probes any surviving guard for it, and its own stand-in case is what keeps that half exercised
 // changed: "connector-verb-guard.bats::no suffix is published as pre-approved and denied at once" crates/batten/tests/it/cli.rs unconstructible now, for the reason above: with no allow arm there is no second set to contradict the deny set. The property it protected — one verdict per verb — is the rule table's own, since two rows cannot both select one tool and disagree about severity without `config-lint` reporting it
 // changed: "connector-verb-guard.bats::the bypass silences every arm" crates/batten/tests/it/guardrail_bypass.rs BATTEN_CONNECTOR_VERB_BYPASS is gone; a mediated deny takes the engine's own hatch, the consolidation rows 1-3 and 6 record
 //!
 //! THE SURVIVING GATE'S OWN RENAME OWES AN ARM, for the reason row 3's block
 //! records: a renamed case is a deleted case to anything reading names.
 //!
-// changed: "mcp-allow-check.bats::a deny whose suffix a guard covers passes under any server spelling" tests/mcp-allow-check.bats what backs the coverage is a `tool`-keyed row rather than a guard now, so the case says so — and it doubles as the seam's end-to-end assertion, passing only if `batten policy tools` reaches that gate. The predicate is untouched
+// changed: "mcp-allow-check.bats::a deny whose suffix a guard covers passes under any server spelling" crates/batten/tests/it/mcp_allow.rs what backs the coverage is a `tool`-keyed row rather than a guard now, so the case says so — and it doubles as the seam's end-to-end assertion, passing only if `batten policy tools` reaches that gate. The predicate is untouched
 //!
 //! ─── CLOUD-909's REPLAY, row 4 ───────────────────────────────────────────────
 //!

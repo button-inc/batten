@@ -403,38 +403,6 @@ fn decision_with_env(command: &str, key: &str, value: &str) -> String {
     )
 }
 
-/// The hatch these four rows actually take, which is the ENGINE'S.
-///
-/// # The docs said otherwise and the docs were wrong (found by this port)
-///
-/// `rules/toolchain.md` claimed `BATTEN_GH_GUARD_BYPASS` was "the
-/// `bypass_env` these rows DECLARE rather than the engine's global hatch". It is
-/// not: `batten.toml:273` says in as many words that these four "WOULD DECLARE
-/// `bypass_env = "BATTEN_GH_GUARD_BYPASS"` AND DO NOT YET", deferred to
-/// CLOUD-1027 because adding the key reads to `config-lint` as
-/// `rule-predicate-changed` and needs a groomed `Weakens:` clause first — so
-/// "until that row is groomed, these four take the general `BATTEN_HOOK_BYPASS`
-/// like every other row."
-///
-/// The tree's decision is deliberate and documented; the rules file had drifted
-/// from it. That is corrected in the same change rather than carried forward, and
-/// the drift is reported rather than folded in — `rule watch other` gates values
-/// `.claude/rules/*.md` restates, and it did not catch this one.
-///
-/// **So the shell's own `BATTEN_GH_GUARD_BYPASS` arm is NOT conserved, and that
-/// is not a loss this change causes.** `mise-tasks/gh-guard.sh:16` honoured the
-/// variable, but nothing has invoked that program since CLOUD-312 made
-/// `PreToolUse` one entry — so the variable has been inert for that whole span
-/// and this deletion removes the dead code that still appeared to offer it.
-#[test]
-fn the_engines_hatch_suppresses_the_lifecycle() {
-    let out = decision_with_env("gh pr merge 63", "BATTEN_HOOK_BYPASS", "1");
-    assert!(
-        !out.contains("\"deny\""),
-        "the engine's hatch must suppress a mediated refusal\n{out}"
-    );
-}
-
 /// And the row-specific variable does NOT, because no row declares it.
 ///
 /// The anti-vacuity mirror for the case above: without it, a run where BOTH

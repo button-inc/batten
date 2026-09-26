@@ -29,7 +29,6 @@
 //! that claims nothing leaves its case unmapped, which is a refusal — the quiet
 //! way to write three comments and still be red.
 
-// changed: "could not look outranks a refusal, so a half-run sweep is never exit 1" tests/board-sweep.bats CLOUD-921 reverses it: a clone-scoped abstention no longer suppresses a refusal, so the tag-less half-run IS exit 1 and only a board-scoped could-not-look outranks one
 // changed: "a blocker noted as closed needs no relation" tests/ready-lint.bats the exemption's premise is false — Linear does not drop the relation when a blocker completes, measured on CLOUD-661 Done since 2026-08-18 with both dependents still carrying the edge
 // changed: "a closed blocker in Linear's rendered-mention form is exempt" tests/ready-lint.bats the same premise, in the rendered-mention spelling: the form a blocker is written in decides nothing about whether its relation exists
 
@@ -49,11 +48,6 @@ use common::at_root;
 /// assertion hold every arm rather than one test per row — a shape that would go
 /// stale the moment a fourth inversion lands.
 const INVERSIONS: &[(&str, &str, &str)] = &[
-    (
-        "tests/board-sweep.bats",
-        "could not look outranks a refusal, so a half-run sweep is never exit 1",
-        "a board-scoped could-not-look outranks a refusal, so a half-run sweep is never exit 1",
-    ),
     (
         "tests/ready-lint.bats",
         "a blocker noted as closed needs no relation",

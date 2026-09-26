@@ -411,8 +411,6 @@ impl Production {
 /// (CLOUD-757), which is the wrong trade. The break is declared instead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Fact {
-    /// The `BATTEN_HOOK_BYPASS` hatch (CLOUD-610).
-    Bypass,
     /// The receipt verdicts a `requires_receipt` row is judged against.
     Receipts,
     /// The tracker-key evidence a `requires_key` row is judged against.
@@ -758,12 +756,6 @@ pub enum Fact {
     /// the reading, not of the thing being read.
     Pinned,
 }
-
-/// [`Fact::Bypass`] — the hatch is an environment variable, and the kernel
-/// handed the process its environment block at `exec`. Reading it spawns
-/// nothing, opens nothing and waits on nothing, which is the whole content of
-/// [`Cost::Free`].
-pub const BYPASS: Class = Class::new(Cost::Free, Surface::Hook);
 
 /// [`Fact::Receipts`] — a file and two git refs (`hook.rs`'s receipt read).
 /// Bounded plumbing, which is exactly what a `read`-classified verb may hold,
@@ -1469,7 +1461,6 @@ pub const PINNED: Class = Class::new(Cost::Read, Surface::Hook);
 impl Fact {
     /// Every fact the boundary resolves today, so [`Fact::class`] is total.
     pub const ALL: &'static [Fact] = &[
-        Fact::Bypass,
         Fact::Receipts,
         Fact::Keys,
         Fact::Stop,
@@ -1514,7 +1505,6 @@ impl Fact {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Fact::Bypass => "bypass",
             Fact::Receipts => "receipts",
             Fact::Keys => "keys",
             Fact::Stop => "stop",
@@ -1567,7 +1557,6 @@ impl Fact {
     #[must_use]
     pub const fn class(self) -> Class {
         match self {
-            Fact::Bypass => BYPASS,
             Fact::Receipts => RECEIPTS,
             Fact::Keys => KEYS,
             Fact::Stop => STOP,
@@ -1653,8 +1642,7 @@ impl Fact {
             // spawn happens once at session start and every call reads the record.
             // That displacement is exactly what makes their absence invisible.
             Fact::Tasks | Fact::Pinned => true,
-            Fact::Bypass
-            | Fact::Receipts
+            Fact::Receipts
             | Fact::Keys
             | Fact::Stop
             | Fact::Waived
@@ -1804,8 +1792,7 @@ impl Fact {
             // made yet were allowed. Naming it `Some(..)` would invite a Rego
             // predicate to ask the tree what a write is about to do, which is a
             // question with no answer rather than an answer of none.
-            Fact::Bypass
-            | Fact::Receipts
+            Fact::Receipts
             | Fact::Keys
             | Fact::Stop
             | Fact::Waived
@@ -1939,7 +1926,7 @@ impl Fact {
             // count, and it is the seam this function's own doc says to split
             // along. `Instant` arriving is what took it past its ceiling, exactly
             // as `Landing` did for the git family.
-            Fact::Bypass | Fact::Instant => Self::scalar_schema_fragment(self),
+            Fact::Instant => Self::scalar_schema_fragment(self),
             // The description-only family delegates, for the same reason and
             // along the same kind of seam as the git family below: every one of
             // these constrains nothing but its own prose, so a match arm each
@@ -2176,10 +2163,6 @@ impl Fact {
     /// panic.
     fn scalar_schema_fragment(self) -> serde_json::Value {
         match self {
-            Fact::Bypass => serde_json::json!({
-                "type": "boolean",
-                "description": "Fact::Bypass -- the BATTEN_HOOK_BYPASS hatch (CLOUD-610). The one fact whose shape is certain enough to constrain.",
-            }),
             // NULL IS COULD-NOT-LOOK AND IS NOT AN INSTANT OF ZERO. A caller that
             // supplied none has not named the epoch, it has said nothing, and a
             // predicate over it must not hold. Collapsing the two would make
@@ -2286,8 +2269,7 @@ impl Fact {
             // `git_schema_fragment`'s tail states: `no_axis_match_carries_a_wildcard_arm`
             // refuses a `_ =>`, and a wildcard would let a fact added later
             // classify itself here instead of failing to compile.
-            Fact::Bypass
-            | Fact::Document
+            Fact::Document
             | Fact::Tracked
             | Fact::Lines
             | Fact::External
@@ -2440,8 +2422,7 @@ impl Fact {
             // `no_axis_match_carries_a_wildcard_arm`, and a wildcard would let a
             // fact added later classify itself here instead of failing to
             // compile.
-            Fact::Bypass
-            | Fact::Receipts
+            Fact::Receipts
             | Fact::Keys
             | Fact::Stop
             | Fact::Waived
@@ -2647,8 +2628,7 @@ impl Fact {
             // `schema_fragment` delegates six variants and only those — and
             // spelling them out is what makes a seventh a compile error in both
             // functions rather than a silent default in one.
-            Fact::Bypass
-            | Fact::Receipts
+            Fact::Receipts
             | Fact::Keys
             | Fact::Stop
             | Fact::Waived

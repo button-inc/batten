@@ -601,6 +601,55 @@ declared_modules := {
 	# decision out of here is what stops the break-glass becoming a second
 	# authority on its own scope — `wiring`'s argument, one domain over.
 	"ripcord",
+	# `probe_verdict` arrived with CLOUD-1717 and this rule named it a
+	# seventeenth time, which is the coverage clause working once more: the
+	# module was written, its unit tests and its tier were green, clippy was
+	# clean, and this is what said nobody had placed it.
+	#
+	# It is `environment`'s class and reaches NOTHING — not `error`, not `exit`.
+	# It is one total function from `(i32, &str, &str)` to a three-valued enum,
+	# with no failure to report: a log it cannot make sense of is `Unread`, which
+	# is the could-not-look the caller already has to handle. A `Result` here
+	# would add a state whose only honest handling is the one `Unread` gets.
+	#
+	# THE PLACEMENT IS WHY THE READING MOVED HERE AT ALL. It was a `.py` beside
+	# the task, where the classification of a probe build's output was a second
+	# authority nothing in this crate could test. Reaching nothing is what lets
+	# `record` call it without the producer's effects reaching the engine: the
+	# spawn stays in the task (house-style §5) and only the reading is here.
+	"probe_verdict",
+	# `signer_posture` arrived with CLOUD-1717, `probe_verdict`'s sibling and
+	# its class: it reaches NOTHING in this crate. It takes the two git config
+	# values as `&str` and never runs `git config` itself, which is what keeps
+	# the reading testable against a scratch path and a developer's real
+	# configuration out of the tests (CLOUD-591's boundary).
+	#
+	# It owns the RECORD'S SHAPE as well as the classification, and that is the
+	# placement rather than scope creep: the shape was a sequence of `printf`
+	# calls in a task body that nothing tested, including the truncation of each
+	# sha to eight characters — which is the difference between a pointer and a
+	# payload. The producer still gathers the facts, because `git config` and
+	# `git rev-list` are spawns §5 keeps outside; what they MEAN is composed here.
+	"signer_posture",
+	# `cargo_graph` arrived with CLOUD-1717 and this rule named it, the coverage
+	# clause working an eighteenth time.
+	#
+	# It is `probe_verdict`'s and `environment`'s class: it reaches NOTHING, not
+	# even `error`. A `cargo metadata` document it cannot make sense of is an
+	# EMPTY graph, which the caller's own could-not-look arm decides over — a
+	# graph that answered "nothing is reachable" while claiming to have looked
+	# would be the vacuous pass, so the distinction is the caller's to draw and
+	# not a failure to report here.
+	#
+	# IT NAMES NO CRATE, and that is the placement rather than an accident of
+	# what it happens to contain. Which package is the evaluator, which crates
+	# bear IO, which need a platform SDK and which vendor what they link are
+	# CONSUMER facts (non-negotiable rule 1), so the roots are chosen by a
+	# predicate the caller supplies and the names live in `[[pattern]]` rows.
+	# An edge from here to `config` would be this module reading the consumer's
+	# authority itself, which is the direction that would make a repo-agnostic
+	# walk conditional on one repository's table.
+	"cargo_graph",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.

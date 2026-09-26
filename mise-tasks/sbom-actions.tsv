@@ -1,6 +1,6 @@
 # The license and copyright of every SHA-pinned GitHub Action this repository
-# uses (CLOUD-667). One committed authority, read by `mise-tasks/sbom.sh` at scan
-# time and gated by `mise-tasks/sbom-check.sh`.
+# uses (CLOUD-667). One committed authority, read by `[tasks.sbom]` at scan
+# time; its rows' shape is gated by `policy/sbom-actions.rego`.
 #
 # WHY A COMMITTED TABLE IS LEGITIMATE HERE. A SHA-pinned action's license is
 # immutable: the bytes at that commit cannot change, so the fact is a property of

@@ -45,9 +45,15 @@ const GUARDED: &str = ".serena/memories/core.md";
 const AUTHORITY: &str = "batten.toml";
 const ORDINARY: &str = "target/debug/scratch";
 
-/// The repository root, whose committed `batten.toml` is the policy under test.
+/// The committed `batten.toml` and modules, with the protected set declared, so
+/// the mechanism stays under test while the owner has the committed gate off.
 fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    // Per PROCESS: nextest runs each case in its own, and a shared name races.
+    ROOT.get_or_init(|| {
+        common::committed_fixture_with_protected(&format!("mediated-verbs-{}", std::process::id()))
+    })
+    .clone()
 }
 
 /// A Claude Code `PreToolUse` envelope carrying a shell command.

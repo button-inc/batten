@@ -242,6 +242,7 @@ fn findings_declared_by(root: &Path, vocabulary_root: &Path) -> Vec<(String, Opt
             verdicts: &verdicts,
             words: None,
             recorders: &[],
+            records: &[],
         },
         root,
     )
@@ -275,6 +276,7 @@ fn verdicts_raised(root: &Path) -> Vec<String> {
             verdicts: &verdicts,
             words: None,
             recorders: &[],
+            records: &[],
         },
         root,
     )

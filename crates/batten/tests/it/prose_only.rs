@@ -116,6 +116,7 @@ fn findings(root: &Path) -> Vec<String> {
             verdicts: &verdicts,
             words: None,
             recorders: &[],
+            records: &[],
         },
         root,
     )
@@ -485,6 +486,7 @@ fn the_finding_carries_a_count_and_never_a_path() {
             verdicts: &verdicts,
             words: None,
             recorders: &[],
+            records: &[],
         },
         &root,
     )

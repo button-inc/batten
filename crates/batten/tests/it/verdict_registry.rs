@@ -68,6 +68,7 @@ fn load(
             verdicts,
             words: None,
             recorders: &[],
+            records: &[],
         },
         policy::ModuleChecks::Run,
         None,
@@ -456,6 +457,7 @@ fn route_findings(name: &str, authority: &str, manifest: &str) -> Vec<String> {
             verdicts: &verdicts,
             words: None,
             recorders: &[],
+            records: &[],
         },
         &root,
     )

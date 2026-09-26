@@ -1355,6 +1355,21 @@ pub enum Native {
     /// `batten policy explain` could not reach it, because the class it resolved
     /// belonged to the other arm.
     ProgramUnknown,
+    /// The `[[record]]` table would not load (CLOUD-1810).
+    ///
+    /// Its own class rather than the recorder's, on the reason the environment
+    /// pair states: the two tables carry different rows and a refusal has to name
+    /// which one to edit.
+    ///
+    /// **APPENDED, BECAUSE THE VARIANT ABOVE SAYS SO AND THIS ONE DID NOT LISTEN.**
+    /// It landed beside the other config classes — between `RecorderTableRefused`
+    /// and `ProvisionTableRefused`, where it reads best — and that shifted the
+    /// discriminants of `ProvisionTableRefused`, `StartupTableRefused`,
+    /// `OutcomeTableRefused`, `PlanReadStale` and `ConfigUnreadable`, which is the
+    /// whole tail `enum_no_repr_variant_discriminant_changed` reads as broken.
+    /// Position is API; the reading order is not, and `Native::ALL` below is where
+    /// the grouping belongs.
+    RecordTableRefused,
 }
 
 impl Native {
@@ -1404,6 +1419,7 @@ impl Native {
         Native::FactTableRefused,
         Native::MintTableRefused,
         Native::RecorderTableRefused,
+        Native::RecordTableRefused,
         Native::ProvisionTableRefused,
         Native::StartupTableRefused,
         Native::PlanReadStale,
@@ -1440,6 +1456,7 @@ impl Native {
         Native::FactTableRefused,
         Native::MintTableRefused,
         Native::RecorderTableRefused,
+        Native::RecordTableRefused,
         Native::ProvisionTableRefused,
         Native::StartupTableRefused,
     ];
@@ -1491,6 +1508,7 @@ impl Native {
             Native::FactTableRefused => "fact declare refused",
             Native::MintTableRefused => "mint declare refused",
             Native::RecorderTableRefused => "recorder declare refused",
+            Native::RecordTableRefused => "record declare refused",
             Native::ProvisionTableRefused => "provision declare refused",
             Native::StartupTableRefused => "startup declare refused",
         }
@@ -1623,9 +1641,9 @@ refusal names when one exists.",
             //
             // With no override route, `admission::questions_for` returns `None` and
             // `batten override request` answers "declares no `override` route, so
-            // it cannot be overridden". The only remaining exit was
-            // `BATTEN_HOOK_BYPASS` — a knowable string the guarded party can set,
-            // which records nothing and stops nobody. This repository already ruled
+            // it cannot be overridden". The only remaining exit was the general
+            // hatch (since retired) — a knowable string the guarded party could
+            // set, which recorded nothing and stopped nobody. This repository already ruled
             // on that shape for `issue file same`: *the point of the admission
             // mechanism is that the bare variable stops working*.
             //
@@ -1716,7 +1734,7 @@ reachability is.",
             run("file reverted", "git checkout -- <path>"),
             // The way through that leaves a record, which is what keeps this a
             // gate rather than a wall. Its precondition also makes the class
-            // non-suppressible by `BATTEN_HOOK_BYPASS` (CLOUD-1357), which is
+            // non-suppressible by any hatch (CLOUD-1357), which is
             // right for a verb whose subject is gone by the time anyone reads
             // the refusal.
             admit(
@@ -2213,6 +2231,16 @@ the ids are known to be well formed themselves.",
         applicability: Applicability::Advice,
     },
     VendoredVerdict {
+        id: "record declare refused",
+        gloss: "the record table would not load",
+        class: "`[[record]]` declares a family a producer fills with `batten record named`, so \
+that a module may read its store at all. A row whose name could never be written, or whose \
+writer is unnamed, is a family that can only ever answer could-not-look -- and the moment to \
+say so is at load, not after a green run nobody questioned.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
         id: "provision declare refused",
         gloss: "the provision table would not load",
         class: "`[[provision]]` is how a pinned tool reaches the cache a rule will look for \
@@ -2623,6 +2651,7 @@ mod tests {
                 | Native::FactTableRefused
                 | Native::MintTableRefused
                 | Native::RecorderTableRefused
+                | Native::RecordTableRefused
                 | Native::ProvisionTableRefused
                 | Native::StartupTableRefused
                 | Native::ProgramUnknown => native.id(),
