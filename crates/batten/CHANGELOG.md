@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.186](https://github.com/button-inc/batten/compare/v0.0.185...v0.0.186) - 2026-09-26
+
+### Fixed
+
+- *(darwin-link)* take the target argument, and refuse a bare body that reads one
+- *(task)* reclaim a singleton lock that never got a pid
+- *(hook)* a loaded deny-all rule can be escaped by a ripcord sentinel
+
+### Other
+
+- *(run-arg-shape)* backtick the target triples in a doc comment
+- *(policy)* describe each bundle's AST once per load
+- *(config)* read the committed schema before deriving one, and derive once
+- *(claude)* no tracker or harness step ever stops for a prompt
+- *(perf-gate)* open the sibling directory with backup semantics on Windows
+- *(perf-gate)* the seeding cases declare their expect() like the crate's other tests
+- *(perf-gate)* warm-start a missed base build from the newest previous one
+
 ## [0.0.185](https://github.com/button-inc/batten/compare/v0.0.184...v0.0.185) - 2026-09-26
 
 ### Added
