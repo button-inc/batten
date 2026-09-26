@@ -92,7 +92,7 @@
 
 use crate::common;
 
-use batten::perf::{base_arm_is_built, base_binary, base_target_dir, perf_dir};
+use batten::perf::{PAIR_PROFILE, base_arm_is_built, base_binary, base_target_dir, perf_dir};
 use common::{Fixture, run, stdout};
 
 /// A checkout with a committed base and nothing after it, so HEAD IS its merge
@@ -167,8 +167,11 @@ fn perf_is_a_noun_that_performs_no_default_action() {
 /// runs it.
 fn stage_base_arm(repo: &std::path::Path, sha: &str) -> std::path::PathBuf {
     let bin = base_binary(&perf_dir(repo), sha);
-    std::fs::create_dir_all(bin.parent().expect("the binary sits under release/"))
-        .expect("stage the base arm's target directory");
+    std::fs::create_dir_all(
+        bin.parent()
+            .expect("the binary sits under the pair profile's directory"),
+    )
+    .expect("stage the base arm's target directory");
     std::fs::write(&bin, b"a previously built base arm").expect("stage the base arm's binary");
     bin
 }
@@ -238,7 +241,7 @@ fn a_base_arm_from_this_merge_base_is_reused() {
 fn a_base_directory_with_no_binary_is_not_a_built_arm() {
     let repo = repo("perf-pair-base-partial");
     let sha = "4444444444444444444444444444444444444444";
-    std::fs::create_dir_all(base_target_dir(&perf_dir(&repo), sha).join("release"))
+    std::fs::create_dir_all(base_target_dir(&perf_dir(&repo), sha).join(PAIR_PROFILE))
         .expect("stage a killed build's leftovers");
     assert!(
         !base_arm_is_built(&perf_dir(&repo), sha),
