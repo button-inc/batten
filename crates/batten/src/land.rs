@@ -1988,6 +1988,11 @@ pub(crate) const BRANCH_KEYED_RECEIPTS: &[&str] = &[
     "filed-here-nudged",
     "filed-set-nudged",
     "unlanded-nudged",
+    // `pr-open`, minted from `create_pull_request`'s own result: this branch has an
+    // unlanded pull request, so opening a second one is the bundle split
+    // AGENTS.md's "one PR all of it" refuses. Landing sweeps it here, which is what
+    // lets the NEXT branch open its one PR.
+    "pr-open",
 ];
 
 /// Retire a branch whose pull request has merged.

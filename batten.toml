@@ -3656,6 +3656,43 @@ and stops for three things only: a rebase conflict, a failed `verify`, or red CI
 A webhook's silence is not success. Fetching CI on demand is fine; the ban is on \
 the timer."""
 
+# ONE PR ALL OF IT, AS A MECHANISM RATHER THAN A SENTENCE (CLOUD-1891).
+#
+# AGENTS.md says "one branch many rows, one PR all of it", and the landing-loop
+# memory carried a hatch ("one PR is an efficiency, not a commandment") that a
+# session read as licence twice in two days: 2026-09-25 it planned two PRs for one
+# bundle, and 2026-09-26 it opened #1033 while #1031 was still landing. Each
+# extra PR is a whole CI matrix and a whole lap. Prose was the fix both times and
+# failed both times, which is non-negotiable rule 2's case exactly.
+#
+# The marker is minted from `create_pull_request`'s own RESULT, so it exists only
+# once a PR really opened, and it is keyed on the branch the session sits on.
+# `land::retire_branch` sweeps it on the landed path (`BRANCH_KEYED_RECEIPTS`),
+# which is the only thing that frees the next PR — and `validate_marker` refuses
+# this row at load if that sweep is ever removed.
+[[mint]]
+name = "pr-open"
+tool = "create_pull_request"
+key = "branch"
+requires = ["url"]
+mode = "replace"
+body = "{now} {url}"
+
+[[rule]]
+id = "review open twice"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+tool = "create_pull_request"
+while_marker = "pr-open"
+reason = """
+This branch already has an unlanded pull request, and AGENTS.md's rule is one \
+PR for all of it: every extra PR is a whole CI matrix and a whole landing lap. \
+Put the new commits on the open PR's branch, or land it first — `mise run land` \
+sweeps this marker when the PR merges. A second PR is correct only when the \
+first must MERGE before the second is correct, and that dependency belongs in \
+the Ready block's `blockers`."""
+
 [[rule]]
 id = "timer mint refused"
 kind = "shape"
