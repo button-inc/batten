@@ -693,14 +693,11 @@ pub(crate) fn scratch_outside_tree(group: &str, name: &str) -> PathBuf {
 /// Absent or empty is the default lane and adds nothing, which is what keeps the
 /// ~130 binaries only `test:cargo` runs on the exact paths they have always had.
 ///
-/// **`.lane-` IS A MARKER THE COLLECTOR READS** (CLOUD-1879). The `clear-scratch`
-/// setup script in `.config/nextest.toml` runs at the start of every nextest
-/// invocation, and `verify` runs several at once — `test:cargo` beside seven
-/// narrow lanes. A collector that wiped the whole parent deleted a live lane's
-/// fixtures mid-run, which is the concurrent-deletion defect this qualifier
-/// exists to prevent, arriving one layer up. So the collector spares any
-/// `*.lane-<lane>-<pid>` entry whose pid is still alive, and the separator is
-/// spelled so it can find one without knowing any lane's name.
+/// **THE COLLECTOR DOES NOT READ THIS NAME** (CLOUD-1912). `clear-scratch` in
+/// `.config/nextest.toml` runs at the start of every nextest invocation, and
+/// `verify` runs several at once; it protects a live run by deferring while any
+/// other `cargo-nextest` is alive, not by sparing names. The qualifier's job is
+/// the one above: two concurrent runs of one task never resolve the same path.
 fn in_lane(name: &str) -> String {
     match std::env::var("BATTEN_TEST_SCRATCH_LANE") {
         Ok(lane) if !lane.is_empty() => format!("{name}.lane-{lane}-{}", std::process::id()),
