@@ -617,7 +617,7 @@ fn a_tool_call_is_not_judged_by_the_end_of_turn_rule() {
 /// Declare a `stop` handler row running a stub, with a chosen exit and output.
 ///
 /// The row is how a consumer puts a program on the ladder's second rung; the
-/// stub reads the host payload and ABSTAINS (exit 3) when it names no
+/// stub reads the host payload and ABSTAINS (exit 0, silent) when it names no
 /// transcript, the contract the real check keeps.
 #[cfg(unix)]
 fn stub(dir: &Path, exit: i32, stdout: &str) {
@@ -625,7 +625,7 @@ fn stub(dir: &Path, exit: i32, stdout: &str) {
     fs::write(
         &path,
         format!(
-            "#!/bin/sh\ngrep -q transcript_path || exit 3\nprintf '%s\\n' {stdout:?}\nexit {exit}\n"
+            "#!/bin/sh\ngrep -q transcript_path || exit 0\nprintf '%s\\n' {stdout:?}\nexit {exit}\n"
         ),
     )
     .expect("write stub");

@@ -26,9 +26,9 @@
 // carried: "ONLY THE LAST TURN is judged — an earlier stranding is not re-reported" mise.toml kind:mechanism
 // carried: "a stranding in the last turn fires even when earlier turns were clean" mise.toml kind:mechanism
 // carried: "a path:line-looking string that is not a source file does not fire" mise.toml kind:mechanism
-// changed: "an unparseable transcript exits 2 — could not look is not a verdict" mise.toml exits 3, abstained: at the handler door 2 is a refusal, and could-not-look must never read as one
-// changed: "an absent transcript path exits 2, not 0" mise.toml exits 3, abstained, for the same reason; still never 0
-// changed: "empty stdin exits 2 rather than reporting a clean session" mise.toml exits 3, abstained, for the same reason; still never 0
+// changed: "an unparseable transcript exits 2 — could not look is not a verdict" mise.toml exits 0 with the reason on stderr and nothing on stdout: the handler door has no abstention code, a 3 is a violation shown every turn and a 2 a refusal
+// changed: "an absent transcript path exits 2, not 0" mise.toml exits 0 with nothing on stdout, for the same reason, and says why on stderr
+// changed: "empty stdin exits 2 rather than reporting a clean session" mise.toml exits 0 with nothing on stdout, for the same reason, and says why on stderr
 // carried: "ANTI-VACUITY: a transcript with no turns exits 0 and says it judged nothing" mise.toml kind:mechanism
 // carried: "ANTI-VACUITY: the suite's own fired case is reachable" mise.toml kind:mechanism
 // carried: "CLOUD-775: an annotation on a TERMINAL row still reports — CLOUD-475 survives" mise.toml kind:mechanism
@@ -319,11 +319,11 @@ fn an_unreadable_transcript_abstains() {
     let turns = Turns::new("unparseable");
     std::fs::write(turns.transcript(), "this is not json\n").expect("write");
     let (code, text) = turns.check_in(&turns.repo, &turns.transcript().display().to_string());
-    assert_eq!(code, Some(3), "{text}");
+    assert_eq!(code, Some(0), "{text}");
     let absent = turns.root.join("nope.jsonl").display().to_string();
-    assert_eq!(turns.check_in(&turns.repo, &absent).0, Some(3));
-    assert_eq!(turns.check_in(&turns.repo, "").0, Some(3));
-    assert_eq!(turns.check_in(&turns.repo, "{}").0, Some(3));
+    assert_eq!(turns.check_in(&turns.repo, &absent).0, Some(0));
+    assert_eq!(turns.check_in(&turns.repo, "").0, Some(0));
+    assert_eq!(turns.check_in(&turns.repo, "{}").0, Some(0));
 }
 
 #[test]

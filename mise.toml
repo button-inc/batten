@@ -626,7 +626,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "mise,attestation,timeout-drift,engine-checks-green,engine-cargo-graph,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,task-board-payloads,task-board-sweep,branch-age,done,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,denials-outlive-the-turn,digest-major-agreement,doctor,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,egress-fencing,evaluator-closure,evaluator-io-probe,filed-here,task-finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,agent-spawn,in-progress-drain,install-check,land-divergence,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,task-linear-check,lock-complete,macos-link,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict,ntia,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,task-pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,task-reclaim-census,release-due,release-provision-parity,release-tag-shape,release-tracking,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,task-sbom,sbom-actions,sbom-binary,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,task-sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-callable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules,deferral,closing-key,release-assets"
+MUTANT_GATES = "mise,attestation,timeout-drift,engine-checks-green,engine-cargo-graph,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,task-board-payloads,task-board-sweep,branch-age,done,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,coderabbit-config-check,commit-hygiene,task-connector-allow-resolve,task-mcp-attach-check,container-preflight,darwin-link,denials-outlive-the-turn,digest-major-agreement,doctor,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,egress-fencing,evaluator-closure,evaluator-io-probe,filed-here,task-finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,agent-spawn,in-progress-drain,install-check,land-divergence,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,task-linear-check,lock-complete,macos-link,task-mcp-allow-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict,ntia,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,task-pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,task-reclaim-census,release-due,release-provision-parity,release-tag-shape,release-tracking,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,task-sbom,sbom-actions,sbom-binary,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,task-sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-callable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules,deferral,closing-key,release-assets"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -4040,10 +4040,10 @@ exit 2
 #
 # Stdin is the host's Stop payload (its `transcript_path`) or a bare path. The
 # contract is the handler door's: exit 1 with the pointer and the practice on
-# stderr when it fires, 0 silent otherwise, and 3 — abstained — when there is no
-# transcript to read, which the door reports as broken and the ladder keeps
-# silent. Never exit 2: at this door that is a refusal, and "no transcript" is
-# not one. POINTER, NEVER PAYLOAD: a turn number, never a byte of the prose.
+# stderr when it fires, and 0 otherwise. With no transcript to read it ABSTAINS
+# at exit 0 with the reason on stderr and nothing on stdout, which the door reads
+# as a pass: its table has no abstention code, a 3 is a contract violation shown
+# every turn, and a 2 is a refusal. Never a finding from nothing. POINTER, NEVER PAYLOAD: a turn number, never a byte of the prose.
 #MUTANT-SUITE crates/batten/tests/it/finding_sink.rs
 #MUTANT class-split-removed|s@^OPENS_A_ROW=.*@OPENS_A_ROW='save_'@|a_comment_alone_is_not_a_home
 #MUTANT terminal-row-is-a-home|s@#open\$'@#'@|an_annotation_on_a_terminal_row_still_reports
@@ -4057,7 +4057,7 @@ dir = "{{cwd}}"
 run = '''
 {% raw %}
 set -uo pipefail
-input=$(cat) || exit 3
+input=$(cat) || exit 0
 transcript="$input"
 if [[ "${input#"${input%%[![:space:]]*}"}" == \{* ]]; then
 	transcript=$(jq -r '.transcript_path // empty' <<<"$input" 2>/dev/null) || transcript=""
@@ -4065,7 +4065,7 @@ fi
 transcript="${transcript//[[:space:]]/}"
 if [[ -z "$transcript" ]] || [[ ! -r "$transcript" ]]; then
 	echo "finding-sink-check: abstained — no readable transcript" >&2
-	exit 3
+	exit 0
 fi
 # A path separator or a known source extension, so a duration, ratio or port is
 # not read as evidence; the extensionless `mise-tasks/` files need the first.
@@ -4101,7 +4101,7 @@ if ! boundaries=$(jq -r '
     | input_line_number
   ' "$transcript" 2>/dev/null); then
 	echo "finding-sink-check: abstained — the transcript is not readable JSONL" >&2
-	exit 3
+	exit 0
 fi
 turns=$(grep -c . <<<"$boundaries")
 start=$(tail -n 1 <<<"$boundaries")
@@ -4120,7 +4120,7 @@ if [[ -n "$start" ]]; then
 	      else empty end
 	  ' 2>/dev/null); then
 		echo "finding-sink-check: abstained — the transcript is not readable JSONL" >&2
-		exit 3
+		exit 0
 	fi
 	prose=$(grep '^T' <<<"$blocks")
 	tools=$(grep '^U' <<<"$blocks")
@@ -4228,6 +4228,507 @@ if [[ "$blocked" -ne 0 ]]; then
 	echo "::error:: done-pr-check: not Done — an issue still has a pull request open. A merged PR completes a diff, not an issue; an issue is done when every PR it carries has landed." >&2
 	exit 1
 fi
+{% endraw %}
+'''
+
+# Apply the committed `.claude/settings.json` permissions to whichever server
+# name the host exposed (CLOUD-191) — retired off `mise-tasks/connector-allow-
+# resolve.sh` and `connector-allow-guard.sh` under CLOUD-1717, one task in three
+# modes so the decision has one definition.
+#
+# The toolbox server is exposed under a name the HOST chooses per registration
+# episode: `mcp__Claude_Code_Remote__*`, then `mcp__<uuid>__*` after a
+# re-register. The literal matching the second is account-specific (rule 1), so
+# during a UUID episode the committed allow rules grant nothing and the deny rules
+# ENFORCE NOTHING — silently. This answers one question, "which committed server
+# is the host talking about", and returns THAT FILE's verdict; it grants nothing
+# of its own.
+#
+# ANCHOR ON THE ENDPOINT, NOT THE KEY: each injected entry's `mcp_url` carries a
+# public, committable upstream. ONE ENDPOINT: only the toolbox server is governed
+# by `permissions.allow`; a claude.ai connector is authorised at the connector
+# layer, so translating its name would GRANT what the file does not — every other
+# endpoint is silence. DENY IS TESTED BEFORE ALLOW, or an allow glob pre-approves
+# the timers AGENTS.md bans. Every degradation is silence, never a grant.
+#
+#   <tool> [--config F] [--settings F]   prints `<verdict> <alias>`, exit 0
+#   --guard                              the `connector-allow-guard` handler row:
+#                                        a host payload on stdin; allow is the
+#                                        reason on stdout, exit 0 (the row
+#                                        pre-approves); deny is the reason on
+#                                        stderr, exit 2; silence is nothing
+#   --aliases [--config F]               one line per injected key, in `keys`
+#                                        order: its alias or `-`, never the key
+#
+# Pointer-only: a verdict and an alias, never a key, URL or payload — and no UUID
+# shape in this body at all, which the tier asserts.
+#MUTANT-SUITE crates/batten/tests/it/connector_allow.rs
+#MUTANT deny-loses-to-allow-glob|s@^\treturn_if_denied .. return$@\treturn_if_allowed \&\& return@|a_deny_outranks_an_allow_glob_over_the_same_server
+#MUTANT translated-allow-not-emitted|s@^\tallow) printf@\tallow-never) printf@|a_committed_allow_is_a_preapproval_under_a_flipped_name
+#MUTANT connector-translated|s@^\t\[\[ "\$endpoint" = "\$TOOLBOX_ENDPOINT" \]\] .. { say silence -; return; }$@\t:@|a_claude_ai_connector_resolves_to_silence_never_a_grant
+[tasks.connector-allow-resolve]
+description = "The decision behind connector-allow-guard: apply the committed permissions to whichever server name the host exposed, resolved through the injected config's endpoint (CLOUD-191)"
+shell = "bash -c"
+dir = "{{cwd}}"
+usage = 'arg "[args]..." var=#true help="<tool> [--config F] [--settings F] | --guard | --aliases [--config F]"'
+run = '''
+{% raw %}
+set -uo pipefail
+args=()
+read -ra args <<<"${usage_args:-${*:-}}"
+# Public vendor address and the portable alias the committed file spells: the
+# whole of this task's committed knowledge, neither account-specific.
+TOOLBOX_ENDPOINT="https://api.anthropic.com/v1/code/mcp/meta"
+TOOLBOX_ALIAS="Claude_Code_Remote"
+tool=""
+mode=resolve
+config="${BATTEN_MCP_CONFIG:-}"
+settings="${BATTEN_MCP_SETTINGS:-.claude/settings.json}"
+i=0
+while [[ "$i" -lt "${#args[@]}" ]]; do
+	case "${args[$i]}" in
+	--config) config="${args[$((i + 1))]:-}"; i=$((i + 2)) ;;
+	--settings) settings="${args[$((i + 1))]:-}"; i=$((i + 2)) ;;
+	--guard) mode=guard; i=$((i + 1)) ;;
+	--aliases) mode=aliases; i=$((i + 1)) ;;
+	*) [[ -n "$tool" ]] || tool="${args[$i]}"; i=$((i + 1)) ;;
+	esac
+done
+if [[ -z "$config" ]]; then
+	for candidate in /tmp/mcp-config-cse_*.json; do
+		[[ -f "$candidate" ]] || continue
+		config="$candidate"
+		break
+	done
+fi
+#PIN-OK: jq
+command -v jq >/dev/null 2>&1 || { [[ "$mode" = resolve ]] && echo "silence -"; exit 0; }
+# The endpoint behind one live key, %-decoded; `--arg`, never spliced.
+endpoint_of() { # endpoint_of <key>
+	local url
+	url=$(jq -r --arg s "$1" '
+	  (.mcpServers[$s].url // "")
+	  | if test("mcp_url=") then (capture("mcp_url=(?<u>[^&]*)").u) else "" end
+	' "$config" 2>/dev/null) || return 1
+	[[ -n "$url" ]] || return 1
+	printf '%b' "${url//%/\\x}" 2>/dev/null
+}
+if [[ "$mode" = aliases ]]; then
+	[[ -n "$config" ]] && [[ -f "$config" ]] || exit 0
+	while IFS= read -r key; do
+		[[ -n "$key" ]] || continue
+		if [[ "$(endpoint_of "$key")" = "$TOOLBOX_ENDPOINT" ]]; then
+			echo "$TOOLBOX_ALIAS"
+		else
+			echo "-"
+		fi
+	done < <(jq -r '(.mcpServers // {}) | keys[]' "$config" 2>/dev/null)
+	exit 0
+fi
+if [[ "$mode" = guard ]]; then
+	[[ -n "${BATTEN_CONNECTOR_ALLOW_BYPASS:-}" ]] && exit 0
+	raw=$(cat) || exit 0
+	tool=$(jq -r '.tool_name // empty' <<<"$raw" 2>/dev/null) || exit 0
+	[[ -n "$tool" ]] || exit 0
+fi
+resolve() { # prints `<verdict> <alias>`
+	say() { printf '%s %s\n' "$1" "$2"; }
+	[[ -n "$tool" ]] || { say silence -; return; }
+	case "$tool" in
+	mcp__*__*) ;;
+	*) say silence -; return ;;
+	esac
+	local rest server verb endpoint alias
+	rest=${tool#mcp__}
+	server=${rest%%__*}
+	verb=${rest#*__}
+	[[ -n "$server" ]] && [[ -n "$verb" ]] || { say silence -; return; }
+	[[ -f "$settings" ]] || { say silence -; return; }
+	# A name the committed file spells needs no translation: the CLI matches it.
+	[[ "$server" != "$TOOLBOX_ALIAS" ]] || { say silence "$TOOLBOX_ALIAS"; return; }
+	[[ -n "$config" ]] && [[ -f "$config" ]] || { say silence -; return; }
+	endpoint=$(endpoint_of "$server") || { say silence -; return; }
+	[[ "$endpoint" = "$TOOLBOX_ENDPOINT" ]] || { say silence -; return; }
+	alias="$TOOLBOX_ALIAS"
+	# The exact spelling and the tool-name glob after a literal server prefix.
+	states() { # states <allow|deny>
+		local answer
+		answer=$(jq -r --arg a "mcp__${alias}__${verb}" --arg g "mcp__${alias}__*" --arg arm "$1" '
+		  (.permissions[$arm] // []) | map(select(type == "string")) | any(. == $a or . == $g)
+		' "$settings" 2>/dev/null) || return 1
+		[[ "$answer" = true ]]
+	}
+	return_if_denied() { states deny && say deny "$alias"; }
+	return_if_allowed() { states allow && say allow "$alias"; }
+	# Deny first — see the ordering note in the header.
+	return_if_denied && return
+	return_if_allowed && return
+	say silence "$alias"
+}
+answer=$(resolve)
+if [[ "$mode" = resolve ]]; then
+	printf '%s\n' "$answer"
+	exit 0
+fi
+read -r verdict alias <<<"$answer"
+verb=${tool##*__}
+case "$verdict" in
+	allow) printf 'connector-allow-guard: .claude/settings.json already allows %s on %s. The host is exposing that server under a different name this session, so the committed rule does not match it literally — this applies the committed verdict, and grants nothing the file does not already state (CLOUD-191).\n' "$verb" "$alias" ;;
+	deny)
+		printf 'connector-allow-guard: .claude/settings.json denies %s on %s, and the host is exposing that server under a different name this session, so the committed deny rule does not match it literally. AGENTS.md'"'"'s ban on babysitting timers rests on this refusal (CLOUD-191).\n' "$verb" "$alias" >&2
+		exit 2
+		;;
+esac
+exit 0
+{% endraw %}
+'''
+
+# No MCP permission rule in `.claude/settings.json` is silently skipped by the
+# CLI — retired off `mise-tasks/mcp-allow-check.sh` under CLOUD-1717. A rule
+# that grants nothing is silent by construction: its only symptom is an approval
+# prompt, which reads as harness behaviour rather than a settings bug.
+#
+# Commit-scoped (the hk gate and CI), pure functions of the settings file:
+#   unanchored-allow-glob     a glob in the server segment, or a bare `*`: the
+#                             CLI skips it with a warning, so it grants nothing.
+#   ungranted-enabled-server  a server `enabledMcpjsonServers` turns on that no
+#                             allow rule names — Serena shipped that way.
+#   uncovered-connector-deny  a deny naming ONE host-supplied server and ONE tool
+#                             literally, that no suffix-deciding `tool` row covers
+#                             (`batten policy tools`). An under-matching deny fails
+#                             OPEN, silently (CLOUD-178). An unreadable engine is
+#                             could-not-look: the predicate is skipped and says so.
+# World-scoped, only with `--session` (the `user-prompt-submit` handler row):
+#   CLOUD-765  an allow rule on the toolbox alias whose tool the connector sets to
+#              anything but `always_allow` — no allow rule skips that prompt. The
+#              alias comes from `[tasks.connector-allow-resolve] --aliases`, the one
+#              resolver. A deny is never reported: the control never widens one.
+#   CLOUD-790  a guard's pre-approved suffix (`--covers-allow`, under
+#              `BATTEN_GUARD_DIR`) the connector sets to ask, on any server.
+# Both world predicates fail open with no generated config. Silence is the pass
+# (CLOUD-891). Pointer-only: a rule, a server segment, a suffix, a policy token
+# and a count — never a URL, a key or the `headers` block.
+#MUTANT-SUITE crates/batten/tests/it/mcp_allow.rs
+#MUTANT allow-check-ignores-policy|s/^\t\t\t\[\[ "\$policy" = always_allow \]\].*$/\t\t\tcontinue/|an_allow_rule_whose_tool_the_connector_sets_to_ask_is_unenforceable
+#MUTANT guard-allow-ignores-policy|s/^\t\t\t\[\[ "\$arm_policy" = always_allow \]\] && continue$/\t\t\tcontinue/|a_preapproved_suffix_the_connector_sets_to_ask_is_refused
+#MUTANT server-glob-accepted|s@^\t\*'\*'\*) report "\$rule — the server segment@\tnever) report "$rule — the server segment@|a_glob_in_the_server_segment_is_reported
+#MUTANT enabled-grant-unchecked|s@\[\[ "\$rule_server" = "\$server" \]\] && granted=1@granted=1@|an_enabled_server_that_no_allow_rule_names_is_reported
+[tasks.mcp-allow-check]
+description = "Gate: no MCP allow rule in .claude/settings.json is silently skipped by the CLI"
+shell = "bash -c"
+dir = "{{cwd}}"
+usage = 'arg "[args]..." var=#true help="[--session] [settings-file]"'
+run = '''
+{% raw %}
+set -euo pipefail
+args=()
+read -ra args <<<"${usage_args:-${*:-}}"
+manifest="${MISE_CONFIG_FILE:-${MISE_PROJECT_ROOT:-$PWD}/mise.toml}"
+#PIN-OK: jq
+if ! command -v jq >/dev/null 2>&1; then
+	echo "::error:: mcp-allow-check: no jq on PATH — every read here would fail into a silent pass, so this gate is checking NOTHING. Run: mise install" >&2
+	exit 2
+fi
+session=0
+settings=".claude/settings.json"
+for arg in "${args[@]}"; do
+	case "$arg" in
+	--session) session=1 ;;
+	*) settings="$arg" ;;
+	esac
+done
+if [[ ! -f "$settings" ]]; then
+	echo "mcp-allow-check: no $settings — nothing to check"
+	exit 0
+fi
+if ! allows=$(jq -e -c '[.permissions.allow // [] | .[] | select(type == "string")]' "$settings" 2>/dev/null); then
+	echo "::error:: $settings is not readable JSON with a permissions.allow list" >&2
+	exit 2
+fi
+fail=0
+report() {
+	[[ "$fail" = 0 ]] && echo "::error:: MCP permission defects in $settings (see mem:toolchain-and-hooks):" >&2
+	printf '  %s\n' "$1" >&2
+	fail=1
+}
+while IFS= read -r rule; do
+	[[ -n "$rule" ]] || continue
+	case "$rule" in
+	mcp__*) ;;
+	*) continue ;;
+	esac
+	server=${rule#mcp__}
+	server=${server%%__*}
+	case "$server" in
+	*'*'*) report "$rule — the server segment cannot be a glob; the CLI skips this rule with a warning and it grants nothing" ;;
+	esac
+done < <(jq -r '.[]' <<<"$allows")
+while IFS= read -r rule; do
+	case "$rule" in
+	'*') report "$rule — an unanchored allow glob is skipped with a warning; it auto-approves nothing" ;;
+	esac
+done < <(jq -r '.[]' <<<"$allows")
+while IFS= read -r server; do
+	[[ -n "$server" ]] || continue
+	granted=0
+	while IFS= read -r rule; do
+		case "$rule" in
+		mcp__*) ;;
+		*) continue ;;
+		esac
+		rule_server=${rule#mcp__}
+		rule_server=${rule_server%%__*}
+		[[ "$rule_server" = "$server" ]] && granted=1
+	done < <(jq -r '.[]' <<<"$allows")
+	[[ "$granted" = 1 ]] ||
+		report "$server — enabledMcpjsonServers turns this server on and no allow rule names it; every call to it prompts"
+done < <(jq -r '(.enabledMcpjsonServers // empty) | if type == "array" then .[] else empty end' "$settings" 2>/dev/null)
+# --- an under-matching DENY (CLOUD-178) ---------------------------------------
+declared=$( (
+	jq -r '(.enabledMcpjsonServers // empty) | if type == "array" then .[] else empty end' "$settings" 2>/dev/null
+	# A checkout with no `.mcp.json` declares nothing; under `pipefail` an absent
+	# file must not end the gate with a silent exit 2.
+	jq -r '(.mcpServers // {}) | keys[]' .mcp.json 2>/dev/null || true
+) | sort -u)
+guards="${BATTEN_GUARD_DIR:-$(dirname -- "$manifest")/mise-tasks}"
+engine_read=0
+if ! covered_engine=$(
+	read -r -a batten_bin <<<"${BATTEN_BIN:-batten}"
+	"${batten_bin[@]}" policy tools 2>/dev/null
+); then
+	engine_read=1
+fi
+# Stdin is closed for every probe: a guard that does not know the flag falls
+# through to reading a payload that never comes.
+covered=$( (
+	printf '%s\n' "$covered_engine"
+	for guard in "$guards"/*-guard.sh; do
+		[[ -x "$guard" ]] || continue
+		"$guard" --covers </dev/null 2>/dev/null || true
+	done
+) | { grep -E '^[a-z][a-z0-9_]*$' || true; } | sort -u)
+if [[ "$engine_read" != "0" ]]; then
+	echo "mcp-allow-check: deny coverage not judged — \`${BATTEN_BIN:-batten} policy tools\` could not be read, and it is the only source of the covered suffixes"
+fi
+while IFS= read -r rule; do
+	[[ "$engine_read" == "0" ]] || break
+	[[ -n "$rule" ]] || continue
+	case "$rule" in
+	mcp__*) ;;
+	*) continue ;;
+	esac
+	rule_server=${rule#mcp__}
+	rule_server=${rule_server%%__*}
+	suffix=${rule##*__}
+	case "$rule_server$suffix" in
+	*'*'*) continue ;;
+	esac
+	grep -qxF "$rule_server" <<<"$declared" && continue
+	grep -qxF "$suffix" <<<"$covered" && continue
+	report "$rule — a deny on a host-supplied connector, whose exposed name the host chooses per registration episode (CLOUD-178). No suffix-matching guard covers \`$suffix\`, so this rule reads as a prohibition and enforces nothing the moment the connector comes back under a different name."
+done < <(jq -r '[.permissions.deny // [] | .[] | select(type == "string")] | .[]' "$settings")
+# --- the world half, only with --session --------------------------------------
+config="${BATTEN_MCP_CONFIG:-}"
+if [[ -z "$config" ]]; then
+	for candidate in /tmp/mcp-config-cse_*.json; do
+		[[ -f "$candidate" ]] || continue
+		config="$candidate"
+		break
+	done
+fi
+if [[ "$session" = 1 ]] && [[ -n "$config" ]] && [[ -f "$config" ]]; then
+	# CLOUD-765. Keys and their aliases, zipped in `keys` order: the resolver
+	# prints an alias or `-` per key and never the key itself.
+	aliases=$(MISE_CONFIG_FILE="$manifest" mise run -q connector-allow-resolve -- --aliases --config "$config" </dev/null 2>/dev/null) || aliases=""
+	keys=$(jq -r '(.mcpServers // {}) | keys[]' "$config" 2>/dev/null) || keys=""
+	while IFS=$'\t' read -r key alias; do
+		[[ -n "$key" ]] && [[ -n "$alias" ]] && [[ "$alias" != "-" ]] || continue
+		blocked=0
+		policies=""
+		while IFS= read -r verb; do
+			[[ -n "$verb" ]] || continue
+			policy=$(jq -r --arg s "$key" --arg t "$verb" '
+			  (.mcpServers[$s].tools // []) | map(select(.name == $t)) | .[0].permission_policy // ""
+			' "$config" 2>/dev/null)
+			[[ -n "$policy" ]] || continue
+			[[ "$policy" = always_allow ]] && continue
+			blocked=$((blocked + 1))
+			case " $policies " in
+			*" $policy "*) ;;
+			*) policies="${policies}${policies:+,}$policy" ;;
+			esac
+		done < <(jq -r --arg p "mcp__${alias}__" '.[] | select(startswith($p)) | sub("^" + $p; "")' <<<"$allows" | grep -vF '*' | sort -u)
+		[[ "$blocked" = 0 ]] ||
+			report "$alias — $blocked allow rule(s) name a tool the connector sets to \`$policies\`, and an allow rule never skips that prompt. Fix it at the connector's Tool permissions, not in $settings (CLOUD-765)."
+	done < <(paste <(printf '%s\n' "$keys") <(printf '%s\n' "$aliases"))
+	# CLOUD-790. A guard's pre-approved suffixes, judged on every exposed server.
+	preapproved=$(for guard in "$guards"/*-guard.sh; do
+		[[ -x "$guard" ]] || continue
+		"$guard" --covers-allow </dev/null 2>/dev/null || true
+	done | grep -E '^[a-z][a-z0-9_]*$' | sort -u) || preapproved=""
+	while IFS= read -r suffix; do
+		[[ -n "$suffix" ]] || continue
+		blocked=0
+		policies=""
+		while IFS= read -r arm_policy; do
+			[[ -n "$arm_policy" ]] || continue
+			[[ "$arm_policy" = always_allow ]] && continue
+			blocked=$((blocked + 1))
+			case " $policies " in
+			*" $arm_policy "*) ;;
+			*) policies="${policies}${policies:+,}$arm_policy" ;;
+			esac
+		done < <(jq -r --arg t "$suffix" '
+		  (.mcpServers // {}) | to_entries[] | (.value.tools // []) | map(select(.name == $t)) | .[] | .permission_policy // empty
+		' "$config" 2>/dev/null)
+		[[ "$blocked" = 0 ]] ||
+			report "$suffix — a guard pre-approves this tool, and the connector sets it to \`$policies\` on $blocked exposed server(s). A hook's \`permissionDecision: allow\` never skips that prompt, so the arm claims an authority it does not hold. Fix it at the connector's Tool permissions, or drop the arm and do the work off the mediated path (CLOUD-790)."
+	done <<<"$preapproved"
+fi
+exit "$fail"
+{% endraw %}
+'''
+
+# Every server this repo enables actually ATTACHED this session (CLOUD-316) —
+# retired off `mise-tasks/mcp-attach-check.sh` under CLOUD-1717. Serena was
+# declared, enabled, granted, pinned and startable, and absent for a whole
+# session, because the launch failed and nothing read the CLI's record of it.
+#
+# THE LAST connection outcome in the NEWEST log (by ISO-8601 name, never mtime)
+# decides: a failure followed by a reconnect is a session that has its server.
+# The failure code is NOT fixed at `-32000` (the next one was `CONNECT_TIMEOUT`),
+# and an `error` KEY is routine stderr chatter, not an error. A missing log ROOT
+# is not a live session and fails open; a root with a server's directory missing
+# is the defect. With a spawn ledger (CLOUD-714), a failure reads as
+# spawned-and-unresponsive or never-spawned — but only where the ledger has seen
+# that server at all; otherwise `unrecorded`, never a verdict from nothing.
+#
+# The log tree CANNOT answer whether a permission rule's server name is right:
+# `mcp-logs-<server>` sanitizes every non-alphanumeric run to `-` (CLOUD-665).
+# World-scoped, so it runs on `user-prompt-submit`, never in the commit gate.
+# Silence is the pass (CLOUD-891). Pointer-only: a server name and a code.
+#MUTANT-SUITE crates/batten/tests/it/mcp_attach.rs
+#MUTANT spawn-window-ignored|s@\$1 >= t - 5 .. \$1 <= t + 35@1@|a_timeout_with_no_spawn_record_for_that_attempt_reads_as_never_spawned
+#MUTANT ledger-wiring-inverted|s@if ! grep -q@if grep -q@|a_timeout_with_a_matching_spawn_record_reads_as_spawned_and_unresponsive
+#MUTANT last-outcome-ignored|s@ tail -n 1)$@ head -n 1)@|a_failure_followed_by_a_reconnect_passes
+#MUTANT absent-root-judged|s@^if \[\[ ! -d "\$logroot" \]\]; then$@if false; then@|a_missing_log_root_is_not_a_live_session
+[tasks.mcp-attach-check]
+description = "Gate: every server this repo enables actually ATTACHED this session — reads the CLI's own MCP connection logs, pointer-only"
+shell = "bash -c"
+dir = "{{cwd}}"
+usage = 'arg "[args]..." var=#true help="[--settings F] [--logs DIR] [--spawns F]"'
+run = '''
+{% raw %}
+set -uo pipefail
+args=()
+read -ra args <<<"${usage_args:-${*:-}}"
+#PIN-OK: jq
+if ! command -v jq >/dev/null 2>&1; then
+	echo "::error:: mcp-attach-check: no jq on PATH — this gate reads a settings file and an MCP log, so it is checking NOTHING. Run: mise install" >&2
+	exit 2
+fi
+settings=".claude/settings.json"
+logroot=""
+spawns=""
+spawns_set=0
+i=0
+while [[ "$i" -lt "${#args[@]}" ]]; do
+	case "${args[$i]}" in
+	--settings) settings="${args[$((i + 1))]:-}" ;;
+	--logs) logroot="${args[$((i + 1))]:-}" ;;
+	--spawns)
+		spawns="${args[$((i + 1))]:-}"
+		spawns_set=1
+		;;
+	*)
+		echo "usage: mcp-attach-check [--settings <file>] [--logs <dir>] [--spawns <file>]" >&2
+		exit 2
+		;;
+	esac
+	i=$((i + 2))
+done
+if [[ "$spawns_set" = 0 ]]; then
+	git_dir=$(git rev-parse --git-dir 2>/dev/null) || git_dir=""
+	[[ -n "$git_dir" ]] && spawns="$git_dir/batten-mcp-spawns"
+fi
+# The CLI keys its log tree by the project path with every `/` as `-`.
+if [[ -z "$logroot" ]]; then
+	logroot="${HOME}/.cache/claude-cli-nodejs/$(pwd | tr '/' '-')"
+fi
+if [[ ! -f "$settings" ]]; then
+	echo "mcp-attach-check: no $settings — nothing to check"
+	exit 0
+fi
+if ! servers=$(jq -r '(.enabledMcpjsonServers // empty) | if type == "array" then .[] else empty end' "$settings" 2>/dev/null); then
+	echo "::error:: $settings is not readable JSON" >&2
+	exit 2
+fi
+if [[ -z "$servers" ]]; then
+	echo "mcp-attach-check: no enabled .mcp.json servers — nothing to check"
+	exit 0
+fi
+if [[ ! -d "$logroot" ]]; then
+	echo "mcp-attach-check: no MCP log tree at $logroot — not a live session, nothing to check"
+	exit 0
+fi
+# The ledger `mise-tasks/<server>-mcp` appends to. Its silence about an attempt
+# means something only once it has recorded that server at all.
+spawn_verdict() { # spawn_verdict <server> <newest-log-path>
+	local server="$1" log="$2" stamp start hits
+	if [[ -z "$spawns" ]] || [[ ! -r "$spawns" ]]; then
+		echo "unrecorded (no spawn ledger; wire mise-tasks/${server}-mcp to tell a launch that never happened from one that hung)"
+		return 0
+	fi
+	if ! grep -q "$(printf '\t%s\t' "$server")" "$spawns" 2>/dev/null; then
+		echo "unrecorded (the ledger has never seen $server; the shim is not wired for it)"
+		return 0
+	fi
+	# The log NAME is the attempt's UTC start: `…T05-41-40-873Z` -> `…T05:41:40Z`.
+	stamp=$(basename -- "$log" .jsonl)
+	stamp=$(printf '%s' "$stamp" | sed -E 's/^([0-9]{4}-[0-9]{2}-[0-9]{2})T([0-9]{2})-([0-9]{2})-([0-9]{2})-[0-9]+Z$/\1T\2:\3:\4Z/')
+	if ! start=$(date -u -d "$stamp" +%s 2>/dev/null) || [[ -z "$start" ]]; then
+		echo "unrecorded (the log name carries no parseable attempt time)"
+		return 0
+	fi
+	hits=$(awk -F'\t' -v s="$server" -v t="$start" \
+		'$1 ~ /^[0-9]+$/ && $2 == s && $1 >= t - 5 && $1 <= t + 35 { n++ } END { print n + 0 }' \
+		"$spawns" 2>/dev/null) || hits=0
+	if [[ "${hits:-0}" -gt 0 ]]; then
+		echo "spawned-and-unresponsive (the shim recorded the launch; the child ran and did not answer)"
+	else
+		echo "never-spawned (the shim records every launch and recorded none for this attempt)"
+	fi
+}
+fail=0
+report() {
+	[[ "$fail" = 0 ]] && echo "::error:: enabled MCP server(s) did not attach this session (see mem:serena-setup):" >&2
+	printf '  %s\n' "$1" >&2
+	fail=1
+}
+while IFS= read -r server; do
+	[[ -n "$server" ]] || continue
+	dir="$logroot/mcp-logs-$server"
+	if [[ ! -d "$dir" ]]; then
+		report "$server no-log — enabled, but this session logged no connection attempt for it"
+		continue
+	fi
+	newest=$(find "$dir" -maxdepth 1 -type f -name '*.jsonl' 2>/dev/null | sort -r | head -n 1)
+	if [[ -z "$newest" ]] || [[ ! -r "$newest" ]]; then
+		report "$server no-log — $dir holds no readable connection log"
+		continue
+	fi
+	outcome=$(jq -r 'select(has("debug")) | .debug
+		| if startswith("Successfully connected") then "ok"
+		  elif startswith("Connection failed") then
+		      "fail " + ((capture("\\((?<c>[^)]+)\\)") | .c) // "unknown")
+		  else empty end' "$newest" 2>/dev/null | tail -n 1)
+	case "$outcome" in
+	ok) ;;
+	"fail "*) report "$server ${outcome#fail } — $(spawn_verdict "$server" "$newest")" ;;
+	*) report "$server no-outcome — its newest log records no connection result" ;;
+	esac
+done <<<"$servers"
+exit "$fail"
 {% endraw %}
 '''
 

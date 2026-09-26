@@ -10251,8 +10251,9 @@ wiring = [".claude/settings.json"]
 [[hook.handler]]
 id = "mcp-attach-check"
 on = "user-prompt-submit"
-run = ["mise-tasks/mcp-attach-check.sh"]
-timeout_ms = 2000
+run = ["mise", "run", "-q", "mcp-attach-check"]
+# `mise run` costs ~750ms in this checkout before the task starts.
+timeout_ms = 5000
 owner = "CLOUD-312"
 expires = "2027-02-28"
 
@@ -10309,34 +10310,26 @@ expires = "2027-02-28"
 # Halved, and the half that goes is the spawn. `mcp__*` calls still pay it, which is
 # the point — they are the calls this decides.
 #
-# THIS ROW IS DECIDING NOTHING TODAY, AND THAT IS RECORDED HERE RATHER THAN FIXED
-# (measured 2026-08-26, still true on `main`). The guard writes its verdict as a
-# `hookSpecificOutput` document on stdout and exits 0. Behind the door
-# `handler::impersonates_host` reads that shape BEFORE the exit code, returns
-# `Outcome::Broke(ImpersonatedHost)`, and every `Broke` variant ALLOWS — so the
-# verdict is reported as a pointer and dropped. Its own bats suite is green
-# throughout, because a suite that never drives the real dispatch cannot see it.
+# THIS ROW DECIDES NOW, AND IT DID NOT BEFORE (CLOUD-1717). The retired guard
+# wrote its verdict as a `hookSpecificOutput` document on stdout, which
+# `handler::impersonates_host` reads before the exit code as `Broke`, which
+# allows: every verdict was reported and dropped, and only the ALLOW half — which
+# nothing else provides — was actually lost. The repair was a governed-file edit
+# `shell-retirement` refused; retiring the file into `[tasks.connector-allow-
+# resolve] --guard` is what made it expressible. The task now answers on the
+# door's contract: allow is the reason on stdout at exit 0, which `preapproves`
+# turns into the grant, and deny is the reason on stderr at exit 2.
 #
-# What made the loss invisible: every deny in the committed table is also covered
-# by an unrelated engine row over the same tool, so a refusal still reached the
-# host — from somewhere else. Only the ALLOW half, which nothing else provides, is
-# actually gone, and with it the approval prompt CLOUD-191 exists to remove.
-#
-# WHY IT IS NOT REPAIRED HERE. The fix is one `case` in the guard's `decide()`,
-# and that is an EDIT to a governed file, which `shell-retirement` refuses unless
-# the file is retired instead. It cannot be retired: it reads
-# `/tmp/mcp-config-cse_*.json` per call — off-tree, per-session, unstable — which a
-# Rego module may not do (`Authority::Supplied` opens no file), and a Rust port
-# would carry one consumer's file layout and vocabulary into `crates/batten`
-# against non-negotiable rule 1. So the repair needs a decision this PR does not
-# own, and `preapproves` is left undeclared because it cannot fire while the
-# document is dropped — declaring it would assert a reach this row does not have.
+# THE COST MOVED, AND IS MEASURED: `mise run` in this checkout is ~750ms against
+# the retired script's 31ms, because mise parses this manifest before any task
+# runs. `matcher` still keeps every non-MCP call off it; the bound is 5000.
 [[hook.handler]]
 id = "connector-allow-guard"
 on = "pre-tool"
-run = ["mise-tasks/connector-allow-guard.sh"]
+run = ["mise", "run", "-q", "connector-allow-resolve", "--", "--guard"]
 matcher = "^mcp__"
-timeout_ms = 2000
+timeout_ms = 5000
+preapproves = true
 owner = "CLOUD-312"
 expires = "2027-02-28"
 
@@ -10374,8 +10367,9 @@ expires = "2027-02-28"
 [[hook.handler]]
 id = "mcp-allow-check"
 on = "user-prompt-submit"
-run = ["mise-tasks/mcp-allow-check.sh", "--session"]
-timeout_ms = 2000
+run = ["mise", "run", "-q", "mcp-allow-check", "--", "--session"]
+# Two `mise run`s with the resolver nested, ~750ms each in this checkout.
+timeout_ms = 5000
 owner = "CLOUD-312"
 expires = "2027-02-28"
 
@@ -10385,7 +10379,8 @@ expires = "2027-02-28"
 # the output-posture module and never ahead of them: at most one nudge per turn is
 # the measured rule. The engine used to spawn the file by path, which put this
 # repository's program inside `crates/batten`; declared here, it is the
-# consumer's. Abstains (exit 3) with no transcript, which the ladder keeps silent.
+# consumer's. With no transcript it abstains at exit 0 with nothing on stdout,
+# which the door reads as a pass: its table has no abstention code.
 [[hook.handler]]
 id = "finding-sink"
 on = "stop"
