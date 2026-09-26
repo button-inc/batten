@@ -566,17 +566,68 @@ pub fn perf_dir(repo: &Path) -> PathBuf {
 /// The separate target directory itself is unchanged and still carries the
 /// reason `measure` gives for it — sharing the main one would have the two builds
 /// evict each other's artifacts and race the target-dir lock under `verify`.
+///
+/// # The key is the crates' CONTENT, not the merge-base sha (CLOUD-1891)
+///
+/// `main` moves several times an hour and almost never touches only one thing,
+/// but most moves leave `crates/`, `Cargo.toml` and `Cargo.lock` as they were at
+/// the previous base. A sha key rebuilt the base arm on every one of those
+/// moves; [`base_key`] names the three trees the binary is built FROM, so an
+/// unchanged set is the same directory and costs no build at all. The
+/// refusal the paragraph above describes is unchanged — the name is still a
+/// fact about what the directory was built from, and a closer one.
 #[must_use]
-pub fn base_target_dir(perf_dir: &Path, base_sha: &str) -> PathBuf {
-    perf_dir.join(format!("base-{base_sha}"))
+pub fn base_target_dir(perf_dir: &Path, key: &str) -> PathBuf {
+    perf_dir.join(format!("base-{key}"))
 }
 
 /// The binary [`base_target_dir`] holds once the base arm has been built.
 #[must_use]
-pub fn base_binary(perf_dir: &Path, base_sha: &str) -> PathBuf {
-    base_target_dir(perf_dir, base_sha)
-        .join("release")
+pub fn base_binary(perf_dir: &Path, key: &str) -> PathBuf {
+    base_target_dir(perf_dir, key)
+        .join(PAIR_PROFILE)
         .join("batten")
+}
+
+/// The cargo profile BOTH arms of the pair are built under (CLOUD-1891).
+///
+/// `release` is thin-LTO, and building `batten` under it twice was 7m40s and
+/// 6m23s of a 1007s `perf-gate`. The pair's verdict is a RATIO between two arms
+/// under one profile, so the profile the ratio is taken under only has to be the
+/// same on both sides — `perf-arm` inherits `release` and turns LTO off and
+/// incremental on. The published absolute figure (`invocation`, `perf-assert`)
+/// still measures `release`, which is the binary users install.
+pub const PAIR_PROFILE: &str = "perf-arm";
+
+/// The base arm's key: the three tree ids the binary is built from, hashed.
+///
+/// Pure over the three ids so it is testable without a repository; the empty
+/// string stands for a path absent at that revision, which still yields a key.
+#[must_use]
+pub fn crate_key(crates: &str, manifest: &str, lock: &str) -> String {
+    use sha2::Digest as _;
+    let digest = sha2::Sha256::digest(format!("{crates}\n{manifest}\n{lock}\n").as_bytes());
+    digest.iter().take(10).fold(String::new(), |mut hex, byte| {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{byte:02x}");
+        hex
+    })
+}
+
+/// [`crate_key`] over `base_sha`'s own trees.
+///
+/// # Errors
+///
+/// A repository that cannot be opened.
+pub fn base_key(repo: &Path, base_sha: &str) -> Result<String> {
+    let id = |path: &str| -> Result<String> {
+        Ok(crate::git::resolve_ref(repo, &format!("{base_sha}:{path}"))?.unwrap_or_default())
+    };
+    Ok(crate_key(
+        &id("crates")?,
+        &id("Cargo.toml")?,
+        &id("Cargo.lock")?,
+    ))
 }
 
 /// Whether the base arm can be measured without spawning cargo at all.
@@ -586,8 +637,8 @@ pub fn base_binary(perf_dir: &Path, base_sha: &str) -> PathBuf {
 /// behind with no binary in it, and reading that as "built" would hand hyperfine
 /// a path it cannot execute and report the could-not-look as a measurement.
 #[must_use]
-pub fn base_arm_is_built(perf_dir: &Path, base_sha: &str) -> bool {
-    base_binary(perf_dir, base_sha).is_file()
+pub fn base_arm_is_built(perf_dir: &Path, key: &str) -> bool {
+    base_binary(perf_dir, key).is_file()
 }
 
 /// Warm-start a missing base target directory from the newest sibling base build.
@@ -602,9 +653,9 @@ pub fn base_arm_is_built(perf_dir: &Path, base_sha: &str) -> bool {
 ///
 /// # Why a rename is safe
 ///
-/// The SHA is still in the path, so a stale arm still cannot answer to this name:
-/// the directory is renamed BEFORE the build, and the build runs against this
-/// base's own tree. What carries over is only what cargo's fingerprints judge
+/// The key is still in the path, so a stale arm still cannot answer to this
+/// name: the directory is renamed BEFORE the build, and the build runs against
+/// this base's own tree. What carries over is only what cargo's fingerprints judge
 /// unchanged — dependencies, almost always — so correctness rests on cargo, not
 /// on the key. A RENAME, never a copy: the superseded key is dead once `main`
 /// has moved past it, and a copy would double the heaviest directory under
@@ -616,8 +667,8 @@ pub fn base_arm_is_built(perf_dir: &Path, base_sha: &str) -> bool {
 /// # Errors
 ///
 /// A failed rename. An unreadable `perf_dir` is treated as having no siblings.
-pub fn seed_base_target_dir(perf_dir: &Path, base_sha: &str) -> Result<()> {
-    let target = base_target_dir(perf_dir, base_sha);
+pub fn seed_base_target_dir(perf_dir: &Path, key: &str) -> Result<()> {
+    let target = base_target_dir(perf_dir, key);
     if target.exists() {
         return Ok(());
     }
@@ -658,7 +709,10 @@ fn out_dir(repo: &Path) -> Result<PathBuf> {
         .with_context(|| format!("perf-pair: could not resolve {}", dir.display()))
 }
 
-/// Build `-p batten --release` in `dir`, with an optional target directory.
+/// Build `-p batten` under `profile` in `dir`, with an optional target directory.
+///
+/// `release` for the published figure, [`PAIR_PROFILE`] for both arms of the
+/// pair — never mixed within one pair, which is what keeps its ratio fair.
 ///
 /// NOT `--quiet`, and the flag's removal is CLOUD-1331's measurement half rather
 /// than a taste. The row's acceptance is a `Compiling` line count per arm read
@@ -667,8 +721,8 @@ fn out_dir(repo: &Path) -> Result<PathBuf> {
 /// `0` again after the fix, which is a reading that cannot tell the two apart.
 /// Cargo's progress goes to stderr, so nothing changes for `perf-gate.sh`, which
 /// redirects this command's STDOUT to a file and greps `^arm=`.
-fn build(dir: &Path, target_dir: Option<&Path>, what: &str) -> Result<()> {
-    let args: Vec<String> = ["build", "--release", "-p", "batten"]
+fn build(dir: &Path, target_dir: Option<&Path>, what: &str, profile: &str) -> Result<()> {
+    let args: Vec<String> = ["build", "--profile", profile, "-p", "batten"]
         .iter()
         .map(|a| (*a).to_owned())
         .collect();
@@ -877,8 +931,8 @@ fn measure(repo: &Path, options: Options, base_sha: &str) -> Result<Vec<Record>>
 
     let out = out_dir(repo)?;
 
-    build(repo, None, "head")?;
-    let head_bin = repo.join("target/release/batten");
+    build(repo, None, "head", PAIR_PROFILE)?;
+    let head_bin = repo.join("target").join(PAIR_PROFILE).join("batten");
 
     let (base_bin, base_tree) = if options.null {
         // The null experiment: the same bytes as both arms. COPIED rather than
@@ -911,14 +965,20 @@ fn measure(repo: &Path, options: Options, base_sha: &str) -> Result<Vec<Record>>
         // to derive that arm's invocation, so skipping it would measure the head
         // wiring against the base binary.
         let perf = perf_dir(repo);
-        let base_bin = base_binary(&perf, base_sha);
-        if !base_arm_is_built(&perf, base_sha) {
-            seed_base_target_dir(&perf, base_sha)?;
-            build(&base_tree, Some(&base_target_dir(&perf, base_sha)), "base")?;
+        let key = base_key(repo, base_sha)?;
+        let base_bin = base_binary(&perf, &key);
+        if !base_arm_is_built(&perf, &key) {
+            seed_base_target_dir(&perf, &key)?;
+            build(
+                &base_tree,
+                Some(&base_target_dir(&perf, &key)),
+                "base",
+                PAIR_PROFILE,
+            )?;
             // A cargo that exits 0 without leaving the binary is could-not-look,
             // never a measurement: hyperfine would report the missing path as a
             // failed command and `perf-compare` would read the gap as a verdict.
-            if !base_arm_is_built(&perf, base_sha) {
+            if !base_arm_is_built(&perf, &key) {
                 bail!(
                     "perf-pair: the base build left no binary at {} — nothing to measure. No measurement.",
                     base_bin.display()
@@ -997,7 +1057,7 @@ pub fn invocation(repo: &Path) -> Result<Vec<Record>> {
     // install. A debug build's startup is dominated by unoptimised code and is
     // not the number being defended, so measuring one would publish a claim
     // about an artifact that ships nowhere.
-    build(repo, None, "head")?;
+    build(repo, None, "head", "release")?;
     let head_bin = repo.join("target/release/batten");
     if !head_bin.is_file() {
         bail!(
@@ -2968,6 +3028,88 @@ pub fn refusal_render_report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The base arm's binary lives under the pair profile, the one the head arm
+    /// is built under, and that profile is not `release`.
+    ///
+    /// MUTANT: reverting the base arm to `release` moves its binary to
+    /// `release/batten` and this case goes red.
+    #[test]
+    fn both_arms_are_built_under_the_pair_profile() {
+        assert_ne!(PAIR_PROFILE, "release");
+        let bin = base_binary(Path::new("/p"), "k");
+        assert_eq!(
+            bin,
+            Path::new("/p/base-k").join(PAIR_PROFILE).join("batten")
+        );
+    }
+
+    /// Two bases whose crate trees match share one key; any tree changing moves it.
+    ///
+    /// MUTANT: keying on the commit sha gives two different keys for the first
+    /// pair and this case goes red.
+    #[test]
+    fn identical_crate_trees_share_one_base_key() {
+        assert_eq!(crate_key("c", "m", "l"), crate_key("c", "m", "l"));
+        assert_ne!(crate_key("c", "m", "l"), crate_key("c", "m", "l2"));
+        assert_ne!(crate_key("c", "m", "l"), crate_key("c2", "m", "l"));
+        assert_eq!(crate_key("c", "m", "l").len(), 20);
+    }
+
+    /// A commit touching nothing under the three built trees keeps the base key.
+    ///
+    /// MUTANT: `base_key` returning `base_sha` gives the two commits two keys and
+    /// this case goes red.
+    #[test]
+    #[expect(
+        clippy::expect_used,
+        reason = "test-only: a failed fixture write should fail the case loudly"
+    )]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "test-only: builds the fixture repository `base_key` reads; no production spawn"
+    )]
+    fn a_commit_outside_the_crates_keeps_the_base_key() {
+        let repo = perf_scratch("base-key");
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .expect("git");
+            assert!(out.status.success(), "git {args:?}");
+            String::from_utf8(out.stdout)
+                .expect("utf8")
+                .trim()
+                .to_owned()
+        };
+        git(&["init", "-q", "-b", "main"]);
+        std::fs::create_dir_all(repo.join("crates")).expect("mkdir");
+        std::fs::write(repo.join("crates/lib.rs"), "a").expect("write");
+        std::fs::write(repo.join("Cargo.toml"), "m").expect("write");
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "one"]);
+        let first = git(&["rev-parse", "HEAD"]);
+        std::fs::write(repo.join("README"), "r").expect("write");
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "two"]);
+        let second = git(&["rev-parse", "HEAD"]);
+        std::fs::write(repo.join("crates/lib.rs"), "b").expect("write");
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "three"]);
+        let third = git(&["rev-parse", "HEAD"]);
+        let key = |sha: &str| base_key(&repo, sha).expect("key");
+        assert_eq!(key(&first), key(&second));
+        assert_ne!(key(&second), key(&third));
+    }
 
     /// A perf dir nothing else in this process writes, keyed on pid and thread.
     #[expect(

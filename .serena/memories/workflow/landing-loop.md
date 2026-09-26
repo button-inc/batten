@@ -245,7 +245,18 @@ on its row; this section is the pointer, not the argument.
   worktree (`git worktree add ../<name> -b <branch> origin/main`): read the
   code, draft the edit, run its unit tests there. The tree coming back should
   mean committing, not starting to read. An agent that idles through a lap
-  pays the lap twice.
+  pays the lap twice. **The worktree shares the main checkout's `target/`**
+  (`CARGO_TARGET_DIR=<main>/target`), and `land` runs from the main checkout
+  only: two warm targets exceed this box's disk floor, which is how a worktree
+  `land` failed on 2026-09-26.
+- **A slow local check gets CHEAPER; it never moves to CI** (2026-09-26). CI
+  confirms, it never discovers (AGENTS.md, "Workflow contract"), so "make
+  `verify` faster by running X only in CI" is not an option to weigh or to
+  offer as an override ask — it is a change to the principle, and a principle
+  change is never framed as an override. `fb9d8d99`'s approximated musl lane is
+  not a precedent: it kept a local approximation. The remedy for a slow gate is
+  its own cost (`perf-gate`: one profile for both arms, a content-keyed base —
+  CLOUD-1891).
 
 The composition itself is a declared list with a durable compensation per step
 (CLOUD-1556 carries the Pkl default and its schema; CLOUD-1564 `Push`'s row),

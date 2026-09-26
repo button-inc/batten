@@ -1214,18 +1214,24 @@ jobs:
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target/perf/base-seed
-          key: perf-base-${{ runner.os }}-${{ hashFiles('mise.lock', 'Cargo.lock') }}
+          key: perf-base-perf-arm-${{ runner.os }}-${{ hashFiles('mise.lock', 'Cargo.lock') }}
       # Absent seed is a cold run, which is a pass: the gate builds what it needs.
+      #
+      # The arm's directory is `perf.rs`'s `base_key`, not the sha (CLOUD-1891):
+      # sha256 over the base's `crates`, `Cargo.toml` and `Cargo.lock` tree ids,
+      # one per line, first 20 hex. A path absent at the base is the empty line.
       - name: Seed the base arm from the restored closure
         env:
           BASE_SHA: ${{ steps.base.outputs.sha }}
         run: |
           seed=target/perf/base-seed
           [ -d "$seed" ] || exit 0
-          arm="target/perf/base-$BASE_SHA"
+          id() { git rev-parse -q --verify "$BASE_SHA:$1" || true; }
+          key=$(printf '%s\n%s\n%s\n' "$(id crates)" "$(id Cargo.toml)" "$(id Cargo.lock)" | sha256sum | cut -c1-20)
+          arm="target/perf/base-$key"
           rm -rf "$arm"
           cp -a "$seed" "$arm"
-          rm -f "$arm/release/batten"
+          rm -f "$arm/perf-arm/batten"
       - run: mise run perf-gate
 
   # Single fan-in status. Point branch protection at `final` instead of

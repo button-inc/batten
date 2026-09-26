@@ -135,16 +135,19 @@ jobs:
       # saves, which is what removes ~190 MB per run of bytes nothing could
       # restore — CLOUD-840 measured 203.7 GB of them across 1,144 entries.
       #
-      # NO NEW TRIGGER AND NO SECOND BUILD. This job already built `--release`
-      # for the measurement above, so the seed is that closure copied aside. It
+      # NO NEW TRIGGER, ONE EXTRA BUILD. The pair builds both arms under the
+      # `perf-arm` profile (CLOUD-1891), so a `--release` closure seeds nothing:
+      # this main-only scheduled job builds `perf-arm` once and stages that. It
       # is staged AFTER the assertion for the same reason the series is: a
       # measurement that broke its budget is a defect to fix, and a seed carried
       # forward from it would spread the defect to every pull request.
+      - name: Build the base-arm seed
+        run: mise exec -- cargo build --profile perf-arm -p batten
       - name: Stage the base-arm seed
         run: |
           rm -rf target/perf/base-seed
           mkdir -p target/perf/base-seed
-          cp -a target/release target/perf/base-seed/release
+          cp -a target/perf-arm target/perf/base-seed/perf-arm
       # A save collision on an existing key is the ORDINARY case — the key moves
       # only when `mise.lock` or `Cargo.lock` does — and "if the provided `key`
       # matches an existing cache, a new cache is not created". That is a
@@ -155,7 +158,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target/perf/base-seed
-          key: perf-base-${{ runner.os }}-${{ hashFiles('mise.lock', 'Cargo.lock') }}
+          key: perf-base-perf-arm-${{ runner.os }}-${{ hashFiles('mise.lock', 'Cargo.lock') }}
       # The series (CLOUD-172). AFTER the assertion, deliberately: a measurement
       # that broke its budget is a defect to fix, not a datum to enshrine, and a
       # series carrying known-bad readings is one nobody can read a trend from.

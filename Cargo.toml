@@ -912,3 +912,14 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# The profile `perf pair` builds BOTH arms with (CLOUD-1891). The gate compares
+# head against base under one profile, so dropping thin-LTO and keeping
+# incremental state changes neither arm relative to the other while cutting each
+# build from minutes to an incremental relink. `perf-assert`'s absolute ceiling
+# still measures `release`.
+[profile.perf-arm]
+inherits = "release"
+lto = false
+incremental = true
+codegen-units = 256
