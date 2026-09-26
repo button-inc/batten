@@ -9779,22 +9779,7 @@ shell = "bash -c"
 # window, the same shape `linear-check` already has in `verify` and
 # `ready-guard`. It is deliberately NOT an hk step: `pre-commit` runs over a
 # tree that is dirty by definition.
-#
-# `perf-gate` IS IN THIS LIST, NOT THE BODY (CLOUD-1891). In the body it ran
-# after every entry here had finished: two release builds plus the hyperfine
-# arms, strictly serial, on a box the parallel set had left under-used (61m50s
-# of CPU across a 23m36s gate is ~2.6 of 4 cores). It reads nothing the body
-# writes, so its verdict does not depend on running last.
-depends = [
-  "tree-clean",
-  "ci",
-  "cross-check",
-  "darwin-link",
-  "zizmor",
-  "semver",
-  "ci-task-parity",
-  "perf-gate",
-]
+depends = ["tree-clean", "ci", "cross-check", "darwin-link", "zizmor", "semver", "ci-task-parity"]
 run = '''
 # A task body does not run under `set -e` (see rules/toolchain.md), so
 # every step whose failure changes the verdict is guarded by hand.
@@ -9953,12 +9938,23 @@ if ! mise run batten -- check --rule 'test cover never'; then
   echo "::error:: verify: 'test cover never' refused — the IO-free evaluator test no longer discriminates. No receipt written." >&2
   exit 1
 fi
-# The latency regression gate (CLOUD-172) runs in `depends` above, beside the
-# other gates it reads nothing from (CLOUD-1891). It still stops a regression
-# before `ready-guard` lets the PR spend a runner, because a failed `depends`
-# entry fails this task before the receipt below is written. Its skip is real
-# but narrow: only a diff that touches no crate source, manifest or lockfile is
-# exempt, which most branches in this repository are not.
+# The latency regression gate (CLOUD-172). `perf-assert` holds the published
+# number to an absolute ceiling; this asks whether THIS branch made an
+# invocation path slower than its own merge base.
+#
+# IN THE BODY, AFTER `depends`, AND THAT WAS MEASURED (CLOUD-1891). Run in
+# `depends` beside hk, its two builds competed with the test builds: 7m40s and
+# 6m23s against 3m46s alone, and the gate got slower. Its skip is narrow — only
+# a diff touching no crate source, manifest or lockfile is exempt — so its cost
+# is the two builds, which is what to make cheaper.
+#
+# Here and never CI-only: CI confirms, it never discovers. `ready-guard`
+# refuses to ready a PR without a verify receipt for this HEAD, so a regression
+# blocks the PR before it can spend a runner at all.
+if ! mise run perf-gate; then
+  echo "::error:: verify: perf-gate failed — this branch made an invocation path measurably slower than its merge base, or the measurement could not run. No receipt written." >&2
+  exit 1
+fi
 # The COST gate (CLOUD-827), and it is deliberately last of the content gates:
 # every question above is "is this branch correct", and this one is "is the matrix
 # it is about to buy able to have an opinion about it". Asking that before the
@@ -10354,5 +10350,6 @@ lockfile = false
 # per-step record anywhere — hk logs none — so where the time went was inferred
 # from CI job durations on different hardware. A lap that loses to `main`
 # moving is lost in proportion to how long the gate runs, so the gate's cost has
-# to be read off every run rather than guessed.
-task_timings = true
+# to be read off every run rather than guessed. `task.timings`, not the
+# `task_timings` spelling mise deprecated (removed in mise 2027.2.0).
+task.timings = true
