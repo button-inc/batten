@@ -10864,7 +10864,12 @@ expires = "2027-02-28"
 [[hook.handler]]
 id = "session-container-preflight"
 on = "session-start"
-run = ["batten", "doctor", "egress"]
+# THROUGH `mise`, NOT `batten` BY NAME, for `doctor:mediator`'s reason
+# (bc420eb1): `doctor`'s `hook-handlers` check resolves every handler program,
+# and a CI runner builds `batten` rather than installing it, so naming it here
+# failed `this_repository_is_healthy` on every runner. It also kept a verb this
+# branch adds off the one surface that resolves a release.
+run = ["mise", "run", "doctor:egress"]
 # THE FIRST OF THE TWO ROWS `session-container-preflight` ALWAYS WAS (CLOUD-1753),
 # AND IT KEEPS THE ID. The split is one row into two, not a removal, so the id
 # stays on the half that inherits the question — `config-lint`'s weakening check

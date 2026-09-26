@@ -2540,6 +2540,14 @@ description = "Report whether the engine adjudicating this tree was built from i
 # grow the bash surface two gates are shrinking.
 run = "batten doctor mediator"
 
+[tasks."doctor:egress"]
+description = "Report whether this container can reach what the work needs, before the session starts on it"
+# `session-container-preflight` spawns this rather than the verb, for
+# `doctor:mediator`'s reason directly above: `batten` is absent from a CI
+# runner's `PATH`, so a handler naming it failed `doctor`'s `hook-handlers`
+# check on every runner. The body is the engine verb and nothing else.
+run = "batten doctor egress"
+
 [tasks."install:local"]
 description = "Put the built binary where the hook registrations resolve it — `install.sh`'s own destination"
 depends = ["build:release"]
