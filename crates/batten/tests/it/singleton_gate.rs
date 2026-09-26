@@ -123,20 +123,20 @@ fn a_dead_holder_allows() {
     );
 }
 
-/// AN EMPTY PID FILE DENIES. Absence of evidence is "held", never "free" — a
-/// holder caught between its `create` and its `write` is a holder, and this is
-/// the direction `singleton_acquire` already takes.
+/// A LOCK NAMING NO PID ALLOWS, for the dead holder's reason (CLOUD-1895). One
+/// sighting cannot tell a holder mid-write from one killed before it wrote, and
+/// the acquiring path decides that over two. Refusing here made its reclaim
+/// unreachable: the task never started, so nothing ever took the second look.
 #[test]
-fn a_lock_that_says_nothing_readable_denies() {
+fn a_lock_that_says_nothing_readable_defers_to_the_acquiring_path() {
     let dir = fixture("singleton-gate-empty");
     hold(&dir, "land", None);
     let (code, cause) = adjudicate(&dir, "mise run land");
     assert_eq!(
         code,
-        Some(2),
-        "an unreadable lock is held, not free\n{cause}"
+        Some(0),
+        "the acquiring path judges an unstamped lock over two sightings\n{cause}"
     );
-    assert!(cause.contains(CLASS), "under its own class\n{cause}");
 }
 
 /// THE ANTI-VACUITY HALF. Without it, "refuse every `mise run`" passes the case
