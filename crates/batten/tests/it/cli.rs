@@ -11421,6 +11421,12 @@ fn a_byte_range_without_an_encoding_is_a_pointer_rather_than_the_payload() {
     );
 }
 
+// THE WRAPPER RETIRES ONTO THE VERB IT WRAPPED (CLOUD-1752).
+// `mise-tasks/payload-field.sh` only located a binary and exec'd
+// `batten payload field`; its last by-path caller retired before it, and the
+// verb itself is what the cases below drive.
+// carried: mise-tasks/payload-field.sh crates/batten/src/lib.rs kind:mechanism crates/batten/tests/it/cli.rs
+
 /// Run `batten payload field --harness <harness> --name <name>` over `payload`.
 fn run_payload_field(name: &str, payload: &str) -> Output {
     let mut command = batten();

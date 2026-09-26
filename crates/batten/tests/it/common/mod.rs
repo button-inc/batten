@@ -239,8 +239,8 @@ fn bypass_env_vars() -> Vec<String> {
 /// # `BATTEN_BIN` names the binary UNDER TEST, and it is set here for the same
 /// reason
 ///
-/// A `[[hook.handler]]` the binary dispatches can shell out to
-/// `mise-tasks/payload-field.sh`, whose documented resolution order is
+/// A `[[hook.handler]]` the binary dispatches can shell out to a batten
+/// resolved the way the retired `payload-field` wrapper documented it:
 /// `$BATTEN_BIN`, then `<root>/target/{release,debug}/batten`, then whatever
 /// `command -v batten` finds — where `<root>` is resolved beside the SCRIPT, so
 /// in a fixture repository it is the fixture, which has no `target/`. Without

@@ -698,7 +698,7 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   multiplier, but the reading list inside each prompt is the multiplicand and it
   dominates. A named artifact counts only if it is TRACKED, so `origin/main` and
   a URL drop out by construction rather than by an allowlist somebody has to
-  tune. It reads the payload through `payload-field`, never `jq`, because it is
+  tune. It reads the payload through `batten payload field`, never `jq`, because it is
   registered by path (`hook-pin-check`), and it is blind by construction to what
   an agent reads on its own initiative. Bypass: `BATTEN_FANOUT_GUARD_BYPASS=1`.
 - **contract drift is `batten hook`'s now** (CLOUD-461), and it is not
