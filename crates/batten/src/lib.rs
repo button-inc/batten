@@ -13485,7 +13485,7 @@ fn run_hook(
     // being read. A turn already handed a handler's advice has been told
     // something more specific, so the module's line is appended only to a silent
     // buffer.
-    fill_turn_advice(&policy, &envelope, &facts, overrides, &mut advice);
+    fill_turn_advice(&policy, &envelope, &facts, overrides, &raw, &mut advice);
     // THE DECISION IS RESOLVED BEFORE THE ADVISORY IS SPOKEN (CLOUD-1175), and
     // that ordering is the whole fix rather than a tidy-up.
     //
@@ -13923,11 +13923,12 @@ fn fill_turn_advice(
     envelope: &hook::Envelope,
     facts: &hook::Facts<'_>,
     overrides: &Overrides,
+    raw: &str,
     advice: &mut Vec<advisory::Advice>,
 ) {
     if advice.is_empty()
-        && let Some(nudge) =
-            hook::stop_advice(policy, envelope, facts).or_else(|| stop_nudges(overrides, envelope))
+        && let Some(nudge) = hook::stop_advice(policy, envelope, facts)
+            .or_else(|| stop_nudges(overrides, envelope, raw))
     {
         advice.push(advisory::Advice::new(
             severity::AdvisoryTier::Caution,
@@ -14276,6 +14277,15 @@ fn dispatch_handlers(
     // `fire_actions`' reading, for `fire_actions`' reason: a handler table is a
     // per-repository declaration, so it comes from the REPOSITORY's authority
     // rather than the cwd's (CLOUD-824).
+    //
+    // NOT AT `Stop`: a stop row speaks as the end-of-turn ladder's second rung
+    // (`stop_nudges`), never ahead of it. Dispatched here its advice would fill
+    // the buffer `fill_turn_advice` reads as "already told", which would silence
+    // the completion rung above it AND skip the seam writes that ride that
+    // routine — CLOUD-1372's defect, reached through a different door.
+    if envelope.event == hook::Event::Stop {
+        return Ok(None);
+    }
     let here = hook_authority_root();
     if !here.join(config::CONFIG_FILE).exists() {
         return Ok(None);
@@ -15322,7 +15332,7 @@ fn record_post_tool(
 /// end-of-turn check on the path that must stay free — committing and pushing to
 /// a draft is what survives a container reclaim. So every unreadable path,
 /// missing program and unresolvable branch yields `None`.
-fn stop_nudges(overrides: &Overrides, envelope: &hook::Envelope) -> Option<String> {
+fn stop_nudges(overrides: &Overrides, envelope: &hook::Envelope, raw: &str) -> Option<String> {
     if envelope.event != hook::Event::Stop || envelope.stop_active == Some(true) {
         return None;
     }
@@ -15418,16 +15428,16 @@ fn stop_nudges(overrides: &Overrides, envelope: &hook::Envelope) -> Option<Strin
              target. Land it, or say what blocks it."
         ));
     }
-    // RULE 2 — a finding stated in prose with nothing durable written. It reads
-    // the transcript, so it reaches prose the module above cannot see: the final
-    // text block is under half a turn's assistant prose.
-    if let Some(path) = envelope.transcript.as_deref()
-        && let Some(pointer) = spawn_reading(root, "mise-tasks/finding-sink-check.sh", path)
-    {
-        return Some(format!(
-            "{pointer}\nA finding was stated here and nothing durable was written. Go re-derive \
-             it and file it, or confirm it is already tracked."
-        ));
+    // RULE 2 — the consumer's declared `[[hook.handler]] on = "stop"` rows, in
+    // declaration order, the first that speaks. This is where a program reading
+    // the transcript lives (this repository's stranded-finding check reaches
+    // prose the module above cannot see), and it is DECLARED rather than named
+    // here: a consumer's program path inside `crates/batten` is non-negotiable
+    // rule 1's plainest violation. The door's bound applies, and a row that
+    // breaks its contract — times out, cannot spawn — is silence, as every
+    // failure on this routine is.
+    if let Some(said) = stop_handler_advice(root, overrides, raw) {
+        return Some(said);
     }
     // RULE 3 — a row this branch filed names a file this branch is changing. The
     // same predicate `land` decides on, run here so the punt surfaces at the end
@@ -15969,22 +15979,26 @@ enum Suppression {
     PerSet,
 }
 
-/// Run one sibling program and return its pointer, or `None` for silence.
+/// The first thing a declared `on = "stop"` handler said, or `None`.
 ///
-/// The contract is the retired hook's, unchanged: a fired predicate is a
-/// non-zero exit with the pointer on stdout, and anything else — clean,
-/// unreadable, absent, unrunnable — is silence.
-///
-/// The spawn itself is [`exec::piped`]'s. This module is not a placed adapter
-/// (`policy/spawn-adapters.rego`), and holding its own `Command` here would have
-/// been the second copy of a shape the sanctioned boundary already owns.
-fn spawn_reading(root: &Path, program: &str, stdin: &str) -> Option<String> {
-    let (code, stdout) = exec::piped(root, Path::new(program), &[], stdin)?;
-    if code == 0 {
+/// Advice, a reported finding and a refusal all speak here as ONE nudge: `Stop`
+/// carries no verdict (`Event::carries_a_verdict`), so a refusal is demoted to
+/// the channel the dispatch door demotes it to on every such moment. A broken
+/// contract says nothing — this runs where silence is the failure mode.
+fn stop_handler_advice(root: &Path, overrides: &Overrides, raw: &str) -> Option<String> {
+    if !root.join(config::CONFIG_FILE).exists() {
         return None;
     }
-    let pointer = stdout.trim_end();
-    (!pointer.is_empty()).then(|| pointer.to_owned())
+    let handlers = resolve::resolve(root, overrides).ok()?.hook?.handlers;
+    let dispatched = handler::dispatch(&handlers, hook::Event::Stop, "", None, raw);
+    dispatched.ran.iter().find_map(|ran| match &ran.outcome {
+        handler::Outcome::Advise(text)
+        | handler::Outcome::Reported(text)
+        | handler::Outcome::Deny(text) => {
+            Some(format!("hook.handler.{}: {}", ran.id, text.trim_end()))
+        }
+        _ => None,
+    })
 }
 
 /// Append every declared record this result earns (CLOUD-1051).

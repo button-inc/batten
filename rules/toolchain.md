@@ -596,8 +596,9 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   spawning kind with `RuleScope::Tree` alone), so they are `stop_nudges` in
   `lib.rs`, keeping the order the shell ranked them in — by MEASURED precision,
   `stop-posture` at 3/3 leading `finding-sink` at 1/1, with the three unmeasured
-  below. `finding-sink-check.sh` is spawned unchanged, with the same stdin the
-  bash gave it, which is what bounds the cascade.
+  below. The finding-sink rung is the consumer's `[[hook.handler]] on = "stop"`
+  row (`finding-sink`, running `[tasks.finding-sink-check]`): a `stop` row speaks
+  on that rung and never ahead of the ladder, and the engine names no program.
 
   **Two corrections, both measured 2026-09-02 (CLOUD-1372).** This clause named
   `unlanded-check.sh` as a second spawned sibling; that program **does not

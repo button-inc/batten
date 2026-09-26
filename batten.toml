@@ -10379,6 +10379,23 @@ timeout_ms = 2000
 owner = "CLOUD-312"
 expires = "2027-02-28"
 
+# THE STRANDED-FINDING CHECK, at the end of the turn that stranded it (CLOUD-252),
+# retired off `mise-tasks/finding-sink-check.sh` under CLOUD-1717. A `stop` row is
+# the engine's end-of-turn ladder's SECOND rung, after the completion reading and
+# the output-posture module and never ahead of them: at most one nudge per turn is
+# the measured rule. The engine used to spawn the file by path, which put this
+# repository's program inside `crates/batten`; declared here, it is the
+# consumer's. Abstains (exit 3) with no transcript, which the ladder keeps silent.
+[[hook.handler]]
+id = "finding-sink"
+on = "stop"
+run = ["mise", "run", "-q", "finding-sink-check"]
+# Two streamed jq passes over the transcript: measured 338ms on 2.9MB. Ten
+# seconds is headroom for a long session's transcript, and a timeout is silence.
+timeout_ms = 10000
+owner = "CLOUD-1717"
+expires = "2027-02-28"
+
 # THE CROSS-TRIPLE CHECK, MOVED FROM A GATE'S CADENCE TO A TURN'S (CLOUD-1731).
 #
 # `cross-check` ran in exactly one place — inside `verify` — so "this does not

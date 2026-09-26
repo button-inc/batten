@@ -626,7 +626,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "mise,attestation,timeout-drift,engine-checks-green,engine-cargo-graph,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,task-board-payloads,task-board-sweep,branch-age,done,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,denials-outlive-the-turn,digest-major-agreement,doctor,done-pr-check,duplicate-close,task-duplicate-close-record,task-released,egress-fencing,evaluator-closure,evaluator-io-probe,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,agent-spawn,in-progress-drain,install-check,land-divergence,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,task-linear-check,lock-complete,macos-link,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict,ntia,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,task-pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,task-reclaim-census,release-due,release-provision-parity,release-tag-shape,release-tracking,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,task-sbom,sbom-actions,sbom-binary,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,task-sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-callable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules,deferral,closing-key,release-assets"
+MUTANT_GATES = "mise,attestation,timeout-drift,engine-checks-green,engine-cargo-graph,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,task-board-payloads,task-board-sweep,branch-age,done,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,denials-outlive-the-turn,digest-major-agreement,doctor,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,egress-fencing,evaluator-closure,evaluator-io-probe,filed-here,task-finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,agent-spawn,in-progress-drain,install-check,land-divergence,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,task-linear-check,lock-complete,macos-link,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict,ntia,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,task-pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,task-reclaim-census,release-due,release-provision-parity,release-tag-shape,release-tracking,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,task-sbom,sbom-actions,sbom-binary,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,task-sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-callable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules,deferral,closing-key,release-assets"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -4017,6 +4017,217 @@ if [[ "$verdict" = "idle" ]]; then
 fi
 echo "::error:: reclaim-census: boot $prev recorded nothing — UNOBSERVED, not idle; this sensor only sees landings and none ran there" >&2
 exit 2
+{% endraw %}
+'''
+
+# A turn that cites `path:line` evidence and gives it no OPEN row stranded a
+# finding (CLOUD-252) — retired off `mise-tasks/finding-sink-check.sh` under
+# CLOUD-1717, and reached as the `finding-sink` `[[hook.handler]] on = "stop"`
+# row, which the engine runs as its end-of-turn ladder's second rung.
+#
+# It reads the TRANSCRIPT, because `last_assistant_message` carries only the
+# final text block (measured under half a turn's prose), and joins the LAST
+# turn's prose against that turn's own `tool_use` records, main thread only. ONE
+# SHAPE, MEASURED: a `path:line` citation (1 firing, the true positive); the
+# exit-claim and fenced-block shapes were dropped as a false positive and dead.
+# No "already filed" exemption: it suppressed the measured true positive.
+#
+# RECORDED IS NOT SCHEDULED (CLOUD-475, CLOUD-775). A home is a row that OPENS
+# (`save_issue` with no id), an amendment to a row this clone's own
+# `issue-read` receipt records in an open column, or a memory/document write. A
+# comment on a Done row, or on a row with no receipt, is not — could-not-look
+# must not be the cheapest way to buy silence.
+#
+# Stdin is the host's Stop payload (its `transcript_path`) or a bare path. The
+# contract is the handler door's: exit 1 with the pointer and the practice on
+# stderr when it fires, 0 silent otherwise, and 3 — abstained — when there is no
+# transcript to read, which the door reports as broken and the ladder keeps
+# silent. Never exit 2: at this door that is a refusal, and "no transcript" is
+# not one. POINTER, NEVER PAYLOAD: a turn number, never a byte of the prose.
+#MUTANT-SUITE crates/batten/tests/it/finding_sink.rs
+#MUTANT class-split-removed|s@^OPENS_A_ROW=.*@OPENS_A_ROW='save_'@|a_comment_alone_is_not_a_home
+#MUTANT terminal-row-is-a-home|s@#open\$'@#'@|an_annotation_on_a_terminal_row_still_reports
+#MUTANT citation-never-fires|s@^CITATION=.*@CITATION='^\$never'@|a_cited_finding_with_no_durable_write_fires
+#MUTANT sidechain-credited|s@select(.isSidechain != true)@select(true)@|a_subagents_write_is_not_credited_to_the_turn
+#MUTANT whole-transcript-judged|s@^start=\$(tail -n 1 @start=$(head -n 1 @|only_the_last_turn_is_judged
+[tasks.finding-sink-check]
+description = "Gate: a turn that cites path:line evidence and makes no durable write stranded a finding (reads a Stop payload or transcript path on stdin; pointer-only)"
+shell = "bash -c"
+dir = "{{cwd}}"
+run = '''
+{% raw %}
+set -uo pipefail
+input=$(cat) || exit 3
+transcript="$input"
+if [[ "${input#"${input%%[![:space:]]*}"}" == \{* ]]; then
+	transcript=$(jq -r '.transcript_path // empty' <<<"$input" 2>/dev/null) || transcript=""
+fi
+transcript="${transcript//[[:space:]]/}"
+if [[ -z "$transcript" ]] || [[ ! -r "$transcript" ]]; then
+	echo "finding-sink-check: abstained — no readable transcript" >&2
+	exit 3
+fi
+# A path separator or a known source extension, so a duration, ratio or port is
+# not read as evidence; the extensionless `mise-tasks/` files need the first.
+CITATION='([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+|[A-Za-z0-9_-]+\.(rs|toml|yml|yaml|bats|md|json|pkl|sh|lock)):[0-9]+'
+# Matched on the tool-name SUFFIX: the server prefix changes on reconnect.
+OPENS_A_ROW='save_issue#noid$'
+AMENDS_AN_OPEN_ROW='save_(issue|comment)#open$'
+OTHER_DURABLE='(save_document|write_memory|edit_memory|rename_memory)#'
+git_dir=$(git rev-parse --git-dir 2>/dev/null) || git_dir=""
+# The OPEN set is enumerated; an unknown column falls to `terminal`.
+row_class() { # row_class <key-or-empty> -> noid / open / terminal
+	case "$1" in
+	"") echo noid && return ;;
+	[A-Z]*-[0-9]*) ;;
+	*) echo terminal && return ;;
+	esac
+	[[ -n "$git_dir" ]] || { echo terminal && return; }
+	column=$(awk 'NR==1{print $5}' "$git_dir/batten-receipts/issue-read.$1" 2>/dev/null) || column=""
+	case "$column" in
+	backlog | todo | in-progress | in-review) echo open ;;
+	*) echo terminal ;;
+	esac
+}
+# PASS 1 — turn boundaries: a real user prompt, never a `tool_result`. The count
+# is the turn number and the last boundary is where the judged turn begins
+# (CLOUD-479: only that turn's blocks are built). One record per line.
+if ! boundaries=$(jq -r '
+    select(.isSidechain != true)
+    | select(.type == "user")
+    | select( (.message.content | type) == "string"
+              or ( (.message.content | type) == "array"
+                   and ( [ .message.content[] | select(type == "object" and .type == "text") ] | length ) > 0 ) )
+    | input_line_number
+  ' "$transcript" 2>/dev/null); then
+	echo "finding-sink-check: abstained — the transcript is not readable JSONL" >&2
+	exit 3
+fi
+turns=$(grep -c . <<<"$boundaries")
+start=$(tail -n 1 <<<"$boundaries")
+fired=0
+if [[ -n "$start" ]]; then
+	# PASS 2 — the last turn's assistant blocks, tagged T (prose) or U (tool#key).
+	if ! blocks=$(tail -n +"$start" "$transcript" | jq -r '
+	    select(.isSidechain != true)
+	    | select(.type == "assistant")
+	    | (.message.content // [])[]
+	    | select(type == "object")
+	    | if .type == "text" then "T" + ((.text // "") | gsub("\n"; " "))
+	      elif .type == "tool_use" then "U" + (.name // "") + "#" +
+	             ((.input // {}) | if type == "object"
+	              then ((.id // .issueId // "") | tostring) else "" end)
+	      else empty end
+	  ' 2>/dev/null); then
+		echo "finding-sink-check: abstained — the transcript is not readable JSONL" >&2
+		exit 3
+	fi
+	prose=$(grep '^T' <<<"$blocks")
+	tools=$(grep '^U' <<<"$blocks")
+	clean=0
+	if [[ -n "$tools" ]]; then
+		while IFS= read -r name; do
+			[[ -n "$name" ]] || continue
+			name="${name#U}"
+			name="${name%%#*}#$(row_class "${name#*#}")"
+			if grep -qE "($OPENS_A_ROW|$AMENDS_AN_OPEN_ROW|$OTHER_DURABLE)" <<<"$name"; then
+				clean=1
+				break
+			fi
+		done <<<"$tools"
+	fi
+	if [[ "$clean" = 0 ]] && grep -qE "$CITATION" <<<"$prose"; then
+		fired=1
+	fi
+fi
+# Anti-vacuity: a gate that cannot fire is not a gate that found nothing.
+if [[ "$turns" = 0 ]]; then
+	echo "finding-sink-check: no turns in $transcript — nothing to judge" >&2
+	exit 0
+fi
+[[ "$fired" = 0 ]] && exit 0
+# THE REFUSAL NAMES THE PRACTICE, NOT THE RULE (CLOUD-475): what is missing is an
+# OPEN row, and an author who commented the finding believes it written down.
+{
+	echo "turn:$turns finding-without-durable-write"
+	echo "The last of $turns turn(s) cited path:line evidence and gave it no OPEN row. Writing to a row that is closed — or to one this clone has recorded no read of — records the finding without scheduling it. Go re-derive it and file an open issue linked \`relatedTo\` the source, or put it on a row that is still open."
+} >&2
+exit 1
+{% endraw %}
+'''
+
+# An issue may become Done only if none of its own pull requests is still open
+# (CLOUD-468) — retired off `mise-tasks/done-pr-check.sh` under CLOUD-1752. A
+# merged PR completes a DIFF, and the board read it as completing an ISSUE; those
+# coincide only at N=1. Measured: CLOUD-420 carried four PRs, one an open draft,
+# read Done for 35 minutes, was reversed by hand, and the inference was made again.
+#
+# NOT `done-check` (CLOUD-192, release containment): that caller pipes rows with
+# no `.pulls`, which this reads as could-not-look, so the two stay two gates.
+#
+# ARITHMETIC ONLY: N attached pull requests, k open => not Done. Whether the
+# merged ones did the work is not computable and is not judged. A PR is an
+# attachment URL on GitHub — `claim-check`'s filter, character for character. A
+# DRAFT is open, and named so. Closed-unmerged is a DECIDED outcome, never a
+# refusal. An attached PR with no piped state is exit 2: an unread PR must not be
+# the cheapest route to Done. Pure function of stdin; pointer-only (id, rule, #n).
+#
+# Exit 0 licensed / 1 refused / 2 unreadable stdin.
+#MUTANT-SUITE crates/batten/tests/it/done_pr_check.rs
+#MUTANT draft-not-open|s/^\t\tif \[\[ "\$(jq -r '\.draft \/\/ false' <<<"\$pull")" = true \]\]; then$/\t\tif false; then/|the_defect_a_draft_pull_request_refuses_named_as_a_draft
+#MUTANT open-state-ignored|s/^\t\tif \[\[ "\$(jq -r '\.state \/\/ ""' <<<"\$pull")" = open \]\]; then$/\t\tif false; then/|an_open_pull_request_refuses_naming_its_number
+#MUTANT no-pr-licensed|s/^\tif \[\[ -z "\$numbers" \]\]; then$/\tif false; then/|no_pull_request_at_all_is_refused
+#MUTANT absent-state-licensed|s/^\t\tif \[\[ -z "\$pull" \]\]; then$/\t\tif false; then/|an_attached_pr_with_no_state_is_could_not_look
+#MUTANT filter-host-unanchored|s@github\\\\\.com/\.+/pull/@pull/@|a_pr_shaped_url_on_another_host_is_not_a_pr
+[tasks.done-pr-check]
+description = "Gate: an issue may become Done only if none of its own pull requests is still open (reads get_issue payloads on stdin)"
+shell = "bash -c"
+dir = "{{cwd}}"
+run = '''
+{% raw %}
+set -euo pipefail
+if ! issues=$(jq -sc 'if length == 1 and (.[0] | type == "array") then .[0] else . end' 2>/dev/null) ||
+	[[ "$(jq 'length' <<<"$issues")" = 0 ]] ||
+	! jq -e 'all(.[]; has("id"))' <<<"$issues" >/dev/null 2>&1; then
+	echo "::error:: stdin is not a set of get_issue payloads (need id per issue)" >&2
+	exit 2
+fi
+blocked=0
+report() {
+	echo "$1 $2" >&2
+	blocked=$((blocked + 1))
+}
+while read -r id; do
+	[[ -n "$id" ]] || continue
+	payload=$(jq -c --arg id "$id" '.[] | select(.id == $id)' <<<"$issues")
+	numbers=$(jq -r '[.attachments // [] | .[] | .url
+	                  | select(test("github\\.com/.+/pull/[0-9]+"))
+	                  | capture("/pull/(?<n>[0-9]+)").n] | unique | .[]' <<<"$payload")
+	# `graph-check` requires a PR to enter In Review, so Done cannot need less.
+	if [[ -z "$numbers" ]]; then
+		report "$id" "no-pr"
+		continue
+	fi
+	while read -r n; do
+		[[ -n "$n" ]] || continue
+		pull=$(jq -c --argjson n "$n" '(.pulls // []) | .[] | select(.number == $n)' <<<"$payload")
+		if [[ -z "$pull" ]]; then
+			echo "::error:: done-pr-check: $id names PR #$n and stdin carries no state for it. Fetch it and pipe it under .pulls — a Done over an unread PR is the defect this gate exists to refuse." >&2
+			exit 2
+		fi
+		if [[ "$(jq -r '.draft // false' <<<"$pull")" = true ]]; then
+			report "$id" "open-pr (#$n, draft)"
+			continue
+		fi
+		if [[ "$(jq -r '.state // ""' <<<"$pull")" = open ]]; then
+			report "$id" "open-pr (#$n)"
+		fi
+	done <<<"$numbers"
+done <<<"$(jq -r '.[].id' <<<"$issues")"
+if [[ "$blocked" -ne 0 ]]; then
+	echo "::error:: done-pr-check: not Done — an issue still has a pull request open. A merged PR completes a diff, not an issue; an issue is done when every PR it carries has landed." >&2
+	exit 1
+fi
 {% endraw %}
 '''
 

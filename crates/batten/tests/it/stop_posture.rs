@@ -614,14 +614,19 @@ fn a_tool_call_is_not_judged_by_the_end_of_turn_rule() {
 // routes a non-zero exit's stdout to the advisory channel.
 // ---------------------------------------------------------------------------
 
-/// Install a stub at the path the engine spawns, with a chosen exit and stdout.
+/// Declare a `stop` handler row running a stub, with a chosen exit and output.
+///
+/// The row is how a consumer puts a program on the ladder's second rung; the
+/// stub reads the host payload and ABSTAINS (exit 3) when it names no
+/// transcript, the contract the real check keeps.
 #[cfg(unix)]
-fn stub(dir: &Path, program: &str, exit: i32, stdout: &str) {
-    let path = dir.join(program);
-    fs::create_dir_all(path.parent().expect("a parent")).expect("mise-tasks dir");
+fn stub(dir: &Path, exit: i32, stdout: &str) {
+    let path = dir.join("finding-sink-stub.sh");
     fs::write(
         &path,
-        format!("#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' {stdout:?}\nexit {exit}\n"),
+        format!(
+            "#!/bin/sh\ngrep -q transcript_path || exit 3\nprintf '%s\\n' {stdout:?}\nexit {exit}\n"
+        ),
     )
     .expect("write stub");
     #[cfg(unix)]
@@ -629,6 +634,13 @@ fn stub(dir: &Path, program: &str, exit: i32, stdout: &str) {
         use std::os::unix::fs::PermissionsExt as _;
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod stub");
     }
+    let config = dir.join("batten.toml");
+    let mut text = fs::read_to_string(&config).expect("read config");
+    text.push_str(&format!(
+        "\n[[hook.handler]]\nid = \"finding-sink\"\non = \"stop\"\nrun = [{:?}]\n",
+        path.display().to_string()
+    ));
+    fs::write(&config, text).expect("declare the stop row");
 }
 
 /// A Stop payload naming a transcript the second rule can read.
@@ -657,7 +669,7 @@ fn stop_with_transcript(dir: &Path, message: &str) -> String {
 #[test]
 fn a_stranded_finding_is_pointed_at_and_the_turn_still_ends() {
     let dir = repo("stop-finding-sink");
-    stub(&dir, "mise-tasks/finding-sink-check.sh", 1, "turn 12");
+    stub(&dir, 1, "turn 12");
     let output = hook(&dir, &stop_with_transcript(&dir, "Landed and pushed."));
     let stdout = stdout_of(&output);
     assert_eq!(
@@ -667,8 +679,8 @@ fn a_stranded_finding_is_pointed_at_and_the_turn_still_ends() {
     );
     assert!(stdout.contains("turn 12"), "the pointer travels: {stdout}");
     assert!(
-        stdout.contains("file it"),
-        "and so does what to do about it: {stdout}"
+        stdout.contains("hook.handler.finding-sink"),
+        "and so does the row that said it: {stdout}"
     );
 }
 
@@ -683,7 +695,7 @@ fn a_stranded_finding_is_pointed_at_and_the_turn_still_ends() {
 #[test]
 fn the_measured_rule_keeps_precedence_when_both_would_fire() {
     let dir = repo("stop-precedence");
-    stub(&dir, "mise-tasks/finding-sink-check.sh", 1, "turn 12");
+    stub(&dir, 1, "turn 12");
     let stdout = stdout_of(&hook(
         &dir,
         &stop_with_transcript(&dir, "One thing I would flag is the exit code."),
@@ -707,7 +719,7 @@ fn the_measured_rule_keeps_precedence_when_both_would_fire() {
 #[test]
 fn a_turn_that_strands_nothing_is_silent() {
     let dir = repo("stop-finding-sink-clean");
-    stub(&dir, "mise-tasks/finding-sink-check.sh", 0, "");
+    stub(&dir, 0, "");
     // ISOLATED, because this is the one case here that asserts SILENCE and so is
     // the one a real session's findings can decide. `hook_in`'s own comment
     // states the hazard — "an ambient one would let a real session's findings
@@ -744,7 +756,7 @@ fn a_turn_that_strands_nothing_is_silent() {
 #[test]
 fn an_unreadable_transcript_manufactures_no_advisory() {
     let dir = repo("stop-no-transcript");
-    stub(&dir, "mise-tasks/finding-sink-check.sh", 1, "turn 12");
+    stub(&dir, 1, "turn 12");
     let stdout = stdout_of(&hook(&dir, &stop_payload("Landed.", false)));
     assert!(
         !stdout.contains("turn 12"),
@@ -763,7 +775,7 @@ fn an_unreadable_transcript_manufactures_no_advisory() {
 #[test]
 fn the_stop_guard_bypass_silences_the_whole_surface() {
     let dir = repo("stop-bypass");
-    stub(&dir, "mise-tasks/finding-sink-check.sh", 1, "turn 12");
+    stub(&dir, 1, "turn 12");
     let mut command = batten();
     command
         .current_dir(&dir)
@@ -967,15 +979,15 @@ fn landed_work_is_silent() {
 #[test]
 fn the_recursion_bound_holds_for_every_rule() {
     let dir = repo("stop-bounded-all");
-    stub(
-        &dir,
-        "mise-tasks/unlanded-check.sh",
-        1,
-        "completion.unlanded 1",
-    );
-    let stdout = stdout_of(&hook(&dir, &stop_payload("Landed and pushed.", true)));
+    stub(&dir, 1, "turn 12");
+    // A stop row that WOULD speak — the payload names a transcript — so the
+    // silence below is the bound's, not the row abstaining.
+    let mut payload: serde_json::Value =
+        serde_json::from_str(&stop_with_transcript(&dir, "Landed and pushed.")).expect("json");
+    payload["stop_hook_active"] = serde_json::Value::Bool(true);
+    let stdout = stdout_of(&hook(&dir, &payload.to_string()));
     assert!(
-        !stdout.contains("completion.unlanded"),
+        !stdout.contains("turn 12"),
         "the second Stop of a turn says nothing: {stdout}"
     );
 }
@@ -990,13 +1002,8 @@ fn the_recursion_bound_holds_for_every_rule() {
 #[test]
 fn the_stop_surface_never_exits_non_zero() {
     let dir = repo("stop-exit-zero");
-    stub(
-        &dir,
-        "mise-tasks/unlanded-check.sh",
-        1,
-        "completion.unlanded 1",
-    );
-    let output = hook(&dir, &stop_payload("Landed and pushed.", false));
+    stub(&dir, 1, "turn 12");
+    let output = hook(&dir, &stop_with_transcript(&dir, "Landed and pushed."));
     assert_eq!(
         output.status.code(),
         Some(0),
