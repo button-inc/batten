@@ -50,10 +50,11 @@ jobs:
           # digest above pins the ACTION; this pins the MISE it installs, which
           # is a separate resolution the digest does not reach.
           version: 2026.9.1
-          # `gh` for both readings, `jq` for the GraphQL projection. Narrow, for
-          # the reason ci.yml states: the whole toolchain is ~10s a job that
-          # this one has no use for.
-          install_args: aqua:cli/cli aqua:jqlang/jq
+          # `gh` for both readings, `jq` for the GraphQL projection, and `rust`
+          # because both steps below reach the engine through `cargo run`: the
+          # record family and the rule are this tree's, which a release may not
+          # carry yet. Without it the steps failed before reading anything.
+          install_args: rust aqua:cli/cli aqua:jqlang/jq
       # THE SPLIT THE PORT FORCED (CLOUD-1717). The producer makes the two
       # `gh` reads and the calendar subtraction; the engine adjudicates what
       # it recorded. Neither half can hold the other: section 5 makes `check`
