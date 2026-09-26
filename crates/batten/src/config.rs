@@ -2167,6 +2167,8 @@ fn names_an_unknown_key(rendered: &str) -> bool {
 /// file content in the output is the parser's own error, unchanged.
 //MUTANT-SUITE crates/batten/tests/it/config_skew.rs
 //MUTANT skew-reads-as-malformed|s@    if !names_an_unknown_key(&rendered) {@    if true {@|an_unknown_key_names_the_rebuild
+//MUTANT the-schema-is-derived-before-the-read|s@^    let Ok(committed) = fs::read_to_string(\&at) else {$@    let _eager = schema(); let Ok(committed) = fs::read_to_string(\&at) else {@|a_failing_load_with_no_committed_schema_derives_nothing
+//MUTANT the-schema-is-derived-every-call|s@^    if let Some(derived) = DERIVED.get() {$@    if let Some(derived) = None::<\&String> {@|the_schema_is_derived_once_per_process
 //MUTANT every-parse-error-blames-skew|s@    if !names_an_unknown_key(&rendered) {@    if false {@|a_malformed_config_does_not_mention_a_rebuild
 pub(crate) fn config_error(source: &str, text: &str, err: &toml::de::Error) -> anyhow::Error {
     let rendered = err.to_string();
@@ -2357,7 +2359,13 @@ fn binary_is_behind_the_config(source: &str, text: &str) -> bool {
     // the same class as [`CONFIG_FILE`] — so the fix is the constant, not
     // config.
     let at = root.join(SCHEMA_PATH);
-    let (Ok(committed), Ok(derived)) = (fs::read_to_string(&at), schema()) else {
+    // READ, THEN DERIVE (CLOUD-1876). A tuple evaluates both arms, so this paid
+    // a whole-schema derivation to answer `false` for every source with no
+    // sibling artifact — which is every consumer tree, every time.
+    let Ok(committed) = fs::read_to_string(&at) else {
+        return false;
+    };
+    let Ok(derived) = schema() else {
         return false;
     };
     committed.trim_end() != derived.trim_end()
@@ -3551,10 +3559,32 @@ pub(crate) fn report(text: &str) {
 ///
 /// Returns an error only if serialization itself fails, which for this
 /// data-only tree does not occur in practice.
+///
+/// Derived ONCE per process (CLOUD-1876): it is a pure function of the
+/// compiled-in type, and every failing config load used to pay for it again.
+/// Across processes it is still recomputed, so a stale committed artifact still
+/// disagrees with the derivation the next run makes.
 pub fn schema() -> Result<String> {
-    Ok(serde_json::to_string_pretty(&schemars::schema_for!(
-        Config
-    ))?)
+    static DERIVED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    if let Some(derived) = DERIVED.get() {
+        return Ok(derived.clone());
+    }
+    SCHEMA_DERIVATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let derived = serde_json::to_string_pretty(&schemars::schema_for!(Config))?;
+    Ok(DERIVED.get_or_init(|| derived).clone())
+}
+
+/// Every derivation [`schema`] has performed in this process.
+///
+/// A counter, never a clock, in `policy::engines_constructed`'s shape: read as
+/// a delta around one call. Process-global, so the case asserting it relies on
+/// nextest's process-per-test.
+static SCHEMA_DERIVATIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many times [`schema`] has derived in this process. Monotonic.
+#[must_use]
+pub fn schema_derivations() -> usize {
+    SCHEMA_DERIVATIONS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 impl Config {
