@@ -168,9 +168,14 @@ fn an_unmethodical_table_is_refused() {
     let copy = Fixture::new("bench-tokens-unmethodical").git().build();
     copy_tree(&repo().join("bench/tokens"), &copy.join("bench/tokens"));
     std::fs::create_dir_all(copy.join("target/debug")).expect("a binary directory");
+    // The binary under test by its own path, and linked under the name the
+    // verb looks for: `batten.exe` on Windows, where a bare `batten` is absent.
     std::fs::hard_link(
-        repo().join("target/debug/batten"),
-        copy.join("target/debug/batten"),
+        env!("CARGO_BIN_EXE_batten"),
+        copy.join(format!(
+            "target/debug/batten{}",
+            std::env::consts::EXE_SUFFIX
+        )),
     )
     .expect("link the binary under test");
 

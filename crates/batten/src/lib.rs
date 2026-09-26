@@ -528,7 +528,12 @@ fn run_bench(
     // The binary under test, built once. `cargo run` per step would fold cargo's
     // own chatter into a measurement of Batten's output, which is the one thing
     // these byte counts must not contain.
-    let binary = root.join("target/debug/batten");
+    // `EXE_SUFFIX`, because the Windows leg failed both `bench_tokens` cases
+    // on `target/debug/batten` where cargo writes `batten.exe`.
+    let binary = root.join(format!(
+        "target/debug/batten{}",
+        std::env::consts::EXE_SUFFIX
+    ));
     if !binary.is_file() {
         writeln!(
             err,
