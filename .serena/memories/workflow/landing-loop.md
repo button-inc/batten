@@ -233,9 +233,19 @@ on its row; this section is the pointer, not the argument.
   (CLOUD-1565). `verify` runs over a dirty tree with a content-keyed receipt;
   `tree-clean` gates the push only. Commit early, push to the draft, rewrite
   draft history freely; the Stop arm is CLOUD-1503's `commit-or-discard`.
-- **One PR is an efficiency, not a commandment** (CLOUD-1566). A two-merge
-  dependency is a correctness reason for a second PR, claimed in the Ready
-  block's `blockers`, never in a PR body alone.
+- **One PR, unless a merge is a precondition of correctness** (CLOUD-1566).
+  A second PR is justified only by a two-merge dependency, claimed in the Ready
+  block's `blockers`. Priority, reviewability, "land the fast part first" and a
+  one-off sequencing instruction given for a single race never qualify: each
+  extra PR is a whole CI matrix and a whole lap. This line used to read "an
+  efficiency, not a commandment", and that hatch is what let a plan split one
+  bundle into two PRs against AGENTS.md's "one PR all of it" (2026-09-25).
+- **The wait is working time** (2026-09-26). While `land` holds the tree —
+  a 20-40 min `verify`, then CI — prepare the next change in a separate
+  worktree (`git worktree add ../<name> -b <branch> origin/main`): read the
+  code, draft the edit, run its unit tests there. The tree coming back should
+  mean committing, not starting to read. An agent that idles through a lap
+  pays the lap twice.
 
 The composition itself is a declared list with a durable compensation per step
 (CLOUD-1556 carries the Pkl default and its schema; CLOUD-1564 `Push`'s row),
