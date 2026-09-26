@@ -335,3 +335,42 @@ fn the_parser_still_words_an_unknown_key_the_way_the_predicate_expects() {
         "the predicate keys on this wording too: {err}"
     );
 }
+
+// --- the derivation's cost on a failing load (CLOUD-1876) --------------------
+//
+// A counter, never a clock (`rules/rust.md`): `config::schema_derivations` is
+// read as a delta around one call. It is process-global, so these rely on
+// nextest's process-per-test, as `policy_engine_count` does.
+
+/// A config that fails to deserialize, beside no committed schema, derives
+/// nothing: absent already answers `false`, and reading first is what lets it
+/// say so without paying for a whole-schema derivation.
+#[test]
+fn a_failing_load_with_no_committed_schema_derives_nothing() {
+    let dir = common::scratch("schema-skew-absent");
+    let source = dir.join("batten.toml");
+    let before = ::batten::config::schema_derivations();
+    let parsed = ::batten::config::parse(
+        "version = 1\nnot_a_key = true\n",
+        source.to_str().expect("utf-8 path"),
+    );
+    assert!(
+        parsed.is_err(),
+        "an unknown top-level key must not deserialize"
+    );
+    assert_eq!(
+        ::batten::config::schema_derivations(),
+        before,
+        "no sibling schema file, so no derivation"
+    );
+}
+
+/// Derived once per process, and the same bytes every call (§6).
+#[test]
+fn the_schema_is_derived_once_per_process() {
+    let before = ::batten::config::schema_derivations();
+    let first = ::batten::config::schema().expect("derives");
+    let second = ::batten::config::schema().expect("derives");
+    assert_eq!(first, second, "byte-stable across calls");
+    assert_eq!(::batten::config::schema_derivations() - before, 1);
+}
