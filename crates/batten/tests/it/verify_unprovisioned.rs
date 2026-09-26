@@ -318,6 +318,84 @@ fn the_extracted_verify_body_is_the_task_and_not_the_whole_file() {
     );
 }
 
+/// CLOUD-1702. THE BASE A SPECULATIVE LAP IS JUDGED AGAINST.
+///
+/// `verify:gated` arms two gates with a base ref, and both used to name
+/// `origin/main` unconditionally on a premise the body itself states: that
+/// `verify` has already refused any branch not rebased on current trunk, so the
+/// task is a function of (commit, current trunk). A speculative lap breaks that
+/// premise — `land` replays the branch onto the lease holder's UNLANDED commits —
+/// and judging that tree against trunk charges the holder's weakenings and the
+/// holder's commits to the BORROWER.
+///
+/// It refuses rather than merely misreports, because `lint::groom` keys the claim
+/// receipt on the branch name: the borrower carries one of its own, minted for
+/// its own row and naming no weakening, which is `Groom::Read({})` — a refusal by
+/// design (CLOUD-841). The holder's `Weakens:` trailer cannot admit it.
+///
+/// Both halves are asserted, because arming only one leaves the other charging
+/// the same borrowed commits: `commit-lint`'s instance is already in this
+/// repository's cost record as CLOUD-1775's lost lap, *28 commits claim no
+/// CLOUD-N issue*.
+///
+/// Fails by: restoring either literal, which is the state five laps over four
+/// borrowed tips were measured in on 2026-09-25/26.
+#[test]
+fn both_base_armed_gates_read_the_base_the_lap_actually_borrowed() {
+    let body = task_body("verify:gated");
+    assert!(
+        body.contains("mise run config-lint"),
+        "the extraction found the gate set, not a neighbouring table"
+    );
+    for (armed, gate) in [
+        ("CONFIG_LINT_BASE", "mise run config-lint"),
+        ("BASE_SHA", "mise run commit-lint"),
+    ] {
+        let line = arming(&body, armed, gate);
+        assert!(
+            line.contains("BATTEN_SPEC_BASE"),
+            "{armed} must read the base the lap borrowed, or a speculative lap \
+             charges the holder's diff to this branch: {line}"
+        );
+    }
+}
+
+/// The line that ARMS `gate` with `armed`, never the prose that discusses it.
+///
+/// Both halves of the pair are required, for the reason [`task_body`]'s own
+/// comment records one layer up: this body explains each arming in a comment
+/// above it, so a bare `find` for the variable name returns *"absent
+/// `CONFIG_LINT_BASE` the task runs exactly ..."* — a sentence that will never
+/// contain the expansion, so every assertion over it fails for the wrong reason.
+/// Requiring the invocation on the same line is what picks the executable one.
+fn arming<'a>(body: &'a str, armed: &str, gate: &str) -> &'a str {
+    body.lines()
+        .find(|line| line.contains(armed) && line.contains(gate))
+        .unwrap_or_else(|| panic!("{armed} arms {gate} in this body"))
+}
+
+/// CLOUD-1702's MIRROR, and without it the case above is satisfied by dropping
+/// the base entirely — which is the dead-gate class, not a fix.
+///
+/// An unspeculated lap and CI both leave `BATTEN_SPEC_BASE` unset, so the
+/// expansion has to fall back to trunk. A bare `$BATTEN_SPEC_BASE` would arm
+/// `config lint` with an empty ref there and judge nothing at all, which is
+/// exactly the silence house style §8 arms this gate against.
+#[test]
+fn an_unspeculated_lap_still_falls_back_to_trunk() {
+    let body = task_body("verify:gated");
+    for (armed, gate) in [
+        ("CONFIG_LINT_BASE", "mise run config-lint"),
+        ("BASE_SHA", "mise run commit-lint"),
+    ] {
+        let line = arming(&body, armed, gate);
+        assert!(
+            line.contains("${BATTEN_SPEC_BASE:-origin/main}"),
+            "the fallback is the whole reason this is a no-op off a bet: {line}"
+        );
+    }
+}
+
 /// CLOUD-1683. The load-bearing ordering. An unprovisioned tree has to stop
 /// BEFORE the receipt question, because that question is asked through a compile
 /// entry point: on a tree with no toolchain it fails for the wrong reason and is

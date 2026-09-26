@@ -4411,7 +4411,12 @@ if ! mise run test:bats; then
   echo "::error:: verify: the shell suite failed. No receipt written." >&2
   exit 1
 fi
-if ! BASE_SHA="$(git rev-parse origin/main)" HEAD_SHA="$(git rev-parse HEAD)" mise run commit-lint; then
+# THE SAME BOUND, AND THIS HALF IS ALREADY IN THE COST RECORD (CLOUD-1702).
+# CLOUD-1775's body tabulates a lap lost to `commit-lint` reporting "28 commits
+# claim no CLOUD-<n> issue" — those 28 were the lease holder's, charged here
+# because `BASE_SHA` named trunk while the tree sat on the holder's base. See the
+# `config-lint` paragraph below for why the borrowed base is the honest one.
+if ! BASE_SHA="$(git rev-parse "${BATTEN_SPEC_BASE:-origin/main}")" HEAD_SHA="$(git rev-parse HEAD)" mise run commit-lint; then
   echo "::error:: verify: commit-lint failed. No receipt written." >&2
   exit 1
 fi
@@ -4424,10 +4429,38 @@ fi
 # CI confirms what this proved. The first arming ran in CI alone and a
 # ref-namespace mistake was unreachable by any local run — it cost a matrix.
 #
-# `origin/main` is the right base HERE and is not the property-of-the-world
-# mistake the `hk` gate must avoid: `verify` has already refused this branch
-# unless it is rebased on current `origin/main` (see the guard in `verify`), so
-# this task is a function of (commit, current trunk) before this line runs. The
+# `origin/main` IS THE RIGHT BASE ONLY WHEN THE LAP DID NOT SPECULATE, and the
+# paragraph below used to say it unconditionally (CLOUD-1702). Its reasoning —
+# `verify` has already refused this branch unless it is rebased on current
+# `origin/main`, so this task is a function of (commit, current trunk) — holds
+# for an ordinary run and is FALSE on a speculative lap: `land` replays the
+# branch onto the lease holder's UNLANDED commits, "the main that is about to
+# exist", so the tree is a function of (commit, the holder's base) instead.
+#
+# Judging that tree against trunk charges the holder's weakenings to the
+# BORROWER. `lint::groom` keys the claim receipt on the branch name, and a
+# borrower has one of its own, minted for its own row and naming no weakening —
+# `Groom::Read({})`, which refuses by design (CLOUD-841: evidence of absence, not
+# absence of evidence). The holder's `Weakens:` trailer cannot admit it, because
+# the borrower's groom has already answered. Measured 2026-09-25/26: five laps
+# over four different borrowed tips, every one refusing
+# `recorder[board-issue-created] recorder-changed` and its sibling, while
+# `mise run test:cargo` over the identical integrated commit was 6057/6057 green.
+#
+# `BATTEN_SPEC_BASE` is what `land` already publishes for exactly this question
+# (`speculation::PUBLISHED_AS`, CLOUD-748), and `land.rs`'s own
+# `a_body_gate_is_told_which_base_the_lap_borrowed` asserts it arrives. Using it
+# is the same bound CLOUD-1711 put on `race::authored_log`, which read the whole
+# branch history where the shell read only the commits the branch authored.
+#
+# NOTHING ESCAPES JUDGEMENT, which is the property that makes this a fix rather
+# than a relaxation: every commit is still judged once, on its own branch,
+# against the base it actually sits on. The holder's weakenings are adjudicated
+# on the holder's own lap, against trunk, under the holder's groom.
+#
+# A no-op wherever no bet is live — an ordinary local lap and CI both leave the
+# variable unset, so the expansion is `origin/main` and the class is unchanged.
+# The
 # pre-commit step stays single-tree, where that reasoning does not hold.
 #
 # Unarmed callers are unaffected: absent `CONFIG_LINT_BASE` the task runs exactly
@@ -4445,7 +4478,7 @@ if ! mise run record-verdicts; then
   echo "::error:: verify: the validator verdicts could not be recorded, so the rows that read them would decide over a record nothing wrote. No receipt written." >&2
   exit 1
 fi
-if ! CONFIG_LINT_BASE=origin/main mise run config-lint; then
+if ! CONFIG_LINT_BASE="${BATTEN_SPEC_BASE:-origin/main}" mise run config-lint; then
   echo "::error:: verify: config-lint refused this tree — either batten.toml carries a policy smell, or this branch weakens policy against origin/main. No receipt written." >&2
   exit 1
 fi
