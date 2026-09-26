@@ -2993,7 +2993,22 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("sibling");
         std::fs::write(dir.join("marker"), sha).expect("marker");
         let when = std::time::SystemTime::now() - std::time::Duration::from_secs(age_secs);
-        std::fs::File::open(&dir)
+        // WINDOWS OPENS A DIRECTORY ONLY WITH BACKUP SEMANTICS, and a plain
+        // `File::open` of one fails there — measured red on the `windows` job,
+        // green everywhere else. The flag is what `CreateFileW` requires to hand
+        // back a directory handle, and write access is what setting its time needs.
+        #[cfg(windows)]
+        let handle = {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(&dir)
+        };
+        #[cfg(not(windows))]
+        let handle = std::fs::File::open(&dir);
+        handle
             .and_then(|handle| handle.set_modified(when))
             .expect("set the sibling's mtime");
     }
