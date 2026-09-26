@@ -7,6 +7,101 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.185](https://github.com/button-inc/batten/compare/v0.0.184...v0.0.185) - 2026-09-26
+
+### Added
+
+- *(bench)* the token benchmark and its honesty gate move into the engine
+- *(perf)* the measurement and its series move into the engine
+- *(release)* the install contract is asked of its authorities, not scraped
+- *(policy)* a startup budget nobody chose is boilerplate, and now it is gated
+- *(ready)* the paths a row names are the crate's question too
+- *(ci)* which suites a diff can move is a deny-list the engine reads
+- *(doctor)* [**breaking**] six programs were two capabilities, and they are now two verbs
+- *(record)* the per-suite cost corpus splits into a producer and a membership gate
+- *(receipt)* the tree-clean precondition moves inside the verb that writes the receipt
+- *(mcp)* retire the MCP launcher shim onto a verb that cannot become a supervisor
+- *(doctor)* retire the egress pair onto the verb that already outranked it
+- *(perf)* generalise the declared-arm harness both instances now use
+- *(exit)* one authority folds findings and blind spots into an exit code
+- *(policy)* retire ci-tools-check onto the engine
+- *(policy)* retire timeout-check onto the engine
+- *(policy)* retire publish-credential-check onto the engine
+- *(policy)* retire coderabbit-config-check onto the engine
+- *(policy)* retire cap-drift onto the engine
+- *(policy)* retire digest-major-agreement onto the engine
+- *(policy)* retire rust-paths-check onto the engine
+- *(policy)* retire msrv-pin-agreement onto the engine
+- *(policy)* retire hook-pin-check onto the engine
+- *(policy)* retire mise-action-floor onto the engine
+- *(policy)* retire batten-glob-check onto glob-containment
+- *(policy)* [**breaking**] retire six shell gates onto the engine and give `exec` a lock
+
+### Fixed
+
+- *(harness)* take main's collector and fail-fast posture after the replay
+- *(land)* a red head's other runs finish instead of being cancelled
+- *(bench)* find the binary under test by its platform name
+- *(prune)* a prune inside verify's open lap touches nothing
+- *(land)* a fresh ready's wait does not read the draft-era skips as a dead end
+- *(prune)* a running build's tree is never reclaimed
+- *(surface)* drop the unreached declaration the reach needle refutes
+- *(policy)* only a hook command in harness JSON reaches a verb
+- *(refusal)* defer to the trunk's class-token binding, and carry the two cases it lacks
+- *(prune)* a reclaimed artifact takes its cargo fingerprint with it
+- *(harness)* the collector cases state their platform contract instead of hiding it
+- *(harness)* the collector's command reader is Unix-only with its callers
+- *(harness)* the scratch collector no longer deletes a concurrent run's fixtures
+- *(lint)* a claim arms the repository root's authority and nothing below it
+- *(lint)* a claimed branch's weakenings are adjudicated at the edit, not a lap later
+- *(harness)* every scratch directory is one case's own, and a gate says so
+- *(toolchain)* declare the fail-fast posture instead of inheriting one
+- *(land)* restore the sentence that stops a reader reaching for --continue
+- *(bench)* two runs at once measured each other
+- *(config)* [**breaking**] the two consumer facts the ports wrote into the core
+- *(spec)* the nine rows this campaign added, and the two lints the split raised
+- *(spawn)* every spawn this branch added goes through the placed adapter
+- *(lint)* every clippy escape this branch added, removed rather than annotated
+- *(exec)* a lock key cannot leave its directory, and a lock option needs a lock
+- *(policy)* five boundary reads that fired on text nobody wrote
+- *(policy)* four ways a gate read clean over what it never judged
+- *(surface)* exec and verdict declare the exit codes they actually return
+- *(refusal)* every pointer shape binds, so no declared route can ship inert
+- *(refusal)* an admission binds to an artifact subject, so a receipt refusal is escapable
+- *(tests)* a case about which column moves must not also be about the clock
+- *(handler)* a row naming the mediator runs the running image
+- *(arm)* take the order from the caller, so a percentile needs no cast
+- *(mcp)* withdraw a retirement whose caller resolves a release
+- *(config)* a split keeps its id, so the weakening check reads it as one
+- *(surface)* re-derive what the branch's new base changed under it
+- *(git)* the working-tree walk answers about the checkout in front of it
+- *(lints)* clear what the branch's own new code owed clippy and the vocabulary gate
+- *(git)* a submodule is not an uncommitted path
+- *(config)* repair what the replay dropped and rename the ported rows to three-word names
+- *(spec)* the `verdict` verb takes its two ledger rows
+- *(gate)* place `arm`, and make its rank arithmetic need no lint escape
+- *(test)* qualify the four ledger arms whose case titles collide
+- *(test)* fold the fixture builders instead of collecting a format! per entry
+- *(policy)* give the first six ported rules verdicts that mean what they emit
+- *(policy)* give the five ported rules verdicts that mean what they emit
+- *(test)* drop the tracker key from the awk-regex inline fixture
+
+### Other
+
+- *(mcp-spawn)* the windows refusal case names a server
+- *(platform)* state the unix contract of eleven cases the windows leg ran
+- *(bench-tokens)* byte-exact reproduction is the publishing platform's
+- *(bench-tokens)* perturb a copy of the table, never the committed one
+- *(config-schema)* a config fixture is its own repository
+- *(prune)* declare the fingerprint mutation where the obligation gate reads
+- *(pointer)* the seven ports had no rule-4 disposition
+- *(ledger)* the 129 deleted cases this branch never accounted for
+- *(policy)* three assertions that could not tell right from wrong
+- *(policy)* place the modules this branch added, and unbreak a module header
+- *(landed)* retire the program its successor already replaced
+- *(pointer-only)* the `verdict` verb takes its census row
+- *(land)* drive a real conflict through the writer the module reads
+
 ## [0.0.184](https://github.com/button-inc/batten/compare/v0.0.183...v0.0.184) - 2026-09-26
 
 ### Fixed
