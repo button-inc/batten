@@ -18,8 +18,8 @@ use batten::rules::{self, Rule};
 /// The predicate id the module declares, not the `[[rule]]` id.
 const DROPPED: &str = "task read unseen";
 
-/// The pre-fix `darwin-link` body, verbatim in shape: the x86_64 required check
-/// ran this and linked aarch64.
+/// The pre-fix `darwin-link` body, verbatim in shape: the `x86_64` required
+/// check ran this and linked `aarch64`.
 const PRE_FIX_DARWIN_LINK: &str =
     r#"run = "t=\"${1:-${DARWIN_TARGET:-aarch64-apple-darwin}}\"; echo \"darwin-link: $t\"""#;
 
