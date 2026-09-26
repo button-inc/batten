@@ -626,7 +626,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "mise,attestation,timeout-drift,engine-checks-green,engine-cargo-graph,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age,done,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,denials-outlive-the-turn,digest-major-agreement,doctor,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure,evaluator-io-probe,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,agent-spawn,in-progress-drain,install-check,land-divergence,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,task-linear-check,lock-complete,macos-link,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict,ntia,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,task-pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-due,release-provision-parity,release-tag-shape,release-tracking,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,task-sbom,sbom-actions,sbom-binary,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,task-sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-callable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules,deferral,closing-key,release-assets"
+MUTANT_GATES = "mise,attestation,timeout-drift,engine-checks-green,engine-cargo-graph,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,task-board-sweep,branch-age,done,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,denials-outlive-the-turn,digest-major-agreement,doctor,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure,evaluator-io-probe,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,agent-spawn,in-progress-drain,install-check,land-divergence,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,task-linear-check,lock-complete,macos-link,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict,ntia,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,task-pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-due,release-provision-parity,release-tag-shape,release-tracking,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,task-sbom,sbom-actions,sbom-binary,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,task-sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-callable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules,deferral,closing-key,release-assets"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -3804,6 +3804,172 @@ for tag in "${tags[@]}"; do
 	echo "release-backfill: $tag recorded (run $id)"
 done
 echo "release-backfill: ${#tags[@]} tag(s) recorded, oldest first"
+{% endraw %}
+'''
+
+# Every board gate over one payload set, reported as a SET (CLOUD-825), retired
+# off `mise-tasks/board-sweep.sh` under CLOUD-1752. It re-derives no gate's
+# predicate: each is invoked with the payloads on stdin and its exit code read as
+# the three-valued channel it publishes. The report is a set, never a first
+# failure, because one fetch feeding N gates is what makes a sweep affordable.
+#
+# A GATE IS RESOLVED WHERE IT LIVES, so this survives each gate's own retirement:
+# `mise-tasks/<gate>.sh` while that file exists, else the inline task, run with
+# `MISE_CONFIG_FILE` naming this manifest so it executes in the CALLER's tree —
+# every retired board gate declares `dir = "{{cwd}}"` for exactly that. Measured:
+# without that `dir`, or through `-C`, the task runs in the manifest's directory
+# and would judge the wrong repository.
+#
+# COULD-NOT-LOOK OUTRANKS A REFUSAL, AND A REFUSAL OUTRANKS AN ABSTENTION
+# (CLOUD-921). Board-scoped `unjudgeable` (a gate exited 2 over the payload set,
+# or the set is empty or not JSON) is exit 2; clone-scoped `abstained` (no `v*`
+# tag for `released`, no pull-request state for `done-pr-check`) is exit 3, and a
+# refusal beside it is still exit 1. `graph-check` is a LEAF here, run before
+# `released`, so a tag-less clone still gets its verdict.
+#
+# EFFECT IS `read`: it decides and reports and MOVES NO ROW.
+#MUTANT-SUITE crates/batten/tests/it/board_sweep.rs
+#MUTANT empty-set-is-clean|s@^\[\[ "\$count" -gt 0 \]\]@[[ "$count" -ge 0 ]]@|an_empty_payload_set_is_could_not_look
+#MUTANT gate-two-laundered|s@^\t\tunjudgeable=@\t\trefusals=@|a_gate_exiting_2_is_not_laundered_into_the_refusal_lane
+#MUTANT drain-not-invoked|s@^run_gate in-progress-drain@true in-progress-drain@|a_landed_but_in_progress_row_is_named_by_in_progress_drain
+#MUTANT released-fed-nothing|s@^\trun_gate released "\$tag" <<<"\$issues"@\trun_gate released "$tag" </dev/null@|a_payload_set_reaches_graph_check_behind_released
+#MUTANT graph-check-not-a-leaf|s@^run_gate graph-check@true graph-check@|a_tag_less_clone_still_gets_a_graph_check_verdict
+#MUTANT abstention-laundered|s@^\tabstained=@\tunjudgeable=@|an_abstention_and_a_not_judged_sweep_are_different_exit_codes
+#MUTANT refusal-loses-to-abstention|s@^if \[\[ "\$refusals" -gt 0 \]\]; then$@if [[ "$refusals" -gt 99 ]]; then@|a_refusal_outranks_a_clone_scoped_abstention
+[tasks.board-sweep]
+description = "Gate: run every board gate over one payload set and report the set of refusals (reads get_issue payloads on stdin or from BOARD_PAYLOADS_DIR) — CLOUD-825"
+shell = "bash -c"
+dir = "{{cwd}}"
+usage = '''
+flag "--payloads <source>" help="a payload file, or - for stdin"
+flag "--tag <tag>" help="the release whose shipped rows released judges; the newest v* when omitted"
+flag "--pulls <file>" help="a JSON array of {number,state,draft} for done-pr-check"
+'''
+run = '''
+{% raw %}
+set -uo pipefail
+# Resolved BEFORE the cd, so the gates this composes are this manifest's.
+manifest="${MISE_CONFIG_FILE:-${MISE_PROJECT_ROOT:-$PWD}/mise.toml}"
+tasks_dir="$(dirname -- "$manifest")/mise-tasks"
+cd "$(git rev-parse --show-toplevel 2>/dev/null)" || {
+	echo "::error:: board-sweep: not a git repository, so no gate below can resolve a ref" >&2
+	exit 2
+}
+payloads="${usage_payloads:-${SWEEP_PAYLOADS:-}}"
+tag="${usage_tag:-${SWEEP_TAG:-}}"
+pulls_file="${usage_pulls:-${SWEEP_PULLS:-}}"
+# The source is chosen before anything is read: a task has no tty on stdin
+# whether or not anything was piped, so a tty test would block a bare call.
+dir="${BOARD_PAYLOADS_DIR:-$(git rev-parse --git-dir)/batten-payloads}"
+if [[ -n "$payloads" ]]; then
+	if [[ "$payloads" = - ]]; then
+		raw=$(cat)
+	else
+		[[ -r "$payloads" ]] || {
+			echo "::error:: board-sweep: cannot read $payloads" >&2
+			exit 2
+		}
+		raw=$(cat -- "$payloads")
+	fi
+elif compgen -G "$dir/*.json" >/dev/null 2>&1; then
+	raw=$(cat -- "$dir"/*.json)
+else
+	raw=$(cat)
+fi
+issues=$(jq -sc 'if length == 1 and (.[0] | type == "array") then .[0] else . end' <<<"$raw" 2>/dev/null) || {
+	echo "::error:: board-sweep: the payload set is not JSON. Recover it with \`mise run board-payloads <id>...\`, which reads this session's own \`get_issue\` results rather than text an agent re-typed (CLOUD-526)." >&2
+	exit 2
+}
+count=$(jq 'length' <<<"$issues" 2>/dev/null) || count=0
+# The anti-vacuity term: an empty set runs every gate, each finds nothing, and
+# the sweep would report a board it never looked at.
+[[ "$count" -gt 0 ]] || {
+	echo "::error:: board-sweep: the payload set is empty, so no gate below can decide anything. That is COULD NOT LOOK, never a clean board — pipe \`get_issue\` payloads, or run \`mise run board-payloads <id>...\` first." >&2
+	exit 2
+}
+refusals=0
+unjudgeable=0
+abstained=0
+# One gate, wherever it lives: the file while it exists, else the inline task.
+gate() { # gate <name> [args...]
+	local name=$1
+	shift
+	if [[ -x "$tasks_dir/$name.sh" ]]; then
+		"$tasks_dir/$name.sh" "$@"
+	else
+		MISE_CONFIG_FILE="$manifest" mise run -q "$name" -- "$@"
+	fi
+}
+# Pointer-only: the gate's name and its verdict. Both streams, because the gates
+# disagree on which one carries a finding (`released` puts its verdicts on
+# stdout), and a composer reading one throws half the report away.
+run_gate() { # run_gate <name> [args...]
+	local name=$1 report status
+	report=$(gate "$@" 2>&1)
+	status=$?
+	case "$status" in
+	0)
+		echo "  $name ok"
+		;;
+	1)
+		refusals=$((refusals + 1))
+		echo "  $name REFUSED"
+		[[ -z "$report" ]] || printf '%s\n' "$report" >&2
+		;;
+	*)
+		# Never laundered into the refusal lane: "could not look" and "found
+		# dissonance" are different facts about the board.
+		unjudgeable=$((unjudgeable + 1))
+		echo "  $name COULD NOT LOOK"
+		[[ -z "$report" ]] || printf '%s\n' "$report" >&2
+		;;
+	esac
+}
+echo "board-sweep: $count issue(s)"
+run_gate graph-check <<<"$issues"
+run_gate duplicate-close-check <<<"$issues"
+if [[ -z "$tag" ]]; then
+	tag=$(git tag --list 'v[0-9]*' --sort=-version:refname | head -n1) || tag=""
+fi
+if [[ -z "$tag" ]]; then
+	abstained=$((abstained + 1))
+	echo "  released ABSTAINED"
+	echo "::notice:: board-sweep: this checkout carries no \`v*\` tag, so \`released\` cannot resolve a range and says nothing about which rows a release shipped. Every board-scoped gate above still ran. Fetch tags, or pass --tag." >&2
+else
+	run_gate released "$tag" <<<"$issues"
+fi
+run_gate in-progress-drain <<<"$issues"
+pulls="[]"
+if [[ -n "$pulls_file" ]]; then
+	pulls=$(cat -- "$pulls_file" 2>/dev/null) || pulls=""
+elif command -v gh >/dev/null 2>&1; then
+	pulls=$(gh pr list --state all --limit 500 --json number,state,isDraft 2>/dev/null |
+		jq -c '[.[] | {number, state: (.state | ascii_downcase), draft: .isDraft}]') || pulls=""
+fi
+if [[ -z "$pulls" ]] || ! jq -e 'type == "array"' <<<"$pulls" >/dev/null 2>&1; then
+	# This task's own gather failed, a fact about the environment rather than
+	# the board, so it abstains; the gate's own exit 2 stays board-scoped.
+	abstained=$((abstained + 1))
+	echo "  done-pr-check ABSTAINED"
+	echo "::notice:: board-sweep: no pull-request state to judge Done against, so that gate was not run. Supply --pulls <file> (a JSON array of {number,state,draft}), or make \`gh\` reachable." >&2
+else
+	with_pulls=$(jq -c --argjson pulls "$pulls" 'map(. + {pulls: $pulls})' <<<"$issues")
+	run_gate done-pr-check <<<"$with_pulls"
+fi
+run_gate spec-ref-check <<<"$issues"
+if [[ "$unjudgeable" -gt 0 ]]; then
+	echo "board-sweep: $unjudgeable gate(s) could not look — the board has not been judged" >&2
+	exit 2
+fi
+if [[ "$refusals" -gt 0 ]]; then
+	echo "board-sweep: $refusals gate(s) name dissonance above" >&2
+	exit 1
+fi
+if [[ "$abstained" -gt 0 ]]; then
+	echo "board-sweep: the board is coherent ($count issue(s)); $abstained gate(s) abstained on a property of this clone, not of the board" >&2
+	exit 3
+fi
+echo "board-sweep: every gate ran and none names dissonance ($count issue(s))"
 {% endraw %}
 '''
 

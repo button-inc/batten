@@ -61,6 +61,7 @@ mod bats_invocation;
 mod board_receipts;
 mod board_record;
 mod board_state_claim;
+mod board_sweep;
 mod bot_lane;
 mod branch_age;
 mod bundle;
