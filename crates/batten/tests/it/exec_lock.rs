@@ -146,6 +146,12 @@ fn lock_options_are_accepted_alongside_a_selector() {
 
 #[test]
 fn the_wrapped_exit_code_survives_the_lock() {
+    // UNIX ONLY: the wrapped command is `bash`, which a Windows runner resolves
+    // to WSL, and a holder's death is read by `kill(pid, 0)` (`task::lives`),
+    // which exists only on unix.
+    if !cfg!(unix) {
+        return;
+    }
     // The whole product of a wrapper. The shell names losing it as the defect
     // that would "destroy the verdict of everything it guards".
     let dir = repo("exec-lock-verdict");
@@ -155,6 +161,12 @@ fn the_wrapped_exit_code_survives_the_lock() {
 
 #[test]
 fn a_signal_survives_the_lock() {
+    // UNIX ONLY: the wrapped command is `bash`, which a Windows runner resolves
+    // to WSL, and a holder's death is read by `kill(pid, 0)` (`task::lives`),
+    // which exists only on unix.
+    if !cfg!(unix) {
+        return;
+    }
     // A child that died on a signal has no exit status of its own, and the
     // shell's `128 + signal` convention is what the wrapper reports. The lock
     // must not replace it with a success of its own.
@@ -209,6 +221,12 @@ fn an_empty_holder_file_is_held_not_free() {
 
 #[test]
 fn a_dead_holder_is_reclaimed_rather_than_waited_out() {
+    // UNIX ONLY: the wrapped command is `bash`, which a Windows runner resolves
+    // to WSL, and a holder's death is read by `kill(pid, 0)` (`task::lives`),
+    // which exists only on unix.
+    if !cfg!(unix) {
+        return;
+    }
     // DISCRIMINATING, and the opposite direction from the case above. A
     // directory lock's release comes from the guard, which a SIGKILLed holder
     // never runs; reclaim is what keeps that a delay of one ask instead of the

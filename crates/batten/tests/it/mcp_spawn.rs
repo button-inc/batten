@@ -119,6 +119,12 @@ fn ledger_lines(ledger: &Path) -> Vec<Vec<String>> {
 
 #[test]
 fn a_launch_appends_one_record_naming_the_server_and_becomes_the_launch_line() {
+    // UNIX ONLY: `mcp spawn` REPLACES this process (`exec`), and a host that
+    // cannot do that is refused by design rather than served by a child; see
+    // `a_host_that_cannot_replace_a_process_refuses_the_launch` for that arm.
+    if !cfg!(unix) {
+        return;
+    }
     let (dir, launcher, ledger) = bench("one-record");
     let output = spawn(
         &dir,
@@ -139,6 +145,12 @@ fn a_launch_appends_one_record_naming_the_server_and_becomes_the_launch_line() {
 
 #[test]
 fn the_servers_pid_is_this_processs_it_execs_rather_than_forks() {
+    // UNIX ONLY: `mcp spawn` REPLACES this process (`exec`), and a host that
+    // cannot do that is refused by design rather than served by a child; see
+    // `a_host_that_cannot_replace_a_process_refuses_the_launch` for that arm.
+    if !cfg!(unix) {
+        return;
+    }
     // NON-NEGOTIABLE FOR THIS DESIGN, and the one property only a compiled-binary
     // tier can see. After `exec` there is no process left, so the verb
     // structurally cannot become the supervisor or retry loop CLOUD-714 forbids.
@@ -218,6 +230,12 @@ fn stdout_carries_only_the_servers_bytes() {
 
 #[test]
 fn an_unwritable_ledger_never_stops_the_server_from_starting() {
+    // UNIX ONLY: `mcp spawn` REPLACES this process (`exec`), and a host that
+    // cannot do that is refused by design rather than served by a child; see
+    // `a_host_that_cannot_replace_a_process_refuses_the_launch` for that arm.
+    if !cfg!(unix) {
+        return;
+    }
     // A ledger that cannot be written must never be the reason a server does not
     // start. The launch is the product; the record is the diagnosis.
     let (dir, launcher, ledger) = bench("ledger-unwritable");
@@ -233,6 +251,12 @@ fn an_unwritable_ledger_never_stops_the_server_from_starting() {
 
 #[test]
 fn a_launch_outside_a_checkout_still_starts_the_server() {
+    // UNIX ONLY: `mcp spawn` REPLACES this process (`exec`), and a host that
+    // cannot do that is refused by design rather than served by a child; see
+    // `a_host_that_cannot_replace_a_process_refuses_the_launch` for that arm.
+    if !cfg!(unix) {
+        return;
+    }
     // Outside a repository there is nowhere per-clone to keep the ledger, and
     // inventing a path under the temp directory would put it where no gate reads.
     // So this records nothing and launches anyway, which is the same priority the
@@ -263,6 +287,12 @@ fn a_second_server_is_an_argument_rather_than_a_second_script() {
 
 #[test]
 fn a_launch_line_that_will_not_start_is_a_refusal_and_not_a_silent_success() {
+    // UNIX ONLY: `mcp spawn` REPLACES this process (`exec`), and a host that
+    // cannot do that is refused by design rather than served by a child; see
+    // `a_host_that_cannot_replace_a_process_refuses_the_launch` for that arm.
+    if !cfg!(unix) {
+        return;
+    }
     // `exec` returns only on failure, so reaching the line after it IS the error.
     // A verb that reported success here would tell a reader the server was
     // launched when nothing was — which is the false half of exactly the
@@ -297,4 +327,24 @@ fn the_pinned_launch_args_are_still_in_the_committed_config() {
     let config = std::fs::read_to_string(at_root(".mcp.json")).unwrap();
     assert!(config.contains("pipx:serena-agent@"), "{config}");
     assert!(config.contains("start-mcp-server"), "{config}");
+}
+
+/// THE WINDOWS ARM, pinned rather than skipped. A host that cannot replace a
+/// process refuses the launch with a usage-class exit and says why, instead of
+/// running the server as a child: a supervisor that survives would break the
+/// guarantee `mcp spawn` exists to give. Measured on #928's `windows` leg.
+#[test]
+fn a_host_that_cannot_replace_a_process_refuses_the_launch() {
+    if cfg!(unix) {
+        return;
+    }
+    let output = batten()
+        .args(["mcp", "spawn", "--", "cmd", "/c", "exit", "0"])
+        .output()
+        .expect("run batten mcp spawn");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("cannot replace a process"),
+        "{output:?}"
+    );
 }

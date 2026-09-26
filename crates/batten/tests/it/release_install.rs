@@ -148,6 +148,12 @@ fn run(repo: &Path) -> Output {
 
 #[test]
 fn a_contract_every_authority_agrees_on_passes() {
+    // UNIX ONLY: the fixture's authorities are read through `bash`, which a
+    // Windows runner resolves to WSL; its UTF-16 banner then reads as 13
+    // disagreements about assets nobody changed.
+    if !cfg!(unix) {
+        return;
+    }
     let repo = fixture("agreeing", INSTALL_AGREEING, WORKFLOW);
     let outcome = run(&repo);
     let (answer, cause) = (stdout(&outcome), stderr(&outcome));
@@ -162,6 +168,12 @@ fn a_contract_every_authority_agrees_on_passes() {
 /// THE CLASS THIS ROW EXISTS FOR: a matrix leg `install.sh` will not serve.
 #[test]
 fn a_matrix_target_install_does_not_serve_is_refused() {
+    // UNIX ONLY: the fixture's authorities are read through `bash`, which a
+    // Windows runner resolves to WSL; its UTF-16 banner then reads as 13
+    // disagreements about assets nobody changed.
+    if !cfg!(unix) {
+        return;
+    }
     let serves_nothing = INSTALL_AGREEING.replace("printf 'x86_64-unknown-linux-gnu\\n'", "true");
     let repo = fixture("unserved", &serves_nothing, WORKFLOW);
     let outcome = run(&repo);
@@ -293,6 +305,12 @@ fn a_committed_binary_is_refused_and_only_its_path_is_named() {
 /// with two printable characters a PE header also uses.
 #[test]
 fn a_script_and_prose_are_not_committed_binaries() {
+    // UNIX ONLY: the fixture's authorities are read through `bash`, which a
+    // Windows runner resolves to WSL; its UTF-16 banner then reads as 13
+    // disagreements about assets nobody changed.
+    if !cfg!(unix) {
+        return;
+    }
     let repo = fixture("not-binaries", INSTALL_AGREEING, WORKFLOW);
     std::fs::write(repo.join("tool.sh"), "#!/usr/bin/env bash\nexit 0\n").unwrap();
     std::fs::write(repo.join("NOTES.md"), "MZ is how a sentence might start\n").unwrap();
