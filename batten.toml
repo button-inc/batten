@@ -14831,7 +14831,7 @@ route. Prefix it, as `board-payloads` does for every line of its own recipe bloc
 [[verdict.route]]
 id = "task read first"
 kind = "document"
-target = "mise-tasks/board-payloads.sh"
+target = "mise.toml"
 
 [[verdict]]
 id = "remedy own duplicate"

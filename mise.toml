@@ -626,7 +626,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "mise,attestation,timeout-drift,engine-checks-green,engine-cargo-graph,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,task-board-sweep,branch-age,done,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,denials-outlive-the-turn,digest-major-agreement,doctor,done-pr-check,duplicate-close,task-duplicate-close-record,task-released,egress-fencing,evaluator-closure,evaluator-io-probe,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,agent-spawn,in-progress-drain,install-check,land-divergence,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,task-linear-check,lock-complete,macos-link,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict,ntia,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,task-pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-due,release-provision-parity,release-tag-shape,release-tracking,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,task-sbom,sbom-actions,sbom-binary,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,task-sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-callable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules,deferral,closing-key,release-assets"
+MUTANT_GATES = "mise,attestation,timeout-drift,engine-checks-green,engine-cargo-graph,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,task-board-payloads,task-board-sweep,branch-age,done,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,denials-outlive-the-turn,digest-major-agreement,doctor,done-pr-check,duplicate-close,task-duplicate-close-record,task-released,egress-fencing,evaluator-closure,evaluator-io-probe,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,agent-spawn,in-progress-drain,install-check,land-divergence,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,task-linear-check,lock-complete,macos-link,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict,ntia,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,task-pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-due,release-provision-parity,release-tag-shape,release-tracking,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,task-sbom,sbom-actions,sbom-binary,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,task-sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-callable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules,deferral,closing-key,release-assets"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -3804,6 +3804,128 @@ for tag in "${tags[@]}"; do
 	echo "release-backfill: $tag recorded (run $id)"
 done
 echo "release-backfill: ${#tags[@]} tag(s) recorded, oldest first"
+{% endraw %}
+'''
+
+# This session's own `get_issue` payloads, recovered from its transcript so a
+# sweep pays the fetch once (CLOUD-782) — retired off `mise-tasks/board-payloads.sh`
+# under CLOUD-1752. What it removes is the SECOND COPY: a payload reaching a
+# gate's stdin by an agent re-typing it is the forged-compliance shape CLOUD-526
+# measured seven times; the transcript already holds the bytes the tracker
+# returned.
+#
+# IDENTIFY BY TOOL NAME, NEVER BY FIELD PRESENCE. A `save_issue` response is
+# shape-identical to a `get_issue` payload across `id`, `status` and
+# `attachments` and omits only `relations`, so a field-presence discriminator
+# prefers the later, poorer payload. The name lives on the `tool_use` block and
+# the payload on its `tool_result`, joined by `tool_use_id` (measured total, 1839
+# of 1839). Match the suffix after the last `__`: the server reconnects under a
+# new alias mid-session (CLOUD-178). Newest QUALIFYING payload wins.
+#
+# A recovered payload carries STRUCTURE, not freshness — re-read a row before
+# promoting on its `status`; `issue-read-check` bounds that age.
+#
+# COULD NOT LOOK IS NEVER AN EMPTY HARVEST: an unreadable transcript, or one that
+# does not decode (decided ONCE, before any id — CLOUD-1033), is exit 2 and names
+# the capture store, the same bytes on a host that writes no transcript
+# (CLOUD-990). A genuine miss over a decoded transcript is exit 1. Pointer-only:
+# counts, ids, and jq's own line number, never a byte of a body.
+#MUTANT-SUITE crates/batten/tests/it/board_payloads.rs
+#MUTANT board-payloads-matches-any-issue-tool|s@endswith("__get_issue")@length >= 0@|a_later_save_issue_response_does_not_displace_the_get_issue_payload
+#MUTANT board-payloads-matches-full-tool-name|s@endswith("__get_issue")@== "mcp__Linear__get_issue"@|a_reconnected_server_alias_still_matches_on_the_suffix
+#MUTANT board-payloads-decode-failure-is-an-empty-harvest|s@^if ! decode_erro[r]=@if false \&\& ! decode_error=@|a_transcript_with_an_undecodable_line_is_could_not_look
+#MUTANT board-payloads-absent-is-empty|s@^if \[\[ ! -r "\$transcript" \]\]; then$@if false; then@|an_unreadable_transcript_is_could_not_look
+#MUTANT board-payloads-miss-is-clean|s@^\t\[\[ -s "\$out/\$id.json" \]\] @\ttrue @|an_id_absent_from_the_transcript_is_exit_1_and_named
+[tasks.board-payloads]
+description = "Recover this session's own `get_issue` payloads from its transcript, so a sweep pays the fetch once (CLOUD-782)"
+shell = "bash -c"
+dir = "{{cwd}}"
+usage = 'arg "[id]..." var=#true help="CLOUD-* ids whose newest get_issue payload to recover"'
+run = '''
+{% raw %}
+set -euo pipefail
+usage() {
+	echo "::error:: usage: board-payloads <CLOUD-id>... (writes one payload per id into BOARD_PAYLOADS_DIR)" >&2
+	exit 2
+}
+ids=()
+read -ra ids <<<"${usage_id:-${*:-}}"
+[[ "${#ids[@]}" -ge 1 ]] || usage
+for id in "${ids[@]}"; do
+	case "$id" in
+	CLOUD-[0-9]*) ;;
+	*) usage ;;
+	esac
+done
+#PIN-OK: jq
+if ! command -v jq >/dev/null 2>&1; then
+	echo "::error:: board-payloads: no jq on PATH — the transcript could not be read. Run: mise install" >&2
+	exit 2
+fi
+# Injectable: a live host produces exactly one transcript (CLOUD-418). The default
+# is `[transcript] path`, the symlink `stop-guard` refreshes each Stop.
+transcript="${BATTEN_TRANSCRIPT_FILE:-.claude/.transcript.jsonl}"
+out="${BOARD_PAYLOADS_DIR:-.git/batten-payloads}"
+if [[ ! -r "$transcript" ]]; then
+	echo "::error:: board-payloads: no readable transcript at $transcript — the payloads could not be recovered. This is not an empty harvest." >&2
+	cat >&2 <<-'ELSEWHERE'
+		::error:: board-payloads: the same bytes are in the capture store, which needs no transcript:
+		::error::     batten capture list
+		::error::     batten capture show <handle> --grep '"id":"CLOUD-N"'   # find the handle
+		::error::     batten capture show <handle> --raw | mise run issue-read-check
+		::error:: Those are bytes the tracker returned, not a re-typed copy, so they are as valid here as a recovered payload.
+	ELSEWHERE
+	exit 2
+fi
+mkdir -p "$out" || {
+	echo "::error:: board-payloads: cannot create $out" >&2
+	exit 2
+}
+if ! decode_error=$(jq -e . "$transcript" 2>&1 >/dev/null); then
+	echo "::error:: board-payloads: the transcript at $transcript did not decode, so no payload could be recovered. This is not an empty harvest." >&2
+	printf '::error:: board-payloads: %s\n' "${decode_error##*$'\n'}" >&2
+	cat >&2 <<-'ELSEWHERE'
+		::error:: board-payloads: the same bytes are in the capture store, which needs no transcript:
+		::error::     batten capture list
+		::error::     batten capture show <handle> --raw | grep -c '"id":"CLOUD-N"'   # find the handle; --grep exits 0 either way
+		::error::     batten capture show <handle> --raw | mise run issue-read-check
+		::error:: Those are bytes the tracker returned, not a re-typed copy, so they are as valid here as a recovered payload.
+	ELSEWHERE
+	exit 2
+fi
+for id in "${ids[@]}"; do
+	payload=$(jq -rn --arg id "$id" '
+		[inputs] as $lines
+		| ($lines
+		   | map(.. | objects | select(.type? == "tool_use" and (.name? | type == "string")))
+		   | map({(.id): .name}) | add // {}) as $names
+		| $lines
+		| map(.. | objects
+		      | select(.type? == "tool_result")
+		      | select($names[.tool_use_id] // "" | endswith("__get_issue"))
+		      | .content?)
+		| map(.. | strings)
+		| map(select(startswith("{")))
+		| map(fromjson? // empty)
+		| map(select(.id? == $id))
+		| last // empty
+		| tojson
+	' "$transcript" 2>/dev/null) || payload=""
+	if [[ -n "$payload" ]]; then
+		printf '%s\n' "$payload" >"$out/$id.json"
+	fi
+done
+found=0
+missing=""
+for id in "${ids[@]}"; do
+	[[ -s "$out/$id.json" ]] && found=$((found + 1)) && continue
+	missing="$missing $id"
+done
+echo "board-payloads: recovered $found of ${#ids[@]} payload(s) into $out"
+if [[ -n "$missing" ]]; then
+	echo "::error:: board-payloads: no \`get_issue\` payload in this session's transcript for:$missing. Fetch them with get_issue(includeRelations: true) and run this again — sweeping a short closure is what the board gates refuse." >&2
+	exit 1
+fi
 {% endraw %}
 '''
 
