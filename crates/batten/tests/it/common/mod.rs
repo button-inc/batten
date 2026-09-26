@@ -295,6 +295,17 @@ pub(crate) fn task_body(name: &str) -> String {
         .join("\n")
 }
 
+/// `[env].<name>` from the committed `mise.toml` — the one declaration a task
+/// body and its tier both read, so a tier never restates a shared name.
+pub(crate) fn task_env(name: &str) -> String {
+    let manifest = fs::read_to_string(at_root("mise.toml")).expect("the manifest");
+    let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
+    parsed["env"][name]
+        .as_str()
+        .unwrap_or_else(|| panic!("[env] declares {name}"))
+        .to_owned()
+}
+
 /// `bash -c <body>` in `dir`, with `dir/bin` first on `PATH` for the stubs a
 /// tier plants there.
 #[expect(

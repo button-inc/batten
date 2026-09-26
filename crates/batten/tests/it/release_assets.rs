@@ -5,7 +5,7 @@
 //! fixture workflow and a stub `gh` serving a directory of REAL files — the
 //! manifest rules hash bytes, so a stub answering names alone would leave half
 //! the gate untested. The engine then decides over what was recorded. The
-//! per-target SBOM names are derived by the live `sbom-binary.sh --names`, the
+//! per-target SBOM names are derived by the live `mise run sbom-binary -- --names`, the
 //! way the producer derives them, so a literal here cannot rot at a version bump.
 //!
 //! The last cases are properties of the COMMITTED workflow rather than of the
@@ -169,11 +169,18 @@ fn manifest(dir: &Path, names: Option<&[String]>) {
 
 /// The binary SBOM a composed leg publishes, derived as the producer derives it.
 fn binary_sbom(dir: &Path, target: &str) -> String {
-    let out = common::program(at_root("mise-tasks/sbom-binary.sh"))
-        .args(["--names", target])
-        .current_dir(dir)
+    let out = common::program("mise")
+        .arg("-C")
+        .arg(at_root("."))
+        .args(["run", "sbom-binary", "--", "--names", target])
+        .env("SBOM_BINARY_ROOT", dir)
         .output()
-        .expect("sbom-binary --names");
+        .expect("mise run sbom-binary -- --names");
+    assert!(
+        out.status.success(),
+        "sbom-binary --names: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let line = String::from_utf8_lossy(&out.stdout).into_owned();
     line.trim()
         .trim_start_matches("sbom=")
@@ -202,21 +209,19 @@ fn complete(dir: &Path, extra: &[&str]) -> Vec<String> {
     assets
 }
 
-fn env_manifest_name() -> String {
-    let manifest = std::fs::read_to_string(at_root("mise.toml")).expect("the manifest");
-    let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
-    parsed["env"]["BATTEN_CHECKSUM_MANIFEST"]
-        .as_str()
-        .expect("[env] declares the manifest name")
-        .to_owned()
-}
-
 fn produce(dir: &Path, tag: Option<&str>) -> Output {
     let mut command = common::task_command(dir, "release-assets-record");
     command
         .env("BATTEN_RELEASE_WORKFLOW", dir.join("workflow.yml"))
         .env("BATTEN_TASKS_DIR", at_root("mise-tasks"))
-        .env("BATTEN_CHECKSUM_MANIFEST", env_manifest_name())
+        .env(
+            "BATTEN_CHECKSUM_MANIFEST",
+            common::task_env("BATTEN_CHECKSUM_MANIFEST"),
+        )
+        .env(
+            "BATTEN_CLI_REFERENCE",
+            common::task_env("BATTEN_CLI_REFERENCE"),
+        )
         .stdin(Stdio::null());
     match tag {
         Some(tag) => command.env("usage_tag", tag),

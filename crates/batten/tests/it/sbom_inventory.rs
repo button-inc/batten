@@ -20,8 +20,8 @@
 //! `sbom-check.sh` re-ran `sbom.sh` twice and adjudicated the documents in shell.
 //! The scan stays outside — §9's prior art, and §5 makes `check` `read` — so
 //! `mise run record-sbom` derives and records, and the adjudication moves here.
-//! `sbom.sh` itself SURVIVES: it decides nothing, so it is a producer rather than
-//! a gate, and its disposition is CLOUD-1159's rather than this row's.
+//! The producer itself decides nothing, so it became `[tasks.sbom]` under
+//! CLOUD-1717; `sbom_producer.rs` is its tier.
 
 // carried: mise-tasks/sbom-check.sh policy/sbom-inventory.rego crates/batten/tests/it/sbom_inventory.rs
 // carried: tests/sbom-check.bats policy/sbom-inventory.rego crates/batten/tests/it/sbom_inventory.rs
@@ -324,7 +324,7 @@ fn an_unstable_scan_is_refused() {
 #[test]
 fn an_inflated_component_set_is_refused() {
     // syft emits a component per REFERENCE SITE. Measured once at 340 entries for
-    // 290 distinct things; this is the clause that keeps `sbom.sh`'s normalisation
+    // 290 distinct things; this is the clause that keeps `[tasks.sbom]`'s normalisation
     // honest without anyone having predicted which shape comes next.
     let dir = fixture("inflated", TABLE);
     assert_eq!(

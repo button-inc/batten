@@ -350,7 +350,6 @@ local gate = new Mapping<String, Step> {
         "crates/batten/src/cli.rs",
         "crates/batten/src/render.rs",
         "crates/batten/src/spec.rs",
-        "mise-tasks/render/cli.sh",
       )
     check = "mise run test:reference-coverage"
   }
@@ -742,7 +741,7 @@ local gate = new Mapping<String, Step> {
         "Cargo.toml",
         "Cargo.lock",
         "crates/**/Cargo.toml",
-        "mise-tasks/sbom.sh",
+        "mise.toml",
         "policy/ntia.rego",
       )
     check = "mise run ntia-check"

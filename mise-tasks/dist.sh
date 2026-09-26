@@ -97,7 +97,7 @@ main() {
 		usage
 		return 0
 		;;
-	# The stem, without building. `mise-tasks/sbom-binary.sh` names its asset from
+	# The stem, without building. `[tasks.sbom-binary-record]` names its asset from
 	# this rather than re-spelling `archive_stem`, so the naming contract
 	# CLOUD-65's install path reads stays decided in one place — the same reason
 	# `sbom --names` exists for the platform-independent documents.
@@ -140,7 +140,7 @@ main() {
 	# not refuted: `cross` compiles inside a container carrying its own toolchain,
 	# and no Docker daemon was available to probe it. This matrix shipped six
 	# consecutive releases with zero binaries (CLOUD-258), so an unproven build
-	# wrapper does not enter it on inference — `mise-tasks/sbom-binary.sh` is only
+	# wrapper does not enter it on inference — `mise run sbom-binary` is only
 	# asked for the legs that are proven, and the DoD's "every archive whose leg
 	# composes" is what absorbs the narrowing.
 	case "$BUILD_TOOL" in

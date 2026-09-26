@@ -474,6 +474,40 @@ fn declared(lines: &[String], marker: &str) -> Option<String> {
     lines.iter().find_map(|line| strip_marker(line, marker))
 }
 
+/// The task manifest an inline-task gate resolves to.
+const TASK_MANIFEST: &str = "mise.toml";
+
+/// The gate-name prefix naming an inline `[tasks.<name>]` body.
+const TASK_PREFIX: &str = "task-";
+
+/// The line index of `[tasks.<name>]` or `[tasks."<name>"]`, whichever is used.
+fn task_header(lines: &[String], name: &str) -> Option<usize> {
+    let bare = format!("[tasks.{name}]");
+    let quoted = format!("[tasks.\"{name}\"]");
+    lines
+        .iter()
+        .position(|line| line.trim_end() == bare || line.trim_end() == quoted)
+}
+
+/// The comment block directly above a task's header: its declarations only.
+///
+/// Walks up from the header across comment and blank lines and stops at the
+/// first line that is neither, which is the previous table's last key. A row
+/// belonging to the task above can therefore never be read as this task's.
+fn task_block(lines: &[String], name: &str) -> Vec<String> {
+    let Some(header) = task_header(lines, name) else {
+        return Vec::new();
+    };
+    let start = lines[..header]
+        .iter()
+        .rposition(|line| {
+            let trimmed = line.trim_start();
+            !(trimmed.is_empty() || trimmed.starts_with('#'))
+        })
+        .map_or(0, |last| last + 1);
+    lines[start..header].to_vec()
+}
+
 /// The `#MUTANT` rows in one source, refusing a row that is not three fields.
 ///
 /// The count precedes the split because after the split the evidence is gone: a
@@ -511,6 +545,15 @@ pub fn sources_for(root: &Path, name: &str) -> Vec<String> {
     let task = format!("mise-tasks/{name}.sh");
     if root.join(&task).is_file() {
         return vec![task];
+    }
+    // THE INLINE-TASK ARM. A program retired off `mise-tasks/<name>.sh` into a
+    // `[tasks.<name>]` body keeps its mutations, or retiring it would silently
+    // drop them: no other arm resolves to the manifest, so a `#MUTANT` row there
+    // was declared and swept by nothing.
+    if let Some(inline) = name.strip_prefix(TASK_PREFIX)
+        && lines_of(root, TASK_MANIFEST).is_some_and(|lines| task_header(&lines, inline).is_some())
+    {
+        return vec![TASK_MANIFEST.to_owned()];
     }
     let module = format!("policy/{name}.rego");
     if root.join(&module).is_file() {
@@ -565,9 +608,16 @@ pub fn resolve(root: &Path, name: &str) -> Option<Gate> {
     let mut suite = None;
     let mut owner = None;
     for source in &sources {
-        let Some(lines) = lines_of(root, source) else {
+        let Some(mut lines) = lines_of(root, source) else {
             continue;
         };
+        // An inline task shares its file with every other task, so its rows and
+        // suite are only the comment block directly above its own header.
+        if let Some(inline) = name.strip_prefix(TASK_PREFIX)
+            && source == TASK_MANIFEST
+        {
+            lines = task_block(&lines, inline);
+        }
         suite = suite.or_else(|| declared(&lines, SUITE));
         owner = owner.or_else(|| declared(&lines, OWNER));
         for row in rows_in(&lines, source) {
@@ -1758,6 +1808,36 @@ mod tests {
         let rows = rows_in(&lines, "policy/x.rego");
         assert!(rows[0].is_ok());
         assert_eq!(rows[1].as_ref().err().map(|(_, n)| *n), Some(5));
+    }
+
+    /// An inline task's rows are the comment block above its own header, and
+    /// never a neighbour's: two tasks share one file, and a row read into the
+    /// wrong gate would run against the wrong suite.
+    #[test]
+    fn an_inline_task_block_is_only_its_own_comment_header() {
+        let lines: Vec<String> = [
+            "[tasks.above]",
+            "#MUTANT-SUITE crates/batten/tests/it/above.rs",
+            "#MUTANT above-row|s@a@b@|above_case",
+            "run = 'true'",
+            "",
+            "# The task under test.",
+            "#MUTANT-SUITE crates/batten/tests/it/mine.rs",
+            "#MUTANT mine-row|s@c@d@|mine_case",
+            "[tasks.\"mine\"]",
+            "run = 'true'",
+        ]
+        .map(String::from)
+        .to_vec();
+        let block = task_block(&lines, "mine");
+        let rows = rows_in(&block, TASK_MANIFEST);
+        assert_eq!(rows.len(), 1, "{block:?}");
+        assert_eq!(rows[0].as_ref().expect("a row").slug, "mine-row");
+        assert_eq!(
+            declared(&block, SUITE).as_deref(),
+            Some("crates/batten/tests/it/mine.rs")
+        );
+        assert!(task_block(&lines, "absent").is_empty());
     }
 
     #[test]

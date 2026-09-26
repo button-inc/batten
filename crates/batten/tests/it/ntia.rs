@@ -60,7 +60,7 @@ fn executable(dir: &Path, name: &str, body: &str) -> PathBuf {
 }
 
 /// A producer writing `batten.spdx.json` with `STUB_SPDXVER` (`NONE` omits the
-/// key), and printing `spdx=<path>` as `mise-tasks/sbom.sh` does.
+/// key), and printing `spdx=<path>` as `[tasks.sbom]` does.
 const SBOM: &str = r#"#!/usr/bin/env bash
 set -euo pipefail
 [[ -z "${STUB_SBOM_FAILS:-}" ]] || exit 1

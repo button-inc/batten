@@ -7557,10 +7557,10 @@ input = "hk.pkl"
 #
 # THE SCAN STAYS OUTSIDE, which is `validator-verdict-clean`'s disposition and the
 # same one house style §5 forces: `check` is `read` and cannot spawn, so `syft`
-# stays a command on PATH and `mise-tasks/sbom.sh` stays the producer that derives
+# stays a command on PATH and `[tasks.sbom]` stays the producer that derives
 # the documents. `[tasks.record-sbom]` runs it twice and records the counts; this
-# row adjudicates them. `sbom.sh` deliberately survives — it decides nothing, so it
-# is a producer rather than a gate, and its own disposition is CLOUD-1159's.
+# row adjudicates them. The producer decides nothing, so it moved inline rather
+# than into a module (CLOUD-1752, which settles CLOUD-1159's disposition).
 #
 # `line_sources` CARRIES TWO OF THE PREDICATES OUTRIGHT, and that is what keeps the
 # producer's trusted surface narrow rather than total. The expected cargo count is
@@ -11722,25 +11722,93 @@ target = "policy/sbom-inventory.rego"
 id = "manifest count wrong"
 gloss = "the document and the tree it claims to describe do not agree"
 class = """
-The cargo count is stated against `Cargo.lock`'s own `source = ` entries rather than a number anyone wrote down, because the issue that specified this recorded 156 cargo and 175 total and the total had moved by 2 a day later. So a disagreement means a cataloger missed something, or emitted a component per REFERENCE SITE rather than per thing depended on -- 340 entries for 290 distinct things, measured. Fix the normalisation in `mise-tasks/sbom.sh` and re-record; never adjust the expected count to match what the scan happened to produce, which is the one repair that makes the gate decide nothing.
+The cargo count is stated against `Cargo.lock`'s own `source = ` entries rather than a number anyone wrote down, because the issue that specified this recorded 156 cargo and 175 total and the total had moved by 2 a day later. So a disagreement means a cataloger missed something, or emitted a component per REFERENCE SITE rather than per thing depended on -- 340 entries for 290 distinct things, measured. Fix the normalisation in `[tasks.sbom]` in `mise.toml` and re-record; never adjust the expected count to match what the scan happened to produce, which is the one repair that makes the gate decide nothing.
 """
 
 [[verdict.route]]
 id = "source read first"
 kind = "document"
-target = "mise-tasks/sbom.sh"
+target = "mise.toml"
 
 [[verdict]]
 id = "manifest state missing"
 gloss = "a field the tree states is NOASSERTION in the published document"
 class = """
-Supplier, originator, copyright and licence each have a source in this tree -- the lockfile's resolution, `cargo metadata`'s authors, the bytes `Cargo.lock` pins by checksum, and the manifests `cargo-deny` already reads. A `NOASSERTION` in any of them is data the tree states and the document dropped, and `NONE` is conformant where `NOASSERTION` is not, so only the third state refuses. The remedy is to enrich the field in `mise-tasks/sbom.sh` and re-record. Findings here are counts and never values on purpose: an author name, an email address and a copyright holder are all personal data, and echoing one would publish it into every CI log that reads this gate.
+Supplier, originator, copyright and licence each have a source in this tree -- the lockfile's resolution, `cargo metadata`'s authors, the bytes `Cargo.lock` pins by checksum, and the manifests `cargo-deny` already reads. A `NOASSERTION` in any of them is data the tree states and the document dropped, and `NONE` is conformant where `NOASSERTION` is not, so only the third state refuses. The remedy is to enrich the field in `[tasks.sbom]` in `mise.toml` and re-record. Findings here are counts and never values on purpose: an author name, an email address and a copyright holder are all personal data, and echoing one would publish it into every CI log that reads this gate.
 """
 
 [[verdict.route]]
 id = "source read first"
 kind = "document"
-target = "mise-tasks/sbom.sh"
+target = "mise.toml"
+
+# CLOUD-667's table refusals, ported off `mise-tasks/sbom.sh` under CLOUD-1717.
+# The key shape is exactly `owner/repo@<40-hex>`, spelled as a workflow's `uses:`.
+[[pattern]]
+id = "sbom-action-key"
+regex = '^[^@[:space:]]+@[0-9a-f]{40}$'
+
+[[rule]]
+id = "pin parse other"
+kind = "policy"
+scope = "tree"
+module = "policy/sbom-actions.rego"
+line_sources = ["mise-tasks/sbom-actions.tsv"]
+severity = "deny"
+
+[[verdict]]
+id = "pin parse broken"
+gloss = "a licence-table row carries fewer than three tab-separated fields"
+class = "A short row would write an empty license into a published document: a field that parses as present and says nothing. Complete the row with a license and a copyright (`NONE` where the license file states no holder)."
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/sbom-actions.rego"
+
+[[verdict]]
+id = "pin parse loose"
+gloss = "a licence-table key is not `owner/repo@<40-hex>`"
+class = "The pin is the drift authority: without it a row maps an action to whatever its default branch says today rather than to the commit this repository builds against. Spell the key exactly as the workflow's `uses:` line pins it."
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/sbom-actions.rego"
+
+# CLOUD-263, ported off `mise-tasks/sbom-binary.sh` under CLOUD-1717.
+# `mise run sbom-binary` produces then checks this one rule; silent with no record.
+[[record]]
+record = "sbom-binary"
+writer = "mise run sbom-binary-record"
+
+[[rule]]
+id = "cargo list other"
+kind = "policy"
+scope = "tree"
+module = "policy/sbom-binary.rego"
+line_sources = ["Cargo.lock"]
+severity = "deny"
+
+[[verdict]]
+id = "cargo list empty"
+gloss = "a binary's inventory recovered fewer than two rust-crate packages"
+class = "0 is a build that lost its `cargo auditable` wrapper, 1 is the binary cataloging only itself; both are an empty document that exits 0, and a gate that checks nothing must not report green. Rebuild through `mise run dist` on a leg the wrapper is proven on."
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run sbom-binary-record"
+
+[[verdict]]
+id = "cargo list wrong"
+gloss = "a binary's inventory names a crate `Cargo.lock` does not declare"
+class = "Subset, never equality: the lockfile spans every target's build and dev dependencies. A recovered crate outside it means the binary was not built from this lockfile."
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run sbom-binary-record"
 
 [[verdict]]
 id = "pin table missing"
