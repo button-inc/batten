@@ -269,6 +269,32 @@ fn scratch(name: &str) -> std::path::PathBuf {
     dir
 }
 
+/// ONE LOAD DESCRIBES EACH BUNDLE ONCE (CLOUD-1875). The authoring checks and
+/// `session_facts` all read the same whole-AST description, and each used to
+/// re-serialise it — four per rule per load, so ~572 where 143 would do. A
+/// counter, never a clock: process-global, so this relies on nextest's
+/// process-per-test, as `policy_engine_count` does.
+#[test]
+fn a_load_describes_each_bundle_once() {
+    let root = scratch("describe-once");
+    let path = module_file(&root, "writes.rego", DENIES_WRITES);
+    let before = policy::ast_descriptions();
+    let bundles = policy::load(
+        &root,
+        &[row("policy-writes", &path)],
+        fixtures(&root),
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect("load");
+    assert_eq!(bundles.len(), 1);
+    assert_eq!(
+        policy::ast_descriptions() - before,
+        1,
+        "one bundle, one description, however many checks read it"
+    );
+}
+
 #[test]
 fn a_module_denies_on_a_fact_and_is_silent_otherwise() {
     let root = scratch("denies");
