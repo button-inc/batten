@@ -21,8 +21,8 @@
 // its own exit 2 rather than a clean short sweep. It belongs to the drain's own
 // port, and naming it here is what stops a reader assuming the half they cannot
 // see is still covered.
-// ported: "with no DRAIN_MERGED_PRS the drain gathers evidence rather than refusing" crates/batten/tests/it/claimed_keys.rs subject:mise-tasks/in-progress-drain.sh
-// ported: "a failed gather is could-not-look, never a short sweep" crates/batten/tests/it/claimed_keys.rs subject:mise-tasks/in-progress-drain.sh
+// ported: "with no DRAIN_MERGED_PRS the drain gathers evidence rather than refusing" crates/batten/tests/it/claimed_keys.rs subject:mise.toml
+// ported: "a failed gather is could-not-look, never a short sweep" crates/batten/tests/it/claimed_keys.rs subject:mise.toml
 // carried: mise-tasks/claimed-keys.sh crates/batten/src/race.rs kind:mechanism crates/batten/tests/it/claimed_keys.rs runs:batten+claim+keys
 // carried: tests/claimed-keys.bats crates/batten/src/race.rs kind:mechanism crates/batten/tests/it/claimed_keys.rs
 // carried: mise-tasks/merged-pr-keys.sh crates/batten/src/forge.rs kind:mechanism crates/batten/tests/it/claimed_keys.rs runs:batten+claim+merged
