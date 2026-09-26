@@ -59,6 +59,18 @@ local gate = new Mapping<String, Step> {
   ["no-docs-tree"] {
     check = "mise run no-docs-tree"
   }
+  // The shipping half of CLOUD-1847's break-glass. `.batten-ripcord` admits the
+  // repair floor over a config that LOADS and denies the calls that would fix
+  // it — the state CLOUD-1842's floor cannot see, because there is nothing
+  // wrong with the file. That is the right answer for one locked-out tree and
+  // the wrong one for every clone, so an armed sentinel must not reach `main`.
+  //
+  // Glob-less for `no-docs-tree`'s reason directly above: the input is the whole
+  // index, and a glob would let a tracked sentinel persist unreported for every
+  // commit that did not touch it.
+  ["no-armed-ripcord"] {
+    check = "mise run no-armed-ripcord"
+  }
   ["hook-profile-check"] {
     glob = List("hk.pkl", ".claude/hooks/git-hook.sh")
     check = "mise run record-verdicts"

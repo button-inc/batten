@@ -752,10 +752,10 @@ pub fn singleton_holder(git_dir: &Path, task: &str) -> Option<String> {
     if !lock.exists() {
         return None;
     }
-    let Some(holder) = holder_of(&lock) else {
-        // The lock directory exists and says nothing readable. Held.
-        return Some("unknown".to_owned());
-    };
+    // A lock that names no pid is the acquiring path's to judge over two sightings
+    // (CLOUD-1895), exactly as a dead pid is: refusing here on one sighting made
+    // the reclaim unreachable through `mise run`, since the task never started.
+    let holder = holder_of(&lock)?;
     pid_exists(&holder).then_some(holder)
 }
 
@@ -829,18 +829,14 @@ pub fn singleton_acquire_at(
             return Claim::Taken;
         }
 
-        // An EMPTY pid file is a holder caught between its create and its write,
-        // not a corpse: absence of evidence is "held", never "free".
-        let Some(holder) = holder_of(lock) else {
-            if last {
-                return Claim::Held {
-                    holder: "unknown".to_owned(),
-                    phase: None,
-                };
-            }
-            sleep_once(recheck);
-            continue;
-        };
+        // An EMPTY OR ABSENT pid file is neither held nor free on ONE sighting
+        // (CLOUD-1895). It used to report `Held { "unknown" }` before the reclaim
+        // below was consulted — so a process killed between `take`'s create and
+        // its write left a lock nothing would ever reclaim. It now takes the
+        // two-sighting path a dead pid does: a holder mid-write has written long
+        // before the recheck ends, and `take` no longer leaves a live holder's
+        // lock unstamped.
+        let holder = holder_of(lock);
 
         // There is deliberately NO early live-holder fast path. It read as a safety
         // property and was not one: with it deleted a live holder still falls
@@ -859,11 +855,11 @@ pub fn singleton_acquire_at(
         // declares, and the interval IS the safety margin rather than a guess at how
         // long something takes.
         sleep_once(recheck);
-        if may_reclaim(&holder, holder_of(lock).as_deref())
+        if may_reclaim(holder.as_deref(), holder_of(lock).as_deref())
             && std::fs::remove_dir_all(lock).is_ok()
             && take(lock, pid)
         {
-            return Claim::Reclaimed(holder);
+            return Claim::Reclaimed(holder.unwrap_or_else(|| UNSTAMPED.to_owned()));
         }
 
         // The lock changed under us, or a live holder took it: whoever holds it
@@ -926,18 +922,38 @@ pub fn singleton_release_at(lock: &Path) {
 /// and reclaiming then robs a live process. A reading that is gone entirely is
 /// the same answer: there is nothing to reclaim, and the caller's next `take`
 /// decides it honestly.
-fn may_reclaim(first: &str, second: Option<&str>) -> bool {
-    second == Some(first) && !pid_exists(first)
+///
+/// A lock naming NO pid on both sightings is reclaimable too (CLOUD-1895):
+/// unreadable-twice is the corroboration standing in for `!pid_exists`, since a
+/// holder between its create and its write stamps it long before the recheck
+/// ends. Unreadable then readable is a holder that finished writing: held.
+//MUTANT-SUITE crates/batten/tests/it/singleton.rs
+//MUTANT an-empty-pid-file-is-a-live-holder|s@^        (None, None) => true,$@        (None, None) => false,@|a_lock_naming_no_pid_is_reclaimed_after_the_recheck
+fn may_reclaim(first: Option<&str>, second: Option<&str>) -> bool {
+    match (first, second) {
+        (None, None) => true,
+        (Some(first), second) => second == Some(first) && !pid_exists(first),
+        (None, Some(_)) => false,
+    }
 }
 
+/// What a reclaim reports when the lock it took named no pid.
+const UNSTAMPED: &str = "(none: the lock carried no readable pid)";
+
 /// Create the lock and stamp it with `pid`, reporting whether this call won it.
+///
+/// A write that fails REMOVES the lock and reports a loss. It used to leave an
+/// empty pid file and report a win, which was safe only while an empty file read
+/// as held forever; now that one is reclaimable, a live holder must never be the
+/// thing that leaves it (CLOUD-1895).
 fn take(lock: &Path, pid: &str) -> bool {
     if std::fs::create_dir(lock).is_err() {
         return false;
     }
-    // A write that fails leaves an EMPTY pid file, which the reader above treats
-    // as held — the safe direction, and the one the shell also took.
-    let _ = std::fs::write(lock.join("pid"), format!("{pid}\n"));
+    if std::fs::write(lock.join("pid"), format!("{pid}\n")).is_err() {
+        let _ = std::fs::remove_dir_all(lock);
+        return false;
+    }
     true
 }
 
@@ -1187,20 +1203,25 @@ mod tests {
         // only as a doc comment. `#[cfg(unix)]` over the whole test would have
         // left the Windows contract unstated, which is what let CI find it.
         #[cfg(unix)]
-        // The only reclaimable reading: the same pid twice, and it is gone.
-        assert!(may_reclaim(dead, Some(dead)));
+        // The same dead pid twice, and it is gone.
+        assert!(may_reclaim(Some(dead), Some(dead)));
         #[cfg(not(unix))]
         // Off unix the identical reading is NOT reclaimable, because the probe
         // that would call it dead does not exist.
-        assert!(!may_reclaim(dead, Some(dead)));
+        assert!(!may_reclaim(Some(dead), Some(dead)));
         // The lock changed hands to a NEW holder while the first's trap was
         // removing it. Reclaiming here robs whoever holds it now.
-        assert!(!may_reclaim(dead, Some(&live)));
-        assert!(!may_reclaim(dead, Some("31337")));
+        assert!(!may_reclaim(Some(dead), Some(&live)));
+        assert!(!may_reclaim(Some(dead), Some("31337")));
         // It is gone entirely: nothing to reclaim, and the next `take` decides.
-        assert!(!may_reclaim(dead, None));
+        assert!(!may_reclaim(Some(dead), None));
         // Two sightings of a LIVE pid is a held lock, which is the common case.
-        assert!(!may_reclaim(&live, Some(&live)));
+        assert!(!may_reclaim(Some(&live), Some(&live)));
+        // CLOUD-1895: no readable pid on EITHER sighting is reclaimable, on every
+        // platform — it needs no liveness probe. No pid, then a pid, is a holder
+        // that finished its write: held.
+        assert!(may_reclaim(None, None));
+        assert!(!may_reclaim(None, Some(&live)));
     }
 
     #[test]

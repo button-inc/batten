@@ -381,3 +381,187 @@ fn the_floor_does_not_reach_a_config_that_loads() {
         "a rule this build COULD read still decides; the floor is not a bypass"
     );
 }
+
+// THE BREAK-GLASS OVER A CONFIG THAT LOADS (CLOUD-1847).
+//
+// Everything above this line is CLOUD-1842's floor, which answers only on the
+// `ConfigUnreadable` arm — and `the_floor_does_not_reach_a_config_that_loads`
+// pins that scope deliberately. The cases below are the OTHER state: a config
+// that parses, loads and lints clean, whose rows refuse the calls that would
+// remove them. The floor never sees it, and a container in it has no exit.
+//
+// Measured in a live session: a `mediated_call` `policy` row whose body was bare
+// truthiness on `input.call` passed `batten config lint` at rc=0, "0 smell(s)",
+// then refused `Bash`, `Read`, and the `Edit` of `batten.toml` that would undo
+// it. The session ended by abandonment.
+
+/// A config that LOADS and refuses both halves of the repair floor.
+///
+/// Two `shape` rows rather than a rego module, on `DENIES_THE_READ`'s reason: a
+/// tool-keyed row is the cheapest thing that denies for real, and the mechanism
+/// under test is the ripcord rather than any particular way of writing a deny.
+/// Both halves are here because the floor admits exactly two shapes, and a
+/// fixture that refused only one would let a half-working ripcord pass.
+const DENIES_THE_REPAIR: &str = "version = 1\n\
+     \n\
+     [[rule]]\n\
+     id = \"fixture read refused\"\n\
+     kind = \"shape\"\n\
+     scope = \"mediated_call\"\n\
+     severity = \"deny\"\n\
+     tool = \"Read\"\n\
+     reason = \"the fixture refuses this read\"\n\
+     \n\
+     [[rule]]\n\
+     id = \"fixture write refused\"\n\
+     kind = \"shape\"\n\
+     scope = \"mediated_call\"\n\
+     severity = \"deny\"\n\
+     tool = \"Write\"\n\
+     reason = \"the fixture refuses this write\"\n";
+
+/// A config that LOADS and refuses ONLY `Bash`.
+///
+/// The falsifier's fixture: with the sentinel armed, `Bash` must still deny. A
+/// ripcord that admitted it would be a global allow wearing a record.
+const DENIES_ONLY_BASH: &str = "version = 1\n\
+     \n\
+     [[rule]]\n\
+     id = \"fixture command refused\"\n\
+     kind = \"shape\"\n\
+     scope = \"mediated_call\"\n\
+     severity = \"deny\"\n\
+     tool = \"Bash\"\n\
+     reason = \"the fixture refuses this command\"\n";
+
+/// Arm the sentinel in `dir`, untracked.
+///
+/// Written after the fixture's `base_commit` on purpose: a COMMITTED sentinel is
+/// the thing `no-armed-ripcord` refuses, so a fixture that committed one would be
+/// asserting the state the repository forbids.
+fn arm(dir: &Path) {
+    std::fs::write(dir.join(batten::ripcord::SENTINEL), "").expect("arm the ripcord");
+}
+
+#[test]
+fn a_loaded_rule_refuses_the_repair_when_the_ripcord_is_not_armed() {
+    // THE ANTI-VACUITY HALF, and without it every case below is satisfied by a
+    // build that allows these calls unconditionally. The config here denies the
+    // read, nothing is armed, and the answer must still be the refusal.
+    let dir = fixture("ripcord-unarmed", DENIES_THE_REPAIR);
+    assert_eq!(
+        code_for(&dir, &envelope("Read", r#"{"file_path":"notes.md"}"#)),
+        Some(2),
+        "with no sentinel the loaded rule decides, exactly as it did before"
+    );
+}
+
+#[test]
+fn the_ripcord_admits_a_read_a_loaded_rule_refused() {
+    // The case the row exists for: the config loads, the rule denies, and the
+    // container can look again.
+    let dir = fixture("ripcord-armed-read", DENIES_THE_REPAIR);
+    arm(&dir);
+    assert_eq!(
+        code_for(&dir, &envelope("Read", r#"{"file_path":"notes.md"}"#)),
+        Some(0),
+        "an armed ripcord admits the read that would diagnose the fault"
+    );
+}
+
+#[test]
+fn the_ripcord_admits_the_repair_write() {
+    // The other half of the floor, and the one that actually ends the lockout:
+    // the authority is what carries the offending row, so a ripcord that opened
+    // reads and not this write would leave the container able to see the fault
+    // and unable to fix it.
+    let dir = fixture("ripcord-armed-write", DENIES_THE_REPAIR);
+    arm(&dir);
+    let target = dir.join("batten.toml");
+    assert_eq!(
+        code_for(&dir, &write_envelope(&target)),
+        Some(0),
+        "an armed ripcord admits the write onto the config authority"
+    );
+}
+
+#[test]
+fn the_ripcord_is_not_a_global_allow() {
+    // THE FALSIFIER THE ROW NAMES. `Bash` is outside the repair floor —
+    // `Operation::Execute`, whose argv this boundary cannot decide — so it stays
+    // refused with the sentinel armed. If this ever answers `0`, the ripcord has
+    // become the password CLOUD-1357 retired and must not land.
+    let dir = fixture("ripcord-not-global", DENIES_ONLY_BASH);
+    arm(&dir);
+    assert_eq!(
+        code(&dir),
+        Some(2),
+        "the ripcord opens the repair floor, never the whole surface"
+    );
+}
+
+#[test]
+fn the_sentinel_can_be_armed_under_a_config_that_denies_every_write() {
+    // THE BOOTSTRAP, AND WITHOUT IT THE MECHANISM IS CIRCULAR. Nothing is armed
+    // here, and the config refuses `Write` — so the call that would arm the
+    // ripcord is exactly the call the fault denies. Arming grants nothing by
+    // itself; the next call still has to be inside the floor.
+    let dir = fixture("ripcord-bootstrap", DENIES_THE_REPAIR);
+    let target = dir.join(batten::ripcord::SENTINEL);
+    assert_eq!(
+        code_for(&dir, &write_envelope(&target)),
+        Some(0),
+        "creating the sentinel is admitted whether or not the sentinel exists"
+    );
+}
+
+#[test]
+fn arming_grants_nothing_on_its_own() {
+    // The bootstrap's own mirror: the door above is open unconditionally, so it
+    // must open onto nothing. A `Bash` call over the same fixture, with the
+    // sentinel NOT armed, is still refused — the write that arms it is admitted,
+    // and no other call is.
+    let dir = fixture("ripcord-bootstrap-mirror", DENIES_ONLY_BASH);
+    assert_eq!(
+        code(&dir),
+        Some(2),
+        "an unarmed tree decides by its rules, and the bootstrap opens no other call"
+    );
+}
+
+#[test]
+fn a_directory_named_like_the_sentinel_is_not_one() {
+    // `is_file`, never `exists`. A directory at that path is not a sentinel, and
+    // reading one as armed would make an accidental `mkdir` a bypass.
+    let dir = fixture("ripcord-directory", DENIES_THE_REPAIR);
+    std::fs::create_dir(dir.join(batten::ripcord::SENTINEL)).expect("create the directory");
+    assert_eq!(
+        code_for(&dir, &envelope("Read", r#"{"file_path":"notes.md"}"#)),
+        Some(2),
+        "a directory is not the sentinel and grants nothing"
+    );
+}
+
+#[test]
+fn a_pull_says_which_refusal_it_stood_down() {
+    // POINTER, NEVER THE PAYLOAD (rule 4). The line names the class and the
+    // sentinel, so a reader can find the record; the tool's own input never
+    // appears. Saying WHICH refusal was admitted is what keeps this from being
+    // the silent bypass again, wearing a record's clothes.
+    let dir = fixture("ripcord-pointer", DENIES_THE_REPAIR);
+    arm(&dir);
+    let output = run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "exit-code"],
+        &envelope("Read", r#"{"file_path":"notes.md"}"#),
+    );
+    let said = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        said.contains("admitted by the ripcord"),
+        "the pull is announced rather than silent: {said}"
+    );
+    assert!(
+        said.contains(batten::ripcord::SENTINEL),
+        "the line names the sentinel a reader has to disarm: {said}"
+    );
+}

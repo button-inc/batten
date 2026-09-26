@@ -642,7 +642,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,attestation-check,awk-regex,bats-invocation,board-payloads,board-sweep,branch-age-check,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,closing-key-check,coderabbit-config,commit-hygiene,connector-allow-guard,connector-allow-resolve,dead-capability,deferral-check,denials-outlive-the-turn,digest-major-agreement,done-check,done-pr-check,duplicate-close-check,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,land-divergence-assert,landing-loop,landing-roster-guarded,leased-push,license-table,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,sonar-gate,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,transcript-corpus-check,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune"
+MUTANT_GATES = "agentic-experiment-record,attestation-check,awk-regex,bats-invocation,board-payloads,board-sweep,branch-age-check,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,closing-key-check,coderabbit-config,commit-hygiene,connector-allow-guard,connector-allow-resolve,dead-capability,deferral-check,denials-outlive-the-turn,digest-major-agreement,done-check,done-pr-check,duplicate-close-check,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,in-progress-drain,land-divergence-assert,landing-loop,landing-roster-guarded,leased-push,license-table,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-provision-parity,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,sonar-gate,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,transcript-corpus-check,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -3740,6 +3740,30 @@ if [ -n "$tracked" ]; then
   exit 1
 fi
 echo "no-docs-tree: no committed docs/ tree"
+'''
+
+[tasks.no-armed-ripcord]
+description = "Gate: the break-glass sentinel is never committed. An armed ripcord in the index hands every clone the bypass (CLOUD-1847)."
+shell = "bash -c"
+# THE AUDIT IS WHAT KEEPS THE RIPCORD FROM BEING A PASSWORD, and this is half of
+# it. `.batten-ripcord` opens the repair floor over a config that loads and
+# denies — which is the right answer for a container that would otherwise be
+# abandoned, and the wrong thing entirely to hand to every clone of the
+# repository. A sentinel is a thing one operator arms in one tree, for as long as
+# it takes to remove the rule that forced it.
+#
+# GLOB-LESS, on `no-docs-tree`'s reason (CLOUD-224): the input genuinely is the
+# whole index. It fails on a tracked sentinel whatever commit introduced it,
+# where a glob would let one persist unreported for every commit that did not
+# touch it. `.gitignore` carries the same name, so reaching this gate takes a
+# deliberate `git add -f` — which is exactly the case a gate is for.
+run = '''
+tracked=$(git ls-files '.batten-ripcord' | head -n1)
+if [ -n "$tracked" ]; then
+  echo "::error:: the break-glass sentinel is tracked ($tracked). It admits the repair floor over a config that loads and denies, so committing one ships that bypass to every clone. Remove it from the index and disarm it; the lockout it was pulled for is fixed in the config, not here." >&2
+  exit 1
+fi
+echo "no-armed-ripcord: the break-glass is not committed"
 '''
 
 [tasks.bats-submodule]

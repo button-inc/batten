@@ -391,9 +391,24 @@ pub struct Bundle {
     predicate_severity: BTreeMap<String, crate::severity::RuleSeverity>,
     /// The one compiled evaluator, ready to take an input document.
     engine: regorus::Engine,
+    /// The engine's [`describe`] reading, taken once and never re-queried
+    /// (CLOUD-1875) — `declared`'s rationale, one field over. Six callers read
+    /// it, and each used to re-serialise every module's whole AST. The engine is
+    /// immutable after [`compile`], so there is nothing to invalidate. The inner
+    /// `Option` keeps could-not-look distinct from not-yet-read, and `Arc` keeps
+    /// the live-path clone a refcount rather than a copy.
+    described: std::sync::OnceLock<Option<std::sync::Arc<Vec<Described>>>>,
 }
 
 impl Bundle {
+    /// This bundle's [`describe`] reading, computed on first use.
+    fn described(&self) -> Option<&[Described]> {
+        self.described
+            .get_or_init(|| describe(&self.engine).map(std::sync::Arc::new))
+            .as_deref()
+            .map(Vec::as_slice)
+    }
+
     /// The enabling rule's id.
     #[must_use]
     pub fn id(&self) -> &str {
@@ -437,10 +452,10 @@ impl Bundle {
     #[must_use]
     pub fn session_start_facts(&self) -> BTreeSet<&'static str> {
         let mut found = BTreeSet::new();
-        let Some(described) = describe(&self.engine) else {
+        let Some(described) = self.described() else {
             return found;
         };
-        for module in &described {
+        for module in described {
             for rule in &module.rules {
                 for path in &rule.input_paths {
                     let Some(key) = path.strip_prefix("facts.") else {
@@ -589,6 +604,7 @@ impl Clone for Bundle {
             severity: self.severity,
             predicate_severity: self.predicate_severity.clone(),
             engine: self.engine.clone(),
+            described: self.described.clone(),
         }
     }
 }
@@ -625,6 +641,18 @@ fn new_engine() -> regorus::Engine {
 #[must_use]
 pub fn engines_constructed() -> usize {
     ENGINES_CONSTRUCTED.load(Ordering::Relaxed)
+}
+
+/// Every whole-AST [`describe`] this process has performed (CLOUD-1875).
+///
+/// [`ENGINES_CONSTRUCTED`]'s shape and caveat: a counter at the single funnel,
+/// read as a delta around one [`load`], and process-global.
+static AST_DESCRIPTIONS: AtomicUsize = AtomicUsize::new(0);
+
+/// How many AST descriptions this process has performed. Monotonic.
+#[must_use]
+pub fn ast_descriptions() -> usize {
+    AST_DESCRIPTIONS.load(Ordering::Relaxed)
 }
 
 /// The declared vocabulary a policy module reads: named patterns, and the
@@ -1235,6 +1263,7 @@ pub fn compile(
         severity: crate::severity::RuleSeverity::Deny,
         predicate_severity: BTreeMap::new(),
         engine,
+        described: std::sync::OnceLock::new(),
     })
 }
 
@@ -1640,14 +1669,14 @@ fn bundle_members(
 fn check_tree_paths_are_emittable(rule: &Rule, bundle: &Bundle, source: &str) -> Result<()> {
     let tree_scoped = rule.scope == crate::rules::RuleScope::Tree;
     let emittable = tree_keys();
-    let Some(described) = describe(&bundle.engine) else {
+    let Some(described) = bundle.described() else {
         // Could-not-look on the AST is not a refusal: `load` has already
         // compiled and smoke-queried this module, so a shape this reader does
         // not recognise is its own limitation, and failing the config over it
         // would make a reader upgrade a breaking change.
         return Ok(());
     };
-    for module in &described {
+    for module in described {
         for rule_ast in &module.rules {
             for path in &rule_ast.input_paths {
                 let Some(key) = path.strip_prefix("tree.") else {
@@ -2069,12 +2098,12 @@ fn check_verdicts_are_declared(
     // the AST read it sits beside.
     let declared = crate::verdict::declared_tokens(registry);
     let emittable = crate::verdict::live_tokens(registry);
-    let Some(described) = describe(&bundle.engine) else {
+    let Some(described) = bundle.described() else {
         // Could-not-look on the AST is not a refusal, for the reason the sibling
         // checks state.
         return Ok(());
     };
-    for module in &described {
+    for module in described {
         for rule_ast in &module.rules {
             if rule_ast.name.starts_with(TEST_PREFIX) {
                 // A module's own test may legitimately construct a violation
@@ -2153,10 +2182,10 @@ definition and no route, which is the bare no this ABI exists to refuse"
 /// token is emitted.
 fn emitted_verdicts(bundle: &Bundle) -> BTreeSet<String> {
     let mut found = BTreeSet::new();
-    let Some(described) = describe(&bundle.engine) else {
+    let Some(described) = bundle.described() else {
         return found;
     };
-    for module in &described {
+    for module in described {
         for rule_ast in &module.rules {
             if rule_ast.name.starts_with(TEST_PREFIX) {
                 continue;
@@ -2204,7 +2233,7 @@ fn check_no_inline_regex(
     declared: &BTreeSet<&str>,
     source: &str,
 ) -> Result<()> {
-    let Some(described) = describe(&bundle.engine) else {
+    let Some(described) = bundle.described() else {
         // Could-not-look on the AST is not a refusal, for the reason the sibling
         // checks state: `load` has already compiled this module, so a shape this
         // reader does not recognise is its own limitation, and failing the config
@@ -2238,7 +2267,7 @@ fn check_no_inline_regex(
     if rule.preset.is_some() {
         return Ok(());
     }
-    for module in &described {
+    for module in described {
         for rule_ast in &module.rules {
             for referenced in &rule_ast.pattern_refs {
                 if declared.contains(referenced.as_str()) {
@@ -2538,6 +2567,7 @@ struct DescribedRule {
 /// the one this reads. Never an empty description, which would report a module
 /// with no rules at all.
 fn describe(engine: &regorus::Engine) -> Option<Vec<Described>> {
+    AST_DESCRIPTIONS.fetch_add(1, Ordering::Relaxed);
     let json = engine.get_ast_as_json().ok()?;
     let policies: Vec<serde_json::Value> = serde_json::from_str(&json).ok()?;
     let mut described = Vec::new();
@@ -3227,14 +3257,14 @@ impl Suite {
 /// kept apart from a test failure because that is CLOUD-202's whole lesson: a
 /// run that could not evaluate must not be reported as one that found nothing.
 pub fn test(bundle: &Bundle, input: &str, mediated: bool) -> Result<Look<Suite>> {
-    let Some(described) = describe(&bundle.engine) else {
+    let Some(described) = bundle.described() else {
         return Ok(Look::CouldNotLook);
     };
 
     let mut untested_modules = Vec::new();
     let mut bare_only_modules = Vec::new();
     let mut discovered = Vec::new();
-    for module in &described {
+    for module in described {
         let mut carries_a_test = false;
         let mut carries_a_compound_test = false;
         for rule in &module.rules {
@@ -3323,7 +3353,7 @@ pub fn test(bundle: &Bundle, input: &str, mediated: bool) -> Result<Look<Suite>>
     let mut unexercised = Vec::new();
     for id in &bundle.declared {
         let mut reached = false;
-        for module in &described {
+        for module in described {
             let Some(covered) = entered.get(module.path.as_str()) else {
                 continue;
             };

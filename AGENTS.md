@@ -44,7 +44,8 @@ fails and the fix is genuinely ambiguous; a rebase conflict needs a human
 decision; the change is outside the scope you were asked — the gates authorize the
 STEPS of agreed work, never whether it is agreed (CLOUD-431, bypass
 `BATTEN_CLAIM_CHECK_BYPASS`); or an action is destructive and _not_ gated
-(force-pushing `main`, deleting history, an out-of-band release). **Each stops the
+(force-pushing `main`, deleting history, an out-of-band release); a lease-push or
+harness denial never is. **Each stops the
 fix, never the record**: what you decline to fix, you file. **A WRONGLY refusing
 gate is a defect, not an answer** — repair it and carry on this session; ticketing
 one is a punt in gate's clothing (CLOUD-597/615). **A punt is any deferral you
