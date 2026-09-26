@@ -626,7 +626,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "mise,attestation,timeout-drift,engine-checks-green,engine-cargo-graph,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age,done,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,denials-outlive-the-turn,digest-major-agreement,doctor,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure,evaluator-io-probe,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,agent-spawn,in-progress-drain,install-check,land-divergence,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,linear-check,lock-complete,macos-link,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict,ntia,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,task-pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-due,release-provision-parity,release-tag-shape,release-tracking,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,task-sbom,sbom-actions,sbom-binary,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-callable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules,deferral,closing-key,release-assets"
+MUTANT_GATES = "mise,attestation,timeout-drift,engine-checks-green,engine-cargo-graph,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age,done,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,denials-outlive-the-turn,digest-major-agreement,doctor,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure,evaluator-io-probe,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,agent-spawn,in-progress-drain,install-check,land-divergence,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,task-linear-check,lock-complete,macos-link,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict,ntia,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,task-pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-due,release-provision-parity,release-tag-shape,release-tracking,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,task-sbom,sbom-actions,sbom-binary,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,task-sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-callable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules,deferral,closing-key,release-assets"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -3038,14 +3038,6 @@ fi
 printf '%scensus\tissues=%d\n' "$out" "$n" | "${record[@]}"
 '''
 
-# THE NAME STAYS CALLABLE: `AGENTS.md` and the release workflow's summary tell a
-# reader to run `mise run done-check`, and it keeps meaning the same gate — read
-# the piped board, then decide over what was read.
-# CLOUD-278's manifest, moved off `mise-tasks/checksums.sh` under CLOUD-1717. An
-# EFFECT with no decision in it — download a release's own assets, hash them in
-# byte order, write `SHA256SUMS` — so there is no module to move anything into and
-# the body moves whole. The release workflow calls it by this name, and
-# `release-assets-check` asks `--names` for the asset path rather than spelling it.
 [tasks."render:cli"]
 description = "Effect: render the CLI reference from the command surface — the publish-time artifact, never committed (CLOUD-171)"
 shell = "bash -c"
@@ -3097,6 +3089,11 @@ echo "reference=$OUT"
 {% endraw %}
 '''
 
+# CLOUD-278's manifest, moved off `mise-tasks/checksums.sh` under CLOUD-1717. An
+# EFFECT with no decision in it — download a release's own assets, hash them in
+# byte order, write `SHA256SUMS` — so there is no module to move anything into and
+# the body moves whole. The release workflow calls it by this name, and
+# `release-assets-check` asks `--names` for the asset path rather than spelling it.
 [tasks.checksums]
 description = "Effect: derive the SHA256 manifest of a release's own assets, read back after upload"
 shell = "bash -c"
@@ -3810,6 +3807,9 @@ echo "release-backfill: ${#tags[@]} tag(s) recorded, oldest first"
 {% endraw %}
 '''
 
+# THE NAME STAYS CALLABLE: `AGENTS.md` and the release workflow's summary tell a
+# reader to run `mise run done-check`, and it keeps meaning the same gate — read
+# the piped board, then decide over what was read.
 [tasks.done-check]
 description = "Gate: no issue sits Done while no release tag contains its commits (reads get_issue payloads on stdin)"
 run = [
@@ -6482,6 +6482,144 @@ esac
 [tasks.land]
 description = "Land this branch's PR: rebase, verify, push, wait for CI, /fast-forward — lapping until it merges or a rebase conflicts"
 run = 'cargo run --quiet -p batten -- land lap "{{arg(name="reference", default="main")}}"'
+
+# Is HEAD linear on the CURRENT origin/main, so the PR can fast-forward-land?
+# Retired off `mise-tasks/linear-check.sh` under CLOUD-1717; the name and the
+# `linear-check` receipt it mints are unchanged, because `verify`'s receipts,
+# `[ready] checks`, `verified_by` and the ready guard all name it.
+#
+# THE FETCH FAILS CLOSED, and that is why it once lived in a file with `set -e`:
+# a task body under `bash -c` runs every line regardless, so a failed fetch fell
+# through to `rev-parse origin/main`, compared a stale main to itself, passed, and
+# minted a receipt the ready guard then accepted. Every line below is guarded by
+# hand instead. The fetch names its refspec and deepens a shallow clone first: a
+# single-branch clone's `git fetch origin main` exits 0 while writing no
+# `origin/main` at all (measured on `git clone --depth 1`).
+#
+# Exit 1 is the environment (fetch failed, `origin/main` unresolvable) and exit 2
+# is "the branch is behind" (CLOUD-318): `land` laps on 2 and stops on 1, so the
+# two must never collapse. No receipt on any refusal; a failed receipt write
+# fails the gate. `BATTEN_BIN` stubs the writer in the tier.
+#MUTANT-SUITE crates/batten/tests/it/linear_check.rs
+#MUTANT failed-fetch-trusts-stale-ref|s@^\techo "::error:: could not fetch origin/main@\ttrue; echo "@|a_failed_fetch_exits_1_and_writes_no_receipt
+#MUTANT behind-reads-as-broken|s@^\texit 2$@\texit 1@|a_head_behind_main_is_exit_2_and_writes_no_receipt
+#MUTANT receipt-failure-swallowed|s@attests this linearity" >&2$@attests this linearity"; exit 0@|a_failed_receipt_write_fails_the_gate
+[tasks."linear-check"]
+description = "Gate: HEAD is linear on the current origin/main, so the PR can fast-forward-land"
+shell = "bash -c"
+run = '''
+{% raw %}
+set -uo pipefail
+if [[ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]]; then
+	git fetch -q --no-tags --unshallow origin 2>/dev/null ||
+		git fetch -q --no-tags --deepen=1000 origin 2>/dev/null || true
+fi
+if ! git fetch -q --no-tags origin "+refs/heads/main:refs/remotes/origin/main"; then
+	echo "::error:: could not fetch origin/main, so linearity is unverifiable. Refusing to pass on a stale ref — re-run when the network is back." >&2
+	exit 1
+fi
+if ! main=$(git rev-parse origin/main 2>/dev/null); then
+	echo "::error:: fetched, but origin/main still does not resolve. That is a checkout problem, not a rebase problem — do not read it as 'not rebased'." >&2
+	exit 1
+fi
+if [[ "$(git merge-base origin/main HEAD)" != "$main" ]]; then
+	echo "::error:: not rebased on latest main ($main). Run: mise run land" >&2
+	exit 2
+fi
+read -r -a batten_bin <<<"${BATTEN_BIN:-cargo run --quiet -p batten --}"
+"${batten_bin[@]}" receipt record linear-check || {
+	echo "::error:: linear-check: could not record the receipt, so nothing attests this linearity" >&2
+	exit 1
+}
+echo "linear-check: HEAD is linear on origin/main ($main)"
+{% endraw %}
+'''
+
+# The external analyzer's verdict on one SHA (CLOUD-441), retired off
+# `mise-tasks/sonar-gate.sh` under CLOUD-1717. The DECISION was always
+# `checks-green`'s — latest run per name (CLOUD-436), `cancelled` and `skipped`
+# not an answer (CLOUD-363), the least conclusive of an unorderable pair — and
+# the program restated it in awk. It is now `batten checks green` over a roster
+# of one name that may be absent: an analyzer that declines to grade produces no
+# run, and failing on that would wedge every PR it has no opinion about.
+#
+# What stays here is the fetch and its one distinction: a SHA the remote has
+# never seen (404 unauthenticated, 422 "No commit found" authenticated) is "no
+# answer yet", because `land` mints a commit every lap; any other failed read is
+# could-not-look. Nothing in the landing path reads this since CLOUD-897; it is
+# the reading `mem:workflow/sonar-scope` runs by hand.
+#
+# Answers in the predecessor's table like its sibling adapters: 0 green, 1 red,
+# 2 could not look, 3 no answer yet. `SONAR_GATE_RUNS` injects a reading and
+# `SONAR_GATE_GH` the client, which is how the tier runs offline.
+#MUTANT-SUITE crates/batten/tests/it/sonar_gate.rs
+#MUTANT red-analysis-passes|s@^\t\techo "::error:: \$check is red on@\t\texit 0; echo "@|a_failed_or_timed_out_analysis_is_red_and_names_only_a_pointer
+#MUTANT unpushed-read-as-unreadable|s@if grep -qiE 'HTTP 404@if false \&\& grep -qiE 'HTTP 404@|an_unpushed_sha_is_no_answer_yet_at_404_and_at_an_authenticated_422
+#MUTANT absent-unread|s@END { exit !found }@END { exit found }@|absent_is_not_a_veto_and_an_empty_reading_takes_no_network
+#MUTANT red-filter-dropped|s@\&\& \$2 !~ /^(success@\&\& $2 ~ /^(success@|an_unorderable_pair_fails_closed_and_points_at_the_red_one
+[tasks."sonar-gate"]
+description = "Gate: the external analyzer's verdict on this SHA (0 pass / 1 red / 2 could not look / 3 no answer yet)"
+shell = "bash -c"
+run = '''
+{% raw %}
+set -uo pipefail
+if [[ -n "${BATTEN_BIN:-}" ]]; then batten=("$BATTEN_BIN"); else batten=(cargo run --quiet -p batten --); fi
+check="${SONAR_CHECK_NAME:-SonarCloud Code Analysis}"
+sha="${SHA:-$(git rev-parse HEAD 2>/dev/null || true)}"
+could_not_look() { echo "::error:: sonar-gate: $*" >&2; exit 2; }
+# `${VAR+set}`: an explicitly empty reading is a SHA carrying no run yet.
+if [[ -n "${SONAR_GATE_RUNS+set}" ]]; then
+	runs="$SONAR_GATE_RUNS"
+else
+	[[ -n "$sha" ]] || could_not_look "no SHA to judge: neither \$SHA nor a git HEAD."
+	repo="${REPO:-}"
+	[[ -n "$repo" ]] || repo='{owner}/{repo}'
+	err=$(mktemp)
+	trap 'rm -f "$err"' EXIT
+	if ! runs=$("${SONAR_GATE_GH:-gh}" api "repos/$repo/commits/$sha/check-runs?per_page=100" \
+		--jq '.check_runs[]? | "\(.status)\t\(.conclusion // "-")\t\(.name)\t\(.started_at // "")\t\(.id // 0)"' 2>"$err"); then
+		# The message beside the code: a bare 422 is any validation refusal.
+		if grep -qiE 'HTTP 404|not found|no commit found for sha' "$err"; then
+			echo "sonar-gate: $sha carries no check-runs at all — not pushed yet, or the remote has never seen it."
+			exit 3
+		fi
+		could_not_look "could not read the check-runs for $sha. A reading this gate cannot take is not a pass."
+	fi
+fi
+# Absent is decided before the engine is asked, only to say so in words: the
+# roster below would call it green either way.
+if ! awk -F'\t' -v want="$check" '$3 == want { found = 1 } END { exit !found }' <<<"$runs"; then
+	echo "sonar-gate: no $check run on $sha — absent is not a verdict, and not a veto."
+	exit 0
+fi
+answer=$(printf '%s\n' "$runs" | "${batten[@]}" checks green \
+	--required "$check" --absent-ok "$check" \
+	--answered "${CI_ANSWERED_CONCLUSIONS:?the answering conclusions are declared in [env]}" 2>&1)
+rc=$?
+case "$rc" in
+0)
+	echo "sonar-gate: $check is green on $sha"
+	exit 0
+	;;
+2)
+	if [[ "$answer" == *"checks green: red"* ]]; then
+		# Pointer-only: the conclusion and the name, never the analysis.
+		# A conclusion that IS red, never merely the last line: an unorderable
+		# success/failure pair is red, and must not print `success` beside exit 1.
+		conclusion=$(awk -F'\t' -v want="$check" '
+			$3 == want && $1 == "completed" && $2 !~ /^(success|neutral|skipped|cancelled)$/ { print $2; exit }
+		' <<<"$runs")
+		printf '%s\t%s\n' "$conclusion" "$check"
+		echo "::error:: $check is red on $sha. Read the analysis on the check-run's details page and fix it locally." >&2
+		exit 1
+	fi
+	echo "sonar-gate: not an answer yet on $sha — $check has no verdict (pending, skipped or cancelled)"
+	exit 3
+	;;
+*) could_not_look "the engine could not judge the reading for $sha" ;;
+esac
+{% endraw %}
+'''
 
 [tasks."checks-green"]
 description = "Is this SHA green over the required check set? (0 green / 1 red / 2 could not look / 3 no answer yet)"

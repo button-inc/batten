@@ -14803,7 +14803,7 @@ because it carries none.
 [[verdict.route]]
 id = "task read first"
 kind = "document"
-target = "mise-tasks/linear-check.sh"
+target = "mise.toml"
 
 [[verdict]]
 id = "workspace declare unused"
