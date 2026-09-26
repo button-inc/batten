@@ -6660,6 +6660,18 @@ line_sources = ["crates/**/*.rs"]
 module = "policy/cfg-gated-test.rego"
 severity = "deny"
 
+# CLOUD-1916. A bare `run` string reading `$1` never receives it: mise appends a
+# task's arguments to the string. `darwin-link`'s x86_64 required check linked
+# aarch64 for as long as it existed. A state rule — nothing in the tree trips it
+# on landing; the module's header carries the measurement and the residue.
+[[rule]]
+id = "task read dropped"
+kind = "policy"
+scope = "tree"
+line_sources = ["mise.toml"]
+module = "policy/run-arg-shape.rego"
+severity = "deny"
+
 [[rule]]
 id = "prose report duplicate"
 kind = "policy"
@@ -15895,6 +15907,18 @@ The remedy is `cfg!` inside the case, not an attribute over it. An attribute mak
 id = "module read first"
 kind = "document"
 target = "policy/cfg-gated-test.rego"
+
+[[verdict]]
+id = "task read dropped"
+gloss = "a bare mise `run` string reads `$1`, but mise appends arguments to the string, so it is always empty"
+class = """
+The remedy is the function shape: `run = "name() { ...; }; name"`, so the words mise appends after the body become the function's arguments. A bare body reading `${1:-default}` silently takes the default, and the caller's argument lands as trailing words on the last command. Measured on CLOUD-1916: `darwin-link x86_64-apple-darwin` linked and receipted aarch64, so that required check never linked its own target; `ci-slow-needed` compared the wrong range on #928 the same way.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/run-arg-shape.rego"
 
 # THE LEGITIMATE CASE EXISTS AND ITS ROUTE IS A `[[waiver]]`, NOT AN OVERRIDE.
 # `provision.rs`'s relink case asserts over `std::os::unix::fs::MetadataExt::ino`,

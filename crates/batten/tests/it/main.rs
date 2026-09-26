@@ -271,6 +271,7 @@ mod rule_cost_census;
 mod rule_cost_rung;
 mod rules_builtin_claims;
 mod rules_drift;
+mod run_arg_shape;
 mod run_shape;
 mod run_shape_guard_door;
 mod runner_verdict;
