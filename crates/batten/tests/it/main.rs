@@ -251,6 +251,7 @@ mod release_due;
 mod release_provision_parity;
 mod release_token_precedence;
 mod release_tracking;
+mod released;
 mod remedy_authorship;
 mod render_cli;
 mod repaired_arms;
