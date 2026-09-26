@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.184](https://github.com/button-inc/batten/compare/v0.0.183...v0.0.184) - 2026-09-26
+
+### Fixed
+
+- *(config)* name the ancestor sweep, so the prune loop stays under the line lint
+- *(config)* an action row's unknown key costs the row, named rather than silent
+- *(config)* a dotted array row is droppable, so a handler outlives its schema
+
 ## [0.0.183](https://github.com/button-inc/batten/compare/v0.0.182...v0.0.183) - 2026-09-26
 
 ### Added
