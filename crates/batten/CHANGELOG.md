@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.183](https://github.com/button-inc/batten/compare/v0.0.182...v0.0.183) - 2026-09-26
+
+### Added
+
+- *(mutate)* give inline mise tasks a mutation route, scoped to their own table
+
+### Fixed
+
+- *(land)* a speculative lap is judged against the base it borrowed
+- *(test)* every nextest run reports every failure, not the first two
+- *(test)* the scratch collector waits for every other nextest run to finish
+- *(admission)* bind the artifacts, so a class that advertises an override has one
+- *(mutate)* clear verify's refusals on the task route and the prune cases
+- *(target-prune)* refuse a short disk without building the engine to ask
+
+### Other
+
+- *(admission)* read the receipt refusal's subject off the refusal
+- *(target-prune)* state the two spawns the shipped-body cases make
+- *(common)* every task-body extractor reads through the sweep's boundary
+
 ## [0.0.182](https://github.com/button-inc/batten/compare/v0.0.181...v0.0.182) - 2026-09-25
 
 ### Added
