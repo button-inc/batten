@@ -2219,6 +2219,12 @@ writer = "mise run nonverdict-record"
 record = "done"
 writer = "mise run done-record"
 
+# CLOUD-829's reading half, ported off `duplicate-close-check.sh` under
+# CLOUD-1752. The decision is `policy/duplicate-close.rego`.
+[[record]]
+record = "duplicate-close"
+writer = "mise run duplicate-close-record"
+
 # The two landing body gates' reading halves, ported off `deferral-check.sh` and
 # `closing-key-check.sh` under CLOUD-1717. Their decisions are
 # `policy/deferral.rego` and `policy/closing-key.rego`.
@@ -6829,6 +6835,15 @@ id = "issue grade other"
 kind = "policy"
 scope = "tree"
 module = "policy/done.rego"
+severity = "deny"
+
+# CLOUD-829, ported off `duplicate-close-check.sh` under CLOUD-1752. Silent with
+# no record, like its siblings: the record is produced by piping the board in.
+[[rule]]
+id = "issue answer other"
+kind = "policy"
+scope = "tree"
+module = "policy/duplicate-close.rego"
 severity = "deny"
 
 # CLOUD-323 and CLOUD-192, ported off the two landing body gates under
@@ -11746,7 +11761,7 @@ target = "mise.toml"
 # The key shape is exactly `owner/repo@<40-hex>`, spelled as a workflow's `uses:`.
 [[pattern]]
 id = "sbom-action-key"
-regex = '^[^@[:space:]]+@[0-9a-f]{40}$'
+regex = '^[^@\s]+@[0-9a-f]{40}$'
 
 [[rule]]
 id = "pin parse other"
@@ -14224,6 +14239,35 @@ but a ref on `main` that no `v*` tag reaches is conclusive: nothing shipped it.
 id = "task run first"
 kind = "command"
 target = "mise run done-record"
+
+[[verdict]]
+id = "issue grade twice"
+gloss = "a duplicate close was decided in the same operation as its target's own close"
+class = """
+Whether two rows contradict is not computable, and this does not claim to. A \
+duplicate close whose target entered a completed state in the same second is \
+two decisions taken as one, and one was never argued. Argue the close on its \
+own: either the rows really say the same thing, or the closed one carries a \
+finding about the survivor and needs reopening.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run duplicate-close-record"
+
+[[verdict]]
+id = "issue count partial"
+gloss = "the duplicate-close record carries no closing census, or one that disagrees with its lines"
+class = """
+A record torn mid-write judges part of a board as if it were all of it. The \
+census is written last and counts the lines above it.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run duplicate-close-record"
 
 [[verdict]]
 id = "issue read partial"

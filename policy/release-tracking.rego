@@ -399,3 +399,52 @@ step_output(value) := m[1] if {
 deny contains finding if {
 	some finding in violation
 }
+
+# --- cases -----------------------------------------------------------------------
+#
+# The module's OWN cases; `release_tracking.rs` drives the committed workflows over
+# the compiled engine. Paths are literals, never the `profiles` rule in key
+# position, which regorus did not resolve inside a helper (`sbom-actions.rego`).
+
+push_path := ".github/workflows/release-plz.yml"
+
+dispatch_path := ".github/workflows/linear-release-backfill.yml"
+
+pointers(found) := {s.path | some v in found; some s in v.subjects}
+
+test_neither_workflow_read_is_two_findings_never_a_pass if {
+	found := violation with input as {"tree": {"lines": {}}}
+	pointers(found) == {push_path, dispatch_path}
+	{v.verdict | some v in found} == {"release wire unread"}
+}
+
+test_one_workflow_read_does_not_excuse_the_other if {
+	found := violation with input as {"tree": {"lines": {push_path: ["name: release"]}}}
+	dispatch_path in pointers(found)
+}
+
+test_an_unpinned_invocation_is_named_by_its_shape if {
+	found := violation with input as {"tree": {"lines": {
+		push_path: [
+			"jobs:",
+			"  track:",
+			"    steps:",
+			"      - uses: linear/linear-release-action@main",
+		],
+		dispatch_path: ["name: backfill"],
+	}}}
+	sprintf("%s#unpinned", [push_path]) in pointers(found)
+}
+
+test_a_pinned_invocation_is_not_unpinned if {
+	found := violation with input as {"tree": {"lines": {
+		push_path: [
+			"jobs:",
+			"  track:",
+			"    steps:",
+			"      - uses: linear/linear-release-action@0123456789abcdef0123456789abcdef01234567 # v1.2.3",
+		],
+		dispatch_path: ["name: backfill"],
+	}}}
+	not sprintf("%s#unpinned", [push_path]) in pointers(found)
+}

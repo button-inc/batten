@@ -626,7 +626,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "mise,attestation,timeout-drift,engine-checks-green,engine-cargo-graph,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,task-board-sweep,branch-age,done,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,denials-outlive-the-turn,digest-major-agreement,doctor,done-pr-check,duplicate-close-check,egress-fencing,evaluator-closure,evaluator-io-probe,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,agent-spawn,in-progress-drain,install-check,land-divergence,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,task-linear-check,lock-complete,macos-link,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict,ntia,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,task-pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-due,release-provision-parity,release-tag-shape,release-tracking,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,task-sbom,sbom-actions,sbom-binary,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,task-sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-callable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules,deferral,closing-key,release-assets"
+MUTANT_GATES = "mise,attestation,timeout-drift,engine-checks-green,engine-cargo-graph,engine-config,engine-doctor,engine-landed,engine-perf,engine-mcp,engine-pinned,engine-ready,engine-verdict,engine-wiring,engine-surface,agentic-experiment-record,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,task-board-sweep,branch-age,done,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,denials-outlive-the-turn,digest-major-agreement,doctor,done-pr-check,duplicate-close,task-duplicate-close-record,egress-fencing,evaluator-closure,evaluator-io-probe,filed-here,finding-sink-check,fixture-forks,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,agent-spawn,in-progress-drain,install-check,land-divergence,landed-check,landing-loop,landing-roster-guarded,leased-push,license-table-check,task-linear-check,lock-complete,macos-link,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict,ntia,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,task-pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-due,release-provision-parity,release-tag-shape,release-tracking,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,task-sbom,sbom-actions,sbom-binary,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,task-sonar-gate,spec-ref-check,stop-posture,suite-bench-check,suite-subject-retirable,task-callable,task-substitution,test-targets,timeout-check,token-bench-check,transcript-corpus,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,spawn-widening,nextest-slow,engine-lease,engine-handler,engine-speculation,engine-pipeline,engine-policy,rules-paths-trigger,skill-frontmatter-complete,engine-land,engine-hook,engine-rules,deferral,closing-key,release-assets"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -3970,6 +3970,90 @@ if [[ "$abstained" -gt 0 ]]; then
 	exit 3
 fi
 echo "board-sweep: every gate ran and none names dissonance ($count issue(s))"
+{% endraw %}
+'''
+
+# CLOUD-829's reading half, ported off `mise-tasks/duplicate-close-check.sh` under
+# CLOUD-1752. The decision is `policy/duplicate-close.rego`. This reads the piped
+# `get_issue` payloads and records one `dup` line per duplicate close, both stamps
+# truncated to the window, then a census. Every could-not-look the program had is
+# a refusal here that writes nothing: an unread set, no payload carrying
+# `duplicateOf` at all (a projection that dropped the relation reads as "no
+# duplicates"), a close with no `canceledAt`, a target outside the piped set.
+#
+# The window is a count of leading ISO-8601 characters, `19` being the second:
+# no date arithmetic, because this must stay portable. Two closes 400ms apart
+# across a second boundary are missed, and `DUPLICATE_CLOSE_WINDOW` widens it.
+#MUTANT-SUITE crates/batten/tests/it/duplicate_close.rs
+#MUTANT absent-key-reads-as-clean|s@^\[\[ "\$keyed" -gt 0 \]\]@[[ "$keyed" -ge 0 ]]@|a_set_with_no_duplicateof_key_anywhere_is_could_not_look
+#MUTANT target-outside-the-set-passes|s@refuse "\$id is a duplicate of \$target, which was not piped@continue # "@|a_duplicate_whose_target_was_not_piped_is_unjudgeable
+#MUTANT unstamped-close-passes|s@refuse "\$id is a duplicate of \$target and carries no canceledAt@continue # "@|a_duplicate_close_with_no_stamp_is_unjudgeable
+[tasks.duplicate-close-record]
+description = "Effect: record each piped duplicate close beside its target's completion, truncated to the window (CLOUD-829)"
+shell = "bash -c"
+dir = "{{cwd}}"
+run = '''
+{% raw %}
+set -uo pipefail
+if [[ -n "${BATTEN_BIN:-}" ]]; then batten=("$BATTEN_BIN"); else batten=(cargo run --quiet -p batten --); fi
+refuse() { echo "::error:: duplicate-close-record: $*. Nothing recorded." >&2; exit 2; }
+window="${DUPLICATE_CLOSE_WINDOW:-19}"
+[[ "$window" =~ ^[0-9]+$ ]] || refuse "DUPLICATE_CLOSE_WINDOW is not a whole number"
+if ! payload=$(cat) || [[ -z "${payload//[[:space:]]/}" ]]; then
+	refuse "stdin is empty; expected get_issue payload(s)"
+fi
+if ! issues=$(jq -sc 'if length == 1 and (.[0] | type == "array") then .[0] else . end' <<<"$payload" 2>/dev/null) ||
+	! jq -e 'type == "array" and length > 0' <<<"$issues" >/dev/null 2>&1; then
+	refuse "stdin is not a get_issue payload set. Recover it with \`mise run board-payloads <id>...\` (CLOUD-526)"
+fi
+# THE ANTI-VACUITY TERM: a set in which NO payload carries the key was fetched
+# without relations. An explicit `null` is data; only total absence refuses.
+keyed=$(jq '[.[] | select((try (.relations | has("duplicateOf")) catch false))] | length' <<<"$issues" 2>/dev/null) || keyed=0
+[[ "$keyed" -gt 0 ]] || refuse "no payload carries relations.duplicateOf — re-fetch with get_issue(includeRelations: true)"
+# `-` for an absent field, never empty: tab is whitespace to `read`, so an
+# empty column collapses and shifts every field after it.
+rows=$(jq -r '.[] | [(.id // "-"), (.canceledAt // "-"), (.relations.duplicateOf.id // .relations.duplicateOf // "-")] | @tsv' <<<"$issues" | sort -t- -k2,2n)
+ids=$'\n'"$(jq -r '.[].id // empty' <<<"$issues")"$'\n'
+out=""
+n=0
+while IFS=$'\t' read -r id closed target; do
+	[[ -n "$id" && "$target" != - && "$target" != null ]] || continue
+	[[ "$closed" != - && "$closed" != null ]] || refuse "$id is a duplicate of $target and carries no canceledAt, so its close cannot be compared"
+	[[ "$ids" == *$'\n'"$target"$'\n'* ]] || refuse "$id is a duplicate of $target, which was not piped — a question nobody asked is not a clean answer"
+	target_at=$(jq -r --arg t "$target" 'first(.[] | select(.id == $t) | .completedAt // empty)' <<<"$issues")
+	[[ -n "$target_at" ]] || continue
+	out+="dup"$'\t'"$id"$'\t'"${closed:0:$window}"$'\t'"$target"$'\t'"${target_at:0:$window}"$'\n'
+	n=$((n + 1))
+done <<<"$rows"
+printf '%scensus\tduplicates=%d\n' "$out" "$n" | "${batten[@]}" record named duplicate-close ||
+	refuse "could not write the record"
+{% endraw %}
+'''
+
+# The name `board-sweep` composes, kept, and kept on the composers' exit table:
+# 0 clean, 1 a refusal, 2 could not look. The engine answers a violation with 2,
+# so the one mapping lives here. The producer refuses at 2 before any check, so
+# a module finding can only ever be the refusal lane.
+[tasks.duplicate-close-check]
+description = "Gate: a duplicate close decided in the same operation as its target's close (reads get_issue payloads on stdin) — CLOUD-829"
+shell = "bash -c"
+dir = "{{cwd}}"
+run = '''
+{% raw %}
+set -uo pipefail
+if [[ -n "${BATTEN_BIN:-}" ]]; then batten=("$BATTEN_BIN"); else batten=(cargo run --quiet -p batten --); fi
+manifest="${MISE_CONFIG_FILE:-${MISE_PROJECT_ROOT:-$PWD}/mise.toml}"
+MISE_CONFIG_FILE="$manifest" mise run -q duplicate-close-record || exit 2
+rc=0
+"${batten[@]}" check --rule 'issue answer other' || rc=$?
+case "$rc" in
+0) echo "duplicate-close-check: no duplicate close shares an operation with its target's" ;;
+2)
+	echo "::error:: duplicate-close-check: a duplicate close was decided in the same operation as its target's own close. The gate does not know which row was right, and is not claiming to: what it refuses is TWO decisions taken as one. Argue the close on its own." >&2
+	exit 1
+	;;
+*) exit 2 ;;
+esac
 {% endraw %}
 '''
 

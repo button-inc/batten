@@ -124,6 +124,7 @@ mod document_facts;
 mod document_read_count;
 mod done;
 mod done_not_landed;
+mod duplicate_close;
 mod egress_fencing;
 mod emission_census;
 mod enforce_journal;

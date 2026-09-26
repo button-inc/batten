@@ -64,6 +64,20 @@ impl Board {
             board.repo.join("batten.toml"),
         )
         .expect("the committed config");
+        // AND THE COMMITTED MODULES: a gate that moved onto a policy row decides
+        // nothing in a tree that carries the row and not the module it names.
+        let policy = board.repo.join("policy");
+        std::fs::create_dir_all(&policy).expect("policy dir");
+        for entry in std::fs::read_dir(common::at_root("policy")).expect("read policy") {
+            let path = entry.expect("a policy entry").path();
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "rego")
+            {
+                std::fs::copy(&path, policy.join(path.file_name().expect("a name")))
+                    .expect("copy a module");
+            }
+        }
         board.git(&["config", "user.email", "t@t"]);
         board.git(&["config", "user.name", "t"]);
         board.git(&["config", "commit.gpgsign", "false"]);

@@ -78,7 +78,15 @@ violation contains {
 
 pin := "3d3c42e5aac5ba805825da76410c181273ba90b1"
 
-tree(rows_given) := {"tree": {"lines": {table: rows_given}}}
+# THE KEY IS A LITERAL, NOT THE `table` RULE. Under regorus a rule reference in
+# key position inside this helper did not resolve, so `table_lines` was unbound in
+# every case: the two refusal cases failed and the two clean ones passed having
+# judged no table at all. `test_the_fixture_binds_the_table` below pins that.
+tree(rows_given) := {"tree": {"lines": {"mise-tasks/sbom-actions.tsv": rows_given}}}
+
+test_the_fixture_binds_the_table if {
+	count(table_lines) == 1 with input as tree([sprintf("actions/checkout@%s\tMIT\tNONE", [pin])])
+}
 
 test_a_whole_pinned_row_is_clean if {
 	count(violation) == 0 with input as tree([sprintf("actions/checkout@%s\tMIT\tNONE", [pin])])
