@@ -339,7 +339,7 @@ fn a_host_that_cannot_replace_a_process_refuses_the_launch() {
         return;
     }
     let output = batten()
-        .args(["mcp", "spawn", "--", "cmd", "/c", "exit", "0"])
+        .args(["mcp", "spawn", "fixture", "--", "cmd", "/c", "exit", "0"])
         .output()
         .expect("run batten mcp spawn");
     assert_eq!(output.status.code(), Some(1), "{output:?}");
