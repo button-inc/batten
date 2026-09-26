@@ -4631,6 +4631,28 @@ if ! mise run verify:gated; then
 fi
 '''
 
+[tasks.ci-task-parity]
+description = "Gate: every task a workflow runs resolves with its whole dependency graph, and the one argument-taking task answers its workflow's call shape"
+# CI RUNS THE SAME TASKS `verify` DOES, OR IT IS A BUG (AGENTS.md), AND NOTHING
+# CHECKED IT. Four CI-only breaks reached a bought matrix on #928, one per
+# hour-long lap, because `verify` never resolves a task only a workflow calls:
+# `test:musl` depended on the retired `doctor`; `test:bats` depended on the
+# whole startup table; `ci-slow-needed` took its arguments as `$1`/`$2` although
+# mise appends them to the run string; and then compared commits against a
+# merge-commit checkout. `mise tasks deps` exits 1 on a missing task AND on a
+# missing dependency (measured), so every `mise run <task>` a workflow spells is
+# resolved here; `ci-slow-needed` is then called exactly as `ci.yml` calls it,
+# and must answer `0` or `1` rather than a shell or usage error.
+#
+# COMMENTS ARE NOT CALLERS: six workflow comments still name the retired
+# `run-shape-guard` in prose, and the first cut of this gate refused them. Text
+# after a `#` is dropped before a task name is read.
+#
+# THE MERGE-COMMIT HALF IS NOT COVERED HERE and is stated rather than implied:
+# locally the head IS the checkout, so a comparison that only a merge checkout
+# breaks passes this gate. That residue is filed, not absorbed.
+run = "fail=0; for t in $(sed 's/#.*//' .github/workflows/*.yml | grep -oE 'mise run [a-z0-9:_-]+' | cut -d' ' -f3 | sort -u); do mise tasks deps \"$t\" >/dev/null 2>&1 || { echo \"::error:: ci-task-parity: a workflow runs mise task '$t', which does not resolve with its dependencies\" >&2; fail=1; }; done; mise run ci-slow-needed \"$(git merge-base origin/main HEAD)\" HEAD >/dev/null 2>&1; rc=$?; [ \"$rc\" -le 1 ] || { echo \"::error:: ci-task-parity: ci-slow-needed answered $rc to its workflow's call shape, not 0 or 1\" >&2; fail=1; }; [ \"$fail\" = 0 ] && echo 'ci-task-parity: every workflow task resolves, and ci-slow-needed answers its call shape'; exit $fail"
+
 [tasks."verify:gated"]
 description = "Every gate verify runs, and the receipt — invoked only through `verify`, which maps its exit code"
 shell = "bash -c"
@@ -4688,7 +4710,7 @@ shell = "bash -c"
 # window, the same shape `linear-check` already has in `verify` and
 # `ready-guard`. It is deliberately NOT an hk step: `pre-commit` runs over a
 # tree that is dirty by definition.
-depends = ["tree-clean", "ci", "cross-check", "darwin-link", "zizmor", "semver"]
+depends = ["tree-clean", "ci", "cross-check", "darwin-link", "zizmor", "semver", "ci-task-parity"]
 run = '''
 # A task body does not run under `set -e` (see rules/toolchain.md), so
 # every step whose failure changes the verdict is guarded by hand.
