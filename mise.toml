@@ -3734,6 +3734,10 @@ fi
 echo "no-docs-tree: no committed docs/ tree"
 '''
 
+[tasks.bats-submodule]
+description = "Check out the vendored bats runner if it is missing — `bats-submodule-checked-out`'s check and repair, for `test:bats`"
+run = "test -f tests/bats/bin/bats || git submodule update --init --recursive tests/bats"
+
 [tasks."test:bats"]
 description = "Run the shell test suite (tests/*.bats) — cargo test for the mise-tasks/ programs"
 # bats comes from a submodule, not [tools], so a fresh clone has no bats and this
@@ -3745,12 +3749,20 @@ description = "Run the shell test suite (tests/*.bats) — cargo test for the mi
 # inside `rustup target add` and both rolled back (CLOUD-220). The targets are
 # owned by the tasks that need them (cross-check, darwin-link), each routed
 # through the target-ensure lock.
+# ONLY THE SUBMODULE, NOT THE STARTUP TABLE (CLOUD-1753). This depended on
+# `provision:startup` — every `[[startup]]` row — on the reading that the table
+# had no half to exclude. CI refuted it: three rows cannot run on a runner
+# (`check-unrunnable`), so every `bats` job failed before a case ran, and the
+# `mediator-matches-the-tree` row rebuilt the release binary first (184 s), the
+# same reach into `build:release` that pruned mid-gate under `verify`. What this
+# suite needs is `bats-submodule-checked-out`'s check and repair, and that is
+# what `bats-submodule` runs.
+depends = ["bats-submodule"]
 # `batten startup --repair` rather than `doctor --no-targets` (CLOUD-1753): the
 # submodule half this dependency wanted is now the `bats-submodule-checked-out`
 # row, and the flag existed only to keep a full doctor — and its `rustup target
 # add` — off this path. A declared table has no such half to exclude, because the
 # rows that touch the toolchain are separate rows.
-depends = ["provision:startup"]
 # A FIXTURE RUN NEVER READS THE HOST'S MCP LOGS. `mcp-timeout-budget.bats`'s
 # "the committed budget passes" runs the real gate over the real settings, and
 # with this unset the gate also reads whatever session logs this machine holds —
