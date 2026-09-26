@@ -293,6 +293,14 @@ afterwards must name the sha it replaces (`=<ref>:<sha>`); `branch write unsafe`
 refuses the bare form, because a bare lease compares against a tracking ref a
 `fetch` just moved.
 
+**A protected-path override binds the RULE the refusal line ends with, not its
+verdict.** `path write refused .github/workflows/ci.yml Edit protected-mutation`
+is admitted by `override request --rule protected-mutation --verdict "path write
+refused" --subject <path>`; `--rule "path write refused"` issues and spends
+cleanly and the write is still refused, because nothing reads that binding
+(measured 2026-09-26). Rule and verdict may legitimately share a name, so the
+request cannot refuse the mismatch — read the last field.
+
 Amending or letting `land` rebase invalidates the receipt the same way — so do
 the whole edit inside one green window and commit last, rather than committing
 into a window you then have to re-earn.
