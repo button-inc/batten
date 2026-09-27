@@ -3573,6 +3573,10 @@ pub enum Extraction {
     /// because it needs no hashing: it reduces `Event::Turn`, which is already
     /// typed, so no argument or result is read even internally.
     AgentTurnRun,
+    /// Tool calls since the operator's last message with no assistant text
+    /// between them (the ignored-operator shape). A count over typed events;
+    /// no text is read beyond emptiness.
+    UnansweredHumanCalls,
 }
 
 impl Extraction {
@@ -3614,6 +3618,9 @@ impl Extraction {
             }
             Extraction::AgentTurnRun => {
                 recorded(Kind::Turns).then(|| stream.repeats().agent_turn_run)
+            }
+            Extraction::UnansweredHumanCalls => {
+                recorded(Kind::Turns).then(|| stream.repeats().unanswered_human_calls)
             }
         }
     }

@@ -403,6 +403,15 @@ pub enum Event {
         /// make it, which is the payload this variant refuses to carry.
         digest: String,
     },
+    /// The assistant said something to the operator: a non-empty `text` block
+    /// on an assistant turn.
+    ///
+    /// **APPENDED, for [`Event::MemoryInjection`]'s reason.** A marker and
+    /// nothing more: the text is checked for emptiness inside [`collect`] and
+    /// dropped there, so no span of what was said reaches any consumer (rule 4).
+    /// It exists so "a human spoke and the session answered only with tool
+    /// calls" is a typed question rather than a reading of prose.
+    AssistantText,
 }
 
 /// One event and where it was found.
@@ -559,6 +568,15 @@ pub enum Kind {
 /// comments refuse members no reader of that document needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Repeats {
+    /// Tool calls made since the operator's last message with no assistant text
+    /// in between: the ignored-operator shape.
+    ///
+    /// Zero once the session has said anything after the message, and zero when
+    /// no operator message exists. A mid-turn message (the host's
+    /// `queued_command` attachment marked `humanTurn`) counts as the operator
+    /// speaking, which is the case this member was measured on: a session that
+    /// answered four mid-turn messages with tool calls only.
+    pub unanswered_human_calls: usize,
     /// The TRAILING run of assistant turns carrying no tool call — the monologue
     /// shape, and deliberately the member that needs no hashing at all.
     ///
@@ -672,7 +690,7 @@ impl Stream {
                 // breakdown. `hook_decisions` beside it is a different question
                 // — how many hooks DECIDED, not what they said — which is
                 // exactly the pair this variant exists to keep apart.
-                Event::HookOutput { .. } => {}
+                Event::HookOutput { .. } | Event::AssistantText => {}
             }
         }
         counts
@@ -689,7 +707,9 @@ impl Stream {
                 Event::ToolCall { .. } => kinds.insert(Kind::ToolCalls),
                 Event::ToolResult { .. } => kinds.insert(Kind::ToolResults),
                 Event::HookDecision { .. } => kinds.insert(Kind::HookDecisions),
-                Event::MemoryInjection { .. } | Event::HookOutput { .. } => false,
+                Event::MemoryInjection { .. } | Event::HookOutput { .. } | Event::AssistantText => {
+                    false
+                }
             };
         }
         kinds
@@ -714,6 +734,25 @@ impl Stream {
                 // neither extends nor breaks the run.
                 _ => {}
             }
+        }
+        // THE IGNORED-OPERATOR RUN, read backwards like the member above: text
+        // answers the operator and zeroes it, an operator message ends the scan
+        // and keeps the count, and reaching the start means nobody spoke.
+        let mut calls = 0;
+        let mut spoke = false;
+        for record in self.records.iter().rev() {
+            match &record.event {
+                Event::AssistantText => break,
+                Event::ToolCall { .. } => calls += 1,
+                Event::Turn(Role::User, Origin::Authored) => {
+                    spoke = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        if spoke {
+            repeats.unanswered_human_calls = calls;
         }
         repeats
     }
@@ -928,6 +967,80 @@ fn gather(parsed: &Line, agent: &mut AgentContext) {
     }
 }
 
+/// The events one attachment record yields: a hook decision, a memory
+/// injection, an operator message sent mid-turn, and hook output.
+fn collect_attachment(attachment: &Attachment, line: usize, records: &mut Vec<Record>) {
+    if let (Some(event), Some(exit_code)) = (&attachment.hook_event, attachment.exit_code) {
+        records.push(Record {
+            line,
+            event: Event::HookDecision {
+                event: event.clone(),
+                call: attachment.tool_use_id.clone(),
+                exit_code,
+            },
+        });
+    }
+    // BOTH typed fields, or no event (CLOUD-1054). The tag alone says a
+    // memory document was delivered and not which one, and a record naming
+    // no source is exactly what must not be counted as an injection — that
+    // is the difference between a census and a guess. An attachment carrying
+    // the tag without a path is therefore skipped rather than recorded with
+    // an invented source.
+    if attachment.kind.as_deref() == Some(NESTED_MEMORY)
+        && let Some(path) = &attachment.display_path
+    {
+        records.push(Record {
+            line,
+            event: Event::MemoryInjection { path: path.clone() },
+        });
+    }
+    // WHAT THE HOOK PUT IN THE CONTEXT, AS A COUNT (CLOUD-417).
+    //
+    // Gated on the host's tag prefix rather than on an enumerated set: the
+    // measured session carried `hook_success` at 1181 KB and
+    // `hook_additional_context` at 42 KB, and a host that ships a third
+    // `hook_*` tag tomorrow is emitting the same kind of cost. The
+    // forward-compatibility posture this module states cuts that way — an
+    // unrecognized tag must not be counted as zero, which is what an
+    // enumerated set would silently do.
+    //
+    // EMPTY IS NOT AN EMISSION, and that is the posture rather than an
+    // optimization: a hook with nothing to report emits nothing, so a record
+    // whose streams are all blank is silence and must not be counted as a
+    // repeat of anything.
+    // A MESSAGE THE OPERATOR SENT MID-TURN. The host records it as an
+    // attachment, not a user-role message, so without this arm the operator
+    // speaking while the session works is invisible to every turn predicate.
+    // The tag plus the host's own authorship: `humanTurn`, or `origin.kind`
+    // (measured: 59 human queued messages carried only the latter).
+    if attachment.is_operator_message() {
+        records.push(Record {
+            line,
+            event: Event::Turn(Role::User, Origin::Authored),
+        });
+    }
+    if attachment.kind.as_deref().is_some_and(is_hook_tag) {
+        let text = attachment.emitted();
+        if !text.is_empty() {
+            records.push(Record {
+                line,
+                event: Event::HookOutput {
+                    // `hookName` where the host gave one, because two hooks
+                    // on one event are two producers and grouping them would
+                    // hide exactly the repeat this measures.
+                    hook: attachment.producer(),
+                    tokens: crate::budget::estimate_tokens(&text),
+                    // The bytes die here. `context_fingerprint` is the right
+                    // one of identity's family: its own doc says the digest
+                    // "exists so a consumer can reference context it was not
+                    // given", which is this variant's whole contract.
+                    digest: crate::identity::context_fingerprint(text.as_bytes()).to_hex(),
+                },
+            });
+        }
+    }
+}
+
 /// Turn one decoded line into zero or more events.
 ///
 /// Zero is the common case and the important one: a host records far more than
@@ -940,64 +1053,7 @@ fn collect(
     key: Option<&crate::identity::IdentityKey>,
 ) -> Result<()> {
     if let Some(attachment) = &parsed.attachment {
-        if let (Some(event), Some(exit_code)) = (&attachment.hook_event, attachment.exit_code) {
-            records.push(Record {
-                line,
-                event: Event::HookDecision {
-                    event: event.clone(),
-                    call: attachment.tool_use_id.clone(),
-                    exit_code,
-                },
-            });
-        }
-        // BOTH typed fields, or no event (CLOUD-1054). The tag alone says a
-        // memory document was delivered and not which one, and a record naming
-        // no source is exactly what must not be counted as an injection — that
-        // is the difference between a census and a guess. An attachment carrying
-        // the tag without a path is therefore skipped rather than recorded with
-        // an invented source.
-        if attachment.kind.as_deref() == Some(NESTED_MEMORY)
-            && let Some(path) = &attachment.display_path
-        {
-            records.push(Record {
-                line,
-                event: Event::MemoryInjection { path: path.clone() },
-            });
-        }
-        // WHAT THE HOOK PUT IN THE CONTEXT, AS A COUNT (CLOUD-417).
-        //
-        // Gated on the host's tag prefix rather than on an enumerated set: the
-        // measured session carried `hook_success` at 1181 KB and
-        // `hook_additional_context` at 42 KB, and a host that ships a third
-        // `hook_*` tag tomorrow is emitting the same kind of cost. The
-        // forward-compatibility posture this module states cuts that way — an
-        // unrecognized tag must not be counted as zero, which is what an
-        // enumerated set would silently do.
-        //
-        // EMPTY IS NOT AN EMISSION, and that is the posture rather than an
-        // optimization: a hook with nothing to report emits nothing, so a record
-        // whose streams are all blank is silence and must not be counted as a
-        // repeat of anything.
-        if attachment.kind.as_deref().is_some_and(is_hook_tag) {
-            let text = attachment.emitted();
-            if !text.is_empty() {
-                records.push(Record {
-                    line,
-                    event: Event::HookOutput {
-                        // `hookName` where the host gave one, because two hooks
-                        // on one event are two producers and grouping them would
-                        // hide exactly the repeat this measures.
-                        hook: attachment.producer(),
-                        tokens: crate::budget::estimate_tokens(&text),
-                        // The bytes die here. `context_fingerprint` is the right
-                        // one of identity's family: its own doc says the digest
-                        // "exists so a consumer can reference context it was not
-                        // given", which is this variant's whole contract.
-                        digest: crate::identity::context_fingerprint(text.as_bytes()).to_hex(),
-                    },
-                });
-            }
-        }
+        collect_attachment(attachment, line, records);
         return Ok(());
     }
     let Some(message) = &parsed.message else {
@@ -1071,6 +1127,19 @@ fn collect(
                         },
                     });
                 }
+            }
+            // Emptiness only, and the text dies here (rule 4).
+            "text"
+                if role == Some(Role::Assistant)
+                    && block
+                        .text
+                        .as_deref()
+                        .is_some_and(|text| !text.trim().is_empty()) =>
+            {
+                records.push(Record {
+                    line,
+                    event: Event::AssistantText,
+                });
             }
             _ => {}
         }
@@ -1254,6 +1323,22 @@ fn origin_of(parsed: &Line, message: &Message, role: Role) -> Origin {
     if parsed.is_meta.unwrap_or(false) || parsed.is_synthetic.unwrap_or(false) {
         return Origin::Synthetic;
     }
+    // THE HOST'S OWN AUTHORSHIP FIELD, where it writes one: `origin.kind` is
+    // `human` for the operator and something else (`task-notification`, measured
+    // 2026-09-27 on 300 records) for text the harness injected in the user role
+    // as a bare string. Without this a background task's completion read as the
+    // operator speaking.
+    if let Some(kind) = parsed
+        .origin
+        .as_ref()
+        .and_then(|origin| origin.kind.as_deref())
+    {
+        return if kind == HUMAN_ORIGIN {
+            Origin::Authored
+        } else {
+            Origin::Synthetic
+        };
+    }
     match &message.content {
         // A plain typed turn.
         Some(Value::String(_)) => Origin::Authored,
@@ -1309,6 +1394,8 @@ struct Line {
     is_meta: Option<bool>,
     #[serde(rename = "isSynthetic")]
     is_synthetic: Option<bool>,
+    /// The host's authorship field, read by [`origin_of`].
+    origin: Option<HostOrigin>,
     /// The record's own kind, as the host spells it (`user`, `assistant`, …).
     ///
     /// Read by [`authored_session_id`] rather than by the event parse above,
@@ -1371,9 +1458,25 @@ struct Attachment {
     /// The in-band advisory document, on the hosts that carry one.
     #[serde(rename = "additionalContext")]
     additional_context: Option<String>,
+    /// The host marking a queued message as the operator's own.
+    #[serde(rename = "humanTurn")]
+    human_turn: Option<bool>,
+    origin: Option<HostOrigin>,
 }
 
 impl Attachment {
+    /// A message the operator sent mid-turn: the host's `queued_command` tag,
+    /// authored by a human by `humanTurn` or by `origin.kind`.
+    fn is_operator_message(&self) -> bool {
+        self.kind.as_deref() == Some(QUEUED_COMMAND)
+            && (self.human_turn == Some(true)
+                || self
+                    .origin
+                    .as_ref()
+                    .and_then(|origin| origin.kind.as_deref())
+                    == Some(HUMAN_ORIGIN))
+    }
+
     /// Everything this hook put in front of the model, joined in a fixed order.
     ///
     /// **The order is fixed so the digest is**: two identical emissions must
@@ -1436,6 +1539,18 @@ const UNNAMED_PRODUCER: &str = "hook";
 /// the one place that has to change if a host renames it.
 const NESTED_MEMORY: &str = "nested_memory";
 
+/// The host's tag for a message the operator sent while a turn was running.
+const QUEUED_COMMAND: &str = "queued_command";
+
+/// The host's `origin.kind` for a record the operator authored.
+const HUMAN_ORIGIN: &str = "human";
+
+/// The host's authorship record on a line or an attachment.
+#[derive(Debug, Deserialize)]
+struct HostOrigin {
+    kind: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct Block {
     #[serde(rename = "type")]
@@ -1452,6 +1567,8 @@ struct Block {
     /// one would silently mint no digest for the other. It never leaves
     /// [`collect`].
     content: Option<Value>,
+    /// A text block's body, read only for emptiness and never kept.
+    text: Option<String>,
 }
 
 /// The configured transcript, as `batten.toml` declares it: where it is, and

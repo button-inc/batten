@@ -1881,6 +1881,11 @@
           "description": "The trailing run of assistant turns carrying no tool call — the monologue\nshape (CLOUD-1344), and deliberately the first member of this family\nbecause it needs no hashing: it reduces `Event::Turn`, which is already\ntyped, so no argument or result is read even internally.",
           "type": "string",
           "const": "agent-turn-run"
+        },
+        {
+          "description": "Tool calls since the operator's last message with no assistant text\nbetween them (the ignored-operator shape). A count over typed events;\nno text is read beyond emptiness.",
+          "type": "string",
+          "const": "unanswered-human-calls"
         }
       ]
     },

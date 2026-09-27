@@ -59,10 +59,7 @@ the instance in hand; your own landed work spared. Can do it, do it; can't, file
 asserts in a sentence, why the refusal should not stand here, the cost if you are
 wrong, and any part of the refusal you caused — then asks whether to override. A
 route reaching the same outcome with less of the gate applied is never offered as
-an option: it is either the honest answer or it is laundering. Measured: a
-`refined-this-session` refusal was put as four options; three landed the identical
-change, one of those three was not even available, and the override hid among its
-own costumes while the human audited four mechanisms to find the one decision.
+an option: it is either the honest answer or it is laundering.
 
 ## Output posture: a message is a channel with no retention
 
@@ -77,6 +74,10 @@ an _ambiguous_ action is fine), compliance reassurance, restating a rule you jus
 followed, sycophancy and narrating a visible result fail the same test. **It is a
 predicate, not a list**: enumeration is why the previous version did not hold
 (CLOUD-200, CLOUD-248). Causes cite `path:line`.
+
+**The operator comes first, in words:** a message, typed or sent mid-turn, gets
+text before the next tool call (`turn answer missing`); a claim of progress is
+true when written; an operator's link is read in full or its failure filed.
 
 ## The board: move the issue as you move the work
 
