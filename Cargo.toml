@@ -558,6 +558,12 @@ regorus = { version = "0.11", default-features = false, features = [
   "coverage",
   "regex",
   "graph",
+  # The compiled-regex LRU (CLOUD-1891). Without it `regex.match` RECOMPILES its
+  # pattern on every call, and a module matching one registry pattern against
+  # every line of `crates/batten/src/*.rs` paid that per line: `review state
+  # other` was 154s of `enforce`'s ~290s. `lru` is a data structure and does no
+  # IO, so `layer reach unsafe`'s closure is unaffected.
+  "cache",
 ] }
 # OS advisory locks (flock/fcntl/LockFileEx) for the findings store's shard-merge
 # (CLOUD-78). A crate rather than the syscall directly because the workspace
