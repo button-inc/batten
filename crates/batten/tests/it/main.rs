@@ -32,6 +32,15 @@
 //! refuses one, and `rules/toolchain.md`'s retirement shape now lands its
 //! tier in this group.
 
+// A TIER THAT EXECUTES A `mise.toml` TASK BODY IS UNIX-ONLY, marked `#[cfg(unix)]`
+// on its `mod` line below. Its subject is a POSIX bash program run through
+// `common::task_command`, and that program never runs on Windows: the bats suites
+// these tiers retired ran in the Linux `bats` job alone. On the `windows` leg,
+// native `jq.exe` writes CRLF and receives a mangled `\\`, so the tier judged
+// the leg rather than the task (CLOUD-1923, measured on #962 at `771651df`).
+// `cfg-gated-test` exempts a case whose subject does not exist off unix, and this
+// is that case at module scope rather than per `#[test]`.
+
 // Panicking on setup failure is the idiomatic way for a test to fail loudly, and
 // the former per-file allowances are preserved on each module below.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -60,10 +69,12 @@ mod awk_regex;
 mod baseline;
 mod bats_invocation;
 mod bench_tokens;
+#[cfg(unix)]
 mod board_payloads;
 mod board_receipts;
 mod board_record;
 mod board_state_claim;
+#[cfg(unix)]
 mod board_sweep;
 mod bot_lane;
 mod branch_age;
@@ -78,6 +89,7 @@ mod capture_fidelity;
 mod captured_facts;
 mod cfg_gated_test;
 mod checks_green;
+#[cfg(unix)]
 mod checksums;
 mod ci_cache_declared;
 mod ci_hygiene;
@@ -93,6 +105,7 @@ mod claim_race;
 mod claim_receipt;
 mod claimed_keys;
 mod cli;
+#[cfg(unix)]
 mod closing_key;
 mod coderabbit_config;
 mod commit;
@@ -113,6 +126,7 @@ mod config_schema;
 mod config_show;
 mod config_skew;
 mod config_trust;
+#[cfg(unix)]
 mod connector_allow;
 mod connector_allow_door;
 mod connector_bound;
@@ -125,6 +139,7 @@ mod could_not_look_laundered;
 mod dead_capability;
 mod decision_record;
 mod defects;
+#[cfg(unix)]
 mod deferral;
 mod derived_facts;
 mod design_audit;
@@ -135,9 +150,12 @@ mod doctor_session;
 mod doctor_target;
 mod document_facts;
 mod document_read_count;
+#[cfg(unix)]
 mod done;
 mod done_not_landed;
+#[cfg(unix)]
 mod done_pr_check;
+#[cfg(unix)]
 mod duplicate_close;
 mod durable_write;
 mod egress_fencing;
@@ -153,6 +171,7 @@ mod fact_record_keying;
 mod facts;
 mod fail_on_warning;
 mod filed_here;
+#[cfg(unix)]
 mod finding_sink;
 mod fixture_forks;
 mod fixture_repos;
@@ -162,6 +181,7 @@ mod forge_window;
 mod frontmatter_gates;
 mod fuzz_corpus;
 mod gh_guard;
+#[cfg(unix)]
 mod gh_preflight;
 mod git_facts;
 mod glob_containment;
@@ -184,6 +204,7 @@ mod hook_skip_local;
 mod hook_worktree_root;
 mod identity_churn;
 mod identity_precedence;
+#[cfg(unix)]
 mod in_progress_drain;
 mod init;
 mod install_local;
@@ -207,12 +228,16 @@ mod lease_namespace_premise;
 mod lease_precondition;
 mod lease_record;
 mod license_table;
+#[cfg(unix)]
 mod linear_check;
+#[cfg(unix)]
 mod lint_deno;
 mod locator_index;
 mod lock_complete;
 mod macos_link;
+#[cfg(unix)]
 mod mcp_allow;
+#[cfg(unix)]
 mod mcp_attach;
 mod mcp_dispatch;
 mod mcp_reduce_array;
@@ -235,6 +260,7 @@ mod narrow_adoption;
 mod nextest_slow;
 mod no_doctests;
 mod nonverdict;
+#[cfg(unix)]
 mod ntia;
 mod obligations_bound;
 mod outcome_advice;
@@ -256,6 +282,7 @@ mod policy_test_suite;
 mod policy_tree;
 mod policy_whole_set;
 mod pr_partition_restated;
+#[cfg(unix)]
 mod pr_unsubscribed;
 mod pr_watch;
 mod prebuilt_lint;
@@ -283,16 +310,21 @@ mod redirect_resolves;
 mod reference_coverage;
 mod refusal_ceiling;
 mod refusal_render_bench;
+#[cfg(unix)]
 mod release_assets;
+#[cfg(unix)]
 mod release_backfill;
+#[cfg(unix)]
 mod release_due;
 mod release_install;
 mod release_provision_parity;
 mod release_token_precedence;
 mod release_tracking;
+#[cfg(unix)]
 mod released;
 mod remedy_authorship;
 mod remedy_payload_source;
+#[cfg(unix)]
 mod render_cli;
 mod repaired_arms;
 mod repetition;
@@ -310,8 +342,10 @@ mod run_shape;
 mod run_shape_guard_door;
 mod runner_verdict;
 mod rust_paths_check;
+#[cfg(unix)]
 mod sbom_binary;
 mod sbom_inventory;
+#[cfg(unix)]
 mod sbom_producer;
 mod scanner_taxonomy;
 mod scratch_hygiene;
@@ -331,13 +365,16 @@ mod sinks;
 mod skill_contract;
 mod sleep_ban;
 mod snapshots;
+#[cfg(unix)]
 mod sonar_gate;
 mod spawn_ceilings;
 mod spawn_census;
+mod spawn_factory;
 mod spawn_widening;
 mod staged_facts;
 mod startup;
 mod startup_bootstrap;
+#[cfg(unix)]
 mod step_receipt;
 mod stop_posture;
 mod store_lifecycle;

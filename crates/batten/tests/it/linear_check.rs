@@ -145,12 +145,7 @@ fn origin(dir: &Path) -> PathBuf {
     let origin = dir.join("origin");
     let seed = dir.join("seed");
     let git = |at: &Path, args: &[&str]| {
-        let out = common::program("git")
-            .args(args)
-            .current_dir(at)
-            .output()
-            .expect("git");
-        assert!(out.status.success(), "git {args:?}: {}", said(&out));
+        common::git_in(at, args);
     };
     std::fs::create_dir_all(&origin).expect("origin dir");
     std::fs::create_dir_all(&seed).expect("seed dir");
@@ -181,11 +176,7 @@ fn clone(dir: &Path, origin: &Path, name: &str, shallow: bool) -> PathBuf {
     }
     let into_str = into.display().to_string();
     args.extend([url.as_str(), into_str.as_str()]);
-    let out = common::program("git")
-        .args(&args)
-        .output()
-        .expect("git clone");
-    assert!(out.status.success(), "clone: {}", said(&out));
+    common::git_in(dir, &args);
     into
 }
 
@@ -195,15 +186,8 @@ fn the_naive_fetch_exits_0_while_resolving_nothing_in_a_single_branch_clone() {
     let dir = common::scratch("linear-check-naive");
     let origin = origin(&dir);
     let clone = clone(&dir, &origin, "naive", false);
-    let fetch = common::program("git")
-        .args(["fetch", "-q", "origin", "main"])
-        .current_dir(&clone)
-        .output()
-        .expect("git fetch");
-    assert!(fetch.status.success(), "{}", said(&fetch));
-    let resolved = common::program("git")
-        .args(["rev-parse", "origin/main"])
-        .current_dir(&clone)
+    common::git_in(&clone, &["fetch", "-q", "origin", "main"]);
+    let resolved = common::git_command(&clone, &["rev-parse", "origin/main"])
         .output()
         .expect("git rev-parse");
     assert!(

@@ -191,7 +191,6 @@ exempt := {
 	"tests/git-hook.bats": ".claude/hooks/git-hook.sh",
 	"tests/hk-selection.bats": "hk.pkl",
 	"tests/install.bats": "install.sh",
-	"tests/lint-deno.bats": "mise.toml",
 	"tests/lint-rego.bats": "mise.toml",
 	# THE ROW THAT WAS HERE IS GONE BECAUSE ITS SUBJECT IS (CLOUD-1717).
 	#

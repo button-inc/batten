@@ -383,7 +383,7 @@ impl Answer {
 /// here keeps its endpoint string byte for byte.
 #[must_use]
 pub fn get(path: &str, etag: Option<&str>) -> Option<Answer> {
-    exchange(path, etag, None)
+    exchange(path, etag, None, false)
 }
 
 /// One POST against the REST tier, with no body.
@@ -393,7 +393,7 @@ pub fn get(path: &str, etag: Option<&str>) -> Option<Answer> {
 /// that could not stop a run must not also fail the job it is standing in.
 #[must_use]
 pub fn post(path: &str) -> bool {
-    exchange(path, None, Some(&[])).is_some_and(|answer| (200..300).contains(&answer.status))
+    exchange(path, None, Some(&[]), false).is_some_and(|answer| (200..300).contains(&answer.status))
 }
 
 /// One POST carrying a JSON body.
@@ -407,7 +407,15 @@ pub fn post(path: &str) -> bool {
 #[must_use]
 pub fn post_json(path: &str, body: &serde_json::Value) -> Option<Answer> {
     let encoded = serde_json::to_vec(body).ok()?;
-    exchange(path, None, Some(&encoded))
+    exchange(path, None, Some(&encoded), false)
+}
+
+/// One PATCH carrying a JSON body — [`post_json`]'s twin for an update the forge
+/// takes only as a `PATCH`, such as rewriting a pull request's body (CLOUD-1924).
+#[must_use]
+pub fn patch_json(path: &str, body: &serde_json::Value) -> Option<Answer> {
+    let encoded = serde_json::to_vec(body).ok()?;
+    exchange(path, None, Some(&encoded), true)
 }
 
 /// Where a SUITE may put canned responses instead of the forge.
@@ -432,12 +440,48 @@ pub fn post_json(path: &str, body: &serde_json::Value) -> Option<Answer> {
 /// themselves.
 const FIXTURE: &str = "BATTEN_REST_FIXTURE";
 
+/// One request as the fixture seam sees it.
+struct Request<'a> {
+    method: &'a str,
+    url: &'a str,
+    body: Option<&'a [u8]>,
+}
+
 /// Serve one response from the fixture directory, counting the call.
 ///
 /// The protocol is the stubbed program's, conserved exactly so the cases that
 /// read it back need no rewrite: `resp.<n>` for the n-th call and `resp.last`
 /// once they run out, the count in `calls`, and the request appended to `args`.
-fn from_fixture(dir: &std::path::Path, url: &str, etag: Option<&str>, now: u64) -> Option<Answer> {
+///
+/// **ROUTED BY ENDPOINT WHERE THE FIXTURE SAYS SO** (CLOUD-1924). A lane that
+/// asks several endpoints answers by WHICH endpoint, not by call order, which is
+/// what its retired `gh` stub dispatched on. A `routes` file holds
+/// `<needle>\t<file>` lines; the first needle contained in `<METHOD> <url>`
+/// answers from `<file>`, and a request body is kept beside it as
+/// `<file>.request` so a case asserts what the forge was ASKED to store. No
+/// `routes` file, or no line matching, falls through to the call-order protocol.
+fn from_fixture(
+    dir: &std::path::Path,
+    request: &Request<'_>,
+    etag: Option<&str>,
+    now: u64,
+) -> Option<Answer> {
+    let url = request.url;
+    if let Ok(routes) = std::fs::read_to_string(dir.join("routes")) {
+        let line = format!("{} {url}", request.method);
+        let routed = routes.lines().find_map(|route| {
+            let (needle, file) = route.split_once('\t')?;
+            line.contains(needle).then(|| file.trim().to_owned())
+        });
+        if let Some(file) = routed {
+            let _ = crate::durable::append(&dir.join("args"), &line);
+            if let Some(body) = request.body {
+                let _ = crate::durable::replace(dir.join(format!("{file}.request")), body);
+            }
+            let raw = std::fs::read_to_string(dir.join(&file)).ok()?;
+            return Some(canned(&raw, now));
+        }
+    }
     let calls = dir.join("calls");
     let n = std::fs::read_to_string(&calls)
         .ok()
@@ -512,17 +556,32 @@ fn canned(raw: &str, now: u64) -> Answer {
     }
 }
 
-fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>) -> Option<Answer> {
+fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>, patching: bool) -> Option<Answer> {
     let now = crate::now_unix();
     let url = format!("{API}/{path}");
     if let Some(dir) = std::env::var_os(FIXTURE) {
-        return from_fixture(std::path::Path::new(&dir), &url, etag, now);
+        let method = match body {
+            Some(_) if patching => "PATCH",
+            Some(_) => "POST",
+            None => "GET",
+        };
+        return from_fixture(
+            std::path::Path::new(&dir),
+            &Request {
+                method,
+                url: &url,
+                body,
+            },
+            etag,
+            now,
+        );
     }
     let headers = headers(etag, body.is_some_and(|bytes| !bytes.is_empty()));
     let mut answers = fetch::spend(&[Call {
         url: &url,
         headers: &headers,
         body,
+        patch: patching,
         // PROXIED, which is the ordinary path. `direct` exists so a credential
         // can be proved against the forge with the proxy out of the way
         // (`fetch::get_direct`); a forge REST call is not that question, and

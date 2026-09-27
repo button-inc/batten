@@ -155,13 +155,18 @@ fn manifest(dir: &Path, names: Option<&[String]>) {
         .collect();
     all.sort();
     let over = names.map_or(all, <[String]>::to_vec);
-    let out = common::program("sha256sum")
-        .args(&over)
-        .current_dir(&root)
-        .env("LC_ALL", "C")
-        .output()
-        .expect("sha256sum");
-    std::fs::write(root.join("SHA256SUMS"), out.stdout).expect("manifest");
+    // `sha256sum`'s text format, computed in-process: `<hex>  <name>` per line.
+    let lines = over.iter().fold(String::new(), |mut lines, name| {
+        use sha2::Digest as _;
+        use std::fmt::Write as _;
+        let bytes = std::fs::read(root.join(name)).expect("an asset");
+        for b in sha2::Sha256::digest(&bytes) {
+            let _ = write!(lines, "{b:02x}");
+        }
+        let _ = writeln!(lines, "  {name}");
+        lines
+    });
+    std::fs::write(root.join("SHA256SUMS"), lines).expect("manifest");
     if !listing.lines().any(|l| l == "SHA256SUMS") {
         write(dir, "assets", &format!("{listing}SHA256SUMS\n"));
     }
@@ -169,13 +174,15 @@ fn manifest(dir: &Path, names: Option<&[String]>) {
 
 /// The binary SBOM a composed leg publishes, derived as the producer derives it.
 fn binary_sbom(dir: &Path, target: &str) -> String {
-    let out = common::program("mise")
-        .arg("-C")
-        .arg(at_root("."))
-        .args(["run", "sbom-binary", "--", "--names", target])
+    // The producer's `--names` arm, through the shared task-body spawn.
+    let out = common::task_command(dir, "sbom-binary-record")
+        .current_dir(at_root("."))
         .env("SBOM_BINARY_ROOT", dir)
+        .env("usage_binary", "--names")
+        .env("usage_target", target)
+        .stdin(Stdio::null())
         .output()
-        .expect("mise run sbom-binary -- --names");
+        .expect("sbom-binary-record --names");
     assert!(
         out.status.success(),
         "sbom-binary --names: {}",

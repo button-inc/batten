@@ -101,22 +101,21 @@ impl Session {
 }
 
 /// The epoch the log NAME records, the key a spawn is matched against.
+///
+/// Computed here rather than by `date -d`, which is GNU-only and absent on the
+/// macOS leg (CLOUD-1923): Howard Hinnant's days-from-civil over the UTC stamp.
 fn attempt(stamp: &str) -> i64 {
-    let iso = format!(
-        "{}T{}:{}:{}Z",
-        &stamp[..10],
-        &stamp[11..13],
-        &stamp[14..16],
-        &stamp[17..19]
-    );
-    let out = common::program("date")
-        .args(["-u", "-d", &iso, "+%s"])
-        .output()
-        .expect("date");
-    String::from_utf8_lossy(&out.stdout)
-        .trim()
-        .parse()
-        .expect("an epoch")
+    let field =
+        |range: std::ops::Range<usize>| -> i64 { stamp[range].parse().expect("a digit field") };
+    let (year, month, day) = (field(0..4), field(5..7), field(8..10));
+    let (hour, minute, second) = (field(11..13), field(14..16), field(17..19));
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    days * 86_400 + hour * 3_600 + minute * 60 + second
 }
 
 #[test]
@@ -171,12 +170,13 @@ fn only_the_newest_log_by_name_is_judged() {
     let old = s.log("serena", "2026-08-07T05-04-29-250Z", &[STARTED, CLOSED]);
     let new = s.log("serena", "2026-08-11T06-19-12-114Z", &[STARTED, CONNECTED]);
     for (path, when) in [(&old, "2026-08-11 07:00:00"), (&new, "2026-08-07 05:04:29")] {
-        let out = common::program("touch")
-            .args(["-d", when])
-            .arg(path)
-            .output()
-            .expect("touch");
-        assert!(out.status.success());
+        let secs = u64::try_from(attempt(when)).expect("a post-epoch time");
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .expect("open the log")
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+            .expect("set the mtime");
     }
     assert_eq!(s.check().0, Some(0));
 }

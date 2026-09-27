@@ -60,19 +60,7 @@ use std::process::Stdio;
 const PR: &str = r#"[{"url":"https://github.com/o/r/pull/1"}]"#;
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let out = common::program("git")
-        .args(args)
-        .current_dir(repo)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .output()
-        .expect("git");
-    assert!(
-        out.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    common::git_in(repo, args)
 }
 
 fn commit(repo: &Path, subject: &str, body: &str) {

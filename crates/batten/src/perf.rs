@@ -487,11 +487,27 @@ fn which(program: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+/// The programs this module runs, CLOSED (CLOUD-1924): `run` took a free string,
+/// so its reason — which named the builds and the benchmark — also covered a
+/// `git init` it never mentioned. That one is in-process now, and what is left
+/// is exactly what the reason says.
+#[derive(Clone, Copy)]
+enum Tool {
+    /// A release build of one arm; there is no in-process compiler.
+    Cargo,
+    /// The benchmark runner, whose statistics ARE the measurement.
+    Hyperfine,
+}
+
 /// Run a program to completion in `dir`, returning whether it succeeded.
-fn run(dir: &Path, program: &str, args: &[String], env: &[(String, String)]) -> Result<bool> {
+fn run(dir: &Path, tool: Tool, args: &[String], env: &[(String, String)]) -> Result<bool> {
+    let program = match tool {
+        Tool::Cargo => "cargo",
+        Tool::Hyperfine => "hyperfine",
+    };
     #[expect(
         clippy::disallowed_types,
-        reason = "stays: the two release builds and the benchmark runner ARE this module's effect (CLOUD-875). `perf-pair` cannot measure a binary without building it, and Surface::VerifyOnly is the boundary that keeps that off the mediated call"
+        reason = "stays: the two release builds and the benchmark runner ARE this module's effect (CLOUD-875), and `Tool` closes the set to exactly those two. `perf-pair` cannot measure a binary without building it, and Surface::VerifyOnly is the boundary that keeps that off the mediated call"
     )]
     let mut command = std::process::Command::new(program);
     command.args(args).current_dir(dir);
@@ -664,7 +680,7 @@ fn build(dir: &Path, target_dir: Option<&Path>, what: &str) -> Result<()> {
             )]
         })
         .unwrap_or_default();
-    if !run(dir, "cargo", &args, &env)? {
+    if !run(dir, Tool::Cargo, &args, &env)? {
         bail!(
             "perf-pair: the {what} release build failed, so there is nothing to compare. No measurement."
         );
@@ -1363,7 +1379,7 @@ fn bench(
         (String::from("APPDATA"), state.to_owned()),
         (String::from("LOCALAPPDATA"), state.to_owned()),
     ];
-    if !run(dir, "hyperfine", &args, &env)? {
+    if !run(dir, Tool::Hyperfine, &args, &env)? {
         bail!("perf-pair: measuring the {id} pair failed. No measurement.");
     }
 
@@ -2293,23 +2309,19 @@ pub fn sweep_fixture(root: &Path, n: usize) -> Result<()> {
     crate::durable::replace(root.join("batten.toml"), authority)
         .context("perf-acquire: could not write the fixture authority")?;
 
-    // `git init` so the walk is a repository walk, matching every other fixture
-    // in this tree. No global or system config: a contributor's own git settings
-    // must not be able to change what is measured (CLOUD-282).
-    let args: Vec<String> = ["init", "-q", "-b", "main"]
-        .iter()
-        .map(|arg| (*arg).to_owned())
-        .collect();
-    let env = vec![
-        (String::from("GIT_CONFIG_GLOBAL"), String::from("/dev/null")),
-        (String::from("GIT_CONFIG_SYSTEM"), String::from("/dev/null")),
-    ];
-    if !run(root, "git", &args, &env)? {
-        bail!(
-            "perf-acquire: could not initialise the fixture at {}. Nothing measured.",
+    // A repository so the walk is a repository walk, matching every other fixture
+    // in this tree. IN-PROCESS through `gix` rather than a spawned `git init`
+    // (CLOUD-1924), and `HEAD` is pinned to `main` here rather than left to
+    // `init.defaultBranch`, so a contributor's own git settings cannot change
+    // what is measured (CLOUD-282).
+    gix::init(root).map_err(|err| {
+        anyhow::anyhow!(
+            "perf-acquire: could not initialise the fixture at {}: {err}. Nothing measured.",
             root.display()
-        );
-    }
+        )
+    })?;
+    crate::durable::replace(root.join(".git/HEAD"), "ref: refs/heads/main\n")
+        .context("perf-acquire: could not point the fixture's HEAD at main")?;
     Ok(())
 }
 

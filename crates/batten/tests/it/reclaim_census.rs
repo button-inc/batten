@@ -87,8 +87,8 @@ impl Clone {
     }
 
     fn at(&self, boot: &str, args: &[&str]) -> (Option<i32>, String) {
-        let out = common::program("bash")
-            .arg(self.census())
+        let out = common::task_bash(&self.repo, &common::task_body("reclaim-census"))
+            .arg("reclaim-census")
             .args(args)
             .current_dir(&self.repo)
             .env("BATTEN_BOOT_TIME", boot)
@@ -268,13 +268,12 @@ fn a_killed_loop_leaves_an_h_even_though_its_trap_runs() {
     let c = Clone::new("killed").boundary();
     // Two beats land before `ready` is said, and the loop keeps beating after it:
     // reading that line is the wait, so no clock decides when the kill falls.
-    let mut loop_child = common::program("bash")
-        .args([
-            "-c",
-            r#"trap 'exit 0' EXIT TERM; bash "$1" note h; bash "$1" note h; echo ready; while :; do bash "$1" note h; sleep 0.2; done"#,
-            "_",
-        ])
-        .arg(c.census())
+    let mut loop_child = common::task_bash(
+        &c.repo,
+        r#"trap 'exit 0' EXIT TERM; bash "$1" note h; bash "$1" note h; echo ready; while :; do bash "$1" note h; sleep 0.2; done"#,
+    )
+    .arg("_")
+    .arg(c.census())
         .current_dir(&c.repo)
         .env("BATTEN_BOOT_TIME", PRIOR_BOOT)
         .env_remove("usage_args")

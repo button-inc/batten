@@ -235,6 +235,7 @@ pub fn advertise(remote: &str, service: Service) -> Result<Advertisement> {
         headers: &headers("*/*", None),
         body: None,
         direct: false,
+        patch: false,
     }])?;
     let response = responses
         .first()
@@ -504,6 +505,7 @@ pub fn swap(remote: &str, update: &Update, pack: &[u8]) -> Result<Outcome> {
         ),
         body: Some(&body),
         direct: false,
+        patch: false,
     }])?;
     let response = responses
         .first()
@@ -1046,6 +1048,7 @@ pub fn fetch_object(remote: &str, id: &str) -> Result<Object> {
         ),
         body: Some(&body),
         direct: false,
+        patch: false,
     }])?;
     let response = responses
         .first()
@@ -3186,6 +3189,7 @@ pub fn fetch(remote: &str, repo: &std::path::Path, reference: &str) -> Result<Fe
         ),
         body: Some(&body),
         direct: false,
+        patch: false,
     }])?;
     let response = responses
         .first()
@@ -3269,20 +3273,24 @@ fn upload_pack_request(want: &str, haves: &[String]) -> Result<Vec<u8>> {
 /// comes off the lease record, and whether that process is still there is a
 /// property of the machine rather than of the tree.
 ///
-/// **Spawning `kill(1)` rather than calling `kill(2)`**, because the workspace
-/// forbids `unsafe` outright and there is no safe in-process route to signal a
-/// process this one did not start. `signal-hook` is the receiving half and has no
-/// sending half to reach for.
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays: there is no in-process way to signal another process without `unsafe`, which the workspace forbids, and the alternative — leaving a wedged holder running — is the fleet-wide stall this path exists to end"
-)]
+/// **`kill(2)` in-process, through `rustix`'s safe wrapper** — the same crate
+/// `exec`'s reaper signals process groups with. This spawned `kill(1)` on the
+/// premise that no safe route existed; `rustix::process::kill_process` is one,
+/// and it was already a dependency (CLOUD-1924). Off unix there is no signal to
+/// send, which is what the spawn amounted to there as well.
+#[cfg(unix)]
 pub fn stop(pid: u32) {
-    let _ = std::process::Command::new("kill")
-        .arg("-TERM")
-        .arg(pid.to_string())
-        .status();
+    if let Some(pid) = i32::try_from(pid)
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+    {
+        let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+    }
 }
+
+/// See the unix half: no signal exists to send here.
+#[cfg(not(unix))]
+pub fn stop(_pid: u32) {}
 
 // ---------------------------------------------------------------------------
 // CLOUD-420 / CLOUD-1148: the composite step-0 guard.

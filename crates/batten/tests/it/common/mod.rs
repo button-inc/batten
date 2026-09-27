@@ -424,17 +424,6 @@ pub(crate) fn produce(dir: &Path, task: &str, stdin: &str) -> Output {
     child.wait_with_output().expect("run the producer")
 }
 
-/// A system program a tier drives as a consumer would (`sha256sum -c`, a
-/// retired script under comparison).
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays: the tier's subject is the program's own verdict over the artifact"
-)]
-#[must_use]
-pub(crate) fn program(name: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
-    std::process::Command::new(name)
-}
-
 /// Whether the committed authority declares its protected-path set.
 ///
 /// The owner switched that gate off until admission statements are adjudicated.

@@ -343,10 +343,13 @@ pub mod forge {
     use super::Pull;
     use crate::error::UsageError;
 
-    /// The client every call goes through, for [`crate::pr_watch`]'s reason.
-    const CLIENT: &str = "gh";
-
-    /// Run `gh` with `args` and hand back stdout, or a could-not-look.
+    /// One GET against the forge's REST tier, parsed as JSON (CLOUD-1924).
+    ///
+    /// IN-PROCESS through [`crate::rest`], which resolves the credential itself
+    /// ([`crate::rest::credential`]). This lane used to spawn `gh api … --jq`,
+    /// on the reasoning that the forge's own client resolved the credential
+    /// outside this crate; `rest` made that untrue, and the spawn was the last
+    /// one standing on it.
     ///
     /// Pointer-only on the failure path: the endpoint and the status, never the
     /// response body — a forge error can echo a header dump back, and a token
@@ -354,80 +357,62 @@ pub mod forge {
     ///
     /// # Errors
     ///
-    /// Anything but a clean exit is an internal error (→ exit `3`): a lane that
-    /// cannot read the pull request must not report that it filed nothing.
-    fn run(args: &[&str]) -> Result<String> {
-        run_with(args, None)
-    }
-
-    /// As [`run`], with `stdin` handed to the child where there is one.
-    ///
-    /// The two writes send their body **on stdin** (`-F body=@-`) rather than
-    /// through a temporary file. A body is a page of markdown carrying newlines
-    /// and backticks; a file would put that page on disk under a path this
-    /// process then has to remember to remove, and a write that fails between
-    /// those two steps leaves a tracker row's text lying in the world. Stdin has
-    /// no such window.
-    fn run_with(args: &[&str], stdin: Option<&str>) -> Result<String> {
-        #[expect(
-            clippy::disallowed_types,
-            reason = "stays: the forge's own client IS the call, and it resolves the credential outside this crate — the standing CLOUD-1143 gave the check-run read (CLOUD-1295)"
-        )]
-        let output = crate::rules::spawn_resolving(
-            Some(std::path::Path::new(".")),
-            CLIENT,
-            |program, extra| {
-                let mut command = std::process::Command::new(program);
-                command
-                    .args(extra)
-                    .args(args)
-                    .stderr(std::process::Stdio::null());
-                let Some(body) = stdin else {
-                    return command.output();
-                };
-                command
-                    .stdin(std::process::Stdio::piped())
-                    .stdout(std::process::Stdio::piped());
-                let mut child = command.spawn()?;
-                if let Some(pipe) = child.stdin.as_mut() {
-                    std::io::Write::write_all(pipe, body.as_bytes())?;
-                }
-                drop(child.stdin.take());
-                child.wait_with_output()
-            },
-        );
-        let output = output.map_err(|err| {
-            anyhow::anyhow!("bot lane: cannot run {CLIENT}: {err} — nothing is written")
+    /// Anything but a readable answer is an internal error (→ exit `3`): a lane
+    /// that cannot read the pull request must not report that it filed nothing.
+    fn get(endpoint: &str) -> Result<serde_json::Value> {
+        let answer = crate::rest::get(endpoint, None).ok_or_else(|| {
+            anyhow::anyhow!("bot lane: cannot reach the forge for {endpoint} — nothing is written")
         })?;
-        if !output.status.success() {
-            // The endpoint, which is the first argument, and nothing else.
-            let endpoint = args.get(1).copied().unwrap_or("<none>");
+        if !answer.is_reading() {
             return Err(anyhow::anyhow!(
-                "bot lane: {CLIENT} refused {endpoint} — cannot read the pull request, so nothing \
-                 is written"
+                "bot lane: the forge refused {endpoint} ({}) — cannot read the pull request, so \
+                 nothing is written",
+                answer.status
             ));
         }
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        serde_json::from_str(&answer.body).map_err(|_| {
+            anyhow::anyhow!("bot lane: {endpoint} answered with no JSON — nothing is written")
+        })
     }
 
-    /// One `--jq` read against an endpoint.
-    fn read(endpoint: &str, jq: &str) -> Result<String> {
-        Ok(run(&["api", endpoint, "--jq", jq])?.trim().to_owned())
+    /// A write's answer, refused unless the forge accepted it.
+    fn written(endpoint: &str, answer: Option<crate::rest::Answer>) -> Result<serde_json::Value> {
+        let answer = answer.ok_or_else(|| {
+            anyhow::anyhow!("bot lane: cannot reach the forge for {endpoint} — nothing is written")
+        })?;
+        if !(200..300).contains(&answer.status) {
+            return Err(anyhow::anyhow!(
+                "bot lane: the forge refused {endpoint} ({}) — nothing is written",
+                answer.status
+            ));
+        }
+        Ok(serde_json::from_str(&answer.body).unwrap_or(serde_json::Value::Null))
+    }
+
+    /// A JSON value as the text `--jq` printed for it: a string raw, a number
+    /// in decimal, anything absent or null as empty.
+    fn text(value: &serde_json::Value) -> String {
+        match value {
+            serde_json::Value::String(text) => text.clone(),
+            serde_json::Value::Null => String::new(),
+            other => other.to_string(),
+        }
+    }
+
+    /// The elements of a listing, or none where the answer was not one.
+    fn items(listing: &serde_json::Value) -> &[serde_json::Value] {
+        listing.as_array().map_or(&[], Vec::as_slice)
     }
 
     /// The pull request, as [`Pull`].
     ///
     /// # Errors
     ///
-    /// As [`run`], plus a [`UsageError`] where the answer carries no title: the
+    /// As [`get`], plus a [`UsageError`] where the answer carries no title: the
     /// derived row's title IS the PR's, so there is nothing to file.
     pub fn pull(repo: &str, number: &str) -> Result<Pull> {
-        let raw = read(
-            &format!("repos/{repo}/pulls/{number}"),
-            "[.title, .body // \"\", .user.login, .head.ref] | @tsv",
-        )?;
-        let mut fields = raw.split('\t');
-        let title = fields.next().unwrap_or_default().to_owned();
+        let pull = get(&format!("repos/{repo}/pulls/{number}"))?;
+        let title = text(&pull["title"]);
         if title.is_empty() {
             return Err(UsageError::raise(format!(
                 "bot lane: #{number} has no title, and the row's title is the pull request's — so \
@@ -437,9 +422,9 @@ pub mod forge {
         Ok(Pull {
             number: number.to_owned(),
             title,
-            body: fields.next().unwrap_or_default().to_owned(),
-            login: fields.next().unwrap_or_default().to_owned(),
-            head: fields.next().unwrap_or_default().to_owned(),
+            body: text(&pull["body"]),
+            login: text(&pull["user"]["login"]),
+            head: text(&pull["head"]["ref"]),
         })
     }
 
@@ -451,16 +436,14 @@ pub mod forge {
     ///
     /// # Errors
     ///
-    /// As [`run`].
+    /// As [`get`].
     pub fn files(repo: &str, number: &str) -> Result<Vec<String>> {
-        Ok(read(
-            &format!("repos/{repo}/pulls/{number}/files?per_page=100"),
-            ".[].filename",
-        )?
-        .lines()
-        .map(str::to_owned)
-        .filter(|line| !line.is_empty())
-        .collect())
+        let listing = get(&format!("repos/{repo}/pulls/{number}/files?per_page=100"))?;
+        Ok(items(&listing)
+            .iter()
+            .map(|file| text(&file["filename"]))
+            .filter(|name| !name.is_empty())
+            .collect())
     }
 
     /// The mirror issue this pull request already has, if any.
@@ -471,17 +454,15 @@ pub mod forge {
     ///
     /// # Errors
     ///
-    /// As [`run`].
+    /// As [`get`].
     pub fn mirror(repo: &str, number: &str, marker_prefix: &str) -> Result<Option<String>> {
         let marker = format!("{marker_prefix}{number} -->");
-        let found = read(
-            &format!("repos/{repo}/issues?state=all&per_page=100"),
-            &format!(
-                "[.[] | select((.pull_request // null) == null) | select((.body // \"\") | \
-                 contains(\"{marker}\"))] | .[0].number // empty"
-            ),
-        )?;
-        Ok((!found.is_empty()).then_some(found))
+        let listing = get(&format!("repos/{repo}/issues?state=all&per_page=100"))?;
+        Ok(items(&listing)
+            .iter()
+            .find(|issue| issue["pull_request"].is_null() && text(&issue["body"]).contains(&marker))
+            .map(|issue| text(&issue["number"]))
+            .filter(|found| !found.is_empty()))
     }
 
     /// The tracker's linkback comment on `issue`, or empty while the sync has not
@@ -493,14 +474,16 @@ pub mod forge {
     ///
     /// # Errors
     ///
-    /// As [`run`].
+    /// As [`get`].
     pub fn linkback(repo: &str, issue: &str, marker: &str) -> Result<String> {
-        read(
-            &format!("repos/{repo}/issues/{issue}/comments?per_page=100"),
-            &format!(
-                "[.[] | select((.body // \"\") | contains(\"{marker}\"))] | .[0].body // empty"
-            ),
-        )
+        let listing = get(&format!(
+            "repos/{repo}/issues/{issue}/comments?per_page=100"
+        ))?;
+        Ok(items(&listing)
+            .iter()
+            .map(|comment| text(&comment["body"]))
+            .find(|body| body.contains(marker))
+            .unwrap_or_default())
     }
 
     /// Open the mirror issue and answer with its number.
@@ -511,26 +494,19 @@ pub mod forge {
     ///
     /// # Errors
     ///
-    /// As [`run`], plus an internal error where the forge accepted the issue and
+    /// As [`get`], plus an internal error where the forge accepted the issue and
     /// named no number — no row exists then, and none is invented.
     pub fn open_issue(repo: &str, title: &str, body: &str) -> Result<String> {
-        let created = run_with(
-            &[
-                "api",
-                "-X",
-                "POST",
-                &format!("repos/{repo}/issues"),
-                "-f",
-                &format!("title={title}"),
-                "-F",
-                "body=@-",
-                "--jq",
-                ".number",
-            ],
-            Some(body),
-        )?
-        .trim()
-        .to_owned();
+        let endpoint = format!("repos/{repo}/issues");
+        let created = text(
+            &written(
+                &endpoint,
+                crate::rest::post_json(
+                    &endpoint,
+                    &serde_json::json!({ "title": title, "body": body }),
+                ),
+            )?["number"],
+        );
         if created.is_empty() {
             return Err(anyhow::anyhow!(
                 "bot lane: the mirror issue was accepted and named no number, so no row exists \
@@ -544,19 +520,13 @@ pub mod forge {
     ///
     /// # Errors
     ///
-    /// As [`run`]: a body that could not be written means the row exists and the
+    /// As [`get`]: a body that could not be written means the row exists and the
     /// merge would not move it, which is a failure rather than a quiet skip.
     pub fn set_body(repo: &str, number: &str, body: &str) -> Result<()> {
-        run_with(
-            &[
-                "api",
-                "-X",
-                "PATCH",
-                &format!("repos/{repo}/pulls/{number}"),
-                "-F",
-                "body=@-",
-            ],
-            Some(body),
+        let endpoint = format!("repos/{repo}/pulls/{number}");
+        written(
+            &endpoint,
+            crate::rest::patch_json(&endpoint, &serde_json::json!({ "body": body })),
         )
         .map(|_| ())
     }
@@ -565,13 +535,14 @@ pub mod forge {
     ///
     /// # Errors
     ///
-    /// As [`run`].
+    /// As [`get`].
     pub fn open_for(repo: &str, branch: &str) -> Result<Option<String>> {
-        let found = read(
-            &format!("repos/{repo}/pulls?state=open&per_page=100"),
-            &format!("[.[] | select(.head.ref == \"{branch}\")] | .[0].number // empty"),
-        )?;
-        Ok((!found.is_empty()).then_some(found))
+        let listing = get(&format!("repos/{repo}/pulls?state=open&per_page=100"))?;
+        Ok(items(&listing)
+            .iter()
+            .find(|pull| text(&pull["head"]["ref"]) == branch)
+            .map(|pull| text(&pull["number"]))
+            .filter(|found| !found.is_empty()))
     }
 
     /// Every open pull request, as the fields a claim is derived from.
@@ -592,26 +563,18 @@ pub mod forge {
     ///
     /// # Errors
     ///
-    /// As [`run`].
+    /// As [`get`].
     pub fn open_pulls(repo: &str) -> Result<Vec<crate::race::Pull>> {
-        let raw = read(
-            &format!("repos/{repo}/pulls?state=open&per_page=100"),
-            ".[] | [(.number | tostring), .head.ref, .head.sha, .title, (.body // \"\" | \
-             gsub(\"\\t\"; \" \") | gsub(\"\\n\"; \" \"))] | @tsv",
-        )?;
-        Ok(raw
-            .lines()
-            .filter(|line| !line.is_empty())
-            .map(|line| {
-                let mut fields = line.split('\t');
-                crate::race::Pull {
-                    number: fields.next().unwrap_or_default().to_owned(),
-                    head_ref: fields.next().unwrap_or_default().to_owned(),
-                    head_sha: fields.next().unwrap_or_default().to_owned(),
-                    title: fields.next().unwrap_or_default().to_owned(),
-                    body: fields.next().unwrap_or_default().to_owned(),
-                    log: String::new(),
-                }
+        let listing = get(&format!("repos/{repo}/pulls?state=open&per_page=100"))?;
+        Ok(items(&listing)
+            .iter()
+            .map(|pull| crate::race::Pull {
+                number: text(&pull["number"]),
+                head_ref: text(&pull["head"]["ref"]),
+                head_sha: text(&pull["head"]["sha"]),
+                title: text(&pull["title"]),
+                body: text(&pull["body"]).replace(['\t', '\n'], " "),
+                log: String::new(),
             })
             .collect())
     }
@@ -633,12 +596,14 @@ pub mod forge {
     ///
     /// # Errors
     ///
-    /// As [`run`].
+    /// As [`get`].
     pub fn commit_messages(repo: &str, number: &str) -> Result<String> {
-        read(
-            &format!("repos/{repo}/pulls/{number}/commits?per_page=100"),
-            ".[].commit.message",
-        )
+        let listing = get(&format!("repos/{repo}/pulls/{number}/commits?per_page=100"))?;
+        Ok(items(&listing)
+            .iter()
+            .map(|commit| text(&commit["commit"]["message"]))
+            .collect::<Vec<_>>()
+            .join("\n"))
     }
 }
 

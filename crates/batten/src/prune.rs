@@ -2712,44 +2712,20 @@ fn directory_bytes(dir: &Path) -> u64 {
     total
 }
 
-#[cfg(unix)]
+/// Free space in MiB, the reading `df -Pm`'s "Available" column gave: the
+/// space an unprivileged writer can use, not the filesystem's raw free count.
+/// In-process through `fs4` (`statvfs` / `GetDiskFreeSpaceExW`), which was
+/// already a dependency, rather than spawning `df` (CLOUD-1924) — and it answers
+/// on every platform, where the spawn answered on unix alone.
 fn available_megabytes(path: &Path) -> Result<u64> {
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays: this module IS Cost::Effect, and free space is the one question it cannot answer from the tree it prunes (CLOUD-1030). `df` is the portable reading, and it was PROBED rather than trusted — the module header carries the numbers"
-    )]
-    let spawned = std::process::Command::new("df")
-        .arg("-Pm")
-        .arg(path)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .context("target-prune: could not read free space")?;
-    if !spawned.status.success() {
-        bail!(
-            "target-prune: could not read free space for {}",
-            path.display()
-        );
-    }
-    String::from_utf8_lossy(&spawned.stdout)
-        .lines()
-        .nth(1)
-        .and_then(|line| line.split_whitespace().nth(3))
-        .and_then(|field| field.parse().ok())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
+    fs4::available_space(path)
+        .map(|bytes| bytes / (1024 * 1024))
+        .with_context(|| {
+            format!(
                 "target-prune: could not read free space for {}",
                 path.display()
             )
         })
-}
-
-#[cfg(not(unix))]
-fn available_megabytes(path: &Path) -> Result<u64> {
-    bail!(
-        "target-prune: no free-space reading on this platform for {}",
-        path.display()
-    )
 }
 
 #[cfg(test)]

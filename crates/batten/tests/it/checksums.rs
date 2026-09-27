@@ -33,7 +33,7 @@ use crate::common;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{program, scratch, task_bash, task_body, write};
+use common::{scratch, task_bash, task_body, write};
 
 /// A scratch directory with a stub `gh` whose `release download` copies
 /// `release/` into `--dir`, and whose tag lookup answers `v9.9.9`. A marker file
@@ -136,19 +136,39 @@ fn sha256sum_accepts_the_manifest_and_a_corrupted_asset_fails_it() {
     let dir = bench("verify", RELEASE);
     assert!(run_task(&dir, false, Some("v9.9.9")).status.success());
     std::fs::copy(dir.join("out/SHA256SUMS"), dir.join("release/SHA256SUMS")).expect("copy");
-    let ok = program("sha256sum")
-        .args(["-c", "SHA256SUMS"])
-        .current_dir(dir.join("release"))
-        .output()
-        .expect("sha256sum");
-    assert!(ok.status.success(), "no flags needed: {ok:?}");
+    assert!(
+        sums_hold(&dir.join("release")),
+        "every line verifies as written"
+    );
     write(&dir, &format!("release/{}", RELEASE[0]), "tampered\n");
-    let bad = program("sha256sum")
-        .args(["-c", "SHA256SUMS"])
-        .current_dir(dir.join("release"))
-        .output()
-        .expect("sha256sum");
-    assert!(!bad.status.success(), "one corrupt byte fails the check");
+    assert!(
+        !sums_hold(&dir.join("release")),
+        "one corrupt byte fails the check"
+    );
+}
+
+/// What `sha256sum -c SHA256SUMS` decides, in-process: every line is
+/// `<64 hex>  <name>` and the hex is the named file's digest.
+fn sums_hold(release: &std::path::Path) -> bool {
+    use sha2::Digest as _;
+    let manifest = std::fs::read_to_string(release.join("SHA256SUMS")).expect("the manifest");
+    manifest.lines().all(|line| {
+        let Some((hex, name)) = line.split_once("  ") else {
+            return false;
+        };
+        let Ok(bytes) = std::fs::read(release.join(name)) else {
+            return false;
+        };
+        let digest: String =
+            sha2::Sha256::digest(&bytes)
+                .iter()
+                .fold(String::new(), |mut hex, b| {
+                    use std::fmt::Write as _;
+                    let _ = write!(hex, "{b:02x}");
+                    hex
+                });
+        hex.len() == 64 && digest == hex
+    }) && !manifest.is_empty()
 }
 
 #[test]

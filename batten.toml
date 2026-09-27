@@ -4189,6 +4189,38 @@ id = "module read first"
 kind = "document"
 target = "crates/batten/src/durable.rs"
 
+# CLOUD-1924. A function RETURNING `std::process::Command` moves the one
+# `#[expect(clippy::disallowed_types)]` off every spawn onto the factory, so each
+# caller is unannotated and invisible to the ban. #962 measured it: one generic
+# `common::program` laundered twelve spawns, two of them GNU-only. The module
+# names the factories that exist; adding one is an admission on `policy/**`.
+# `line_sources` is every crate source, because the helper that did it lived in
+# the test crate.
+[[rule]]
+id = "spawn bind loose"
+kind = "policy"
+scope = "tree"
+line_sources = ["crates/**/*.rs"]
+module = "policy/spawn-factory.rego"
+severity = "deny"
+
+[[verdict]]
+id = "spawn bind loose"
+gloss = "a function returns a `std::process::Command`, so the spawns it builds carry no `#[expect]` of their own"
+class = """
+Build the `Command` at the site that spawns it, under an `#[expect(\
+clippy::disallowed_types, reason = ...)]` naming that program and why no \
+in-process route exists — or do the work in-process. A shared launcher is a \
+factory only when it builds ONE program its own reason names; add it to \
+`policy/spawn-factory.rego`'s allowlist through the declared admission \
+(CLOUD-1924).
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/spawn-factory.rego"
+
 # THE GENERAL HATCH IS REMOVED FROM THE ENGINE, AND ITS NAME STAYS OUT OF THE
 # TREE. It was a knowable string that switched off mediation and recorded
 # nothing; CLOUD-1357 narrowed it and this removes it. A name nobody may write

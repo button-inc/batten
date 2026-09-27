@@ -1983,6 +1983,7 @@ fn post_all(
             headers: &headers,
             body: Some(body),
             direct: false,
+            patch: false,
         })
         .collect();
     crate::fetch::spend(&calls)

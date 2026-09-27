@@ -126,6 +126,7 @@ fn a_request_does_not_render_its_authorization_header() {
         headers: &headers,
         body: None,
         direct: true,
+        patch: false,
     };
     let rendered = format!("{call:?}");
     assert!(
@@ -155,6 +156,7 @@ fn the_header_match_is_case_insensitive() {
             headers: &headers,
             body: None,
             direct: false,
+            patch: false,
         };
         let rendered = format!("{call:?}");
         assert!(
@@ -174,6 +176,7 @@ fn a_request_body_renders_as_a_length() {
         headers: &[],
         body: Some(&body),
         direct: false,
+        patch: false,
     };
     let rendered = format!("{call:?}");
     assert!(!rendered.contains(FRAGMENT), "{rendered}");

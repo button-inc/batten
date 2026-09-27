@@ -29,7 +29,7 @@ use crate::common;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
-use common::{at_root, program, scratch, task_bash, task_body, task_env, write};
+use common::{at_root, scratch, task_bash, task_body, task_env, write};
 
 /// Run the body in `dir`, with `--names` as the `usage` spec delivers it.
 fn render(dir: &Path, names: bool) -> Output {
@@ -153,9 +153,7 @@ fn this_repos_surface_renders_to_one_named_file_and_one_line() {
 #[test]
 fn the_default_reference_path_is_git_ignored() {
     let path = format!("reference/{}", task_env("BATTEN_CLI_REFERENCE"));
-    let out = program("git")
-        .args(["check-ignore", "-q", &path])
-        .current_dir(at_root("."))
+    let out = common::git_command(&at_root("."), &["check-ignore", "-q", &path])
         .output()
         .expect("git check-ignore");
     assert!(out.status.success(), "{path} is not git-ignored");

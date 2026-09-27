@@ -94,14 +94,7 @@ impl Board {
     }
 
     fn git(&self, args: &[&str]) {
-        let out = common::program("git")
-            .args(args)
-            .current_dir(&self.repo)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .output()
-            .expect("git");
-        assert!(out.status.success(), "git {args:?}: {}", said(&out));
+        common::git_in(&self.repo, args);
     }
 
     fn pulls(&self, json: &str) {

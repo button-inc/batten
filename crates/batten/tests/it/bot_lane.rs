@@ -2,17 +2,19 @@
 //!
 //! `tests/bot-issue.bats` replayed. Every case there drove `mise-tasks/bot-issue.sh`
 //! against a stubbed forge client on `PATH`; these drive `batten pr …` and
-//! `batten claim bot` against the same stub, so the port is asserted at the seam a
-//! consumer actually uses rather than against a fabricated input shape.
+//! `batten claim bot` against canned forge answers served through `rest`'s
+//! fixture seam (the lane reads the forge in-process since CLOUD-1924), so the
+//! port is asserted at the seam a consumer actually uses rather than against a
+//! fabricated input shape.
 //!
-//! # Why the stub rather than a fixture policy
+//! # Why canned forge answers rather than a fixture policy
 //!
 //! `rules/policy-modules.md`'s second tier exists because the load-time
 //! tier cannot see whether the ENGINE builds what a predicate reads. The same
 //! reasoning applies one level up here: `bot::conventional_type` and
 //! `bot::closing_key` are already pinned as pure functions in their own module,
 //! and what those cannot see is whether the verb reaches them with the fields the
-//! forge actually answers with. A stub that answers the real endpoints is what
+//! forge actually answers with. Canned answers for the real endpoints are what
 //! closes that gap, and it is what lets this suite run on a machine with no
 //! credentials at all — the standing `tests/checks-green.bats` had for the same
 //! reason.
@@ -62,22 +64,10 @@
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 //
-// UNIX-ONLY, AND THE WINDOWS FAILURE IS WORSE THAN A COULD-NOT-RUN. Every case
-// below answers the forge from a `#!/usr/bin/env bash` stub placed first on
-// `PATH`. Windows resolves an executable by `PATHEXT`, so an extensionless
-// script is not a candidate at all: the stub is skipped, and a Windows runner
-// with the REAL `gh` installed then resolves to it — the suite would drive an
-// unauthenticated client at `repos/demo/repo` instead of asserting anything.
-// Measured on this branch: two cases reported the port broken (exit 3) where the
-// port was fine and the stub had simply never run.
-//
-// `session_provisioning.rs` and `connector_allow_door.rs` gate their whole
-// suites on this rung for the same reason, and the retired `tests/bot-issue.bats`
-// never ran on Windows either — it stubbed the same client the same way — so
-// nothing is narrowed that was covered. A `.cmd` twin of the dispatch would be a
-// second authority over what the stub answers, which is the class
-// `rules/policy-modules.md` refuses one level down.
-#![cfg(unix)]
+// NO LONGER UNIX-ONLY (CLOUD-1924). The suite was gated because its forge was a
+// `#!/usr/bin/env bash` stub on `PATH`, which Windows does not resolve; the lane
+// now reads the forge in-process through `rest`, and the fixture is a directory
+// of canned answers, so there is no program to resolve on any platform.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::{Path, PathBuf};
@@ -142,10 +132,10 @@ const TEMPLATE: &str = "**Refinement — Ready**\n\n\
 {{manifests}}\n\n\
 * **Commit / bump (§6).** `{{type}}` → no bump.\n";
 
-/// A fixture repository declaring the lane, with the stub on `PATH`.
+/// A fixture repository declaring the lane, with the forge's answers canned.
 ///
-/// Returns the repository and the directory the stub records its writes into, so
-/// a case can assert what the forge was ASKED to store rather than only what the
+/// Returns the repository and the directory the forge fixture lives in, so a
+/// case can assert what the forge was ASKED to store rather than only what the
 /// verb printed.
 fn lane(name: &str, forge: &Forge) -> (PathBuf, PathBuf) {
     let root = scratch(name);
@@ -170,107 +160,110 @@ fn lane(name: &str, forge: &Forge) -> (PathBuf, PathBuf) {
         .git()
         .base_commit()
         .build();
-    let stub = root.join("stub");
-    let recorded = root.join("recorded");
-    std::fs::create_dir_all(&stub).unwrap();
+    let recorded = root.join("forge");
     std::fs::create_dir_all(&recorded).unwrap();
-    write_stub(&stub, &recorded, forge);
+    write_forge(&recorded, forge);
     (repo, recorded)
 }
 
-/// Write the `gh` stub.
+/// Write the forge's canned answers, routed by endpoint (CLOUD-1924).
 ///
-/// It DISPATCHES ON THE ENDPOINT and answers what `--jq` would have produced, so
-/// the stub answers the call rather than re-implementing the tool — the dying
-/// suite's own words, and the property that keeps this from asserting its own
-/// fixture.
-fn write_stub(stub: &Path, recorded: &Path, forge: &Forge) {
-    let body = format!(
-        "#!/usr/bin/env bash\n\
-args=\"$*\"\n\
-case \"$args\" in\n\
-  *\"-X POST\"*\"/issues\"*)\n\
-    if [ '{create_ok}' != yes ]; then echo refused >&2; exit 1; fi\n\
-    cat > '{recorded}/issue-body'\n\
-    echo 41\n\
-    ;;\n\
-  *\"-X PATCH\"*)\n\
-    cat > '{recorded}/patched-body'\n\
-    echo '{{}}'\n\
-    ;;\n\
-  *\"/comments\"*)\n\
-    if [ '{linkback}' = yes ]; then\n\
-      printf '%s\\n' '<!-- linear-linkback --> see https://example.test/CLOUD-700/x'\n\
-    fi\n\
-    ;;\n\
-  *\"issues?state=all\"*)\n\
-    if [ '{mirror}' = yes ]; then printf '%s\\n' 41; fi\n\
-    ;;\n\
-  *\"/files\"*)\n\
-    printf '%s\\n' '{files}'\n\
-    ;;\n\
-  *\"pulls?state=open\"*)\n\
-    printf '%s\\n' 7\n\
-    ;;\n\
-  *\"repos/demo/repo/pulls/\"*)\n\
-    printf '%s\\t%s\\t%s\\t%s\\n' '{title}' '{body}' '{login}' 'renovate/cargo'\n\
-    ;;\n\
-  *) echo \"unstubbed gh call: $args\" >&2; exit 1 ;;\n\
-esac\n",
-        create_ok = yes_no(forge.create_ok),
-        linkback = yes_no(forge.linkback),
-        mirror = yes_no(forge.mirror),
-        recorded = recorded.display(),
-        files = forge.files,
-        title = forge.title,
-        body = forge.body,
-        login = forge.login,
-    );
-    let path = stub.join("gh");
-    std::fs::write(&path, body).unwrap();
-    make_executable(&path);
+/// The lane reads the forge in-process through `rest` now, so the seam moved
+/// from a `gh` stub on `PATH` to `rest`'s fixture directory. It still DISPATCHES
+/// ON THE ENDPOINT — `routes` maps a needle in `<METHOD> <url>` to a response
+/// file — and each answer is the JSON the real endpoint returns, so the lane's
+/// own reading of that JSON is what is under test rather than a pre-filtered
+/// string. The first matching needle answers, so the writes come first.
+fn write_forge(dir: &Path, forge: &Forge) {
+    let answer = |status: u16, body: &serde_json::Value| format!("HTTP/2.0 {status}\n\n{body}\n");
+    let files: Vec<serde_json::Value> = forge
+        .files
+        .lines()
+        .map(|name| serde_json::json!({ "filename": name }))
+        .collect();
+    let mirror = if forge.mirror {
+        serde_json::json!([{ "number": 41, "pull_request": null, "body": "row <!-- bot-lane pr=7 -->" }])
+    } else {
+        serde_json::json!([])
+    };
+    let comments = if forge.linkback {
+        serde_json::json!([{ "body": "<!-- linear-linkback --> see https://example.test/CLOUD-700/x" }])
+    } else {
+        serde_json::json!([])
+    };
+    let created = if forge.create_ok {
+        answer(201, &serde_json::json!({ "number": 41 }))
+    } else {
+        answer(422, &serde_json::json!({ "message": "refused" }))
+    };
+    let responses = [
+        ("issue-create", "POST ", created),
+        ("pr-patch", "PATCH ", answer(200, &serde_json::json!({}))),
+        ("comments", "/comments", answer(200, &comments)),
+        ("mirror", "issues?state=all", answer(200, &mirror)),
+        ("files", "/files", answer(200, &serde_json::json!(files))),
+        (
+            "open",
+            "pulls?state=open",
+            answer(
+                200,
+                &serde_json::json!([{ "number": 7, "head": { "ref": "renovate/cargo", "sha": "0" }, "title": forge.title, "body": forge.body }]),
+            ),
+        ),
+        (
+            "pull",
+            "repos/demo/repo/pulls/",
+            answer(
+                200,
+                &serde_json::json!({
+                    "title": forge.title,
+                    "body": forge.body,
+                    "user": { "login": forge.login },
+                    "head": { "ref": "renovate/cargo" },
+                }),
+            ),
+        ),
+    ];
+    let mut routes = String::new();
+    for (file, needle, response) in responses {
+        write(dir, file, &response);
+        routes.push_str(needle);
+        routes.push('\t');
+        routes.push_str(file);
+        routes.push('\n');
+    }
+    write(dir, "routes", &routes);
 }
 
-fn yes_no(flag: bool) -> &'static str {
-    if flag { "yes" } else { "no" }
-}
-
-// No `#[cfg(unix)]` pair here: the module gate above already decides the target,
-// so a `#[cfg(not(unix))]` twin would be a definition nothing can reach.
-fn make_executable(path: &Path) {
-    use std::os::unix::fs::PermissionsExt as _;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
-}
-
-/// Run `batten` in `repo` with the stub ahead of the real `PATH`.
+/// Run `batten` in `repo` against the forge fixture.
 fn lane_run(repo: &Path, args: &[&str]) -> (Option<i32>, String, String) {
-    let stub = repo.parent().unwrap().join("stub");
-    // `join_paths` rather than an interpolated separator (CLOUD-617): the
-    // separator is `;` on Windows, where a path begins `D:\`, so a `format!`
-    // here does not merely fail to separate — it yields a PATH whose first entry
-    // is a drive letter.
-    let mut entries = vec![stub];
-    entries.extend(std::env::split_paths(
-        &std::env::var_os("PATH").unwrap_or_default(),
-    ));
-    let path = std::env::join_paths(entries).expect("compose PATH");
+    let forge = repo.parent().unwrap().join("forge");
     let output = batten()
         .args(args)
         .current_dir(repo)
-        .env("PATH", path)
+        .env("BATTEN_REST_FIXTURE", forge)
         .output()
         .expect("run batten");
     (output.status.code(), stdout(&output), stderr(&output))
 }
 
-/// What the stub recorded the mirror issue's body as.
-fn issue_body(recorded: &Path) -> String {
-    std::fs::read_to_string(recorded.join("issue-body")).unwrap_or_default()
+/// The `body` field a write sent, or empty where none was sent.
+fn sent_body(recorded: &Path, route: &str) -> String {
+    std::fs::read_to_string(recorded.join(format!("{route}.request")))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|sent| sent["body"].as_str().map(str::to_owned))
+        .unwrap_or_default()
 }
 
-/// What the stub recorded the pull request's rewritten body as.
+/// What the mirror issue was filed with.
+fn issue_body(recorded: &Path) -> String {
+    sent_body(recorded, "issue-create")
+}
+
+/// What the pull request's body was rewritten to.
 fn patched_body(recorded: &Path) -> String {
-    std::fs::read_to_string(recorded.join("patched-body")).unwrap_or_default()
+    sent_body(recorded, "pr-patch")
 }
 
 // -- ensure ------------------------------------------------------------------

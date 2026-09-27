@@ -244,6 +244,7 @@ pub fn get(url: &str, headers: &[(String, String)]) -> Result<Response> {
         headers,
         body: None,
         direct: false,
+        patch: false,
     }])?
     .pop()
     .ok_or_else(|| anyhow::anyhow!("fetch: the exchange returned no answer"))
@@ -266,6 +267,7 @@ pub fn get_direct(url: &str, headers: &[(String, String)]) -> Result<Response> {
         headers,
         body: None,
         direct: true,
+        patch: false,
     }])?
     .pop()
     .ok_or_else(|| anyhow::anyhow!("fetch: the exchange returned no answer"))
@@ -285,6 +287,13 @@ pub struct Call<'a> {
     pub headers: &'a [(String, String)],
     /// The request body, or `None` for a GET.
     pub body: Option<&'a [u8]>,
+    /// Send a present body as `PATCH` rather than `POST`.
+    ///
+    /// A flag on the body-carrying arm rather than a free method, for the reason
+    /// the method follows the body at all: a caller still cannot ask for a GET
+    /// carrying bytes. Added for the bot lane's pull-request body rewrite, which
+    /// the forge takes only as a `PATCH` (CLOUD-1924).
+    pub patch: bool,
     /// Refuse a proxy for this call even where the environment names one.
     ///
     /// **A ROUTE IS PART OF A CALL, NOT PART OF THE PROCESS.** Every other
@@ -636,7 +645,8 @@ async fn exchange(call: &Call<'_>) -> Result<Response> {
     // nothing in the code saying it could.
     let mut carried: Vec<(String, String)> = call.headers.to_vec();
     for _hop in 0..=MAX_REDIRECTS {
-        let (answer, location) = one_exchange(&target, &carried, call.body, call.direct).await?;
+        let (answer, location) =
+            one_exchange(&target, &carried, call.body, call.direct, call.patch).await?;
         let Some(next) = redirect_target(&target, answer.status, location.as_deref())? else {
             return Ok(answer);
         };
@@ -728,6 +738,7 @@ async fn one_exchange(
     headers: &[(String, String)],
     body: Option<&[u8]>,
     direct: bool,
+    patch: bool,
 ) -> Result<(Response, Option<String>)> {
     let (connect_timeout, total_timeout) = bounds();
     let uri: hyper::Uri = url
@@ -760,6 +771,7 @@ async fn one_exchange(
     // shapes a server answers differently and neither of which any caller here
     // wants.
     let mut request = hyper::Request::builder().uri(uri).method(match body {
+        Some(_) if patch => hyper::Method::PATCH,
         Some(_) => hyper::Method::POST,
         None => hyper::Method::GET,
     });

@@ -884,7 +884,7 @@ impl Staged {
         ];
         for args in steps {
             let owned: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
-            let answer = spawn(&self.dir, "git", &owned, &[], HOUSEKEEPING_BOUND)?;
+            let answer = spawn(&self.dir, Program::Git, &owned, &[], HOUSEKEEPING_BOUND)?;
             if !answer.ok {
                 bail!(
                     "mutate: could not make the staged tree a repository; a suite that resolves \
@@ -1006,10 +1006,45 @@ pub struct Ran {
     pub timed_out: bool,
 }
 
+/// The programs this module runs, CLOSED (CLOUD-1924).
+///
+/// `spawn` took the program as a free string, so its one `#[expect]` covered
+/// whatever a caller named while its reason named none of them — the per-site
+/// ban laundered through a parameter. A variant per program means the reason
+/// below can say, for each, why no in-process route exists, and a new program is
+/// a new variant a reviewer reads rather than a string nobody does.
+#[derive(Clone, Copy)]
+enum Program<'a> {
+    /// Makes the staged tree a repository the suite's OWN git reads (CLOUD-480).
+    /// `gix` can init but cannot stage a worktree into an index, and a suite
+    /// running `git ls-files` needs that index.
+    Git,
+    /// Applies a `#MUTANT` row, whose script IS a sed program: the declared row
+    /// language every module authors against. An in-process interpreter would be
+    /// a second implementation of it, drifting from the sed the author tested with.
+    Sed,
+    /// Builds the staged tree's test binaries once before any row is timed
+    /// (CLOUD-1910). There is no in-process compiler.
+    Cargo,
+    /// The consumer's declared suite runner, re-run against the mutant: the verb.
+    Suite(&'a str),
+}
+
+impl Program<'_> {
+    const fn name(&self) -> &str {
+        match self {
+            Program::Git => "git",
+            Program::Sed => "sed",
+            Program::Cargo => "cargo",
+            Program::Suite(program) => program,
+        }
+    }
+}
+
 /// Run a program to completion in `dir`, capturing what it said.
 fn spawn(
     dir: &Path,
-    program: &str,
+    program: Program<'_>,
     args: &[String],
     env: &[(String, String)],
     // The bound is the CALLER'S, so this function has no opinion about how long
@@ -1019,9 +1054,10 @@ fn spawn(
     // reader of that distinction one level below the one that owns it.
     bound: std::time::Duration,
 ) -> Result<Ran> {
+    let program = program.name();
     #[expect(
         clippy::disallowed_types,
-        reason = "stays: staging a tree and re-running a suite against it IS this module's effect (CLOUD-1267). A mutation cannot be shown to redden a case without running the case, and the spawning side is where §5 puts that — the same disposition `perf.rs` carries for hyperfine"
+        reason = "stays: staging a tree and re-running a suite against it IS this module's effect (CLOUD-1267), and `Program` is the closed set it may run — git, sed and cargo each document on their variant why no in-process route exists, and a suite is the consumer's declared runner (CLOUD-1924)"
     )]
     let mut command = std::process::Command::new(program);
     command.args(args).current_dir(dir);
@@ -1383,7 +1419,7 @@ fn spawn_arm(
         .argv
         .split_first()
         .ok_or_else(|| anyhow::anyhow!("mutate: arm {} names no program.", arm.id))?;
-    spawn(&arm.cwd, program, args, env, bound)
+    spawn(&arm.cwd, Program::Suite(program), args, env, bound)
 }
 
 fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Result<Selection> {
@@ -1518,7 +1554,7 @@ fn apply(staged: &Staged, row: &Row) -> Result<bool> {
         row.script.clone(),
         row.source.clone(),
     ];
-    let ran = spawn(staged.dir(), "sed", &args, &[], HOUSEKEEPING_BOUND)?;
+    let ran = spawn(staged.dir(), Program::Sed, &args, &[], HOUSEKEEPING_BOUND)?;
     let _ = std::fs::remove_file(staged.dir().join(format!("{}.bak", row.source)));
     Ok(ran.ok)
 }
@@ -1665,7 +1701,7 @@ pub fn sweep(root: &Path, names: &[String], work: PathBuf) -> Result<Sweep> {
         let args = vec![String::from("test"), String::from("--no-run")];
         let _ = spawn(
             staged.dir(),
-            "cargo",
+            Program::Cargo,
             &args,
             &suite_env(root),
             build_bound(),
