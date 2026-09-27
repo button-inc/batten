@@ -554,6 +554,79 @@ fn an_unconfigured_gate_refuses_rather_than_guessing_and_writes_no_record() {
     );
 }
 
+/// `batten land verify` with a receipt name declared, over a gate that REFUSES —
+/// so an exit `0` can only have come from the receipt.
+fn land_verify_receipted(repo: &Path, gate: &str) -> (i32, String, String) {
+    let output = batten()
+        .args(["land", "verify"])
+        .env("LAND_VERIFY", gate)
+        .env("LAND_VERIFY_RECEIPT", "verify")
+        .current_dir(repo)
+        .output()
+        .expect("run batten land verify");
+    (
+        output.status.code().expect("exit code"),
+        stdout(&output),
+        stderr(&output),
+    )
+}
+
+/// Record a passing `verify` receipt for the fixture's current HEAD.
+fn record_verify_receipt(repo: &Path) {
+    let output = batten()
+        .args(["receipt", "record", "verify"])
+        .current_dir(repo)
+        .output()
+        .expect("run batten receipt record");
+    assert!(
+        output.status.success(),
+        "the fixture's receipt must record: {}",
+        stderr(&output)
+    );
+}
+
+/// A head the gate already proved is answered from its receipt, and the gate
+/// does not run (CLOUD-1891).
+///
+/// The gate here REFUSES, so exit `0` is reachable only through the receipt —
+/// which is what makes the case about the skip rather than about a passing gate.
+#[test]
+fn a_head_with_a_valid_verify_receipt_is_not_verified_twice() {
+    let repo = repo("land-verify-receipted");
+    let branch = branch_of(&repo);
+    record_verify_receipt(&repo);
+
+    let (code, out, err) = land_verify_receipted(&repo, &gate(&repo, "refuses.sh", 1));
+    assert_eq!(code, 0, "a receipted head is not re-proved: {err}{out}");
+    assert!(
+        lap_record(&repo, &branch).contains("verify clean "),
+        "the answer still reaches the lap record"
+    );
+}
+
+/// THE MIRROR: a receipt for ANOTHER head does not answer for this one.
+///
+/// MUTANT: `head_receipt_valid` ignoring the head comparison answers this case
+/// from the stale receipt and exits `0`, so it goes red.
+#[test]
+fn a_receipt_for_an_earlier_head_runs_the_gate() {
+    let repo = repo("land-verify-receipt-stale");
+    let branch = branch_of(&repo);
+    record_verify_receipt(&repo);
+    std::fs::write(repo.join("lib.rs"), "moved\n").expect("edit the fixture");
+    common::git_in(&repo, &["commit", "-qam", "move HEAD"]);
+
+    let (code, out, err) = land_verify_receipted(&repo, &gate(&repo, "refuses.sh", 1));
+    assert_eq!(
+        code, 2,
+        "a moved head is proved by the gate, which refuses: {err}{out}"
+    );
+    assert!(
+        lap_record(&repo, &branch).contains("verify refused "),
+        "the gate's own answer reaches the record"
+    );
+}
+
 /// `batten land lap`, with the lap bound named in the environment.
 ///
 /// `$LAND_VERIFY` is a gate that always REFUSES, which is what makes the stop

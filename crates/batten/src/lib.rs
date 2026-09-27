@@ -10001,6 +10001,13 @@ fn run_land_verify(
         )?;
         return Ok(ExitCode::Usage);
     }
+    // A HEAD THE GATE ALREADY PROVED IS ANSWERED FROM ITS RECEIPT (CLOUD-1891),
+    // with the same line a run would print, so the lap reads identically.
+    let receipt = std::env::var("LAND_VERIFY_RECEIPT").unwrap_or_default();
+    if let Some(land::Verified::Clean(head)) = land::verified_by_receipt(root, branch, &receipt)? {
+        writeln!(out, "land: {head} passed the configured gate")?;
+        return Ok(ExitCode::Success);
+    }
     // THE PUBLICATION IS A FUNCTION OF THE BET, never a side effect kept in step
     // with it. `Bet::published` is `None` with no bet outstanding, so the variable
     // is simply absent from the gate's environment — the predecessor called a

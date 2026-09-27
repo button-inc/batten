@@ -1079,6 +1079,42 @@ impl Verified {
     }
 }
 
+/// Answer the lap's gate from the receipt that gate already wrote for this
+/// exact head, or `None` to run it (CLOUD-1891).
+///
+/// # A head the gate proved is not proved twice
+///
+/// The consumer's gate records a HEAD-keyed receipt when, and only when, it
+/// passes. `land` never read it, so `verify` followed by `land` on an unmoved
+/// trunk — a rebase that replays nothing leaves HEAD where it was — paid the
+/// whole gate a second time, and every refunded lap over the same head paid it
+/// again. Measured at 6-26 minutes a run on this repository.
+///
+/// # Why this is the receipt's soundness and not a new one
+///
+/// [`crate::receipt::head_receipt_valid`] is `receipt status`'s own predicate:
+/// the receipt must name THIS head, have been taken in THIS checkout, and
+/// against the `origin/main` that resolves now. A replay that moved anything
+/// changes the head; a trunk that moved invalidates the receipt. Either way
+/// this answers `None` and the gate runs.
+///
+/// `receipt` is the name the consumer's gate records under, from `$LAND_VERIFY_RECEIPT`
+/// — the consumer's vocabulary, so it arrives as an argument for
+/// `$LAND_VERIFY`'s reason. Empty means undeclared, and runs the gate.
+///
+/// # Errors
+///
+/// A HEAD this clone cannot resolve, or a lap record that will not append.
+pub fn verified_by_receipt(root: &Path, branch: &str, receipt: &str) -> Result<Option<Verified>> {
+    if receipt.is_empty() || !crate::receipt::head_receipt_valid(receipt) {
+        return Ok(None);
+    }
+    let head = crate::git::head_commit(root).context("land: read this clone's HEAD")?;
+    let verified = Verified::Clean(head);
+    append(root, branch, std::slice::from_ref(&verified.line()))?;
+    Ok(Some(verified))
+}
+
 /// Run the consumer's gate over this head and record what it said.
 ///
 /// `command` is argv the CALLER resolved, for the reason [`Verified`] states.

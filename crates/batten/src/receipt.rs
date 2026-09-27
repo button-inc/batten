@@ -1343,6 +1343,37 @@ pub(crate) fn judgeable(path: &str) -> bool {
 
 /// Load a statement, failing closed: an unreadable, unparseable, or
 /// wrong-typed file is `None`, which the predicate reads as missing.
+/// Whether `check`'s HEAD-keyed receipt is [`Validity::Valid`] for this checkout
+/// (CLOUD-1891).
+///
+/// `land`'s question before it spends a whole gate re-proving a head the gate
+/// already proved. The SAME predicate `receipt status` answers — [`validity`]
+/// over [`repo_facts`] — so the two cannot disagree about what a valid receipt
+/// is: this HEAD, this checkout, and the `origin/main` it was taken against.
+///
+/// Could-not-look — no checkout, an unresolvable `origin/main`, an unreadable
+/// statement — is `false`, which runs the gate. That is the only safe direction
+/// for a reader whose `true` SKIPS work.
+#[must_use]
+pub fn head_receipt_valid(check: &str) -> bool {
+    if validate_check_name(check).is_err() {
+        return false;
+    }
+    let Ok(facts) = repo_facts() else {
+        return false;
+    };
+    let Ok(path) = receipt_path(&facts.repo_root, check) else {
+        return false;
+    };
+    validity(
+        load_statement(&path).as_ref(),
+        check,
+        &facts.head,
+        &facts.main,
+        &facts.git_dir,
+    ) == Validity::Valid
+}
+
 fn load_statement(path: &Path) -> Option<Statement> {
     let bytes = std::fs::read(path).ok()?;
     let statement: Statement = serde_json::from_slice(&bytes).ok()?;
