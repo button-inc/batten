@@ -12,7 +12,7 @@ of the three left to a human remembering a prose list, because each is a
 "session-start"` and `doctor` asserts afterwards (CLOUD-476, CLOUD-312 row 10).
 
 **The provisioning order and its bounds are `batten.toml`'s, not a script's.**
-The ten `session-*` handler rows ARE the sequence: declaration order is running
+The `on = "session-start"` handler rows ARE the sequence: declaration order is running
 order, each row declares its own `timeout_ms`, and `batten hook` dispatches them
 inline at session start. `.claude/hooks/session-start.sh` used to hold all of
 that and was the last by-path hook registration this repository owned; it is

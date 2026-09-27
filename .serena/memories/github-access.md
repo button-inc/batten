@@ -245,6 +245,39 @@ persists after BOTH halves are applied, that is a real env-wiring bug — diagno
 https://api.github.com/rate_limit` should report limit 5000, not 15000), don't
 surrender.
 
+## Third-party clones at scale, and a shallow clone's false "forced update"
+
+**The fenced clone needs no per-clone approval, and it scales.** Measured
+2026-09-27: about 45 third-party repos were shallow-cloned for a research corpus
+this way:
+
+```
+NO_PROXY="github.com,$NO_PROXY" git -c credential.helper='!f() { echo username=x-access-token; echo password=$BATTEN_GITHUB_TOKEN; }; f' clone --depth 1 …
+```
+
+Metadata came from `mise exec -- gh api …`. Neither `add_repo` nor the GitHub MCP
+tools are needed for a public repo.
+
+**A shallow checkout can report a normal `main` advance as a force-push.** Measured
+the same day:
+
+- `git fetch` printed `+ 4979166...4595ce3 main -> origin/main (forced update)`.
+- `merge-base --is-ancestor 4979166 4595ce3` failed.
+- GitHub's `compare/4595ce3...4979166` answered `behind 151, ahead 0`: an ordinary
+  fast-forward.
+
+The shallow history simply didn't contain the path between them. **Ask the forge
+before calling it a rewrite:**
+
+```
+mise exec -- gh api repos/{o}/{r}/compare/A...B --jq .status
+```
+
+**Forked skills don't inherit the mise route.** A forked `/code-review --comment`
+reported "gh isn't installed" and fell back to MCP, while `mise exec -- gh` worked
+in the parent (CLOUD-1930). Treat a forked skill's claim that `gh` is absent as a
+probe error, not a fact.
+
 ## CI-checks scope gap (don't misdiagnose as a proxy problem)
 
 Reading CI checks needs **Checks: read**. A fine-grained PAT cannot carry it —

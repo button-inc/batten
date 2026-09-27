@@ -22,6 +22,38 @@ The adoption test, in order:
    re-solved.
 4. **Ship it with its gate.** An adopted practice with no runnable check is prose.
 
+The posture, in the maintainer's words: **proudly found elsewhere**. Building our own
+is the choice that has to be justified. Adopting is not.
+
+## How to survey "what is idiomatic" without anchoring
+
+Measured on the 2026-09-27 lifecycle-scripting run (CLOUD-982). The first plan was
+rejected twice before this one held:
+
+1. It anchored on the one tool the requester had named.
+2. It then swapped in the planner's own favourite tools, found by recall.
+
+- **The corpus is chosen by computable criteria, never by name.**
+  - Registry rankings: crates.io recent-downloads plus the category tops. For tools,
+    GitHub topics plus dependents.
+  - Then maintenance filters: pushed in the last 90 days, a release in the last 6
+    months, at least 3 authors, CI present, MSRV set, current edition.
+  - Stratify, and record the query so the corpus can be re-run.
+- **Tally what emerges, not a checklist.** Collect raw facts (trees, manifests, CI
+  `run:` lines) and group them afterwards. Report anything at 25% or more of a
+  stratum. Call something _idiomatic_ only at 60% or more, and state the frequency
+  and stratum.
+- **Refute before ranking.** A separate pass re-clones a sample to check the
+  citations, and hunts for counter-evidence. It found that 30/39 repos keeping
+  scripts fell to 23/39 when you require two or more.
+- **Reconcile with Linear before recommending.** The census's 2026-08-22 landing
+  review had already rejected merge queues on values. The new survey ranked a merge
+  queue fifth, and that would have silently contradicted the earlier verdict.
+- **Folklore that did not survive:** "Rust projects don't use bash" (30/39 keep
+  scripts, rust-lang leading), "xtask is idiomatic" (6/39), "CI is what you run
+  locally" (2/39 have one command). The real idiom is _no logic in shell_, not
+  _no shell_.
+
 Where a survey's _reasoning_ lives: this file, or the memory for the subsystem it
 touched. Not in the issue, not in the code, not in a commit message.
 
