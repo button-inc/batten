@@ -695,6 +695,38 @@ pub fn seed_base_target_dir(perf_dir: &Path, key: &str) -> Result<()> {
     Ok(())
 }
 
+/// [`PAIR_PROFILE`]'s definition, carried on the command line rather than read
+/// from the tree being built.
+///
+/// The base arm builds the MERGE BASE's tree, and a merge base older than the
+/// profile has no `[profile.perf-arm]` in its `Cargo.toml` — measured on the
+/// first lap after the profile was added: "profile `perf-arm` is not defined",
+/// so the gate could not measure at all. `--config` defines it for either tree,
+/// and on a tree that already declares it these values win, so both arms build
+/// under identical settings by construction. Keep in step with
+/// `[profile.perf-arm]` in `Cargo.toml`, which the CI seed writer builds.
+const PAIR_PROFILE_CONFIG: [&str; 4] = [
+    "profile.perf-arm.inherits=\"release\"",
+    "profile.perf-arm.lto=false",
+    "profile.perf-arm.incremental=true",
+    "profile.perf-arm.codegen-units=256",
+];
+
+/// The cargo arguments [`build`] runs under `profile`.
+fn build_args(profile: &str) -> Vec<String> {
+    let mut args: Vec<String> = ["build", "--profile", profile, "-p", "batten"]
+        .iter()
+        .map(|a| (*a).to_owned())
+        .collect();
+    if profile == PAIR_PROFILE {
+        for setting in PAIR_PROFILE_CONFIG {
+            args.push(String::from("--config"));
+            args.push(setting.to_owned());
+        }
+    }
+    args
+}
+
 /// The out directory this run owns, emptied first so a previous run's records
 /// can never be read as this one's.
 fn out_dir(repo: &Path) -> Result<PathBuf> {
@@ -722,10 +754,7 @@ fn out_dir(repo: &Path) -> Result<PathBuf> {
 /// Cargo's progress goes to stderr, so nothing changes for `perf-gate.sh`, which
 /// redirects this command's STDOUT to a file and greps `^arm=`.
 fn build(dir: &Path, target_dir: Option<&Path>, what: &str, profile: &str) -> Result<()> {
-    let args: Vec<String> = ["build", "--profile", profile, "-p", "batten"]
-        .iter()
-        .map(|a| (*a).to_owned())
-        .collect();
+    let args = build_args(profile);
     let env: Vec<(String, String)> = target_dir
         .map(|dir| {
             vec![(
@@ -3054,6 +3083,25 @@ mod tests {
         assert_ne!(crate_key("c", "m", "l"), crate_key("c", "m", "l2"));
         assert_ne!(crate_key("c", "m", "l"), crate_key("c2", "m", "l"));
         assert_eq!(crate_key("c", "m", "l").len(), 20);
+    }
+
+    /// The pair profile is defined on the command line, so a merge base whose
+    /// `Cargo.toml` predates it still builds; `release` carries no overrides.
+    ///
+    /// MUTANT: dropping the `--config` pushes leaves the base arm reading a
+    /// profile its tree does not declare, and this case goes red.
+    #[test]
+    fn the_pair_profile_is_defined_on_the_command_line() {
+        let pair = build_args(PAIR_PROFILE);
+        for setting in PAIR_PROFILE_CONFIG {
+            assert!(
+                pair.windows(2)
+                    .any(|w| w[0] == "--config" && w[1] == setting),
+                "missing --config {setting}"
+            );
+        }
+        assert!(pair.iter().any(|a| a.contains("inherits=\"release\"")));
+        assert!(!build_args("release").iter().any(|a| a == "--config"));
     }
 
     /// A commit touching nothing under the three built trees keeps the base key.
