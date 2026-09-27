@@ -141,10 +141,9 @@ jobs:
       # is staged AFTER the assertion for the same reason the series is: a
       # measurement that broke its budget is a defect to fix, and a seed carried
       # forward from it would spread the defect to every pull request.
-      - name: Build the base-arm seed
-        run: mise run perf-seed
       - name: Stage the base-arm seed
         run: |
+          mise run perf-seed
           rm -rf target/perf/base-seed
           mkdir -p target/perf/base-seed
           cp -a target/perf-arm target/perf/base-seed/perf-arm
