@@ -8231,7 +8231,7 @@ test:cargo | msrv | cross-check | evaluator-io-check)
 	;;
 darwin-link)
 	specs="$rust_specs"
-	tools="cargo zigbuild --version && zig version && rustc --version"
+	tools="cargo-zigbuild --version && zig version && rustc --version"
 	known=yes
 	;;
 deny)
