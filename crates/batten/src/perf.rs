@@ -3067,7 +3067,7 @@ mod tests {
     )]
     #[expect(
         clippy::disallowed_types,
-        reason = "test-only: builds the fixture repository `base_key` reads; no production spawn"
+        reason = "stays: test-only, builds the fixture repository `base_key` reads; no production spawn"
     )]
     fn a_commit_outside_the_crates_keeps_the_base_key() {
         let repo = perf_scratch("base-key");

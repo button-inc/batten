@@ -183,6 +183,61 @@ fn the_dependency_closure_is_optimised() {
     );
 }
 
+/// The opposite half of the same dial: a WORKSPACE MEMBER is never optimised in
+/// the dev loop (CLOUD-1891).
+///
+/// CLOUD-1878 set `[profile.dev.package.batten] opt-level = 2` on an incremental
+/// cost of 0.51s measured with a `touch`, which changes no code and so gives the
+/// optimiser nothing to redo. After a real change the dev bin every pre-commit
+/// `cargo run -p batten` step waits on took 279s at opt-2 against 90s COLD at
+/// opt-0, paid on every commit and `verify` lap that touches Rust. Dependencies
+/// are the other case — they rebuild only when the lockfile moves — which is why
+/// `the_dependency_closure_is_optimised` above still holds.
+///
+/// MUTANT: re-adding `opt-level = 2` under `[profile.dev.package.batten]` reds
+/// this case.
+#[test]
+fn no_workspace_member_is_optimised_in_the_dev_loop() {
+    let parsed = manifest();
+    let profiles = parsed.get("profile").expect("[profile] is declared");
+    let members: Vec<String> = std::fs::read_dir(common::at_root("crates"))
+        .expect("crates/ is readable")
+        .filter_map(Result::ok)
+        .filter_map(|entry| std::fs::read_to_string(entry.path().join("Cargo.toml")).ok())
+        .filter_map(|text| {
+            let member: toml::Value = toml::from_str(&text).ok()?;
+            Some(member.get("package")?.get("name")?.as_str()?.to_owned())
+        })
+        .collect();
+    assert!(
+        members.iter().any(|name| name == "batten"),
+        "the member walk must reach `batten`, or this case asserts over nothing"
+    );
+    let mut optimised = Vec::new();
+    for (name, profile) in profiles.as_table().expect("[profile] is a table") {
+        let edit_loop =
+            name == "dev" || profile.get("inherits").and_then(toml::Value::as_str) == Some("dev");
+        if !edit_loop {
+            continue;
+        }
+        for member in &members {
+            let level = profile
+                .get("package")
+                .and_then(|package| package.get(member))
+                .and_then(|row| row.get("opt-level"))
+                .and_then(toml::Value::as_integer);
+            if level.is_some_and(|level| level > 0) {
+                optimised.push(format!("profile.{name}.package.{member}"));
+            }
+        }
+    }
+    assert!(
+        optimised.is_empty(),
+        "a workspace member is optimised in a dev-loop profile, which every edit pays \
+         — 279s against 90s per real change (CLOUD-1891): {optimised:?}"
+    );
+}
+
 /// ANTI-VACUITY, and it is the case that would actually have caught the drift.
 /// Both assertions above pass over a profile that declares the key at the right
 /// value; neither would notice a `declared_debug` loosened to a defaulting

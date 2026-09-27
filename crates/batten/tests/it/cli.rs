@@ -3128,6 +3128,14 @@ enum CensusSite {
     /// Supplying the tracked set puts the verdict back inside the commit, exactly
     /// as supplying the git state does for a `requires_key` row.
     Manifest,
+    /// A fixture carrying the **committed** config bytes and the row's
+    /// `while_marker` planted for the fixture's branch (CLOUD-1891).
+    ///
+    /// The fourth site, for `Manifest`'s reason one surface over. A marker row
+    /// refuses only while its branch-keyed marker exists, so against the ambient
+    /// checkout its verdict is whether THIS container happens to hold one — a
+    /// property of the session, not of the commit.
+    Marked,
 }
 
 /// What a census case hands the adjudicator.
@@ -3307,6 +3315,14 @@ const SHAPE_CENSUS: &[ShapeCase] = &[
         rule: "prompt measure wrong",
         site: CensusSite::Checkout,
     },
+    // CLOUD-1891. One open PR per branch: refused while `pr-open` is planted.
+    // The mint that writes the marker, and the unmarked allow arm, are
+    // `one_pr.rs`'s.
+    ShapeCase {
+        call: CensusCall::Verb("mcp__github__create_pull_request"),
+        rule: "review open twice",
+        site: CensusSite::Marked,
+    },
 ];
 
 /// A gap in the census: pointer-only, an id and what is wrong with it.
@@ -3358,7 +3374,9 @@ fn census_gaps(config: &str, cases: &[ShapeCase]) -> Vec<CensusGap> {
         // the commit range; both are facts a fixture has to supply for the verdict
         // to be about the commit. Everything else is banned outright and no fact
         // about the working tree can move its answer.
-        let owed = if row.counts == Some(batten::rules::CeilingUnit::TrackedArtifacts) {
+        let owed = if row.while_marker.is_some() {
+            CensusSite::Marked
+        } else if row.counts == Some(batten::rules::CeilingUnit::TrackedArtifacts) {
             CensusSite::Manifest
         } else if row.requires_key.is_some() {
             CensusSite::Keyless
@@ -3460,6 +3478,26 @@ fn keyless_committed_config_fixture(name: &str) -> PathBuf {
 /// able to cross it, and a case that could not is the "wrong site" the column
 /// exists to refuse. The names are this suite's own and mean nothing to the row —
 /// what the ceiling counts is that the tracked set contains them.
+fn marked_committed_config_fixture(name: &str) -> PathBuf {
+    // The family is READ OFF THE ROW, never written into the case, for the reason
+    // `census_gaps` decides the site from the row: a case naming its own marker
+    // would keep passing after the row's `while_marker` moved underneath it.
+    let parsed = batten::config::parse(&committed_config(), "batten.toml").expect("parse");
+    let family = parsed
+        .rules
+        .iter()
+        .find(|rule| rule.id == name)
+        .and_then(|rule| rule.while_marker.clone())
+        .expect("a Marked case names a row carrying `while_marker`");
+    let dir = keyless_committed_config_fixture(name);
+    // `Fixture` pins the branch to `main`, and a branch-keyed marker is
+    // `<family>.<branch with / as ->` under the receipts directory.
+    let receipts = dir.join(".git/batten-receipts");
+    fs::create_dir_all(&receipts).expect("create the receipts directory");
+    fs::write(receipts.join(format!("{family}.main")), "planted\n").expect("plant the marker");
+    dir
+}
+
 fn manifest_committed_config_fixture(name: &str) -> PathBuf {
     let dir = Fixture::new(&format!("shape-census-{name}"))
         .config(&committed_config())
@@ -3500,6 +3538,7 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
             CensusSite::Checkout => root.clone(),
             CensusSite::Keyless => keyless_committed_config_fixture(case.rule),
             CensusSite::Manifest => manifest_committed_config_fixture(case.rule),
+            CensusSite::Marked => marked_committed_config_fixture(case.rule),
         };
         let payload = match &case.call {
             CensusCall::Command(command) => claude_payload(command),

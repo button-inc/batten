@@ -142,7 +142,7 @@ jobs:
       # measurement that broke its budget is a defect to fix, and a seed carried
       # forward from it would spread the defect to every pull request.
       - name: Build the base-arm seed
-        run: mise exec -- cargo build --profile perf-arm -p batten
+        run: mise run perf-seed
       - name: Stage the base-arm seed
         run: |
           rm -rf target/perf/base-seed

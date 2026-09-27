@@ -1937,12 +1937,38 @@ fn mint_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     // `removed_entries`'. A branch that adds a row here makes a rule pass on the
     // mere fact that a tool was called, where the trusted file required a
     // deliberate act.
+    //
+    // EXCEPT A MINT NO RULE READS AS A RECEIPT (CLOUD-1891). The inversion above
+    // holds because a receipt row PASSES on what a mint writes. A mint read only
+    // through a deny row's `while_marker` does the opposite: its presence ARMS a
+    // refusal, so adding it can only refuse more. Charging that as a weakening
+    // demanded a groomed `Weakens:` for a gate that tightened. Exempt only when
+    // every reader is a deny `while_marker` — any `checks`, `checks_any` or
+    // `[[rule.minted]]` reader, or a non-deny marker row, keeps it charged.
+    let arms_only = |name: &str| {
+        let deny = crate::severity::RuleSeverity::Deny;
+        let armed = working
+            .rules
+            .iter()
+            .any(|rule| rule.while_marker.as_deref() == Some(name) && rule.severity() == deny);
+        let read = working.rules.iter().any(|rule| {
+            rule.checks
+                .iter()
+                .flatten()
+                .chain(rule.checks_any.iter().flatten())
+                .any(|check| check == name)
+                || rule.minted.iter().any(|query| query.mint == name)
+                || (rule.while_marker.as_deref() == Some(name) && rule.severity() != deny)
+        });
+        armed && !read
+    };
     found.extend(added_entries(
         WeakeningKind::MintAdded,
         &ids(base.mints.iter().map(|mint| format!("mint[{}]", mint.name))),
         &ids(working
             .mints
             .iter()
+            .filter(|mint| !arms_only(&mint.name))
             .map(|mint| format!("mint[{}]", mint.name))),
     ));
     for base_mint in &base.mints {
@@ -6007,6 +6033,39 @@ mod tests {
         let mut working = base.clone();
         working.mints = vec![mint("issue-read", &["id", "updatedAt"])];
 
+        let kinds: Vec<WeakeningKind> = weakenings(&base, &working)
+            .iter()
+            .map(|weakening| weakening.kind)
+            .collect();
+        assert!(kinds.contains(&WeakeningKind::MintAdded), "got: {kinds:?}");
+    }
+
+    /// A mint read only by a deny row's `while_marker`, and the same mint once a
+    /// receipt row also reads it. The pair discriminates (CLOUD-418): an
+    /// exemption keyed on the marker alone would pass the first and fail the
+    /// second.
+    const MARKER_MINT: &str = "\n[[mint]]\nname = \"pr-open\"\ntool = \"create_pull_request\"\nkey = \"branch\"\nrequires = [\"url\"]\nmode = \"replace\"\nbody = \"{now} {url}\"\n";
+    const MARKER_DENY: &str = "\n[[rule]]\nid = \"one-pr\"\nkind = \"shape\"\nscope = \"mediated_call\"\nseverity = \"deny\"\ntool = \"create_pull_request\"\nwhile_marker = \"pr-open\"\nreason = \"r\"\n";
+
+    #[test]
+    fn a_mint_only_a_deny_marker_reads_is_not_a_weakening() {
+        // CLOUD-1891: the mint ARMS a refusal, so adding it refuses more.
+        let base = parse(&format!("version = 1\n{MARKER_DENY}"));
+        let working = parse(&format!("version = 1\n{MARKER_DENY}{MARKER_MINT}"));
+        let kinds: Vec<WeakeningKind> = weakenings(&base, &working)
+            .iter()
+            .map(|weakening| weakening.kind)
+            .collect();
+        assert!(!kinds.contains(&WeakeningKind::MintAdded), "got: {kinds:?}");
+    }
+
+    #[test]
+    fn a_marker_mint_a_receipt_row_also_reads_is_still_a_weakening() {
+        // MUTANT: dropping the `checks` arm of the exemption's reader test lets
+        // this mint pass as marker-only while it satisfies a receipt row.
+        let reader = receipt_rule("ready", "").replace("[\"verify\"]", "[\"pr-open\"]");
+        let base = parse(&format!("version = 1\n{MARKER_DENY}{reader}"));
+        let working = parse(&format!("version = 1\n{MARKER_DENY}{reader}{MARKER_MINT}"));
         let kinds: Vec<WeakeningKind> = weakenings(&base, &working)
             .iter()
             .map(|weakening| weakening.kind)
