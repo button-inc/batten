@@ -6,28 +6,27 @@ runner measured it; the suite runs `--no-parallelize-within-files`, so a
 file's number is its own serial cost and is what an author adding a case
 to it pays.
 
-- suites: 20
-- serial total: 138.4s
+- suites: 19
+- serial total: 118.5s
 
 | seconds | share | suite |
 | ---: | ---: | --- |
-| 42.8 | 31.0% | `tests/graph-check.bats` |
-| 19.3 | 13.9% | `tests/ready-lint.bats` |
-| 12.8 | 9.3% | `tests/lint-rego.bats` |
-| 9.1 | 6.6% | `tests/spawn-census.bats` |
-| 8.9 | 6.4% | `tests/hk-selection.bats` |
-| 8.5 | 6.1% | `tests/step-receipt.bats` |
-| 7.6 | 5.5% | `tests/ready-cites-check.bats` |
-| 6.9 | 5.0% | `tests/lint-deno.bats` |
-| 5.6 | 4.0% | `tests/install.bats` |
-| 4.5 | 3.2% | `tests/ready-lint-deferral.bats` |
-| 3.3 | 2.4% | `tests/spec-ref-check.bats` |
-| 3.3 | 2.4% | `tests/verify.bats` |
-| 1.9 | 1.3% | `tests/commit-attribution.bats` |
-| 1.2 | 0.9% | `tests/serena-mcp.bats` |
-| 1.0 | 0.7% | `tests/commit-convention.bats` |
-| 0.8 | 0.5% | `tests/git-hook.bats` |
-| 0.6 | 0.4% | `tests/dist.bats` |
-| 0.3 | 0.2% | `tests/task-fail-closed.bats` |
+| 38.5 | 32.5% | `tests/graph-check.bats` |
+| 17.2 | 14.5% | `tests/ready-lint.bats` |
+| 12.0 | 10.1% | `tests/lint-rego.bats` |
+| 9.0 | 7.6% | `tests/spawn-census.bats` |
+| 7.5 | 6.4% | `tests/ready-cites-check.bats` |
+| 6.8 | 5.8% | `tests/lint-deno.bats` |
+| 6.1 | 5.1% | `tests/hk-selection.bats` |
+| 5.2 | 4.4% | `tests/install.bats` |
+| 4.3 | 3.6% | `tests/ready-lint-deferral.bats` |
+| 3.5 | 2.9% | `tests/spec-ref-check.bats` |
+| 2.9 | 2.5% | `tests/verify.bats` |
+| 1.8 | 1.6% | `tests/commit-attribution.bats` |
+| 1.0 | 0.9% | `tests/serena-mcp.bats` |
+| 0.8 | 0.7% | `tests/commit-convention.bats` |
+| 0.7 | 0.6% | `tests/git-hook.bats` |
+| 0.4 | 0.3% | `tests/task-fail-closed.bats` |
+| 0.4 | 0.3% | `tests/dist.bats` |
 | 0.2 | 0.1% | `tests/cross-check.bats` |
 | 0.1 | 0.1% | `tests/zizmor-split.bats` |

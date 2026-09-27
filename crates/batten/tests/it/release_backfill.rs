@@ -40,7 +40,6 @@
 
 use crate::common;
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Output, Stdio};
 
@@ -92,7 +91,13 @@ impl Sweep {
         );
         write(&dir, "bin/gh", &stub);
         let gh = dir.join("bin/gh");
-        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        }
+        #[cfg(not(unix))]
+        let _ = gh;
         Self { dir }
     }
 

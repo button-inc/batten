@@ -136,6 +136,7 @@
 
 use crate::common;
 
+#[cfg(unix)]
 use std::fmt::Write as _;
 
 use std::fs;

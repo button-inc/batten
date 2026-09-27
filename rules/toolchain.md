@@ -274,15 +274,17 @@ tap (CLOUD-240).
 **The expensive steps answer from per-step receipts (CLOUD-424).** The cargo
 chain, `test:bats`, `deny`, `zizmor`, `msrv`, `cross-check`, `darwin-link` and
 `batten-check` route through `mise run step-receipt`: a content-addressed
-receipt under `.git/batten-receipts/`, keyed by the step's input files (index
+receipt in the keyed record store (`batten record keyed|show steps`), keyed by the step's input files (index
 blob ids), its task body read from `mise tasks info`, its tools' live
 `--version` output, and any argument. Same inputs, same command, same toolchain
 ⇒ same verdict, so a hit skips the step — which is what makes a rebase-only lap
 cheap. This is not test-impact selection: nothing is inferred, and any key that
 cannot be computed runs the step (fail closed). Under CI the cache neither hits
-nor records — CI confirms independently. Spec table and rationale in
-`mise-tasks/step-receipt.sh`; decision table in `tests/step-receipt.bats`. Wrap a
-step only when its cost dwarfs the ~0.3s a check/record pair costs.
+nor records — CI confirms independently. A `check` answers `hit` or `miss` in
+words at exit 0, so `mise run` never prints a failure line over a miss
+(CLOUD-498). Spec table and rationale in `mise.toml` `[tasks.step-receipt]`;
+decision table in `crates/batten/tests/it/step_receipt.rs`. Wrap a step only
+when its cost dwarfs the ~1.5s a check/record pair costs through `mise run`.
 
 Two defects got it here (CLOUD-235, then CLOUD-238), and the second is the
 instructive one. First the refusal was invisible — the predicate's history is in

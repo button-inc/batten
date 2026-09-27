@@ -229,6 +229,7 @@ fn the_notes_carry_epoch_boot_and_only_a_given_reason() {
 /// Called from inside the lease's renewal loop: a census that could abort a
 /// landing is worse than the evidence it fails to collect.
 #[test]
+#[cfg(unix)]
 fn a_sensor_never_kills_what_it_observes() {
     use std::os::unix::fs::PermissionsExt as _;
     let c = Clone::new("unwritable");

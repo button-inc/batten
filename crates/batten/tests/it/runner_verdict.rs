@@ -65,7 +65,7 @@ fn the_batten_check_body_was_found_at_all() {
         "the batten-check body invokes the engine"
     );
     assert!(
-        body.contains("step-receipt.sh"),
+        body.contains("step-receipt check"),
         "the batten-check body is receipt-gated"
     );
 }
@@ -114,7 +114,7 @@ fn the_engine_status_is_captured_and_re_exited_unchanged() {
         .find(r#"exit "$verdict""#)
         .expect("the exit is present");
     let record = body
-        .find("step-receipt.sh record")
+        .find("step-receipt record")
         .expect("the receipt write is present");
     assert!(
         capture < propagate,

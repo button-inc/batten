@@ -44,7 +44,6 @@
 
 use crate::common;
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
@@ -55,7 +54,11 @@ const RULE: &str = "manifest cover other";
 fn executable(dir: &Path, name: &str, body: &str) -> PathBuf {
     write(dir, name, body);
     let path = dir.join(name);
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
     path
 }
 

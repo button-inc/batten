@@ -72,6 +72,7 @@ esac
     dir
 }
 
+#[cfg_attr(not(unix), allow(unused_variables))]
 fn make_executable(path: &Path) {
     #[cfg(unix)]
     {

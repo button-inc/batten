@@ -60,6 +60,7 @@ fn with_cargo(name: &str, script: &str) -> PathBuf {
     dir
 }
 
+#[cfg_attr(not(unix), allow(unused_variables))]
 fn executable(path: &Path) {
     #[cfg(unix)]
     {

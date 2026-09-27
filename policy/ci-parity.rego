@@ -1312,7 +1312,7 @@ test_a_no_run_build_is_exempt_and_does_not_satisfy_the_term if {
 # A manifest whose `test:cargo` carries no readable cargo line is could-not-look,
 # never a pass: the comparison has lost its right-hand side.
 test_a_task_yielding_no_cargo_line_is_refused if {
-	blind := object.union(sound_manifest.tasks, {"test:cargo": {"run": "./mise-tasks/step-receipt.sh check test:cargo"}})
+	blind := object.union(sound_manifest.tasks, {"test:cargo": {"run": "mise run -q step-receipt check test:cargo"}})
 	found := violation with input as swap("mise.toml", object.union(sound_manifest, {"tasks": blind}))
 	some f in found
 	f.verdict == "task read unread"
