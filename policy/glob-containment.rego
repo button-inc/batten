@@ -101,16 +101,20 @@ unquoted(text) := replace(text, "\"", "")
 
 required contains {"glob": glob, "line": i + 1} if {
 	some i, line in config_lines
-	table_of(i) == "[[rule]]"
+
+	# THE CHEAP FILTER FIRST (CLOUD-1891). `table_of` scans every header above
+	# `i`, so asking it of all ~16k config lines was quadratic and cost 25s of
+	# `enforce`; a body evaluates in order, so it now runs on candidate lines only.
 	startswith(line, "glob = ")
+	table_of(i) == "[[rule]]"
 	glob := trim_space(unquoted(substring(line, 7, -1)))
 	glob != ""
 }
 
 required contains {"glob": glob, "line": i + 1} if {
 	some i, line in config_lines
-	table_of(i) == "[[budget.instructions.embedded]]"
 	startswith(line, "path = ")
+	table_of(i) == "[[budget.instructions.embedded]]"
 	glob := trim_space(unquoted(substring(line, 7, -1)))
 	glob != ""
 }
@@ -120,8 +124,8 @@ required contains {"glob": glob, "line": i + 1} if {
 # refusal below is what notices if one ever appears.
 required contains {"glob": glob, "line": i + 1} if {
 	some i, line in config_lines
-	table_of(i) == "[budget.instructions]"
 	startswith(line, "files = [")
+	table_of(i) == "[budget.instructions]"
 	inner := substring(line, 9, indexof(line, "]") - 9)
 	some raw in split(inner, ",")
 	glob := trim_space(unquoted(raw))
