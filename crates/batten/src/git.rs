@@ -1411,6 +1411,27 @@ pub fn current_branch(dir: &Path) -> Result<Option<String>> {
     Ok(head.referent_name().map(|name| name.shorten().to_string()))
 }
 
+/// The key a branch-scoped record is filed under: the branch, or on a detached
+/// `HEAD` the commit itself, spelled `detached-<sha12>`.
+///
+/// **One function for both halves.** A record's writer and its reader must agree
+/// on the key or the reader sees nothing, which a module reads as could-not-look.
+/// CI checks out a detached `HEAD` by design (CLOUD-1422 retired the step that
+/// named a branch there), so a producer and the gate reading it both run
+/// detached: keying on the commit lets them meet, and no other commit — no other
+/// attempt — can read the record, which is the partition a branch key gives.
+///
+/// # Errors
+///
+/// A usage error when `dir` is not inside a repository or has no commits.
+pub fn record_key(dir: &Path) -> Result<String> {
+    if let Some(branch) = current_branch(dir)? {
+        return Ok(branch);
+    }
+    let head = head_commit(dir)?;
+    Ok(format!("detached-{}", &head[..head.len().min(12)]))
+}
+
 /// Whether this checkout's history is truncated (CLOUD-446).
 ///
 /// The one question that separates "the work names no key" from "I cannot see

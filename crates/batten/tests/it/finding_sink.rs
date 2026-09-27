@@ -98,6 +98,11 @@ impl Turns {
         self.line(&serde_json::json!({"type":"assistant","isSidechain":false,"message":{"content":[{"type":"tool_use","name":name,"input":{field:key}}]}}))
     }
 
+    /// A `Bash` block running `command` — the route this repository files through.
+    fn bash(self, command: &str) -> Self {
+        self.line(&serde_json::json!({"type":"assistant","isSidechain":false,"message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":command}}]}}))
+    }
+
     fn result(self) -> Self {
         self.line(&serde_json::json!({"type":"user","isSidechain":false,"message":{"content":[{"type":"tool_result","content":"ok"}]}}))
     }
@@ -216,6 +221,24 @@ fn a_durable_write_clears_it_under_any_server_alias() {
             .tool(tool);
         clean(&turns.check());
     }
+}
+
+#[test]
+fn a_filing_through_the_mediated_route_clears_it() {
+    // THE SANCTIONED ROUTE. The raw MCP tools are denied here, so a filing is a
+    // `Bash` block running `batten mcp call`; reading only tool names made the
+    // one permitted way to file a finding invisible to the gate that demands it.
+    let turns = Turns::new("mediated-file")
+        .prompt()
+        .say("Broken at crates/batten/src/record.rs:943.")
+        .bash("batten mcp call Linear save_issue \"$(cat issue.json)\"");
+    clean(&turns.check());
+    // A mediated READ is still not a home.
+    let turns = Turns::new("mediated-read")
+        .prompt()
+        .say("Broken at crates/batten/src/record.rs:943.")
+        .bash("batten mcp call Linear get_issue '{\"id\":\"CLOUD-1\"}'");
+    fired(&turns.check(), 1);
 }
 
 #[test]

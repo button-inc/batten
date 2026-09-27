@@ -135,6 +135,22 @@ const BROKEN: &str = "signer broken user.signingkey names an empty file, so the 
 // --- the decision, over the engine's own projection --------------------------
 
 #[test]
+fn a_detached_head_records_and_decides_as_ci_checks_it_out() {
+    // CI checks out a detached HEAD by design (CLOUD-1422), so the producer and
+    // the gate both run with no branch. Keyed on the branch alone, the write was
+    // refused and `commit-lint` went red on a clean tree; the record key falls
+    // back to the commit so writer and reader still meet.
+    let dir = repo("detached");
+    let head = git_in(&dir, &["rev-parse", "HEAD"]);
+    git_in(&dir, &["checkout", "--quiet", "--detach", head.trim()]);
+    record(&dir, &format!("{BROKEN}\nsigned 1a2b3c4d\n"));
+
+    let decided = run(&dir, &["check"]);
+    assert_eq!(decided.status.code(), Some(2), "{}", said(&decided));
+    assert!(said(&decided).contains("1a2b3c4d"), "{}", said(&decided));
+}
+
+#[test]
 fn a_signed_commit_in_range_is_refused_and_named_by_short_sha() {
     let dir = repo("signed");
     record(&dir, &format!("{BROKEN}\nsigned 1a2b3c4d\n"));

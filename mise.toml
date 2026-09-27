@@ -1955,7 +1955,8 @@ readonly CDX_NORMALIZE='
 '
 readonly CRATES_IO_SOURCE='registry+https://github.com/rust-lang/crates.io-index'
 readonly COPYRIGHT_RE='^[[:space:]]*(#|//|\*|;)?[[:space:]]*Copyright[[:space:]]*(\(c\)|©)?[[:space:]]*[0-9][0-9,[:space:]-]*[[:alpha:]].*'
-readonly COPYRIGHT_TIDY='s/^[[:space:]]*//; s/^\(#\|\/\/\|\*\|;\)[[:space:]]*//'
+# Extended regex: BRE `\|` alternation is a GNU extension BSD sed reads literally.
+readonly COPYRIGHT_TIDY='s/^[[:space:]]*//; s/^(#|\/\/|\*|;)[[:space:]]*//'
 readonly SPDX_ACTIONS='
   .packages = [.packages[]?
     | ([.externalRefs[]? | select(.referenceType == "purl") | .referenceLocator] | first // "") as $purl
@@ -2012,10 +2013,10 @@ copyright_of() {
 	files=("$dir"/LICENSE* "$dir"/COPYING* "$dir"/COPYRIGHT* "$dir"/NOTICE*)
 	shopt -u nocaseglob
 	if [[ "${#files[@]}" -gt 0 ]]; then
-		line=$(grep -hoiE "$COPYRIGHT_RE" "${files[@]}" 2>/dev/null | sed "$COPYRIGHT_TIDY" | head -1) || line=""
+		line=$(grep -hoiE "$COPYRIGHT_RE" "${files[@]}" 2>/dev/null | sed -E "$COPYRIGHT_TIDY" | head -1) || line=""
 	fi
 	if [[ -z "$line" ]]; then
-		line=$(grep -rhoiE "$COPYRIGHT_RE" "$dir" 2>/dev/null | sed "$COPYRIGHT_TIDY" |
+		line=$(grep -rhoiE "$COPYRIGHT_RE" "$dir" 2>/dev/null | sed -E "$COPYRIGHT_TIDY" |
 			sort | uniq -c | sort -k1,1nr -k2 | head -1 | sed 's/^ *[0-9]* //') || line=""
 	fi
 	printf '%s' "$line"
@@ -2029,7 +2030,7 @@ workspace_copyright() {
 	files=(LICENSE* COPYING* COPYRIGHT* NOTICE*)
 	shopt -u nocaseglob
 	if [[ "${#files[@]}" -gt 0 ]]; then
-		line=$(grep -hoiE "$COPYRIGHT_RE" "${files[@]}" 2>/dev/null | sed "$COPYRIGHT_TIDY" | head -1) || line=""
+		line=$(grep -hoiE "$COPYRIGHT_RE" "${files[@]}" 2>/dev/null | sed -E "$COPYRIGHT_TIDY" | head -1) || line=""
 	fi
 	printf '%s' "${line:-NONE}"
 }
@@ -2582,6 +2583,7 @@ description = "Record each job's declared budget against its measured p95, for `
 shell = "bash -c"
 run = '''
 set -euo pipefail
+iso_epoch() { jq -rn --arg d "$1" '$d | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601' 2>/dev/null; }
 
 window="${BATTEN_BUDGET_WINDOW:-25}"
 workflows=".github/workflows"
@@ -2610,12 +2612,10 @@ emit() {
 				echo "::error:: timeout-drift-record: cannot read jobs for run $run. Nothing recorded." >&2
 				return 2
 			fi
-			durations="$durations$(printf '%s\n' "$legs" | awk -F'\t' '
-				NF == 3 {
-					"date -d \"" $2 "\" +%s" | getline from
-					"date -d \"" $3 "\" +%s" | getline to
-					if (from != "" && to != "" && to >= from) printf "%s\t%d\n", $1, to - from
-				}')
+			durations="$durations$(printf '%s\n' "$legs" | while IFS=$'\t' read -r leg from to; do
+				f=$(iso_epoch "$from") t=$(iso_epoch "$to")
+				[[ -n "$f" && -n "$t" && "$t" -ge "$f" ]] && printf '%s\t%d\n' "$leg" $((t - f))
+			done)
 "
 		done
 		awk -v file="$file" -v durations="$durations" '
@@ -3614,7 +3614,12 @@ if grep -qxF -- "$MANIFEST" <<<"$assets"; then
 	# `sha256sum`'s own line format, anchored, so an unreadable line is no entry.
 	covered=$(sed -nE 's/^[0-9a-fA-F]{64} [ *](.+)$/\1/p' "$scratch/$MANIFEST" | LC_ALL=C sort -u)
 	if [[ -n "$covered" ]]; then
-		if ! bad=$(cd "$scratch" && LC_ALL=C sha256sum -c --quiet -- "$MANIFEST" 2>/dev/null); then
+		# No `--quiet` and a `shasum` fallback: neither is portable, and macOS
+		# refused the flag. Every line not ending `: OK` is the finding.
+		sum256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
+		checked=$(cd "$scratch" && LC_ALL=C sum256 -c -- "$MANIFEST" 2>/dev/null) || true
+		[[ -n "$checked" ]] || refuse "sha256sum could not read $MANIFEST on $tag"
+		if bad=$(grep -v ': OK$' <<<"$checked"); then
 			[[ -n "$bad" ]] || refuse "sha256sum could not read $MANIFEST on $tag"
 			mismatch=$(sed -nE 's/^(.*): FAILED.*$/\1/p' <<<"$bad" | LC_ALL=C sort -u)
 		fi
@@ -3675,7 +3680,7 @@ QUIET_MINUTES="${RELEASE_QUIET_MINUTES:-30}"
 MAX_WAIT_HOURS="${RELEASE_MAX_WAIT_HOURS:-24}"
 case "$QUIET_MINUTES" in '' | *[!0-9]*) refuse "RELEASE_QUIET_MINUTES must be a whole number of minutes, got '$QUIET_MINUTES'" ;; esac
 case "$MAX_WAIT_HOURS" in '' | *[!0-9]*) refuse "RELEASE_MAX_WAIT_HOURS must be a whole number of hours, got '$MAX_WAIT_HOURS'" ;; esac
-epoch() { date -d "$1" +%s 2>/dev/null; }
+epoch() { jq -rn --arg d "$1" '$d | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601' 2>/dev/null; }
 if [[ -n "${RELEASE_DUE_NOW+set}" ]]; then
 	now=$(epoch "$RELEASE_DUE_NOW") || refuse "cannot parse RELEASE_DUE_NOW '$RELEASE_DUE_NOW'"
 else
@@ -4148,6 +4153,7 @@ exit 2
 # every turn, and a 2 is a refusal. Never a finding from nothing. POINTER, NEVER PAYLOAD: a turn number, never a byte of the prose.
 [tasks.finding-sink-check]
 #MUTANT-SUITE crates/batten/tests/it/finding_sink.rs
+#MUTANT mediated-filing-unseen|s@elif .type == "tool_use" and .name == "Bash"@elif false@|a_filing_through_the_mediated_route_clears_it
 #MUTANT class-split-removed|s@^OPENS_A_ROW=.*@OPENS_A_ROW='save_'@|a_comment_alone_is_not_a_home
 #MUTANT terminal-row-is-a-home|s@#open\$'@#'@|an_annotation_on_a_terminal_row_still_reports
 #MUTANT citation-never-fires|s@^CITATION=.*@CITATION='^\$never'@|a_cited_finding_with_no_durable_write_fires
@@ -4216,6 +4222,14 @@ if [[ -n "$start" ]]; then
 	    | (.message.content // [])[]
 	    | select(type == "object")
 	    | if .type == "text" then "T" + ((.text // "") | gsub("\n"; " "))
+	      elif .type == "tool_use" and .name == "Bash"
+	           and ((.input.command // "") | test("mcp call [A-Za-z0-9_-]+ save_(issue|comment)\\b")) then
+	        # THE SANCTIONED ROUTE: this repository files through `batten mcp call`,
+	        # and the raw MCP tools are denied, so a filing arrives as a Bash block.
+	        # Its method and row come from the call itself.
+	        (.input.command) as $c
+	        | "U" + ($c | capture("mcp call [A-Za-z0-9_-]+ (?<m>save_(issue|comment))").m) + "#" +
+	          ([$c | capture("(id|issueId)[^A-Z]{0,4}(?<k>[A-Z]+-[0-9]+)") | .k] | first // "")
 	      elif .type == "tool_use" then "U" + (.name // "") + "#" +
 	             ((.input // {}) | if type == "object"
 	              then ((.id // .issueId // "") | tostring) else "" end)
@@ -4788,7 +4802,7 @@ spawn_verdict() { # spawn_verdict <server> <newest-log-path>
 	# The log NAME is the attempt's UTC start: `…T05-41-40-873Z` -> `…T05:41:40Z`.
 	stamp=$(basename -- "$log" .jsonl)
 	stamp=$(printf '%s' "$stamp" | sed -E 's/^([0-9]{4}-[0-9]{2}-[0-9]{2})T([0-9]{2})-([0-9]{2})-([0-9]{2})-[0-9]+Z$/\1T\2:\3:\4Z/')
-	if ! start=$(date -u -d "$stamp" +%s 2>/dev/null) || [[ -z "$start" ]]; then
+	if ! start=$(jq -rn --arg d "$stamp" '$d | fromdateiso8601' 2>/dev/null) || [[ -z "$start" ]]; then
 		echo "unrecorded (the log name carries no parseable attempt time)"
 		return 0
 	fi
@@ -5781,7 +5795,7 @@ n=0
 paragraph=0
 backtick='`'
 if [[ -n "${body//[[:space:]]/}" ]]; then
-  while IFS= read -r -d '' para; do
+  while IFS= read -r para; do
     paragraph=$((paragraph + 1))
     # A span NAMING the phrase is not a paragraph USING it.
     prose=$(sed -E "s/${backtick}[^${backtick}]*${backtick}/CODESPAN/g" <<<"$para")
@@ -5789,7 +5803,9 @@ if [[ -n "${body//[[:space:]]/}" ]]; then
     keys=$(grep -oE 'CLOUD-[0-9]+' <<<"$para" | sort -u | tr '\n' ' ' | sed 's/ *$//' || true)
     out+="deferral"$'\t'"$paragraph"$'\t'"${keys:--}"$'\n'
     n=$((n + 1))
-  done < <(tr -d '\r' <<<"$body" | awk 'BEGIN { RS = ""; ORS = "\0" } { print }')
+  # One paragraph per LINE, never NUL-separated: BSD awk cannot emit a NUL
+  # through ORS, which on macOS read no paragraph at all and recorded nothing.
+  done < <(tr -d '\r' <<<"$body" | awk 'BEGIN { RS = "" } { gsub(/\n/, " "); print }')
 fi
 printf '%scensus\tdeferrals=%d\n' "$out" "$n" | "${batten[@]}" record named deferral
 '''
@@ -6186,7 +6202,8 @@ cd "$(git rev-parse --show-toplevel)"
 # while this one asks "what did the loop cost over a period", which only a period
 # answers. A count would silently narrow the window whenever the fleet got busy —
 # exactly when the answer matters most.
-SINCE="${BATTEN_DIVERGENCE_SINCE:-$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)}"
+SINCE="${BATTEN_DIVERGENCE_SINCE:-$(jq -rn 'now - 86400 | strftime("%Y-%m-%dT%H:%M:%SZ")')}"
+iso_epoch() { jq -rn --arg d "$1" '$d | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601' 2>/dev/null; }
 
 # The cache root. Under `.git/`, so it is out of tree, never committed, and
 # discarded with the clone rather than surviving as stale state on a fresh one.
@@ -6352,8 +6369,8 @@ job_queue() { # $1 = run id — emits `<seconds>\t<job name>`, one line per job
 		.jobs[]? | select(.created_at != null and .started_at != null)
 		| [.created_at, .started_at, (.name // "-")] | @tsv' 2>/dev/null |
 		while IFS=$'\t' read -r created started name; do
-			c=$(date -u -d "$created" +%s 2>/dev/null) || continue
-			s=$(date -u -d "$started" +%s 2>/dev/null) || continue
+			c=$(iso_epoch "$created") || continue
+			s=$(iso_epoch "$started") || continue
 			printf '%s\t%s\n' "$((s - c))" "$name"
 		done
 }
@@ -6437,8 +6454,8 @@ done <<<"$landed"
 cancel_lat=$(awk -F'\t' '
 	$3 == "cancelled" && $5 != "" && $6 != "" { print }
 ' <<<"$ci_runs" | while IFS=$'\t' read -r id branch _conc _created started updated _attempt; do
-	s=$(date -u -d "$started" +%s 2>/dev/null) || continue
-	u=$(date -u -d "$updated" +%s 2>/dev/null) || continue
+	s=$(iso_epoch "$started") || continue
+	u=$(iso_epoch "$updated") || continue
 	printf '%s\t%s\t%s\n' "$((u - s))" "$id" "$branch"
 done | LC_ALL=C sort -n)
 
@@ -6457,8 +6474,8 @@ cancel_p50=$(cut -f1 <<<"$cancel_lat" | sed '/^$/d' | pct 50)
 # amount of contention and must not be read as one.
 queue_p90=$(awk -F'\t' '$4 != "" && $5 != "" && $3 != "skipped" { print $4 "\t" $5 }' <<<"$ci_runs" |
 	while IFS=$'\t' read -r created started; do
-		c=$(date -u -d "$created" +%s 2>/dev/null) || continue
-		s=$(date -u -d "$started" +%s 2>/dev/null) || continue
+		c=$(iso_epoch "$created") || continue
+		s=$(iso_epoch "$started") || continue
 		printf '%s\n' "$((s - c))"
 	done | LC_ALL=C sort -n | pct 90)
 
@@ -6495,8 +6512,8 @@ done <<<"$job_lat"
 # serialisation working — 25 concurrent matrices before the lease, 3 after.
 peak=$(awk -F'\t' '$3 != "skipped" && $5 != "" && $6 != "" { print $5 "\t" $6 }' <<<"$ci_runs" |
 	while IFS=$'\t' read -r started updated; do
-		s=$(date -u -d "$started" +%s 2>/dev/null) || continue
-		u=$(date -u -d "$updated" +%s 2>/dev/null) || continue
+		s=$(iso_epoch "$started") || continue
+		u=$(iso_epoch "$updated") || continue
 		printf '%s\t1\n%s\t-1\n' "$s" "$u"
 	done | LC_ALL=C sort -n -k1,1 -k2,2r |
 	awk -F'\t' '{ cur += $2; if (cur > max) max = cur } END { print max + 0 }')

@@ -7009,8 +7009,10 @@ fn run(
     // to forget and no config to make the gate conditional on. Reading them only
     // when some unrelated recorder happened to be declared would make a gate's
     // liveness depend on a table it has nothing to do with.
-    let records = match (crate::git::git_dir(root), crate::git::current_branch(root)) {
-        (Ok(git_dir), Ok(Some(branch))) => recorder_records(
+    // `record_key`, not `current_branch`: the key the producers wrote under, which
+    // on a detached HEAD (every CI checkout) is the commit rather than nothing.
+    let records = match (crate::git::git_dir(root), crate::git::record_key(root)) {
+        (Ok(git_dir), Ok(branch)) => recorder_records(
             &git_dir,
             &branch,
             recorders,
@@ -7023,8 +7025,8 @@ fn run(
     // owns both the writer and the reader of this store, so there is no
     // declaration a consumer could forget and nothing to make the read
     // conditional on.
-    let records_blocked = match (crate::git::git_dir(root), crate::git::current_branch(root)) {
-        (Ok(git_dir), Ok(Some(branch))) => recorder_blocked(&git_dir, &branch),
+    let records_blocked = match (crate::git::git_dir(root), crate::git::record_key(root)) {
+        (Ok(git_dir), Ok(branch)) => recorder_blocked(&git_dir, &branch),
         _ => BTreeMap::new(),
     };
 

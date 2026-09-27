@@ -940,9 +940,10 @@ fn store_derived(family: &str, derived: &str) -> Result<()> {
             "record derive: not a git repository, so there is nothing to key on".to_owned(),
         )
     })?;
-    let Ok(Some(branch)) = git::current_branch(root) else {
+    let Ok(branch) = git::record_key(root) else {
         return Err(UsageError::raise(
-            "record derive: a detached HEAD has no branch to key the record on".to_owned(),
+            "record derive: HEAD resolves to no commit, so there is nothing to key the record on"
+                .to_owned(),
         ));
     };
     let claim = claim_of(&git_dir, &branch);
@@ -1011,9 +1012,10 @@ pub fn run_named(family: &str) -> Result<ExitCode> {
             "record named: not a git repository, so there is nothing to key on".to_owned(),
         )
     })?;
-    let Ok(Some(branch)) = git::current_branch(root) else {
+    let Ok(branch) = git::record_key(root) else {
         return Err(UsageError::raise(
-            "record named: a detached HEAD has no branch to key the record on".to_owned(),
+            "record named: HEAD resolves to no commit, so there is nothing to key the record on"
+                .to_owned(),
         ));
     };
     let claim = claim_of(&git_dir, &branch);
