@@ -124,7 +124,6 @@ const KEY_DIR: &str = "identity";
 const KEY_FILE: &str = "secret-key";
 
 /// The key file's mode: owner read/write, nothing for anyone else.
-#[cfg(unix)]
 const KEY_MODE: u32 = 0o600;
 
 /// The key directory's mode: owner only, so the file cannot be reached by
@@ -672,22 +671,9 @@ fn append_event(key: &Path, event: &Event) -> Result<()> {
     let path = ledger_beside(key);
     let parent = path.parent().unwrap_or(&path);
     create_dir_private(parent)?;
-    let line = format!("{}\n", serde_json::to_string(event)?);
-    let mut options = fs::OpenOptions::new();
-    options.create(true).append(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(KEY_MODE);
-    }
-    let mut file = options
-        .open(&path)
-        .with_context(|| format!("open the custody ledger {}", path.display()))?;
-    file.write_all(line.as_bytes())
-        .with_context(|| format!("append to the custody ledger {}", path.display()))?;
-    file.sync_all()
-        .with_context(|| format!("flush the custody ledger {}", path.display()))?;
-    Ok(())
+    let line = serde_json::to_string(event)?;
+    crate::durable::append_with_mode(&path, &line, KEY_MODE)
+        .with_context(|| format!("append to the custody ledger {}", path.display()))
 }
 
 /// Every event the ledger holds, in the order they were recorded.

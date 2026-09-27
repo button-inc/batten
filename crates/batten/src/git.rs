@@ -1999,8 +1999,11 @@ pub fn set_config_local(dir: &Path, key: &str, value: &str) -> Result<()> {
             .map_err(|_| refusal())?;
     file.set_raw_value_by(section, subsection.map(gix::bstr::BStr::new), name, value)
         .map_err(|_| refusal())?;
-    let mut out = std::fs::File::create(&path).map_err(|_| refusal())?;
+    // Serialized in memory, then replaced atomically: a crash mid-write must
+    // not leave the repository with a truncated `.git/config`.
+    let mut out = Vec::new();
     file.write_to(&mut out).map_err(|_| refusal())?;
+    crate::durable::replace(&path, out).map_err(|_| refusal())?;
     Ok(())
 }
 
@@ -2997,7 +3000,7 @@ pub fn materialize_rev(dir: &Path, rev: &str, dest: &Path) -> Result<()> {
         let object = repository.find_object(id).map_err(|err| {
             UsageError::raise(format!("cannot read the blob behind {path:?}: {err}"))
         })?;
-        std::fs::write(&out, &object.data)
+        crate::durable::replace(&out, &object.data)
             .map_err(|err| UsageError::raise(format!("cannot write {}: {err}", out.display())))?;
     }
     Ok(())

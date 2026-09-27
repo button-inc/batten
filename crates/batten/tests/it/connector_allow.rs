@@ -10,10 +10,10 @@
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
-// carried: mise-tasks/connector-allow-resolve.sh mise.toml kind:mechanism crates/batten/tests/it/connector_allow.rs
-// carried: mise-tasks/connector-allow-guard.sh mise.toml kind:mechanism crates/batten/tests/it/connector_allow.rs
-// carried: tests/connector-allow-resolve.bats mise.toml kind:mechanism crates/batten/tests/it/connector_allow.rs
-// carried: tests/connector-allow-guard.bats mise.toml kind:mechanism crates/batten/tests/it/connector_allow.rs
+// ported: mise-tasks/connector-allow-resolve.sh subject:mise.toml crates/batten/tests/it/connector_allow.rs
+// ported: mise-tasks/connector-allow-guard.sh subject:mise.toml crates/batten/tests/it/connector_allow.rs
+// ported: tests/connector-allow-resolve.bats subject:mise.toml crates/batten/tests/it/connector_allow.rs
+// ported: tests/connector-allow-guard.bats subject:mise.toml crates/batten/tests/it/connector_allow.rs
 // carried: "a committed allow reaches the toolbox server under a flipped name" mise.toml kind:mechanism
 // carried: "a committed deny reaches the toolbox server under a flipped name" mise.toml kind:mechanism
 // carried: "a verb the committed file says nothing about resolves to silence" mise.toml kind:mechanism

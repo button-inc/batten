@@ -1844,14 +1844,9 @@ pub fn record_spawn(root: &Path, server: &str) {
     let Some((ledger, line)) = spawn_record(root, server, now, std::process::id()) else {
         return;
     };
-    // `>>` on a short line is atomic enough for concurrent appends: the record is
-    // well under `PIPE_BUF` and every writer opens in append mode.
-    let appended = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&ledger)
-        .and_then(|mut file| std::io::Write::write_all(&mut file, line.as_bytes()));
-    drop(appended);
+    // One write per record and a sync (`durable::append`), so concurrent spawns
+    // cannot interleave inside a line and a reported record is on disk.
+    drop(crate::durable::append(&ledger, &line));
 }
 
 /// Dispatch one declared method over a mediated MCP connection and return its

@@ -135,12 +135,11 @@ jobs:
       # step above went on calling the deleted task for as long as nothing asked
       # whether a workflow's callers still resolve — `workflow run unknown` is
       # that clause, and it reported this line.
-      - name: Record the platform's attestation posture and each archive's verdict
+      # One step, so the step count stays flat; `&&` stops at the producer's
+      # own failure, so the check never judges a record that was not written.
+      - name: Record each archive's attestation verdict, then check the release carries build provenance
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
-        run: mise run attestation-record -- "$TAG"
-      - name: Check the release's binaries carry build provenance
-        shell: bash
-        run: mise run batten -- check --rule 'release grade unsafe'
+        run: mise run attestation-record -- "$TAG" && mise run batten -- check --rule 'release grade unsafe'

@@ -1136,7 +1136,7 @@ pub fn observe(
     let mut text = serde_json::to_string_pretty(&record)
         .map_err(|error| crate::UsageError::raise(error.to_string()))?;
     text.push('\n');
-    std::fs::write(&path, text)?;
+    crate::durable::replace(&path, text)?;
     Ok(Look::Is(record))
 }
 

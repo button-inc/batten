@@ -1019,15 +1019,14 @@ fn materialise(
                 gix::filter::plumbing::pipeline::convert::to_worktree::Options::default(),
             )
             .map_err(|err| anyhow::anyhow!("gitwrite: {relative} will not filter: {err}"))?;
-        // Same reason as the symlink arm, one step earlier: truncating through an
-        // existing link writes the target.
-        match std::fs::remove_file(&target) {
-            Ok(()) => {}
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => return Err(anyhow::anyhow!("gitwrite: {relative}: {err}")),
+        // Same reason as the symlink arm, one step earlier: writing through an
+        // existing link writes the target. Only a LINK is removed first; a
+        // regular file is replaced atomically below, so a crash never leaves the
+        // path missing or half-written.
+        if std::fs::symlink_metadata(&target).is_ok_and(|meta| meta.file_type().is_symlink()) {
+            std::fs::remove_file(&target)
+                .map_err(|err| anyhow::anyhow!("gitwrite: {relative}: {err}"))?;
         }
-        let mut file = std::fs::File::create(&target)
-            .map_err(|err| anyhow::anyhow!("gitwrite: {relative} will not open: {err}"))?;
         // `ToWorktreeOutcome` IS the reader. `as_read` is the NARROWER question —
         // "did an external driver hand back a stream" — and it answers `None` for
         // the unfiltered case, which is every path in a repository that configures
@@ -1041,9 +1040,11 @@ fn materialise(
                 "gitwrite: {relative} is behind a delayed filter, which is not supported"
             ));
         }
-        std::io::copy(&mut converted, &mut file)
+        let mut bytes = Vec::new();
+        std::io::copy(&mut converted, &mut bytes)
+            .map_err(|err| anyhow::anyhow!("gitwrite: {relative} will not filter: {err}"))?;
+        crate::durable::replace(&target, bytes)
             .map_err(|err| anyhow::anyhow!("gitwrite: {relative} will not write: {err}"))?;
-        drop(file);
         if mode == gix::index::entry::Mode::FILE_EXECUTABLE {
             make_executable(&target)
                 .map_err(|err| anyhow::anyhow!("gitwrite: {relative}'s mode: {err}"))?;
@@ -1086,7 +1087,7 @@ fn link(destination: &str, target: &Path) -> std::io::Result<()> {
 /// account does not hold, so it would fail rather than degrade.
 #[cfg(not(unix))]
 fn link(destination: &str, target: &Path) -> std::io::Result<()> {
-    std::fs::write(target, destination)
+    crate::durable::replace(target, destination)
 }
 
 /// Set the executable bit.

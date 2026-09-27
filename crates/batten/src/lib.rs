@@ -41,6 +41,7 @@ pub mod deferral;
 pub mod design;
 pub mod doctor;
 pub mod drain;
+pub mod durable;
 pub mod effect;
 pub mod emission;
 pub mod environment;
@@ -587,7 +588,7 @@ fn run_bench(
             ))
         })?;
     }
-    std::fs::write(&committed, &rendered)
+    crate::durable::replace(&committed, &rendered)
         .map_err(|_| UsageError::raise(String::from("bench tokens: could not write the report")))?;
     writeln!(out, "bench tokens: wrote {}", tokens::RESULTS)?;
     Ok(ExitCode::Success)
@@ -1171,7 +1172,7 @@ fn run_hk(
             if let Some(parent) = artifact.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            std::fs::write(&artifact, current.render()?)?;
+            crate::durable::replace(&artifact, current.render()?)?;
             writeln!(out, "{}", hk::ARTIFACT)?;
             output::message(
                 mode,
@@ -1569,11 +1570,7 @@ fn run_defects_add(
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
-        file.write_all(body.as_bytes())?;
+        crate::durable::append(&path, &body)?;
     }
     // Silence on the ordinary path (§5: `add` prints nothing on success). The
     // counts ride the ladder at `Verbose`, where a caller who asked for them
@@ -12329,7 +12326,7 @@ fn lease_hand_back(root: &Path, terms: &lease::Terms, holder: &str, now: i64) {
 fn lease_bail_reason(git_dir: &Path, why: &str) {
     let dir = git_dir.join("batten-land-lock");
     if std::fs::create_dir_all(&dir).is_ok() {
-        let _ = std::fs::write(
+        let _ = crate::durable::replace(
             dir.join("bail-reason"),
             format!(
                 "the landing {why}, so its lease was released and it was stopped. Nothing is \
@@ -12523,7 +12520,7 @@ fn lease_receipt(root: &Path, branch: &str, expires: i64) {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let _ = std::fs::write(path, format!("{expires}\n"));
+        let _ = crate::durable::replace(path, format!("{expires}\n"));
     }
 }
 
@@ -14648,7 +14645,7 @@ fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook:
     // against the tree". Every receipt-kind refusal carries only `Artifact`
     // subjects, so requiring a path here returned early for the whole class, and
     // the `admit(...)` route CLOUD-1823 declared could never fire — the
-    // declaration took `BATTEN_HOOK_BYPASS` away and nothing replaced it.
+    // declaration took the general hook hatch away and nothing replaced it.
     //
     // The class token is a subject both sides can name without reading the call,
     // so no payload reaches the refusal. What pins the admission to a situation is
@@ -16732,13 +16729,7 @@ fn unlanded_pointer() -> Option<String> {
         }
         // Best-effort: an unwritable receipt costs a repeated nudge, never the
         // nudge itself, so it must not swallow the finding.
-        let _ = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .and_then(|mut file| {
-                std::io::Write::write_all(&mut file, format!("{key}\n").as_bytes())
-            });
+        let _ = crate::durable::append(path, &key);
     }
     Some(format!(
         "unlanded: {count} commit(s) not on the landing target ({})",
@@ -16873,14 +16864,13 @@ fn filed_here_pointers(
     if let Some(parent) = store.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&store)
-    {
-        for key in &fresh {
-            let _ = writeln!(file, "{key}");
-        }
+    if !fresh.is_empty() {
+        let text = fresh.iter().fold(String::new(), |mut text, key| {
+            text.push_str(key);
+            text.push('\n');
+            text
+        });
+        let _ = crate::durable::append(&store, &text);
     }
     Some(match suppression {
         Suppression::PerRow => fresh.join("\n"),
@@ -17199,15 +17189,8 @@ fn mint_receipts(
             continue;
         }
         let written = match mint.mode {
-            crate::mint::MintMode::Replace => std::fs::write(&path, &record),
-            crate::mint::MintMode::Append => {
-                use std::io::Write as _;
-                std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&path)
-                    .and_then(|mut file| file.write_all(record.as_bytes()))
-            }
+            crate::mint::MintMode::Replace => crate::durable::replace(&path, &record),
+            crate::mint::MintMode::Append => crate::durable::append(&path, &record),
         };
         let _ = written;
     }

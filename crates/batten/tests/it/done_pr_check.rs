@@ -4,8 +4,8 @@
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
-// carried: mise-tasks/done-pr-check.sh mise.toml kind:mechanism crates/batten/tests/it/done_pr_check.rs
-// carried: tests/done-pr-check.bats mise.toml kind:mechanism crates/batten/tests/it/done_pr_check.rs
+// ported: mise-tasks/done-pr-check.sh subject:mise.toml crates/batten/tests/it/done_pr_check.rs
+// ported: tests/done-pr-check.bats subject:mise.toml crates/batten/tests/it/done_pr_check.rs
 // carried: "every attached PR merged: Done is licensed" mise.toml kind:mechanism
 // carried: "an OPEN pull request refuses, and the refusal names its number" mise.toml kind:mechanism
 // carried: "THE DEFECT: a DRAFT pull request refuses, and is named as a draft" mise.toml kind:mechanism
@@ -45,7 +45,7 @@ fn check(name: &str, stdin: &str) -> (Option<i32>, String) {
 }
 
 fn url(n: u32) -> String {
-    format!("https://github.com/button-inc/batten/pull/{n}")
+    format!("https://github.com/example-org/example-repo/pull/{n}")
 }
 
 fn pull(n: u32, state: &str, merged: bool, draft: bool) -> String {

@@ -221,7 +221,7 @@ pub fn mint(
         ))
     })?;
     let path = receipts.join(receipt_name(branch));
-    std::fs::write(&path, body).map_err(|err| {
+    crate::durable::replace(&path, body).map_err(|err| {
         UsageError::raise(format!(
             "claim carry: cannot write {}: {err}",
             path.display()

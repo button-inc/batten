@@ -10,8 +10,8 @@
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
-// carried: mise-tasks/board-sweep.sh mise.toml kind:mechanism crates/batten/tests/it/board_sweep.rs
-// carried: tests/board-sweep.bats mise.toml kind:mechanism crates/batten/tests/it/board_sweep.rs
+// ported: mise-tasks/board-sweep.sh subject:mise.toml crates/batten/tests/it/board_sweep.rs
+// ported: tests/board-sweep.bats subject:mise.toml crates/batten/tests/it/board_sweep.rs
 // carried: "a set with no dissonance exits 0 and says every gate ran" mise.toml kind:mechanism
 // carried: "every gate is reached, and the report names each one" mise.toml kind:mechanism
 // carried: "a landed-but-In-Progress row is named by in-progress-drain" mise.toml kind:mechanism

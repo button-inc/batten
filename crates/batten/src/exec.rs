@@ -1186,7 +1186,8 @@ impl GroupRecord {
         // "which supervisor died", and a second `exec` in the same checkout must
         // not overwrite the first one's note.
         let path = dir.join(format!("group.{}", std::process::id()));
-        std::fs::write(&path, format!("{pgid}\n")).context("record the owned process group")?;
+        crate::durable::replace(&path, format!("{pgid}\n"))
+            .context("record the owned process group")?;
         Ok(Self { path: Some(path) })
     }
 

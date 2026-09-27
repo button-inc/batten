@@ -504,7 +504,6 @@ fn captures_dir(repo_root: &Path) -> Result<PathBuf> {
 const STORE_DIR_MODE: u32 = 0o700;
 
 /// A stored capture's mode: owner read and write.
-#[cfg(unix)]
 const STORE_FILE_MODE: u32 = 0o600;
 
 /// Create the capture store, owner-only where the platform enforces it.
@@ -779,7 +778,7 @@ impl Index {
         // elsewhere would make this a copy, and a copy is the truncating write
         // again under another name.
         let staged = self.at.with_extension("staged");
-        std::fs::write(&staged, kept.join("\n") + "\n")
+        crate::durable::replace(&staged, kept.join("\n") + "\n")
             .with_context(|| "the locator index could not be staged".to_owned())?;
         std::fs::rename(&staged, &self.at)
             .with_context(|| "the locator index could not be published".to_owned())
@@ -1073,10 +1072,10 @@ impl Spool {
         let data_path = dir.join(&handle);
         // Truncating on open, not appending: a pid can be reused, and inheriting
         // a dead run's bytes under a live handle would be worse than losing them.
-        let data = std::fs::File::create(&data_path)
+        let data = std::fs::File::create(&data_path) // stream: watermark-committed spool
             .with_context(|| format!("open the spool {}", data_path.display()))?;
         let watermark_path = dir.join(format!("{handle}.watermark"));
-        std::fs::write(&watermark_path, "0\n")
+        crate::durable::replace(&watermark_path, "0\n")
             .with_context(|| format!("open the watermark {}", watermark_path.display()))?;
         Ok(Spool {
             data,
@@ -1121,7 +1120,8 @@ impl Spool {
                     .with_context(|| format!("take the spool lock {}", self.lock_path.display()));
             }
         }
-        let published = std::fs::write(&self.watermark_path, format!("{}\n", self.written));
+        let published =
+            crate::durable::replace(&self.watermark_path, format!("{}\n", self.written));
         drop(lock);
         published
             .with_context(|| format!("publish the watermark {}", self.watermark_path.display()))
@@ -1139,9 +1139,11 @@ impl Spool {
     ///
     /// Returns an error when the spool cannot be opened for append.
     pub fn reopen(&self) -> Result<Self> {
+        // stream: the spool is a byte stream committed by its watermark, which
+        // `durable::replace` publishes; the data handle itself is the stream.
         let data = std::fs::OpenOptions::new()
             .create(true)
-            .append(true)
+            .append(true) // stream:
             .open(&self.data_path)
             .with_context(|| format!("reopen the spool {}", self.data_path.display()))?;
         Ok(Spool {
@@ -1965,16 +1967,7 @@ pub fn record_call_in(dir: &Path, row: &CallRow) -> Result<()> {
     let mut minted = row.clone();
     minted.order = order;
     let line = serde_json::to_string(&minted).context("render a call row")?;
-    let mut options = std::fs::OpenOptions::new();
-    options.append(true).create(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(STORE_FILE_MODE);
-    }
-    let appended = options
-        .open(&path)
-        .and_then(|mut file| writeln!(file, "{line}"));
+    let appended = crate::durable::append_with_mode(&path, &line, STORE_FILE_MODE);
     drop(lock);
     appended.with_context(|| format!("append to the call log {}", path.display()))?;
     Ok(())
@@ -2107,7 +2100,7 @@ fn trim_calls(dir: &Path, ordered: &[CallRow], max_records: u64) -> Result<()> {
     }
     let path = dir.join("calls");
     let staging = dir.join("calls.trim");
-    std::fs::write(&staging, rendered)
+    crate::durable::replace(&staging, rendered)
         .with_context(|| format!("stage the trimmed call log {}", staging.display()))?;
     std::fs::rename(&staging, &path)
         .with_context(|| format!("publish the trimmed call log {}", path.display()))?;

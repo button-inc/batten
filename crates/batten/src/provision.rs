@@ -799,7 +799,7 @@ fn install(entry: &Provision, cache_root: &Path, bytes: &[u8]) -> Result<()> {
     // Keyed on the pid and dot-prefixed for `link_onto_path`'s reasons exactly —
     // two provisions running at once must not write each other's staging file.
     let staged = bin_dir.join(format!(".{}.{}.tmp", entry.binary, std::process::id()));
-    let written = fs::write(&staged, &binary)
+    let written = crate::durable::replace(&staged, &binary)
         .context("write the provisioned binary")
         .and_then(|()| make_executable(&staged));
     if let Err(err) = written {
@@ -819,7 +819,7 @@ fn install(entry: &Provision, cache_root: &Path, bytes: &[u8]) -> Result<()> {
     }
     // The artifact is written last, so a crash between the two leaves the entry
     // reading `missing` rather than `fresh` — the direction that re-applies.
-    fs::write(dir.join(ARTIFACT), bytes).context("write the cached artifact")?;
+    crate::durable::replace(dir.join(ARTIFACT), bytes).context("write the cached artifact")?;
     Ok(())
 }
 
@@ -882,10 +882,11 @@ fn link_onto_path(entry: &Provision, dest: &str, cached: &Path, binary: &[u8]) -
     // does not offer it as a command.
     let staged = dir.join(format!(".{}.{}.tmp", entry.binary, std::process::id()));
     let written = if entry.env.is_empty() {
-        fs::write(&staged, binary).context("write the linked binary")
+        crate::durable::replace(&staged, binary).context("write the linked binary")
     } else {
-        launcher(entry, cached)
-            .and_then(|bytes| fs::write(&staged, bytes).context("write the linked launcher"))
+        launcher(entry, cached).and_then(|bytes| {
+            crate::durable::replace(&staged, bytes).context("write the linked launcher")
+        })
     };
     if let Err(err) = written.and_then(|()| make_executable(&staged)) {
         let _ = fs::remove_file(&staged);
@@ -1301,7 +1302,7 @@ fn credential_usable(value: &Secret, probe: &str) -> bool {
     // Best effort: a receipt we cannot write costs a probe per call, which is
     // slow rather than wrong. Failing the launch over it would be the opposite
     // of what this exists for.
-    let _ = std::fs::write(&receipt, if live { "live\n" } else { "unusable\n" });
+    let _ = crate::durable::replace(&receipt, if live { "live\n" } else { "unusable\n" });
     if !live {
         // LOUD, AND ON THE RE-PROVE RATHER THAN ONCE, because this is the state
         // where the session silently degrades: the fence is not applied, the

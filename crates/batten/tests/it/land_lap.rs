@@ -54,7 +54,7 @@
 // AND ONE CASE FROM A SUITE THAT LIVES ON. `tests/reclaim-census.bats` read the
 // retired lander for its stop note; its own subject is alive, so the case is
 // `ported` rather than `withdrawn` (CLOUD-1268).
-// ported: "land records the stop it causes itself, or every clean landing reads as a reclaim" crates/batten/tests/it/land_lap.rs subject:mise-tasks/reclaim-census.sh
+// ported: "land records the stop it causes itself, or every clean landing reads as a reclaim" crates/batten/tests/it/land_lap.rs subject:mise.toml
 //
 // The 146 titles, one row each.
 //

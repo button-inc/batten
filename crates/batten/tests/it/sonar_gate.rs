@@ -8,8 +8,8 @@
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
-// carried: mise-tasks/sonar-gate.sh mise.toml kind:mechanism crates/batten/tests/it/sonar_gate.rs
-// carried: tests/sonar-gate.bats mise.toml kind:mechanism crates/batten/tests/it/sonar_gate.rs
+// ported: mise-tasks/sonar-gate.sh subject:mise.toml crates/batten/tests/it/sonar_gate.rs
+// ported: tests/sonar-gate.bats subject:mise.toml crates/batten/tests/it/sonar_gate.rs
 // carried: "a green analysis passes" mise.toml kind:mechanism
 // carried: "a failed analysis is red, and named" mise.toml kind:mechanism
 // carried: "a neutral conclusion passes — the analyzer graded and did not object" mise.toml kind:mechanism
@@ -23,7 +23,7 @@
 // carried: "a skip superseded by a success passes — the residue does not veto" mise.toml kind:mechanism
 // carried: "a success superseded by a FAILURE is red" mise.toml kind:mechanism
 // carried: "a success superseded by a re-run in flight is not an answer yet" mise.toml kind:mechanism
-// carried: "the id breaks a tie between two runs started in the same second" mise.toml kind:mechanism
+// "the id breaks a tie between two runs started in the same second" shares its title with a case already ledgered in `checks_green.rs`; a title owes exactly one arm, so that row answers for both suites.
 // carried: "a reading with no ordering key fails closed — the least conclusive wins" mise.toml kind:mechanism
 // carried: "output is a pointer — a conclusion and a name, never the analysis" mise.toml kind:mechanism
 // carried: "the verdict is byte-identical across two runs on identical input" mise.toml kind:mechanism

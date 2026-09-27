@@ -8,8 +8,8 @@
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
-// carried: mise-tasks/reclaim-census.sh mise.toml kind:mechanism crates/batten/tests/it/reclaim_census.rs
-// carried: tests/reclaim-census.bats mise.toml kind:mechanism crates/batten/tests/it/reclaim_census.rs
+// ported: mise-tasks/reclaim-census.sh subject:mise.toml crates/batten/tests/it/reclaim_census.rs
+// ported: tests/reclaim-census.bats subject:mise.toml crates/batten/tests/it/reclaim_census.rs
 // carried: "a landing in flight when the container was replaced" mise.toml kind:mechanism
 // carried: "a landing that stopped on purpose means none was in flight" mise.toml kind:mechanism
 // carried: "ABSENCE IS UNOBSERVED, NEVER IDLE — the row the whole correction turns on" mise.toml kind:mechanism
@@ -229,14 +229,24 @@ fn the_notes_carry_epoch_boot_and_only_a_given_reason() {
 /// Called from inside the lease's renewal loop: a census that could abort a
 /// landing is worse than the evidence it fails to collect.
 #[test]
-#[cfg(unix)]
 fn a_sensor_never_kills_what_it_observes() {
-    use std::os::unix::fs::PermissionsExt as _;
     let c = Clone::new("unwritable");
     let git = c.repo.join(".git");
-    std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o555)).expect("chmod");
+    // The store is made unwritable where the platform can say so. Elsewhere the
+    // case still runs, and still asserts the sensor exits 0 over a live clone.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o555)).expect("chmod");
+    }
     let code = c.run(&["note", "h"]).0;
-    std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    #[cfg(not(unix))]
+    let _ = &git;
     assert_eq!(code, Some(0));
 }
 

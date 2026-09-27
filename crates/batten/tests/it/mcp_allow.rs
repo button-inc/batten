@@ -6,8 +6,8 @@
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
-// carried: mise-tasks/mcp-allow-check.sh mise.toml kind:mechanism crates/batten/tests/it/mcp_allow.rs
-// carried: tests/mcp-allow-check.bats mise.toml kind:mechanism crates/batten/tests/it/mcp_allow.rs
+// ported: mise-tasks/mcp-allow-check.sh subject:mise.toml crates/batten/tests/it/mcp_allow.rs
+// ported: tests/mcp-allow-check.bats subject:mise.toml crates/batten/tests/it/mcp_allow.rs
 // carried: "this repo's own settings pass the gate today" mise.toml kind:mechanism
 // carried: "a bare server rule with no connector companion passes — that is not this gate's claim" mise.toml kind:mechanism
 // carried: "both spellings present is also fine" mise.toml kind:mechanism

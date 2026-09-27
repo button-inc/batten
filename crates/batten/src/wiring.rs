@@ -382,7 +382,7 @@ pub fn reclaim(dir: &Path, home: &Path, dry_run: bool) -> Result<Reclaimed> {
         // temporary sits in the SAME directory so the rename stays within one
         // filesystem and is therefore atomic.
         let staged = path.with_extension("json.batten-tmp");
-        std::fs::write(
+        crate::durable::replace(
             &staged,
             format!("{}\n", serde_json::to_string_pretty(&document)?),
         )?;
@@ -409,7 +409,7 @@ fn write_at_load(dir: &Path, rows: &[AtLoadRow]) -> Result<bool> {
     let record = AtLoad {
         rows: rows.to_vec(),
     };
-    std::fs::write(
+    crate::durable::replace(
         &path,
         format!("{}\n", serde_json::to_string_pretty(&record)?),
     )?;
@@ -723,7 +723,7 @@ pub fn disarm(home: &Path, declared: &[Disarm], dry_run: bool) -> Result<Disarme
             Ok(body) if body.contains(&row.marker) => DisarmState::Shimmed,
             Ok(_) if dry_run => DisarmState::Foreign,
             Ok(_) => {
-                std::fs::write(&path, shim(&row.marker))?;
+                crate::durable::replace(&path, shim(&row.marker))?;
                 out.written += 1;
                 DisarmState::Shimmed
             }

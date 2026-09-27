@@ -233,7 +233,7 @@ pub fn record(
     {
         return false;
     }
-    std::fs::write(path, body).is_ok()
+    crate::durable::replace(path, body).is_ok()
 }
 
 /// Every task the declared node names, with its argv where it has one.

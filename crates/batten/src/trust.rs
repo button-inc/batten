@@ -453,7 +453,7 @@ pub fn record_pin(dir: &Path, loaded: &Loaded) {
     // `store::write_record` uses: a concurrent reader sees the old pin or the
     // new one, never a torn one — which `Pin::read` would refuse loudly.
     let temp = parent.join(format!("{PIN_FILE}.{}.tmp", std::process::id()));
-    if std::fs::write(&temp, format!("{json}\n")).is_err() {
+    if crate::durable::replace(&temp, format!("{json}\n")).is_err() {
         return;
     }
     if std::fs::rename(&temp, &path).is_err() {

@@ -139,6 +139,7 @@ mod done;
 mod done_not_landed;
 mod done_pr_check;
 mod duplicate_close;
+mod durable_write;
 mod egress_fencing;
 mod emission_census;
 mod enforce_journal;

@@ -283,7 +283,7 @@ pub fn record(git_dir: &Path, session: Option<&str>, manifest: &Manifest) -> Res
         body.push_str(tracked);
         body.push('\n');
     }
-    std::fs::write(path, body)?;
+    crate::durable::replace(path, body)?;
     Ok(())
 }
 

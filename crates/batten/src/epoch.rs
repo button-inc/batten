@@ -280,7 +280,7 @@ fn write_cache(dir: &Path, epoch: &str, tracked: &[Stamp]) {
         return;
     };
     let temp = parent.join(format!("{CACHE_FILE}.{}.tmp", std::process::id()));
-    if std::fs::write(&temp, format!("{json}\n")).is_err() {
+    if crate::durable::replace(&temp, format!("{json}\n")).is_err() {
         return;
     }
     if std::fs::rename(&temp, &path).is_err() {

@@ -2455,7 +2455,7 @@ impl Local {
             nonce()
         );
         std::fs::create_dir_all(&self.dir)?;
-        std::fs::write(&path, format!("{minted}\n"))?;
+        crate::durable::replace(&path, format!("{minted}\n"))?;
         Ok(minted)
     }
 
@@ -2488,7 +2488,7 @@ impl Local {
     /// which is the defect this exists to close.
     pub fn poison(&self, tracking: &str, at: &str) -> Result<()> {
         std::fs::create_dir_all(&self.dir)?;
-        std::fs::write(self.dir.join("poisoned"), format!("{tracking}\t{at}\n"))?;
+        crate::durable::replace(self.dir.join("poisoned"), format!("{tracking}\t{at}\n"))?;
         Ok(())
     }
 
@@ -2546,7 +2546,7 @@ impl Local {
             Some(since) if previous == token => now.saturating_sub(since),
             _ => {
                 let _ = std::fs::create_dir_all(&self.dir);
-                let _ = std::fs::write(&path, format!("{token} {now}\n"));
+                let _ = crate::durable::replace(&path, format!("{token} {now}\n"));
                 0
             }
         }

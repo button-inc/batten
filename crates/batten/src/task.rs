@@ -193,7 +193,7 @@ fn write_entry(git_dir: &Path, entry: &Entry) {
         return;
     }
     let temp = dir.join(format!(".{}.tmp", entry.pid));
-    if std::fs::write(&temp, entry.render()).is_err() {
+    if crate::durable::replace(&temp, entry.render()).is_err() {
         let _ = std::fs::remove_file(&temp);
         return;
     }
@@ -950,7 +950,7 @@ fn take(lock: &Path, pid: &str) -> bool {
     if std::fs::create_dir(lock).is_err() {
         return false;
     }
-    if std::fs::write(lock.join("pid"), format!("{pid}\n")).is_err() {
+    if crate::durable::replace(lock.join("pid"), format!("{pid}\n")).is_err() {
         let _ = std::fs::remove_dir_all(lock);
         return false;
     }

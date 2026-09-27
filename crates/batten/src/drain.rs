@@ -1041,7 +1041,7 @@ pub fn save_wake(store_dir: &Path, session: &str, state: &WakeState) -> Result<(
         .with_context(|| format!("create the drain state directory {}", dir.display()))?;
     let path = wake_path(store_dir, session);
     let temp = dir.join(format!("{}.tmp", std::process::id()));
-    std::fs::write(&temp, format!("{}\n", serde_json::to_string_pretty(state)?))
+    crate::durable::replace(&temp, format!("{}\n", serde_json::to_string_pretty(state)?))
         .with_context(|| format!("write the drain state {}", temp.display()))?;
     std::fs::rename(&temp, &path)
         .with_context(|| format!("publish the drain state {}", path.display()))?;

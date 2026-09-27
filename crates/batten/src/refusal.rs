@@ -316,7 +316,7 @@ pub struct Refusal {
 /// `Artifact` per commit) and `receipt read other` (artifacts, its subject
 /// deliberately unnamed to keep payload out of a refusal) could never be
 /// admitted — while both declare an `override` route, which makes
-/// [`crate::hook::Policy::honours_hatch`] disable `BATTEN_HOOK_BYPASS` for them.
+/// leave their declared routes as the only way through.
 /// No hatch and no admission is the state that function's own doc calls "the
 /// wall in its worst form" and asserts cannot happen. It had happened, to two of
 /// the three classes that declare such a route; `path write refused` escaped
@@ -451,7 +451,7 @@ pub fn first_sighting(root: &Path, key: &str) -> bool {
     let _ = std::fs::create_dir_all(&dir);
     // Discarded deliberately: an unwritable store means the next firing explains
     // itself again, which is the safe direction.
-    let _ = std::fs::write(&path, key);
+    let _ = crate::durable::replace(&path, key);
     true
 }
 

@@ -7,8 +7,8 @@
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
-// carried: mise-tasks/board-payloads.sh mise.toml kind:mechanism crates/batten/tests/it/board_payloads.rs
-// carried: tests/board-payloads.bats mise.toml kind:mechanism crates/batten/tests/it/board_payloads.rs
+// ported: mise-tasks/board-payloads.sh subject:mise.toml crates/batten/tests/it/board_payloads.rs
+// ported: tests/board-payloads.bats subject:mise.toml crates/batten/tests/it/board_payloads.rs
 // carried: "a get_issue payload is recovered" mise.toml kind:mechanism
 // carried: "CLOUD-782: a LATER save_issue response does not displace the get_issue payload" mise.toml kind:mechanism
 // carried: "CLOUD-782: newest wins among two get_issue payloads — the compaction case" mise.toml kind:mechanism

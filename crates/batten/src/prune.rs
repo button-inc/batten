@@ -1101,7 +1101,7 @@ impl LapJournal {
         })
         .context("target-prune: render the lap journal")?;
         let staged = path.with_extension("json.writing");
-        std::fs::write(&staged, rendered)
+        crate::durable::replace(&staged, rendered)
             .with_context(|| format!("target-prune: write the lap journal {}", staged.display()))?;
         std::fs::rename(&staged, &path)
             .with_context(|| format!("target-prune: replace the lap journal {}", path.display()))

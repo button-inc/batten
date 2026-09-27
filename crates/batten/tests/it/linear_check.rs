@@ -11,8 +11,8 @@
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
-// carried: mise-tasks/linear-check.sh mise.toml kind:mechanism crates/batten/tests/it/linear_check.rs
-// carried: tests/linear-check.bats mise.toml kind:mechanism crates/batten/tests/it/linear_check.rs
+// ported: mise-tasks/linear-check.sh subject:mise.toml crates/batten/tests/it/linear_check.rs
+// ported: tests/linear-check.bats subject:mise.toml crates/batten/tests/it/linear_check.rs
 // carried: "a failed fetch exits 1 instead of trusting the stale ref" mise.toml kind:mechanism
 // carried: "a failed fetch writes no receipt" mise.toml kind:mechanism
 // carried: "a successful fetch on a linear HEAD passes and records the receipt" mise.toml kind:mechanism

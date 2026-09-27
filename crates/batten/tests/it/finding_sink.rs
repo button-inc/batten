@@ -8,8 +8,8 @@
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
-// carried: mise-tasks/finding-sink-check.sh mise.toml kind:mechanism crates/batten/tests/it/finding_sink.rs
-// carried: tests/finding-sink-check.bats mise.toml kind:mechanism crates/batten/tests/it/finding_sink.rs
+// ported: mise-tasks/finding-sink-check.sh subject:mise.toml crates/batten/tests/it/finding_sink.rs
+// ported: tests/finding-sink-check.bats subject:mise.toml crates/batten/tests/it/finding_sink.rs
 // carried: "THE STRANDED FINDING: path:line evidence with no durable write is reported" mise.toml kind:mechanism
 // carried: "the same turn with a tracker write is clean" mise.toml kind:mechanism
 // carried: "prose with no path:line is clean — ordinary conversation is not noise" mise.toml kind:mechanism

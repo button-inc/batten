@@ -1892,7 +1892,7 @@ the wrong repair.",
             // branch has no exit: every edit is denied, and the denial is
             // discharged only by the edits. With no override route
             // `admission::questions_for` returns `None`, so the sole remaining way
-            // through was `BATTEN_HOOK_BYPASS` — a knowable string that records
+            // through was the general hook hatch — a knowable string that records
             // nothing, which this repository already ruled on for `issue file
             // same`: *the point of the admission mechanism is that the bare
             // variable stops working*. Declaring this route is what MAKES it stop,

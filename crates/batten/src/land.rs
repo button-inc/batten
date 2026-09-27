@@ -40,7 +40,6 @@
 //! green over a module that performs every write CLOUD-1148 §D recorded as
 //! unreachable.
 
-use std::io::Write as _;
 use std::path::Path;
 
 use anyhow::{Context as _, Result};
@@ -471,16 +470,16 @@ fn append(root: &Path, branch: &str, lines: &[String]) -> Result<()> {
     let directory = path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(directory)
         .with_context(|| format!("land: create the record store {}", directory.display()))?;
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .with_context(|| format!("land: open the lap record {}", path.display()))?;
-    for line in lines {
-        writeln!(file, "{line}")
-            .with_context(|| format!("land: append to the lap record {}", path.display()))?;
+    let text: String = lines.iter().fold(String::new(), |mut text, line| {
+        text.push_str(line);
+        text.push('\n');
+        text
+    });
+    if text.is_empty() {
+        return Ok(());
     }
-    Ok(())
+    crate::durable::append(&path, &text)
+        .with_context(|| format!("land: append to the lap record {}", path.display()))
 }
 
 /// The record this module writes, and the one `record::VERB_WRITTEN` names so a

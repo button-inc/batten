@@ -10,8 +10,8 @@
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
-// carried: mise-tasks/released.sh mise.toml kind:mechanism crates/batten/tests/it/released.rs
-// carried: tests/released.bats mise.toml kind:mechanism crates/batten/tests/it/released.rs
+// ported: mise-tasks/released.sh subject:mise.toml crates/batten/tests/it/released.rs
+// ported: tests/released.bats subject:mise.toml crates/batten/tests/it/released.rs
 // carried: "with no stdin it reports what the tag shipped" mise.toml kind:mechanism
 // carried: "an In Review issue the tag shipped is movable" mise.toml kind:mechanism
 // carried: "an issue in any other state is left alone, never touched" mise.toml kind:mechanism

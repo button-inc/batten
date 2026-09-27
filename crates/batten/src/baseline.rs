@@ -350,7 +350,7 @@ pub fn save(root: &Path, baseline: &Baseline) -> Result<PathBuf> {
     let temp = file.with_extension("json.tmp");
     let mut json = serde_json::to_string_pretty(baseline)?;
     json.push('\n');
-    std::fs::write(&temp, json).with_context(|| format!("write {}", temp.display()))?;
+    crate::durable::replace(&temp, json).with_context(|| format!("write {}", temp.display()))?;
     std::fs::rename(&temp, &file)
         .with_context(|| format!("install the baseline at {}", file.display()))?;
     Ok(file)

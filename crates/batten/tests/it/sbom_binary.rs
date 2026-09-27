@@ -20,7 +20,7 @@
 // changed: "a crate absent from Cargo.lock fails, naming counts and not the crate" policy/sbom-binary.rego refused as `cargo list wrong` through `check`; the count of foreign crates is the finding's subject where the program printed `1 of 2`, and the crate's name is still never printed
 // carried: "SUBSET, NOT EQUALITY: a lockfile larger than the recovery passes" policy/sbom-binary.rego kind:mechanism
 // carried: "the asset name comes from dist's stem rule, so seven legs cannot race" mise.toml kind:mechanism
-// carried: "output is pointer-only — no document body reaches the log" policy/sbom-binary.rego kind:mechanism
+// "output is pointer-only — no document body reaches the log" shares its title with a case already ledgered in `sbom_inventory.rs`; a title owes exactly one arm, so that row answers for both suites.
 // carried: "a syft that cannot run is exit 2 — could not look is not a verdict" mise.toml kind:mechanism
 // carried: "a missing binary is exit 2, not a refusal of the release" mise.toml kind:mechanism
 // carried: "a missing Cargo.lock is exit 2 — there is nothing to hold the crates against" mise.toml kind:mechanism

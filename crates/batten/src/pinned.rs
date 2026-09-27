@@ -472,7 +472,7 @@ pub fn record(root: &Path, configs: &[PathBuf], programs: &BTreeSet<String>) -> 
     {
         return false;
     }
-    std::fs::write(path, body).is_ok()
+    crate::durable::replace(path, body).is_ok()
 }
 
 /// The files the pin reports as configuring it. Spawns.

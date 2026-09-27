@@ -328,14 +328,9 @@ fn write_record(at: &Path, text: &str, append: bool) -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     if append {
-        use std::io::Write as _;
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(at)?;
-        file.write_all(text.as_bytes())?;
+        crate::durable::append(at, text)?;
     } else {
-        std::fs::write(at, text)?;
+        crate::durable::replace(at, text)?;
     }
     Ok(())
 }

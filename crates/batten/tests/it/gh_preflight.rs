@@ -5,7 +5,7 @@
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
-// carried: mise-tasks/gh-preflight.sh mise.toml kind:mechanism crates/batten/tests/it/gh_preflight.rs
+// ported: mise-tasks/gh-preflight.sh subject:mise.toml crates/batten/tests/it/gh_preflight.rs
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

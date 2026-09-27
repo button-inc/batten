@@ -444,13 +444,8 @@ fn from_fixture(dir: &std::path::Path, url: &str, etag: Option<&str>, now: u64) 
         .and_then(|raw| raw.trim().parse::<u32>().ok())
         .unwrap_or(0)
         + 1;
-    let _ = std::fs::write(&calls, format!("{n}\n"));
-    if let Ok(mut args) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("args"))
+    let _ = crate::durable::replace(&calls, format!("{n}\n"));
     {
-        use std::io::Write as _;
         // THE VALIDATOR IS PART OF THE REQUEST A CASE READS BACK. The stubbed
         // program recorded its whole argv, so `-H "If-None-Match: …"` was
         // visible and the 304 case asserts on it — the conditional poll IS the
@@ -459,10 +454,13 @@ fn from_fixture(dir: &std::path::Path, url: &str, etag: Option<&str>, now: u64) 
         // that assertion's bytes unchanged.
         match etag {
             Some(etag) => {
-                let _ = writeln!(args, "{url} -H If-None-Match: {etag}");
+                let _ = crate::durable::append(
+                    &dir.join("args"),
+                    &format!("{url} -H If-None-Match: {etag}"),
+                );
             }
             None => {
-                let _ = writeln!(args, "{url}");
+                let _ = crate::durable::append(&dir.join("args"), url);
             }
         }
     }

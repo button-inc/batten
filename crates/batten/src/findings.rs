@@ -587,7 +587,7 @@ fn write_record(store_dir: &Path, record: &FindingRecord) -> Result<()> {
         record.identity.fingerprint.to_hex(),
         std::process::id()
     ));
-    std::fs::write(&temp, format!("{json}\n"))
+    crate::durable::replace(&temp, format!("{json}\n"))
         .with_context(|| format!("write the finding {}", temp.display()))?;
     std::fs::rename(&temp, record_path(store_dir, record.identity.fingerprint))
         .with_context(|| format!("publish the finding in {}", dir.display()))?;

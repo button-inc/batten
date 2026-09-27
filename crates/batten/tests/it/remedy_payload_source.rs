@@ -10,7 +10,7 @@
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
-// carried: tests/remedy-payload-source.bats mise.toml kind:mechanism crates/batten/tests/it/remedy_payload_source.rs
+// ported: tests/remedy-payload-source.bats subject:mise.toml crates/batten/tests/it/remedy_payload_source.rs
 // carried: "every message was found at all — this suite is not passing vacuously" batten.toml kind:mechanism
 // carried: "THE PREDICATE: every refusal names the source that works on any host" batten.toml kind:mechanism
 // carried: "THE STRONGER PREDICATE: the two board-write rows send the reader to no payload at all" batten.toml kind:mechanism

@@ -36,18 +36,12 @@
 // carried: mise-tasks/land-lock.sh crates/batten/src/lease.rs kind:verb crates/batten/tests/it/lease_lifecycle.rs runs:batten+lease
 // carried: tests/land-lock.bats crates/batten/src/lease.rs kind:verb crates/batten/tests/it/lease_lifecycle.rs
 //
-// AND ONE CASE FROM A SUITE THAT SURVIVES. `tests/reclaim-census.bats` reached
-// into `mise-tasks/land-lock.sh` to count the hold loop's own beat records, so
-// the case dies with the program it was counting — but the suite's declared
-// subject, `mise-tasks/reclaim-census.sh`, is still standing.
+// AND ONE CASE FROM `tests/reclaim-census.bats`, which reached into
+// `mise-tasks/land-lock.sh` to count the hold loop's own beat records, so the
+// case moved with the program it was counting. The suite itself retired whole
+// under CLOUD-1717 onto `[tasks.reclaim-census]`; its one path-level row lives
+// in `reclaim_census.rs`, since a deleted path owes exactly one mapping.
 //
-// `ported` is the arm for exactly that, and it obliges MORE than `carried`
-// rather than less: a target the tree carries, PLUS a `subject:` naming a path
-// the edited file declared at base and head still carries. The `subject:` field
-// is what clears the aggregate subject-alive term — by naming the survivor,
-// rather than by a `carried` row falsely claiming the case moved somewhere.
-//
-// ported: tests/reclaim-census.bats crates/batten/tests/it/lease_lifecycle.rs subject:mise-tasks/reclaim-census.sh
 // carried: "land-lock's hold loop records a beat and every stop it chooses" crates/batten/src/lease.rs kind:verb
 //
 // The seventy-seven cases, one row each, keyed by TITLE — a row whose first

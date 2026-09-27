@@ -719,7 +719,7 @@ pub fn record_sourced(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(path, record.render())?;
+    crate::durable::replace(path, record.render())?;
     Ok(())
 }
 
@@ -1618,7 +1618,7 @@ pub fn run_record(check: &str, mode: Mode, err: &mut dyn Write) -> Result<ExitCo
     std::fs::create_dir_all(&receipts_dir)
         .with_context(|| format!("create the receipt store {}", receipts_dir.display()))?;
     let json = serde_json::to_string_pretty(&statement)?;
-    std::fs::write(&canonical, format!("{json}\n"))
+    crate::durable::replace(&canonical, format!("{json}\n"))
         .with_context(|| format!("write the receipt {}", canonical.display()))?;
 
     let compat_dir = Path::new(&facts.git_dir).join("batten-receipts");
@@ -1627,7 +1627,7 @@ pub fn run_record(check: &str, mode: Mode, err: &mut dyn Write) -> Result<ExitCo
     let compat = compat_dir.join(format!("{check}.{}", facts.head));
     // The recorded main, no trailing newline — the exact bytes ready-guard
     // compares against `git rev-parse origin/main`.
-    std::fs::write(&compat, &facts.main)
+    crate::durable::replace(&compat, &facts.main)
         .with_context(|| format!("write the compatibility receipt {}", compat.display()))?;
 
     record_agent_context(check, &facts, &statement.subject, now, mode, err)?;
@@ -1771,7 +1771,7 @@ fn record_agent_context(
 
     let path = agent_path(&facts.repo_root, check)?;
     let json = serde_json::to_string_pretty(&statement)?;
-    std::fs::write(&path, format!("{json}\n"))
+    crate::durable::replace(&path, format!("{json}\n"))
         .with_context(|| format!("write the agent-context statement {}", path.display()))?;
     Ok(())
 }

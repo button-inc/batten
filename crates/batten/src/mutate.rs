@@ -968,7 +968,7 @@ fn reconcile(dir: &Path, tracked: &std::collections::BTreeSet<String>) -> Result
         }
     }
     let manifest: Vec<&str> = tracked.iter().map(String::as_str).collect();
-    std::fs::write(dir.join(MANIFEST), manifest.join("\n"))
+    crate::durable::replace(dir.join(MANIFEST), manifest.join("\n"))
         .context("mutate: could not record what was staged")?;
     Ok(())
 }
@@ -1095,11 +1095,11 @@ fn spawn(
     let out_path = capture.join("stdout");
     let err_path = capture.join("stderr");
     command.stdout(std::process::Stdio::from(
-        fs::File::create(&out_path)
+        fs::File::create(&out_path) // stream: a child's stdout sink
             .with_context(|| format!("mutate: could not open {}", out_path.display()))?,
     ));
     command.stderr(std::process::Stdio::from(
-        fs::File::create(&err_path)
+        fs::File::create(&err_path) // stream: a child's stderr sink
             .with_context(|| format!("mutate: could not open {}", err_path.display()))?,
     ));
     let mut child = command

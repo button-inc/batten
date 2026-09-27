@@ -69,7 +69,6 @@
 //! CLOUD-134: it needs an embedding source and a leakage review of what the
 //! vector encodes. v1 records a pointer and a byte count.
 
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
@@ -481,17 +480,9 @@ pub fn append(repo_root: &Path, worktree: &Path, record: &DecisionRecord) -> Res
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("create the decision log {}", dir.display()))?;
     let path = dir.join(format!("{}.jsonl", journal::shard_id(worktree)));
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .with_context(|| format!("open the decision shard {}", path.display()))?;
-    writeln!(file, "{}", record.to_line()?)
-        .with_context(|| format!("append to the decision shard {}", path.display()))?;
     // Persist before emit: a record a consumer has been shown is already on disk.
-    file.sync_all()
-        .with_context(|| format!("sync the decision shard {}", path.display()))?;
-    Ok(())
+    crate::durable::append(&path, &record.to_line()?)
+        .with_context(|| format!("append to the decision shard {}", path.display()))
 }
 
 /// One SHA's caller provenance, as the log answers it.

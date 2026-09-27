@@ -50,7 +50,6 @@
 //! recorder and reach none of this.
 
 use std::collections::BTreeMap;
-use std::io::Write as _;
 use std::path::Path;
 
 use anyhow::Result;
@@ -1259,12 +1258,7 @@ fn already_recorded(snapshot: &str, recorded: &Recorded, context: &Context<'_>) 
 /// Append one line, creating the store if it does not exist.
 fn append(path: &Path, line: &str) -> Option<()> {
     std::fs::create_dir_all(path.parent()?).ok()?;
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .ok()?;
-    writeln!(file, "{line}").ok()
+    crate::durable::append(path, line).ok()
 }
 
 #[cfg(test)]

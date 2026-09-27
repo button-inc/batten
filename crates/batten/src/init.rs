@@ -122,7 +122,7 @@ pub fn apply(dir: &Path, dry_run: bool) -> Result<Outcome> {
     if dry_run {
         return Ok(Outcome::WouldCreate);
     }
-    std::fs::write(&path, STARTER)?;
+    crate::durable::replace(&path, STARTER)?;
     Ok(Outcome::Created)
 }
 

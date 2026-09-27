@@ -9,8 +9,8 @@
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
-// carried: mise-tasks/in-progress-drain.sh mise.toml kind:mechanism crates/batten/tests/it/in_progress_drain.rs
-// carried: tests/in-progress-drain.bats mise.toml kind:mechanism crates/batten/tests/it/in_progress_drain.rs
+// ported: mise-tasks/in-progress-drain.sh subject:mise.toml crates/batten/tests/it/in_progress_drain.rs
+// ported: tests/in-progress-drain.bats subject:mise.toml crates/batten/tests/it/in_progress_drain.rs
 // carried: "an In Progress issue whose commits are on main is landed-unswept" mise.toml kind:mechanism
 // carried: "a landed row is not ALSO reported as abandoned — the verdicts are exclusive" mise.toml kind:mechanism
 // carried: "the landed report says it is candidates, and names what decides a move" mise.toml kind:mechanism

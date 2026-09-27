@@ -10,8 +10,8 @@
 //! exit code is `changed:` to assert it by word; every case that named the old
 //! `batten-receipts/step.*` files is `changed:` to name the keyed store.
 //!
-// carried: mise-tasks/step-receipt.sh mise.toml kind:mechanism crates/batten/tests/it/step_receipt.rs
-// carried: tests/step-receipt.bats mise.toml kind:mechanism crates/batten/tests/it/step_receipt.rs
+// ported: mise-tasks/step-receipt.sh subject:mise.toml crates/batten/tests/it/step_receipt.rs
+// ported: tests/step-receipt.bats subject:mise.toml crates/batten/tests/it/step_receipt.rs
 // changed: "no receipt: the step runs" mise.toml a miss is the word `miss` at exit 0, since `mise run` would print a failure line over exit 1 (CLOUD-498)
 // carried: "identical inputs, command and tools hit" mise.toml kind:mechanism
 // changed: "a changed input file misses" mise.toml the miss is read as the word, not exit 1

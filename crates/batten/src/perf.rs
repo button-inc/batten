@@ -2256,7 +2256,7 @@ pub fn sweep_fixture(root: &Path, n: usize) -> Result<()> {
     let bundle = root.join("policy-acquisition");
     std::fs::create_dir_all(&bundle)
         .with_context(|| format!("perf-acquire: could not create {}", bundle.display()))?;
-    std::fs::write(bundle.join("gate.rego"), SWEEP_MODULE)
+    crate::durable::replace(bundle.join("gate.rego"), SWEEP_MODULE)
         .context("perf-acquire: could not write the sweep module")?;
 
     let paths: Vec<String> = (0..n).map(|index| format!("config{index}.toml")).collect();
@@ -2265,7 +2265,7 @@ pub fn sweep_fixture(root: &Path, n: usize) -> Result<()> {
         // — open, read, parse, cache — rather than a per-byte one, and a large
         // file would measure the parser instead. Said out loud so the fixture does
         // not grow by accretion.
-        std::fs::write(root.join(path), "quiet = true\n")
+        crate::durable::replace(root.join(path), "quiet = true\n")
             .with_context(|| format!("perf-acquire: could not write {path}"))?;
     }
 
@@ -2290,7 +2290,7 @@ pub fn sweep_fixture(root: &Path, n: usize) -> Result<()> {
              severity = \"deny\"\n"
         )
     };
-    std::fs::write(root.join("batten.toml"), authority)
+    crate::durable::replace(root.join("batten.toml"), authority)
         .context("perf-acquire: could not write the fixture authority")?;
 
     // `git init` so the walk is a repository walk, matching every other fixture

@@ -873,7 +873,7 @@ pub fn mint(
     writeln!(body, "branch {branch}")?;
 
     std::fs::create_dir_all(receipts)
-        .and_then(|()| std::fs::write(&dest, body))
+        .and_then(|()| crate::durable::replace(&dest, body))
         .map_err(|_| {
             UsageError::raise(format!(
                 "claim: could not write the claim receipt at {}",
@@ -1006,7 +1006,7 @@ pub fn adopt(
     }
     writeln!(body, "branch {branch}")?;
     writeln!(body, "adopted-from {}", orphan.recorded)?;
-    std::fs::write(&dest, body)
+    crate::durable::replace(&dest, body)
         .and_then(|()| std::fs::remove_file(&orphan.path))
         .map_err(|_| {
             UsageError::raise(

@@ -112,7 +112,8 @@ fn store(path: &Path, body: &str) -> Result<()> {
     let directory = path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(directory)
         .with_context(|| format!("create the record store {}", directory.display()))?;
-    std::fs::write(path, body).with_context(|| format!("write the record {}", path.display()))?;
+    crate::durable::replace(path, body)
+        .with_context(|| format!("write the record {}", path.display()))?;
     Ok(())
 }
 

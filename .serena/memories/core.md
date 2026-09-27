@@ -2590,6 +2590,12 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   naming it here recorded branch-internal churn as provenance. The detour is
   real and belongs on `shell-retirement.rego`'s arm F, which now refuses it —
   not in the module's own history.
+- `durable.rs` — the ONE place this crate mutates a file (CLOUD-1919): `append`
+  is the whole record in one `write(2)` plus `fsync`, and `replace` is temp,
+  `fsync`, `rename`, then a directory `fsync`, so an interrupted write leaves the
+  old state or the new one and never a torn one. `path write unsafe` refuses a
+  raw `fs::write` / `File::create` / `.append(true)` anywhere else in `src/`.
+  `mem:engineering/crash-only-writes` carries the decision.
 - `cargo_graph.rs` — the ACTIVATED dependency graph, read from a `cargo metadata`
   document (CLOUD-1717). ONE WALK, TWO GATES, and that is the whole reason it
   exists: `evaluator-closure` asks whether an IO-bearing crate is reachable from

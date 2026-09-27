@@ -65,7 +65,6 @@
 //! approval — the cost is thinking, not asking.
 
 use std::collections::BTreeMap;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -711,18 +710,8 @@ fn store(repo_root: &Path, record: &Record) -> Result<()> {
         .context("the override record path has a parent")?;
     std::fs::create_dir_all(dir)
         .with_context(|| format!("create the override store at {}", dir.display()))?;
-    let temp = path.with_extension("json.tmp");
     let bytes = serde_json::to_vec_pretty(record).context("serialize the override record")?;
-    {
-        let mut file =
-            std::fs::File::create(&temp).with_context(|| format!("write {}", temp.display()))?;
-        file.write_all(&bytes)
-            .with_context(|| format!("write {}", temp.display()))?;
-        file.sync_all()
-            .with_context(|| format!("flush {}", temp.display()))?;
-    }
-    std::fs::rename(&temp, &path).with_context(|| format!("install {}", path.display()))?;
-    Ok(())
+    crate::durable::replace(&path, bytes).with_context(|| format!("install {}", path.display()))
 }
 
 /// Issue an admission for `binding`, returning its address.

@@ -13442,7 +13442,7 @@ deny contains "refused by themodule" if {
     }
 
     /// Every class this registry declares an override route for, which is exactly
-    /// the set [`Policy::honours_hatch`] takes `BATTEN_HOOK_BYPASS` away from.
+    /// the set whose refusals only a declared route clears.
     ///
     /// Read off the registry rather than listed, for the reason the gate exists: a
     /// hand-kept list is what lets a class gain an override route and no binding
@@ -13518,7 +13518,7 @@ deny contains "refused by themodule" if {
     /// A class that advertises an override must carry something to bind it to
     /// (CLOUD-1871).
     ///
-    /// [`Policy::honours_hatch`] disables `BATTEN_HOOK_BYPASS` for any class
+    /// a declared route is the only way through for any class
     /// declaring an override route with a precondition, on the stated ground that
     /// such a class "already has a way through that leaves a record … and
     /// `admit_mediated` honours the spent admission". `admit_mediated` returns

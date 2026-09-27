@@ -50,7 +50,6 @@
 //! not how it gets fixed.
 
 use std::collections::BTreeSet;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
@@ -228,7 +227,7 @@ fn write_format(store_dir: &Path, format: &Format) -> Result<()> {
         .with_context(|| format!("create the journal directory {}", dir.display()))?;
     let json = serde_json::to_string_pretty(format)?;
     let temp = dir.join(format!("{FORMAT_FILE}.{}.tmp", std::process::id()));
-    std::fs::write(&temp, format!("{json}\n"))
+    crate::durable::replace(&temp, format!("{json}\n"))
         .with_context(|| format!("write the store format {}", temp.display()))?;
     std::fs::rename(&temp, format_path(store_dir))
         .with_context(|| format!("publish the store format in {}", dir.display()))?;
@@ -451,15 +450,8 @@ pub fn append_line(store_dir: &Path, shard: &str, line: &str) -> Result<()> {
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("create the shard directory {}", dir.display()))?;
     let path = dir.join(format!("{shard}.jsonl"));
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .with_context(|| format!("open the shard {}", path.display()))?;
-    writeln!(file, "{line}").with_context(|| format!("append to the shard {}", path.display()))?;
-    file.sync_all()
-        .with_context(|| format!("sync the shard {}", path.display()))?;
-    Ok(())
+    crate::durable::append(&path, line)
+        .with_context(|| format!("append to the shard {}", path.display()))
 }
 
 /// What folding every shard of a generic journal found.
@@ -708,7 +700,7 @@ fn write_merged(store_dir: &Path, entries: &[Entry]) -> Result<()> {
         body.push_str(&serde_json::to_string(entry)?);
         body.push('\n');
     }
-    std::fs::write(&temp, body)
+    crate::durable::replace(&temp, body)
         .with_context(|| format!("write the merged log {}", temp.display()))?;
     std::fs::rename(&temp, merged_path(store_dir))
         .with_context(|| format!("publish the merged log in {}", dir.display()))?;

@@ -1453,7 +1453,7 @@ bytes the tracker returned, never a re-typed copy; do NOT re-type one by hand.""
 # the one state that matters. The remedy names `verify`; where `verify` is red for
 # reasons only a write can repair, re-running it cannot change its answer, and the
 # write that would is this row's own subject. Measured twice, the second time
-# costing a whole session, with `BATTEN_HOOK_BYPASS` as the only exit — the
+# costing a whole session, with the since-retired general hook hatch as the only exit — the
 # password shape CLOUD-1051 retired.
 #
 # THE ROUTE IS DECLARED ON THE CLASS, not here: `receipt read other` is vendored
@@ -4160,6 +4160,34 @@ pattern = "entities/"
 severity = "deny"
 scope = "tree"
 no_fix_reason = "delete the literal; a consumer fact belongs in that consumer's own batten.toml, never in the core"
+
+# CLOUD-1919. Every file this crate mutates goes through `durable`: one write
+# plus `fsync` per append, temp + `fsync` + `rename` + directory `fsync` per
+# replace, so an interrupted write leaves the old state or the new one and never
+# a torn one. The module's header carries the measurement and why neither a
+# clippy ban nor a `forbid` row can draw the production/test boundary.
+[[rule]]
+id = "path write unsafe"
+kind = "policy"
+scope = "tree"
+line_sources = ["crates/batten/src/**/*.rs"]
+module = "policy/durable-write.rego"
+severity = "deny"
+
+[[verdict]]
+id = "path write unsafe"
+gloss = "a production file write bypasses `durable`, so a crash or a second writer can leave it torn"
+class = """
+Route the write through `crate::durable::append` (one write plus fsync) or \
+`crate::durable::replace` (temp, fsync, rename, directory fsync). A byte stream \
+being captured rather than state being committed is marked `// stream:` on the \
+line, with its commit point named (CLOUD-1919).
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "crates/batten/src/durable.rs"
 
 # THE GENERAL HATCH IS REMOVED FROM THE ENGINE, AND ITS NAME STAYS OUT OF THE
 # TREE. It was a knowable string that switched off mediation and recorded

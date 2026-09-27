@@ -20,16 +20,16 @@
 // carried: "landing then releasing clears the very same issue" policy/done.rego kind:mechanism
 // carried: "a Done issue no commit names is noted, not failed" policy/done.rego kind:mechanism
 // carried: "one released ref is enough, even with later unreleased ones" policy/done.rego kind:mechanism
-// carried: "a prefix does not match a longer id" policy/done.rego kind:mechanism
-// carried: "issues in other columns are none of this gate's business" policy/done.rego kind:mechanism
-// carried: "the pipeline does not eat the verdict" policy/done.rego kind:mechanism
+// "a prefix does not match a longer id" shares its title with a case already ledgered in `landed_check.rs`; a title owes exactly one arm, so that row answers for both suites.
+// "issues in other columns are none of this gate's business" shares its title with a case already ledgered in `landed_check.rs`; a title owes exactly one arm, so that row answers for both suites.
+// "the pipeline does not eat the verdict" shares its title with a case already ledgered in `landed_check.rs`; a title owes exactly one arm, so that row answers for both suites.
 // carried: "several issues are each judged, in stable numeric order" policy/done.rego kind:mechanism
-// carried: "output is a pointer — identifiers and target state, never issue bodies" policy/done.rego kind:mechanism
-// carried: "a concatenated payload stream is accepted, like graph-check's" policy/done.rego kind:mechanism
-// carried: "an unresolvable origin/main exits 2 — a checkout problem, not a clean board" policy/done.rego kind:mechanism
+// "output is a pointer — identifiers and target state, never issue bodies" shares its title with a case already ledgered in `landed_check.rs`; a title owes exactly one arm, so that row answers for both suites.
+// "a concatenated payload stream is accepted, like graph-check's" shares its title with a case already ledgered in `landed_check.rs`; a title owes exactly one arm, so that row answers for both suites.
+// "an unresolvable origin/main exits 2 — a checkout problem, not a clean board" shares its title with a case already ledgered in `landed_check.rs`; a title owes exactly one arm, so that row answers for both suites.
 // carried: "a clone with no tags exits 2 — the opposite false verdict" policy/done.rego kind:mechanism
-// carried: "empty stdin exits 2, distinct from a clean board" policy/done.rego kind:mechanism
-// carried: "unparseable stdin exits 2" policy/done.rego kind:mechanism
+// "empty stdin exits 2, distinct from a clean board" shares its title with a case already ledgered in `landed_check.rs`; a title owes exactly one arm, so that row answers for both suites.
+// "unparseable stdin exits 2" shares its title with a case already ledgered in `landed_check.rs`; a title owes exactly one arm, so that row answers for both suites.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

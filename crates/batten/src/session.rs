@@ -275,7 +275,7 @@ fn write_record(store_dir: &Path, record: &SessionRecord) -> Result<()> {
             .unwrap_or("session"),
         std::process::id()
     ));
-    std::fs::write(&temp, format!("{json}\n"))
+    crate::durable::replace(&temp, format!("{json}\n"))
         .with_context(|| format!("write the session record {}", temp.display()))?;
     std::fs::rename(&temp, &path)
         .with_context(|| format!("publish the session record in {}", dir.display()))?;

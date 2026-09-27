@@ -9,8 +9,8 @@
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
-// carried: mise-tasks/render/cli.sh mise.toml kind:mechanism crates/batten/tests/it/render_cli.rs
-// carried: tests/render-cli.bats mise.toml kind:mechanism crates/batten/tests/it/render_cli.rs
+// ported: mise-tasks/render/cli.sh subject:mise.toml crates/batten/tests/it/render_cli.rs
+// ported: tests/render-cli.bats subject:mise.toml crates/batten/tests/it/render_cli.rs
 // carried: "--names answers the asset path" mise.toml kind:mechanism
 // carried: "--names builds nothing and creates nothing" mise.toml kind:mechanism
 // changed: "an unrecognised argument is a usage error, not a silent render" mise.toml the task's `usage` spec declares only `--names`, so mise refuses an undeclared argument before the body runs; the body no longer re-parses `$@`, which is the template-appended text `[tasks.checksums]` measured running as a command

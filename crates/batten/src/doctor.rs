@@ -703,7 +703,7 @@ fn purge(rustlib: &Path, target: &str) {
         if kept.len() != text.lines().count() {
             let mut body = kept.join("\n");
             body.push('\n');
-            drop(std::fs::write(&components, body));
+            drop(crate::durable::replace(&components, body));
         }
     }
 }

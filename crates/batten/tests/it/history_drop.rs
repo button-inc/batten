@@ -268,7 +268,7 @@ fn spend(dir: &Path, admission: &str, subject: &str) -> bool {
 ///
 /// `verdict.rs` trades this class's hatch for its override route — *"the way
 /// through that leaves a record, which is what keeps this a gate rather than a
-/// wall"* — and `Policy::honours_hatch` duly refuses `BATTEN_HOOK_BYPASS` for it.
+/// wall"* — and a declared route is duly the only way through it.
 /// The record route did not work: `Refusal::declared` bound only path subjects, so
 /// `admit_mediated` returned early on a refusal naming a count and commits, and
 /// the class had no way through at all. Measured before the fix by two admissions

@@ -452,7 +452,7 @@ fn write_record(dir: &Path, record: &StoreRecord) -> Result<()> {
         .with_context(|| format!("create the store directory {}", dir.display()))?;
     let json = serde_json::to_string_pretty(record)?;
     let temp = dir.join(format!("{STORE_FILE}.{}.tmp", std::process::id()));
-    std::fs::write(&temp, format!("{json}\n"))
+    crate::durable::replace(&temp, format!("{json}\n"))
         .with_context(|| format!("write the store record {}", temp.display()))?;
     std::fs::rename(&temp, dir.join(STORE_FILE))
         .with_context(|| format!("publish the store record in {}", dir.display()))?;
@@ -462,7 +462,7 @@ fn write_record(dir: &Path, record: &StoreRecord) -> Result<()> {
 /// Point the repository at its store, so a move can be followed back.
 fn write_marker(common_dir: &str, id: &StoreId) -> Result<()> {
     let path = Path::new(common_dir).join(MARKER_FILE);
-    std::fs::write(&path, id.as_str())
+    crate::durable::replace(&path, id.as_str())
         .with_context(|| format!("write the store marker {}", path.display()))
 }
 

@@ -650,6 +650,10 @@ declared_modules := {
 	# authority itself, which is the direction that would make a repo-agnostic
 	# walk conditional on one repository's table.
 	"cargo_graph",
+	# `durable` arrived with CLOUD-1919 and reaches NOTHING in this crate: two
+	# functions over `std::fs` and a path. Every module that mutates a file calls
+	# it, so it must sit below all of them, which a leaf does by construction.
+	"durable",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.

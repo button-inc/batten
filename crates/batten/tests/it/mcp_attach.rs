@@ -5,8 +5,8 @@
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
-// carried: mise-tasks/mcp-attach-check.sh mise.toml kind:mechanism crates/batten/tests/it/mcp_attach.rs
-// carried: tests/mcp-attach-check.bats mise.toml kind:mechanism crates/batten/tests/it/mcp_attach.rs
+// ported: mise-tasks/mcp-attach-check.sh subject:mise.toml crates/batten/tests/it/mcp_attach.rs
+// ported: tests/mcp-attach-check.bats subject:mise.toml crates/batten/tests/it/mcp_attach.rs
 // carried: "a clean log passes" mise.toml kind:mechanism
 // carried: "a -32000 failure fails and names the server and the code" mise.toml kind:mechanism
 // carried: "a CONNECT_TIMEOUT failure fails too — the code is not fixed at -32000" mise.toml kind:mechanism

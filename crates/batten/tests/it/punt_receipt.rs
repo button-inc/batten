@@ -230,13 +230,12 @@ fn a_superseded_receipt_still_refuses_an_unarticulated_write() {
 }
 
 #[test]
-fn the_bare_variable_no_longer_clears_a_superseded_receipt() {
+fn a_superseded_receipt_is_refused_by_the_vendored_registry() {
     // THE TIGHTENING, and the assertion a reviewer of CLOUD-1823 should look for
-    // first. `hook::Policy::honours_hatch` stops honouring `BATTEN_HOOK_BYPASS`
-    // for any class declaring an `override` route with a precondition, so
-    // DECLARING the route is what takes the password away. Before it, this exact
-    // call exited 0 — measured on this repository's own wedged branch, where the
-    // variable was the only exit that existed.
+    // first: the class declares an `override` route with a precondition, so the
+    // declared route is the way through and nothing else is. The general hook
+    // hatch that once cleared this exact call is retired engine-wide, and
+    // `bypass_scrub.rs` is where its inertness is asserted.
     //
     // Pinned here rather than left to `hook.rs`'s unit tier because the unit tier
     // fabricates a registry, and what this asserts is that the VENDORED registry
@@ -246,9 +245,6 @@ fn the_bare_variable_no_longer_clears_a_superseded_receipt() {
     command
         .current_dir(&dir)
         .args(["adjudicate", "--harness", "exit-code"])
-        // The retired variable, spelled as a literal: the engine no longer names
-        // it, and this asserts it opens nothing.
-        .env("BATTEN_HOOK_BYPASS", "1")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());

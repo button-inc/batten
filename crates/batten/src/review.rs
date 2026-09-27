@@ -443,7 +443,7 @@ fn dispatch(
     {
         return Dispatch::Failed;
     }
-    let _ = std::fs::write(path, body);
+    let _ = crate::durable::replace(path, body);
     Dispatch::Ran
 }
 

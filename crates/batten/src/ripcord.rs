@@ -22,7 +22,7 @@
 //! proposed this sentinel scoped to the unreadable arm; this instance refutes that
 //! scoping, because there the config loads.
 //!
-//! # Why a file, and why it is not `BATTEN_HOOK_BYPASS`
+//! # Why a file, and why it is not the retired general hook hatch
 //!
 //! The environment hatch is unreachable from inside the state it is advertised
 //! for. It is read from the hook process's own environment, and an agent driving
