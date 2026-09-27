@@ -14937,7 +14937,14 @@ fn compose(
             }
         }
         Some(forced) => forced,
-        None => hook::adjudicate(policy, envelope, facts),
+        // DENY FIRST, THEN THE MODULE PRE-APPROVAL (CLOUD-1949). The engine's
+        // answer — every typed row and every module's deny — is taken whole, and
+        // a module's `preapprove` is asked only when that answer is `Allow`.
+        None => match hook::adjudicate(policy, envelope, facts) {
+            hook::Decision::Allow => hook::policy_preapproval(policy, envelope, facts)
+                .map_or(hook::Decision::Allow, hook::Decision::Preapproved),
+            decided => decided,
+        },
     }
 }
 

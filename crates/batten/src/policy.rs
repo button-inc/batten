@@ -159,6 +159,16 @@ const DENY_RULE: &str = "deny";
 /// Read *alongside* [`DENY_RULE`] rather than replacing it: this is additive.
 const VIOLATION_RULE: &str = "violation";
 
+/// The pre-approval set: the ids of this module's rules that hold for a call
+/// the host should run without prompting (CLOUD-1949).
+///
+/// **Not an allow, and not a second authority.** It is read only after every
+/// bundle's deny set came back empty and the engine's own decision was `Allow`,
+/// so it can never lower a refusal: it tells the HOST not to prompt for a call
+/// batten already allowed. The raise-only invariant (house style §8) is about
+/// batten's refusals, and those stay deny-first by construction.
+const PREAPPROVE_RULE: &str = "preapprove";
+
 /// The ids a module publishes — a set of strings.
 ///
 /// ```text
@@ -1340,8 +1350,14 @@ fn collect_strings(results: &regorus::QueryResults, rule_name: &str) -> Option<B
 /// predicate id and no pointers, attributed to the enabling row, and it is held
 /// to the registry exactly as an attributed one is.
 fn collect_deny_messages(results: &regorus::QueryResults) -> Option<Vec<String>> {
+    collect_string_list(results, DENY_RULE)
+}
+
+/// Every string in a set- or array-valued rule named `rule` under the package,
+/// or `None` for a shape this gate cannot read.
+fn collect_string_list(results: &regorus::QueryResults, rule: &str) -> Option<Vec<String>> {
     let mut messages = Vec::new();
-    for value in package_members(results, DENY_RULE) {
+    for value in package_members(results, rule) {
         match value {
             regorus::Value::Set(items) => {
                 for item in items.iter() {
@@ -1540,6 +1556,29 @@ pub fn deny(bundle: &Bundle, input: &str) -> Look<Vec<Violation>> {
     }
 
     Look::Is(violations)
+}
+
+/// The ids of this bundle's rules that pre-approve the call (CLOUD-1949).
+///
+/// Could-not-look on a fault, on an unreadable shape, and on an id the bundle
+/// never declared in `rules` — the same attribution rule [`deny`] applies, so a
+/// pre-approval always names a declared, waivable, mutable predicate.
+#[must_use]
+pub fn preapprove(bundle: &Bundle, input: &str) -> Look<Vec<String>> {
+    let mut engine = bundle.engine.clone();
+    if engine.set_input_json(input).is_err() {
+        return Look::CouldNotLook;
+    }
+    let Ok(answered) = engine.eval_query(PACKAGE_QUERY.to_owned(), false) else {
+        return Look::CouldNotLook;
+    };
+    let Some(ids) = collect_string_list(&answered, PREAPPROVE_RULE) else {
+        return Look::CouldNotLook;
+    };
+    if ids.iter().any(|id| !bundle.declared.contains(id.as_str())) {
+        return Look::CouldNotLook;
+    }
+    Look::Is(ids)
 }
 
 /// The `.rego` modules inside an enabled bundle root, in sorted order.

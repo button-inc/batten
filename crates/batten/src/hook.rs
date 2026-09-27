@@ -6681,6 +6681,35 @@ fn policy_refusal(
     strongest
 }
 
+/// The first pre-approval any module grants this call, as the host's reason
+/// text (CLOUD-1949).
+///
+/// **Only ever consulted after the call was allowed**: the caller holds the
+/// engine's `Allow`, and [`policy_refusal`] ran inside it, so a module deny
+/// always outranks a module pre-approval. `PreToolUse` only, because a permission
+/// decision after the call has run decides nothing.
+#[must_use]
+pub fn policy_preapproval(
+    policy: &Policy,
+    envelope: &Envelope,
+    facts: &Facts<'_>,
+) -> Option<String> {
+    if envelope.event != Event::PreTool || policy.bundles.is_empty() {
+        return None;
+    }
+    let input = call_document(envelope, facts).ok()?;
+    for bundle in &policy.bundles {
+        if let crate::facts::Look::Is(ids) = crate::policy::preapprove(bundle, &input)
+            && let Some(id) = ids.first()
+        {
+            return Some(format!(
+                "pre-approved by batten rule `{id}`: a call the committed policy allows (CLOUD-1949)"
+            ));
+        }
+    }
+    None
+}
+
 /// The input document a policy module decides over.
 ///
 /// **Neutral facts only.** Every field is the concept rather than the host's
@@ -7214,6 +7243,11 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // by it is a policy question, and the engine deciding for every
             // module would be the engine holding a rule it cannot state.
             "stop-repeat": envelope.stop_active,
+            // THE HOST'S PERMISSION MODE (CLOUD-1949), as the host spelled it:
+            // `default`, `plan`, `acceptEdits`, `auto`, `dontAsk` or
+            // `bypassPermissions`. `null` when the host sent none, which Rego
+            // reads as undefined, so no module acts on a mode it was not told.
+            "permission-mode": envelope.mode,
         },
         "facts": projected_facts,
     }))
