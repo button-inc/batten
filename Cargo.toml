@@ -699,6 +699,14 @@ proc-macro2 = { version = "1", features = ["span-locations"] }
 # and must resolve the same major of it. Bump them together or not at all.
 sha2 = "0.11"
 toml = "1.1"
+# Format-preserving TOML WRITES (CLOUD-1575), beside `toml` rather than in place
+# of it. `toml` is serde-shaped: a `Value` round-trip drops comments, blank lines
+# and key order, so a `fix` written through it rewrites the file it repairs, and a
+# repair nobody will run twice. `toml_edit`'s `DocumentMut` keeps every byte it
+# was not asked to change. Same maintainers, and it resolves the SAME
+# `toml_parser` / `toml_datetime` / `toml_writer` the reader already locks, so it
+# adds the one crate and no second copy of anything beneath it.
+toml_edit = "0.25"
 # A TRANSITIVE crate this workspace does not call, pinned EXACTLY because
 # `cargo-semver-checks` re-resolves rather than reading `Cargo.lock` — so the lock
 # pinning 1.12.0 constrains our builds and not the tool's. Measured 2026-09-03:

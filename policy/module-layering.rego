@@ -146,6 +146,12 @@ declared_modules := {
 	# `#[cfg(test)]` cannot be shared across the three scopes that need it (this
 	# crate's unit tests, the `it` binary, and the standalone `tests/*.rs`).
 	"scratch",
+	# `config_edit` arrived with CLOUD-1575. It is a LEAF like `secret`: it reaches
+	# nothing in this crate, only `toml_edit` and `anyhow`, because its whole surface
+	# is one format-preserving write that a `fix` calls. A decider reads it; it reads
+	# no decider, since an edge upward would make whether a repair preserves the
+	# file depend on that decider's layer.
+	"config_edit",
 	# `secret` arrived with CLOUD-1569 and this rule named it once more, on the
 	# gate before landing. It is the PUREST LEAF in the table: it reaches nothing
 	# in this crate at all — not even `error` — because its whole surface is one

@@ -729,6 +729,11 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   that text to the model as the deny reason, where `batten: ` reads as a crash.
 - `config.rs` — loads/validates one `batten.toml` (typed, no unknown keys,
   required `version`). Layering across sources is `resolve.rs`, not here.
+- `config_edit.rs` — format-preserving edits to a committed config file, the
+  substrate a rule's `fix` writes through (CLOUD-1575). A seam with one backend
+  per `Format`, TOML via `toml_edit` for now. The contract is that the output
+  differs from the input only at the edited key. A leaf: it reaches nothing in
+  this crate.
 - `contract.rs` — the contract-drift predicate (CLOUD-461, CLOUD-525): hash the
   `[contract] tracked` surface, compare against this session's snapshot under
   `$GIT_DIR/batten-contract/<session>`, and report the change-set **once** on the

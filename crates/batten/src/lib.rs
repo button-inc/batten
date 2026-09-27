@@ -34,6 +34,7 @@ pub mod cli;
 pub mod commit;
 pub mod completion;
 pub mod config;
+pub mod config_edit;
 pub mod contract;
 pub mod decision;
 pub mod defects;

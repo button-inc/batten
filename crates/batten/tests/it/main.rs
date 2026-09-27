@@ -117,6 +117,7 @@ mod common;
 mod config_authority_boundary;
 mod config_base_ref_reading;
 mod config_deprecations;
+mod config_edit;
 mod config_epoch;
 mod config_fault_class;
 mod config_forward_compatible;
