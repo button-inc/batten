@@ -900,8 +900,22 @@ opt-level = 2
 # re-taken idle. On a CI cache hit the lane simply saves the run-phase delta; on a
 # MISS it is +69s against -40.6s, and `ci.yml` records a miss on 3 of the last 4
 # runs — so the miss rate, not this profile, is the next thing to look at.
-[profile.dev.package.batten]
-opt-level = 2
+#
+# WITHDRAWN (CLOUD-1891): THE 0.51s WAS A `touch`, AND A REAL EDIT COSTS 3x.
+# The incremental row above re-ran the build after touching one file, which
+# changes no code, so the optimiser had nothing to redo. Measured 2026-09-27 on
+# this container, the dev BIN that every pre-commit `cargo run -p batten` step
+# waits on:
+#
+#   build                              opt-2      opt-0
+#   touch, twice                       9.0s 9.0s  10.8s 9.6s
+#   after a real multi-file change     279s       90s (and opt-0 was COLD)
+#
+# The -40.6s per suite run was bought with ~190s per crate-changing build, paid
+# by the hook bin and again by each test build of the crate — every commit and
+# every `verify` lap that touches Rust. So the workspace crate is back at the
+# dev default. The dependency half above (CLOUD-1208) is untouched: those units
+# change only when the lockfile does, so their optimiser runs once.
 
 # The profile the distributed single binary is built with: maximal optimization
 # and the smallest artifact. Distinct from `release` (used for local/dev release
