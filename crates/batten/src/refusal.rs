@@ -925,7 +925,7 @@ mod sightings {
         // `$GIT_DIR`: without one every case below measures the unreadable-store
         // arm instead of the once-per-session one under test. In-process through
         // `gix` — the fixture needs a `.git`, not the git binary (CLOUD-1924).
-        gix::init(&dir).expect("git init");
+        crate::gitwrite::init_on_main(&dir).expect("git init");
         dir
     }
 

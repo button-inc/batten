@@ -1189,10 +1189,21 @@ pub fn census(root: &std::path::Path, exclude: Option<&str>) -> usize {
         };
         // SORTED FOR BYTE-STABILITY (house style §6): the same root yields the
         // same count however the filesystem chose to order itself.
-        let mut names: Vec<_> = entries.flatten().map(|entry| entry.path()).collect();
+        //
+        // THE DIRECTORY TEST IS THE ENTRY'S OWN TYPE, WHICH DOES NOT FOLLOW A LINK.
+        // `Path::is_dir` follows symlinks and this walk keeps no visited set, so
+        // a symlinked directory cycle under the root never terminated. The
+        // retired program's `find` never descended through a link either (`-P`).
+        let mut names: Vec<_> = entries
+            .flatten()
+            .map(|entry| {
+                let real_dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
+                (entry.path(), real_dir)
+            })
+            .collect();
         names.sort();
-        for path in names {
-            if path.is_dir() {
+        for (path, real_dir) in names {
+            if real_dir {
                 pending.push(path);
                 continue;
             }

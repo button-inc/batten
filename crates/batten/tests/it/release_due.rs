@@ -118,6 +118,14 @@ fn main_quiet_past_the_window_is_due() {
 fn a_busy_main_inside_the_max_wait_holds() {
     let (code, text) = verdict("busy", "2026-08-12T11:55:00Z", "2026-08-12T06:00:00Z", &[]);
     assert_eq!(code, Some(2), "a hold: {text}");
+    // THE HOLD, NOT ONLY THE CODE: a torn record also exits 2 under this rule,
+    // so a producer regression writing a malformed record would pass on the exit
+    // alone. The pointer tells them apart — a hold names the activity age in
+    // seconds (five minutes here), a torn record the count of readings present.
+    assert!(
+        text.starts_with("300 release grade early"),
+        "a hold on the activity age: {text}"
+    );
     assert!(
         !text.contains("::error::"),
         "a hold is the ordinary outcome: {text}"
@@ -171,6 +179,10 @@ fn both_windows_are_honoured_from_the_environment() {
         &long,
     );
     assert_eq!(held, Some(2), "{text}");
+    assert!(
+        text.starts_with("3600 release grade early"),
+        "a hold on the activity age: {text}"
+    );
     let short = [("RELEASE_QUIET_MINUTES", "45")];
     let (due, text) = verdict(
         "env-short",
@@ -208,6 +220,8 @@ fn every_reading_the_producer_cannot_take_is_exit_3_and_records_nothing() {
         ("bad-activity", "yesterday-ish", "", vec![]),
         ("bad-release", "2026-08-12T11:00:00Z", "not a time", vec![]),
         ("empty-activity", "", "", vec![]),
+        // A timestamp later than now would record a negative age.
+        ("future-activity", "2099-01-01T00:00:00Z", "", vec![]),
     ] {
         let dir = repo(name);
         let produced = produce(&dir, activity, release, &knobs);
@@ -234,4 +248,10 @@ fn a_release_due_record_missing_a_reading_is_torn() {
     assert!(written.status.success(), "{}", said(&written));
     let decided = common::run(&dir, &["check", "--rule", "release grade early"]);
     assert_eq!(decided.status.code(), Some(2), "{}", said(&decided));
+    // Torn: the pointer is the count of readings present (one), not an age.
+    assert!(
+        said(&decided).starts_with("1 release grade early"),
+        "torn, not a hold: {}",
+        said(&decided)
+    );
 }

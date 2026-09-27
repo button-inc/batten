@@ -27,6 +27,7 @@
 #MUTANT fs-write-unseen|s@^raw_write(line) if contains(line, "fs::write(")$@raw_write(line) if false@|a_raw_fs_write_in_production_is_refused
 #MUTANT append-unseen|s@^raw_write(line) if contains(line, ".append(true)")$@raw_write(line) if false@|a_raw_append_open_in_production_is_refused
 #MUTANT test-boundary-ignored|s@^\tnot after_test_boundary(lines, i)$@\ttrue@|a_write_inside_a_test_module_is_not_refused
+#MUTANT module-never-closes|s@^\tline == "}"$@\tfalse@|production_after_a_closed_test_module_is_refused
 #MUTANT stream-mark-ignored|s@^\tnot contains(line, "// stream:")$@\ttrue@|a_line_marked_as_a_stream_is_not_refused
 
 # METADATA
@@ -48,12 +49,44 @@ raw_write(line) if contains(line, "File::create(")
 
 raw_write(line) if contains(line, ".append(true)")
 
-# The file's own test boundary: a line that IS `#[cfg(test)]`, at column zero,
-# which is how every module in this crate opens its unit tier.
+# Inside a test module: after a line that IS `#[cfg(test)]` at column zero,
+# which is how every module in this crate opens its unit tier, and before the
+# `}` at column zero that closes it.
+#
+# A MODULE ENDS (review of #962). The first version treated everything after
+# the FIRST `#[cfg(test)]` as test code, which assumes the test module is last.
+# `forge.rs` has production after it, and its `conditional_get` wrote the ETag
+# and the body raw, green, because the gate had stopped reading at line 146.
 after_test_boundary(lines, i) if {
 	some j, boundary in lines
 	boundary == "#[cfg(test)]"
 	j < i
+	not closed_between(lines, j, i)
+}
+
+closed_between(lines, j, i) if {
+	some k, line in lines
+	j < k
+	k < i
+	line == "}"
+	rust_item_follows(lines, k)
+}
+
+# A column-0 `}` CLOSES THE MODULE ONLY WHERE A RUST ITEM FOLLOWS IT. A test
+# module embeds other languages in raw strings — a Rego rule's closing brace is
+# also `}` at column zero — so the brace alone read `hook.rs`'s fixtures as
+# production. An item after it (optionally past one blank line) is what a real
+# module end looks like; `"#;` or more Rego is not.
+rust_item_follows(lines, k) if item_start(lines[k + 1])
+
+rust_item_follows(lines, k) if {
+	lines[k + 1] == ""
+	item_start(lines[k + 2])
+}
+
+item_start(line) if {
+	some prefix in ["fn ", "pub ", "pub(", "impl", "struct ", "enum ", "const ", "static ", "use ", "mod ", "type ", "trait ", "#[", "///", "//"]
+	startswith(line, prefix)
 }
 
 production(path) if {
@@ -84,6 +117,29 @@ test_a_raw_write_above_the_test_boundary_is_refused if {
 		"fn f() { std::fs::write(p, b); }",
 		"#[cfg(test)]",
 		"mod tests { fn g() { std::fs::write(p, b); } }",
+	]}}}
+}
+
+test_production_after_a_closed_test_module_is_still_judged if {
+	count(violation) == 1 with input as {"tree": {"lines": {"crates/batten/src/a.rs": [
+		"#[cfg(test)]",
+		"mod tests {",
+		"    fn g() { std::fs::write(p, b); }",
+		"}",
+		"fn f() { std::fs::write(p, b); }",
+	]}}}
+}
+
+test_a_brace_inside_an_embedded_string_does_not_close_the_module if {
+	count(violation) == 0 with input as {"tree": {"lines": {"crates/batten/src/a.rs": [
+		"#[cfg(test)]",
+		"mod tests {",
+		"    const MODULE: &str = r#\"",
+		"deny contains \"x\" if {",
+		"}",
+		"\"#;",
+		"    fn g() { std::fs::write(p, b); }",
+		"}",
 	]}}}
 }
 

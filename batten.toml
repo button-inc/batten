@@ -12893,10 +12893,13 @@ kind = "document"
 target = "mise.toml"
 
 # CLOUD-667's table refusals, ported off `mise-tasks/sbom.sh` under CLOUD-1717.
-# The key shape is exactly `owner/repo@<40-hex>`, spelled as a workflow's `uses:`.
+# The key shape is `owner/repo@<40-hex>`, spelled as a workflow's `uses:`, with an
+# optional sub-path (`actions/cache/restore@…` is a real row). Every segment is
+# non-empty and there is at least one slash: `owner@…` and `owner//x@…` passed the
+# old `^[^@\s]+@…` and are not action references (review of #962).
 [[pattern]]
 id = "sbom-action-key"
-regex = '^[^@\s]+@[0-9a-f]{40}$'
+regex = '^[^@\s/]+(/[^@\s/]+)+@[0-9a-f]{40}$'
 
 [[rule]]
 id = "pin parse other"

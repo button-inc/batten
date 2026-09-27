@@ -2314,14 +2314,8 @@ pub fn sweep_fixture(root: &Path, n: usize) -> Result<()> {
     // (CLOUD-1924), and `HEAD` is pinned to `main` here rather than left to
     // `init.defaultBranch`, so a contributor's own git settings cannot change
     // what is measured (CLOUD-282).
-    gix::init(root).map_err(|err| {
-        anyhow::anyhow!(
-            "perf-acquire: could not initialise the fixture at {}: {err}. Nothing measured.",
-            root.display()
-        )
-    })?;
-    crate::durable::replace(root.join(".git/HEAD"), "ref: refs/heads/main\n")
-        .context("perf-acquire: could not point the fixture's HEAD at main")?;
+    crate::gitwrite::init_on_main(root)
+        .context("perf-acquire: could not initialise the fixture. Nothing measured.")?;
     Ok(())
 }
 

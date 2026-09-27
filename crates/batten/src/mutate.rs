@@ -840,7 +840,8 @@ impl Staged {
                 .context("mutate: could not provide the bats runner")?;
         }
         let staged = Staged { dir, dirty: None };
-        staged.make_a_repository()?;
+        let tracked: Vec<String> = tracked.into_iter().collect();
+        staged.make_a_repository(&tracked)?;
         Ok(staged)
     }
 
@@ -852,47 +853,25 @@ impl Staged {
     /// mutation. The runner then reported `case-already-red`, naming the SUITE
     /// for a defect in this harness.
     ///
-    /// Identity is passed per command rather than written into a config, so a
-    /// contributor with no global `user.email` gets the same throwaway commit as
-    /// CI.
+    /// The identity is the engine's own, so a contributor with no global
+    /// `user.email` gets the same throwaway commit as CI.
     ///
-    /// **`--allow-empty`, AND IT IS THE FLAG THAT MAKES THIS RUNNABLE TWICE.**
-    /// The staged tree PERSISTS between runs by design — that is what keeps an
-    /// unchanged source's timestamp and a compiled tier affordable — so on every
-    /// run after the first, `add -A` stages nothing and a plain `commit` exits 1
-    /// with "nothing to commit, working tree clean". This step then bailed, and
-    /// the message it bailed with named the wrong thing entirely: it reports a
-    /// tree that cannot be made a repository, over a tree that already is one.
-    /// Measured here — the first sweep in a fresh checkout worked and every
-    /// subsequent one was could-not-look at exit 3, which reads as a broken
-    /// harness rather than as a stale commit.
-    fn make_a_repository(&self) -> Result<()> {
-        let steps: [&[&str]; 3] = [
-            &["init", "-q"],
-            &["add", "-A"],
-            &[
-                "-c",
-                "user.email=mutate@localhost",
-                "-c",
-                "user.name=mutate",
-                "commit",
-                "-q",
-                "--allow-empty",
-                "-m",
-                "mutate: the tree under judgement",
-            ],
-        ];
-        for args in steps {
-            let owned: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
-            let answer = spawn(&self.dir, Program::Git, &owned, &[], HOUSEKEEPING_BOUND)?;
-            if !answer.ok {
-                bail!(
-                    "mutate: could not make the staged tree a repository; a suite that resolves \
-                     its own root would answer about the wrong one"
-                );
-            }
-        }
-        Ok(())
+    /// **RE-RUNNABLE, AND THAT IS WHAT THE OLD `--allow-empty` WAS FOR.** The
+    /// staged tree PERSISTS between runs by design — that is what keeps an
+    /// unchanged source's timestamp and a compiled tier affordable — so every run
+    /// after the first commits a tree identical to `HEAD`'s. `commit_paths` takes
+    /// the current `HEAD` as the parent and commits regardless, where a plain
+    /// `git commit` exited 1 and this step bailed naming the wrong thing.
+    fn make_a_repository(&self, tracked: &[String]) -> Result<()> {
+        // IN-PROCESS (review of #962): `git init`, `git add -A` and `git commit
+        // --allow-empty` were three spawns of the one program this crate stopped
+        // invoking. `commit_paths` commits the tracked list and writes the index,
+        // so a suite asking git what is tracked reads what `add -A` staged.
+        crate::gitwrite::commit_paths(&self.dir, tracked, "mutate: the tree under judgement")
+            .context(
+                "mutate: could not make the staged tree a repository; a suite that resolves \
+                 its own root would answer about the wrong one",
+            )
     }
 
     /// Restore the previous row's subject.
@@ -912,7 +891,7 @@ impl Staged {
         let Some(path) = self.dirty.take() else {
             return Ok(());
         };
-        std::fs::copy(root.join(&path), self.dir.join(&path))
+        copy_if_changed(&root.join(&path), &self.dir.join(&path))
             .with_context(|| format!("mutate: could not restore {path} in the staged tree"))?;
         Ok(())
     }
@@ -924,7 +903,7 @@ impl Staged {
     ///
     /// A failed stage is could-not-look (→ exit `3`).
     pub fn stage_subject(&mut self, root: &Path, path: &str) -> Result<()> {
-        std::fs::copy(root.join(path), self.dir.join(path))
+        copy_if_changed(&root.join(path), &self.dir.join(path))
             .with_context(|| format!("mutate: could not stage {path}"))?;
         self.dirty = Some(path.to_owned());
         Ok(())
@@ -935,6 +914,19 @@ impl Staged {
     pub fn dir(&self) -> &Path {
         &self.dir
     }
+}
+
+/// Copy `from` over `to` only where the bytes differ (review of #962).
+///
+/// A copy always bumps the destination's mtime, so staging the clean subject
+/// and restoring it made cargo see a changed source on every row and rebuild
+/// inside the timed run. Leaving identical bytes untouched keeps the tree warm.
+fn copy_if_changed(from: &Path, to: &Path) -> std::io::Result<()> {
+    let wanted = std::fs::read(from)?;
+    if std::fs::read(to).is_ok_and(|have| have == wanted) {
+        return Ok(());
+    }
+    std::fs::copy(from, to).map(|_| ())
 }
 
 /// The manifest of what a previous run staged, inside the staged tree.
@@ -1015,10 +1007,6 @@ pub struct Ran {
 /// a new variant a reviewer reads rather than a string nobody does.
 #[derive(Clone, Copy)]
 enum Program<'a> {
-    /// Makes the staged tree a repository the suite's OWN git reads (CLOUD-480).
-    /// `gix` can init but cannot stage a worktree into an index, and a suite
-    /// running `git ls-files` needs that index.
-    Git,
     /// Applies a `#MUTANT` row, whose script IS a sed program: the declared row
     /// language every module authors against. An in-process interpreter would be
     /// a second implementation of it, drifting from the sed the author tested with.
@@ -1033,7 +1021,6 @@ enum Program<'a> {
 impl Program<'_> {
     const fn name(&self) -> &str {
         match self {
-            Program::Git => "git",
             Program::Sed => "sed",
             Program::Cargo => "cargo",
             Program::Suite(program) => program,
@@ -1057,7 +1044,7 @@ fn spawn(
     let program = program.name();
     #[expect(
         clippy::disallowed_types,
-        reason = "stays: staging a tree and re-running a suite against it IS this module's effect (CLOUD-1267), and `Program` is the closed set it may run — git, sed and cargo each document on their variant why no in-process route exists, and a suite is the consumer's declared runner (CLOUD-1924)"
+        reason = "stays: staging a tree and re-running a suite against it IS this module's effect (CLOUD-1267), and `Program` is the closed set it may run — sed and cargo each document on their variant why no in-process route exists, and a suite is the consumer's declared runner (CLOUD-1924)"
     )]
     let mut command = std::process::Command::new(program);
     command.args(args).current_dir(dir);
@@ -1452,6 +1439,12 @@ fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Result<
             })
         }
         Suite::Cargo { .. } => {
+            // BUILT UNDER THE BUILD BOUND FIRST, THEN TIMED (review of #962). A
+            // mutated source must be recompiled, and paying that inside the
+            // per-case bound is how a slow compile reads as `suite-did-not-run`.
+            // A build that fails here is left for the timed run to report.
+            let build = vec![String::from("test"), String::from("--no-run")];
+            let _ = spawn(staged.dir(), Program::Cargo, &build, &env, build_bound());
             // NO `--test`, for `Suite::declared`'s reason: nothing in the
             // declared path names a cargo target. Every test target is built
             // and each filters `want` for itself, so the case runs wherever it

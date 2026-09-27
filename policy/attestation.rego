@@ -77,11 +77,19 @@ posture := columns[1] if {
 # correction to its issue's wording. `release-artifacts.yml` attests the binary
 # deliberately, so that repackaging cannot launder the claim — verifying a
 # `.tar.gz` would compute a digest nothing ever attested.
+#
+# ONLY THE THREE VERDICTS THE PRODUCER WRITES (review of #962). `record named`
+# stores its input unvalidated, so `archive<TAB>x<TAB>unexpected` could join this
+# set, match no violation below, and — being an archive — keep `release list
+# empty` from firing: a clean reading over a record nothing understood. An
+# unknown verdict is not an archive, so a record of nothing but unknowns reads
+# as the empty list it is.
 archives contains {"name": columns[1], "verdict": columns[2]} if {
 	some raw in recorded
 	columns := split(raw, "\t")
 	count(columns) == 3
 	columns[0] == "archive"
+	columns[2] in {"verified", "unverified", "no-binary"}
 }
 
 # An archive whose binary the verifier refused.

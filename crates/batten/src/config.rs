@@ -2058,7 +2058,7 @@ fn validate_sections(config: &Config) -> Result<()> {
     // validates is a refusal that cannot fire (CLOUD-253).
     under(
         Native::RecordTableRefused,
-        crate::record::validate(&config.records),
+        crate::record::validate(&config.records, &config.recorders),
     )?;
     // `[budget]` is a table rather than a list, so the census below (which scans
     // `Vec<T>` fields) does not reach it — but the failure it guards against is

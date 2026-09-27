@@ -2499,6 +2499,17 @@ if [ -z "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]; then
 fi
 
 remote=$(git remote get-url origin)
+# `${remote#*github.com[:/]}` hands back the WHOLE remote when the pattern does
+# not match, so a non-GitHub origin produced a non-empty slug, the probe asked
+# `repos/<url>/…`, the API answered 404, and `posture 404` suppressed every
+# finding. Refused explicitly, before anything is asked or recorded.
+case "$remote" in
+*github.com[:/]*) ;;
+*)
+	echo "::error:: attestation-record: the origin remote is not on github.com, so there is no repository to ask about. Nothing recorded." >&2
+	exit 2
+	;;
+esac
 slug=${remote#*github.com[:/]}
 slug=${slug%.git}
 if [ -z "$slug" ]; then
@@ -2532,6 +2543,12 @@ if ! "$gh_bin" release download "$tag" --dir "$scratch" --pattern '*.tar.gz' --p
 	exit 2
 fi
 
+# BUFFERED, THEN RECORDED. The loop used to run in a brace group piped straight
+# into `record named`, so its `exit 2` left only that subshell: the recorder got
+# EOF and stored `posture 200` plus the archives read so far — the short list
+# the module reads as complete. `timeout-drift-record` fixes the same shape the
+# same way.
+census="$scratch/census"
 {
 	printf 'posture\t200\n'
 	for archive in "$scratch"/*.tar.gz "$scratch"/*.zip; do
@@ -2564,7 +2581,8 @@ fi
 			printf 'archive\t%s\tunverified\n' "$name"
 		fi
 	done
-} | cargo run --quiet -p batten -- record named attestation
+} >"$census"
+cargo run --quiet -p batten -- record named attestation <"$census"
 '''
 
 # CLOUD-266's measurement half, ported off `timeout-drift.sh` under CLOUD-1717.
@@ -2608,7 +2626,7 @@ emit() {
 		durations=""
 		for run in $runs; do
 			[ -n "$run" ] || continue
-			if ! legs=$(gh api "repos/{owner}/{repo}/actions/runs/$run/jobs" --jq '.jobs[] | select(.conclusion == "success") | [.name, .started_at, .completed_at] | @tsv' 2>/dev/null); then
+			if ! legs=$(gh api "repos/{owner}/{repo}/actions/runs/$run/jobs?per_page=100" --jq '.jobs[] | select(.conclusion == "success") | [.name, .started_at, .completed_at] | @tsv' 2>/dev/null); then
 				echo "::error:: timeout-drift-record: cannot read jobs for run $run. Nothing recorded." >&2
 				return 2
 			fi
@@ -3009,9 +3027,12 @@ description = "Effect: record the built macOS graph's links-declaring and framew
 shell = "bash -c"
 run = """
 if [ -n "${BATTEN_LINK_CHECK_METADATA:-}" ]; then
-  metadata=$(cat "$BATTEN_LINK_CHECK_METADATA") || exit 0
+  metadata=$(cat "$BATTEN_LINK_CHECK_METADATA") || { echo "::error:: macos-link-record: the metadata fixture will not read. Nothing recorded." >&2; exit 2; }
 else
-  metadata=$(cargo metadata --format-version 1 --filter-platform aarch64-apple-darwin 2>/dev/null) || exit 0
+  # COULD-NOT-LOOK IS EXIT 2, NEVER 0: a producer that exits clean having
+  # recorded nothing leaves the module reading an absent record as silence, so
+  # a caller running this then `check` passed without looking.
+  metadata=$(cargo metadata --format-version 1 --filter-platform aarch64-apple-darwin 2>/dev/null) || { echo "::error:: macos-link-record: cargo metadata failed, so the graph is unread. Nothing recorded." >&2; exit 2; }
 fi
 # THE SPAWN STAYS HERE (§5) and the WALK is the engine's: one activated-edge
 # reading in `crates/batten/src/cargo_graph.rs`, shared with the other caller
@@ -3027,9 +3048,11 @@ description = "Effect: record the evaluator's activated sub-closure and any IO-b
 shell = "bash -c"
 run = """
 if [ -n "${BATTEN_EVALUATOR_METADATA:-}" ]; then
-  metadata=$(cat "$BATTEN_EVALUATOR_METADATA") || exit 0
+  metadata=$(cat "$BATTEN_EVALUATOR_METADATA") || { echo "::error:: evaluator-closure-record: the metadata fixture will not read. Nothing recorded." >&2; exit 2; }
 else
-  metadata=$(cargo metadata --locked --format-version 1 2>/dev/null) || exit 0
+  # COULD-NOT-LOOK IS EXIT 2, NEVER 0 — `--locked` fails on a stale lockfile, and
+  # exiting clean there let the IO-closure gate pass without looking.
+  metadata=$(cargo metadata --locked --format-version 1 2>/dev/null) || { echo "::error:: evaluator-closure-record: cargo metadata failed, so the closure is unread. Nothing recorded." >&2; exit 2; }
 fi
 # THE SPAWN STAYS HERE (§5) and the WALK is the engine's: one activated-edge
 # reading in `crates/batten/src/cargo_graph.rs`, shared with the other caller
@@ -3698,9 +3721,13 @@ else
 	release_raw=$(gh api "repos/{owner}/{repo}/releases?per_page=1" --jq '.[0].published_at // ""' 2>/dev/null) || refuse "could not read the latest release"
 fi
 activity_at=$(epoch "$activity_raw") || refuse "cannot parse the last-commit timestamp '$activity_raw'"
+# A FUTURE TIMESTAMP IS REFUSED, NOT SUBTRACTED: `now - activity_at` would record
+# a negative age, which no reading means (review of #962).
+(( activity_at <= now )) || refuse "the last-commit timestamp '$activity_raw' is later than now, so its age means nothing"
 release_age=none
 if [[ -n "$release_raw" ]]; then
 	release_at=$(epoch "$release_raw") || refuse "cannot parse the last-release timestamp '$release_raw'"
+	(( release_at <= now )) || refuse "the last-release timestamp '$release_raw' is later than now, so its age means nothing"
 	release_age=$((now - release_at))
 fi
 printf 'activity-age\t%d\nrelease-age\t%s\nquiet\t%d\nmax-wait\t%d\n' \
@@ -6064,7 +6091,12 @@ elif ! conditional_get "repos/{owner}/{repo}/actions/runs?status=failure&per_pag
 else
 	# `.id` and `.conclusion` only. Sorted by id so the record stream is
 	# byte-stable across ticks that see the same window in a different order.
-	run_ids=$(printf '%s' "$body" | jq -r '[.workflow_runs[]? | select(.conclusion == "failure") | .id] | sort | .[]' 2>/dev/null) || run_ids=""
+	# A PAYLOAD THAT WILL NOT PARSE IS COULD-NOT-LOOK. `|| run_ids=""` recorded a
+	# zero-run window with `unreadable=0`, which the module reads as clean.
+	if ! run_ids=$(printf '%s' "$body" | jq -r '[.workflow_runs[] | select(.conclusion == "failure") | .id] | sort | .[]' 2>/dev/null); then
+		echo "::error:: nonverdict-record: the run list will not parse, so this window judged nothing and nothing was recorded." >&2
+		exit 1
+	fi
 fi
 
 failed_jobs=0
@@ -6084,17 +6116,9 @@ while IFS= read -r run; do
 	# `Run mise run …` step. The classification is done in jq over the payload
 	# rather than in shell over a rendered string, so a job name containing a tab
 	# cannot forge a field.
-	while IFS=$'\t' read -r job kind step; do
-		[[ -n "$job" ]] || continue
-		failed_jobs=$((failed_jobs + 1))
-		if [[ "$kind" = "verdict" ]]; then
-			verdict=$((verdict + 1))
-		else
-			nonverdict=$((nonverdict + 1))
-		fi
-		records="${records}${kind}"$'\t'"run=$run"$'\t'"job=$job"$'\t'"step=$step"$'\n'
-	done <<<"$(
-		printf '%s' "$body" | jq -r --arg fan "$FAN_IN" --arg required "$REQUIRED" '
+	# A JOBS PAYLOAD THAT WILL NOT PARSE IS AN UNREADABLE RUN, counted, never an
+	# empty one silently dropped from the window.
+	if ! classified=$(printf '%s' "$body" | jq -r --arg fan "$FAN_IN" --arg required "$REQUIRED" '
 			($required | split(",") | map(gsub("^\\s+|\\s+$"; ""))) as $roster
 			| [.jobs[]?
 			   | select(.conclusion == "failure")
@@ -6115,8 +6139,20 @@ while IFS= read -r run; do
 			  else [$job.name, "nonverdict", (($failed | first | .name) // "unknown")]
 			  end
 			| @tsv
-		' 2>/dev/null
-	)"
+		' 2>/dev/null); then
+		unreadable=$((unreadable + 1))
+		continue
+	fi
+	while IFS=$'\t' read -r job kind step; do
+		[[ -n "$job" ]] || continue
+		failed_jobs=$((failed_jobs + 1))
+		if [[ "$kind" = "verdict" ]]; then
+			verdict=$((verdict + 1))
+		else
+			nonverdict=$((nonverdict + 1))
+		fi
+		records="${records}${kind}"$'\t'"run=$run"$'\t'"job=$job"$'\t'"step=$step"$'\n'
+	done <<<"$classified"
 done <<<"$run_ids"
 
 # Records first, sorted, then the summary — so the stream is byte-stable and the
@@ -6731,7 +6767,7 @@ if [ -n "$forge_sha" ] && [ -n "$forge_fanin" ]; then
 	# a real run rendered no verdict either: recording `<job> skipped` would say
 	# that job refused.
 	if forge_runs=$(gh api "repos/$forge_repo/commits/$forge_sha/check-runs?per_page=100" \
-		--jq '.check_runs | map(select(.conclusion != null and .conclusion != "skipped")) | group_by(.name) | map(max_by([(.started_at // ""), (.id // 0)])) | .[] | "\(.name)\t\(.conclusion)"' 2>/dev/null); then
+		--jq '.check_runs | group_by(.name) | map(max_by([(.started_at // ""), (.id // 0)])) | map(select(.conclusion != null and .conclusion != "skipped")) | .[] | "\(.name)\t\(.conclusion)"' 2>/dev/null); then
 		# The fan-in decides whether ANY record is written; the name filter then
 		# decides what the record may spell.
 		forge_graded=$(printf '%s\n' "$forge_runs" |

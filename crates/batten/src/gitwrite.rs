@@ -1045,10 +1045,12 @@ fn materialise(
             .map_err(|err| anyhow::anyhow!("gitwrite: {relative} will not filter: {err}"))?;
         crate::durable::replace(&target, bytes)
             .map_err(|err| anyhow::anyhow!("gitwrite: {relative} will not write: {err}"))?;
-        if mode == gix::index::entry::Mode::FILE_EXECUTABLE {
-            make_executable(&target)
-                .map_err(|err| anyhow::anyhow!("gitwrite: {relative}'s mode: {err}"))?;
-        }
+        // BOTH DIRECTIONS, EXPLICITLY. `durable::replace` keeps the replaced
+        // file's permission bits, so a path going 100755 -> 100644 would stay
+        // executable and disagree with the index it was just written from; the
+        // remove-then-create path this replaced came back 0644 by accident.
+        set_mode(&target, mode == gix::index::entry::Mode::FILE_EXECUTABLE)
+            .map_err(|err| anyhow::anyhow!("gitwrite: {relative}'s mode: {err}"))?;
     }
 
     let landed = gix::index::fs::Metadata::from_path_no_follow(&target)
@@ -1092,15 +1094,168 @@ fn link(destination: &str, target: &Path) -> std::io::Result<()> {
 
 /// Set the executable bit.
 #[cfg(unix)]
-fn make_executable(target: &Path) -> std::io::Result<()> {
+fn set_mode(target: &Path, executable: bool) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
-    std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o755))
+    let mode = if executable { 0o755 } else { 0o644 };
+    std::fs::set_permissions(target, std::fs::Permissions::from_mode(mode))
 }
 
 /// There is no executable bit to set, and git does not synthesise one.
 #[cfg(not(unix))]
-fn make_executable(_target: &Path) -> std::io::Result<()> {
+fn set_mode(_target: &Path, _executable: bool) -> std::io::Result<()> {
     Ok(())
+}
+
+/// Make `dir` an empty repository whose `HEAD` names `main`, in-process.
+///
+/// The one place outside `seed` that initialises a repository, so `gix` stays
+/// in the git modules (`gix_is_confined_to_the_git_modules`). `HEAD` is written
+/// rather than left to `init.defaultBranch`, so a host's git settings cannot
+/// change what a caller measures.
+///
+/// # Errors
+///
+/// A directory that will not initialise, or a `HEAD` that will not write.
+pub fn init_on_main(dir: &Path) -> Result<()> {
+    gix::init(dir).map_err(|err| {
+        anyhow::anyhow!("gitwrite: could not initialise {}: {err}", dir.display())
+    })?;
+    crate::durable::replace(dir.join(".git/HEAD"), "ref: refs/heads/main\n").map_err(|err| {
+        anyhow::anyhow!(
+            "gitwrite: could not point {}'s HEAD at main: {err}",
+            dir.display()
+        )
+    })
+}
+
+/// Commit exactly `paths` under `dir` on `HEAD`, and write the index from that
+/// commit's tree — `git init` + `git add` + `git commit --allow-empty`, in-process.
+///
+/// **A LIST, NOT A WALK.** The caller names what is tracked; a directory walk
+/// would hash whatever else lives there — a suite's build directory reached
+/// 1.1 GB in `mutate`'s staged tree — and `.gitignore` is not something this
+/// function should have to re-implement to avoid it.
+///
+/// **THE INDEX IS WRITTEN**, which is what `seed` does not do and why this is a
+/// second function rather than a flag on it: a suite that asks git what is
+/// tracked (`git ls-files`) reads the index, and a commit with no index reads as
+/// every file deleted-and-untracked.
+///
+/// Re-runnable: an existing repository is opened and the new commit takes the
+/// current `HEAD` as its parent, whether or not the tree changed.
+///
+/// # Errors
+///
+/// A directory that will not initialise or open, a file that will not read, an
+/// object the odb refuses, or an index that will not write.
+pub fn commit_paths(dir: &Path, paths: &[String], message: &str) -> Result<()> {
+    let repo = if dir.join(".git").exists() {
+        gix::open(dir)
+            .map_err(|err| anyhow::anyhow!("gitwrite: could not open {}: {err}", dir.display()))?
+    } else {
+        gix::init(dir).map_err(|err| {
+            anyhow::anyhow!("gitwrite: could not initialise {}: {err}", dir.display())
+        })?
+    };
+    let mut root = Node::default();
+    for path in paths {
+        let full = dir.join(path);
+        let Ok(meta) = std::fs::symlink_metadata(&full) else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let body = std::fs::read(&full)
+            .map_err(|err| anyhow::anyhow!("gitwrite: cannot read {}: {err}", full.display()))?;
+        let id = repo
+            .write_blob(&body)
+            .map_err(|err| anyhow::anyhow!("gitwrite: {path} will not write: {err}"))?
+            .detach();
+        root.insert(path, (executable_kind(&meta), id));
+    }
+    let tree = root.write(&repo)?;
+    let parents: Vec<gix::ObjectId> = repo
+        .head_id()
+        .ok()
+        .map(gix::Id::detach)
+        .into_iter()
+        .collect();
+    let signature = gix::actor::Signature {
+        name: "batten".into(),
+        email: "batten@localhost".into(),
+        time: gix::date::Time::now_utc(),
+    };
+    repo.commit_as(
+        signature.to_ref(&mut gix::date::parse::TimeBuf::default()),
+        signature.to_ref(&mut gix::date::parse::TimeBuf::default()),
+        "HEAD",
+        message,
+        tree,
+        parents,
+    )
+    .map_err(|err| anyhow::anyhow!("gitwrite: could not commit {}: {err}", dir.display()))?;
+    repo.index_from_tree(&tree)
+        .map_err(|err| anyhow::anyhow!("gitwrite: no index for {}: {err}", dir.display()))?
+        .write(gix::index::write::Options::default())
+        .map_err(|err| anyhow::anyhow!("gitwrite: the index will not write: {err}"))?;
+    Ok(())
+}
+
+/// One directory level of a tree being assembled from a path list.
+#[derive(Default)]
+struct Node {
+    files: std::collections::BTreeMap<String, (gix::objs::tree::EntryKind, gix::ObjectId)>,
+    dirs: std::collections::BTreeMap<String, Node>,
+}
+
+impl Node {
+    fn insert(&mut self, path: &str, blob: (gix::objs::tree::EntryKind, gix::ObjectId)) {
+        match path.split_once('/') {
+            Some((head, rest)) => self
+                .dirs
+                .entry(head.to_owned())
+                .or_default()
+                .insert(rest, blob),
+            None => {
+                self.files.insert(path.to_owned(), blob);
+            }
+        }
+    }
+
+    fn write(&self, repo: &gix::Repository) -> Result<gix::ObjectId> {
+        let mut entries: Vec<gix::objs::tree::Entry> = Vec::new();
+        for (name, (kind, oid)) in &self.files {
+            entries.push(gix::objs::tree::Entry {
+                mode: (*kind).into(),
+                filename: name.as_str().into(),
+                oid: *oid,
+            });
+        }
+        for (name, child) in &self.dirs {
+            entries.push(gix::objs::tree::Entry {
+                mode: gix::objs::tree::EntryKind::Tree.into(),
+                filename: name.as_str().into(),
+                oid: child.write(repo)?,
+            });
+        }
+        // GIT'S OWN ORDER: a tree entry sorts as its name with a trailing `/`,
+        // so `a.rs` precedes the directory `a` only by that rule.
+        entries.sort_by(|left, right| {
+            let key = |entry: &gix::objs::tree::Entry| {
+                let mut name = entry.filename.to_vec();
+                if entry.mode.is_tree() {
+                    name.push(b'/');
+                }
+                name
+            };
+            key(left).cmp(&key(right))
+        });
+        Ok(repo
+            .write_object(gix::objs::Tree { entries })
+            .map_err(|err| anyhow::anyhow!("gitwrite: a tree will not write: {err}"))?
+            .detach())
+    }
 }
 
 /// Give a directory a git repository carrying its current contents as one
@@ -1216,4 +1371,32 @@ fn executable_kind(meta: &std::fs::Metadata) -> gix::objs::tree::EntryKind {
 #[cfg(not(unix))]
 fn executable_kind(_meta: &std::fs::Metadata) -> gix::objs::tree::EntryKind {
     gix::objs::tree::EntryKind::Blob
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A replay that moves a path from 100755 to 100644 must leave it 0644:
+    /// `durable::replace` keeps the replaced file's bits, so a mode set in one
+    /// direction only left the worktree executable where the index said not.
+    #[test]
+    fn a_path_leaving_the_executable_mode_loses_the_bit() {
+        let dir = std::env::temp_dir().join(format!("batten-gitwrite-mode-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap_or_else(|err| panic!("fixture dir: {err}"));
+        let path = dir.join("tool");
+        std::fs::write(&path, "x").unwrap_or_else(|err| panic!("fixture file: {err}"));
+        set_mode(&path, true).unwrap_or_else(|err| panic!("to 755: {err}"));
+        set_mode(&path, false).unwrap_or_else(|err| panic!("to 644: {err}"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(&path)
+                .unwrap_or_else(|err| panic!("stat: {err}"))
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o644);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

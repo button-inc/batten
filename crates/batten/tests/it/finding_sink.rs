@@ -330,8 +330,8 @@ fn only_the_last_turn_is_judged() {
     fired(&turns.check(), 2);
 }
 
-/// Could-not-look is abstained (3), never clean and never a refusal: at the
-/// handler door a 2 IS a refusal, and "no transcript" is not one.
+/// Could-not-look is not a refusal: at the handler door a 2 IS a refusal, and
+/// "no transcript" is not one, so the task exits 0 and says it could not look.
 #[test]
 fn an_unreadable_transcript_abstains() {
     let turns = Turns::new("unparseable");

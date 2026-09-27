@@ -105,6 +105,24 @@ fn a_write_inside_a_test_module_is_not_refused() {
     assert!(findings(&root).is_empty());
 }
 
+/// A test module ENDS: production after its closing brace is judged. The first
+/// boundary was the file's first `#[cfg(test)]`, which let `forge.rs` write raw
+/// below its test module, green (review of #962).
+#[test]
+fn production_after_a_closed_test_module_is_refused() {
+    let root = repo(
+        "durable-after-tests",
+        &[
+            "#[cfg(test)]",
+            "mod tests {",
+            "    fn g(p: &str) { let _ = std::fs::write(p, \"x\"); }",
+            "}",
+            "fn f(p: &str) { let _ = std::fs::write(p, \"x\"); }",
+        ],
+    );
+    assert_eq!(findings(&root), [RAW]);
+}
+
 #[test]
 fn a_line_marked_as_a_stream_is_not_refused() {
     let root = repo(

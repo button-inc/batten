@@ -451,9 +451,30 @@ pub struct Declared {
 /// component, for an empty `writer`, and for two rows naming one family — the
 /// last because a second row is a second answer to "who writes this", which is
 /// the one question the table exists to settle.
-pub fn validate(declared: &[Declared]) -> Result<()> {
+pub fn validate(declared: &[Declared], recorders: &[crate::recorder::Declared]) -> Result<()> {
     let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     for family in declared {
+        // ONE NAME, ONE SOURCE. The projection resolves a `[[recorder]]` row's
+        // record, then a `[[record]]` family, then a verb-written store, and
+        // keeps the first — so a family sharing a name with either was silently
+        // shadowed, its producer writing a store no module reads as its own.
+        if VERB_WRITTEN.contains(&family.record.as_str()) {
+            return Err(UsageError::raise(format!(
+                "record `{}` is a store the engine writes itself; a declared family \
+                 of that name would be a second writer for it",
+                family.record
+            )));
+        }
+        if recorders
+            .iter()
+            .any(|recorder| recorder.record == family.record)
+        {
+            return Err(UsageError::raise(format!(
+                "record `{}` is already a `[[recorder]]` row's record; a declared family \
+                 of that name would be shadowed by it",
+                family.record
+            )));
+        }
         // The same grammar the writer enforces, checked here so the refusal lands
         // at load. A name that escapes its store is why `safe_component` exists;
         // reaching it only from `run_named` would let a config sit green until a

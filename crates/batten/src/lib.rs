@@ -16254,7 +16254,18 @@ fn record_post_tool(
 /// a draft is what survives a container reclaim. So every unreadable path,
 /// missing program and unresolvable branch yields `None`.
 fn stop_nudges(overrides: &Overrides, envelope: &hook::Envelope, raw: &str) -> Option<String> {
-    if envelope.event != hook::Event::Stop || envelope.stop_active == Some(true) {
+    if envelope.event != hook::Event::Stop {
+        return None;
+    }
+    // EVERY DECLARED STOP ROW RUNS ON EVERY STOP, BEFORE ANY RULE CAN RETURN
+    // (review of #962). `dispatch_handlers` stopped running them at `Stop` so their
+    // advice could not pre-empt the completion rung, and the ladder became their
+    // only caller — but the ladder returns early on `stop_active`, the bypass,
+    // plan mode and, most often, the unlanded rung, so on the common Stop a
+    // declared handler was never spawned and whatever it does was dropped. The
+    // run is unconditional; only WHICH ONE THING IS SAID stays the ladder's call.
+    let handler_said = stop_handler_advice(overrides, raw);
+    if envelope.stop_active == Some(true) {
         return None;
     }
     if std::env::var_os(STOP_GUARD_BYPASS).is_some() {
@@ -16357,7 +16368,7 @@ fn stop_nudges(overrides: &Overrides, envelope: &hook::Envelope, raw: &str) -> O
     // rule 1's plainest violation. The door's bound applies, and a row that
     // breaks its contract — times out, cannot spawn — is silence, as every
     // failure on this routine is.
-    if let Some(said) = stop_handler_advice(overrides, raw) {
+    if let Some(said) = handler_said {
         return Some(said);
     }
     // RULE 3 — a row this branch filed names a file this branch is changing. The

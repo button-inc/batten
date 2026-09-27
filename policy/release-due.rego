@@ -57,11 +57,20 @@ field(name) := value if {
 	some value in candidates
 }
 
+# PRESENT MEANS READABLE, not merely spelled (review of #962). A reading that is
+# not a whole number — a negative age from a future timestamp, say — made no rule
+# below fire: not `torn`, not `due`, and `release ship early` undefined for want
+# of a count, so the record passed as due. It is torn instead. `release-age` is
+# the one reading that may also say `none`: no release exists yet.
 present contains name if {
 	some name in readings
 	count([line | some line in lines; startswith(line, sprintf("%s\t", [name]))]) == 1
-	field(name)
+	readable(name)
 }
+
+readable(name) if regex.match(data.batten.patterns["whole-number"], field(name))
+
+readable("release-age") if field("release-age") == "none"
 
 torn if {
 	lines
@@ -118,6 +127,11 @@ test_busy_inside_the_max_wait_holds if {
 
 test_the_max_wait_is_inclusive if {
 	count(violation) == 0 with input as tree("60", "86400", "1800", "86400")
+}
+
+test_a_negative_age_is_torn_rather_than_due if {
+	found := violation with input as tree("-1", "3600", "1800", "86400")
+	{entry.verdict | some entry in found} == {"release measure partial"}
 }
 
 test_no_release_is_due if {

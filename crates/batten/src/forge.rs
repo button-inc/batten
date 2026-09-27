@@ -337,11 +337,20 @@ fn conditional_get(git_dir: &Path, path: &str, fetch: Transport<'_>) -> Option<(
     // PERSIST BEFORE ANSWERING, and a failure to persist is not a failure to
     // read: the store is an optimisation, so a read-only git directory costs a
     // conditional request next time rather than the answer this time.
+    //
+    // THE ETAG IS THE COMMIT POINT, SO IT GOES LAST (CLOUD-1919). A crash between
+    // two raw writes could leave a new validator beside an old or torn body, and
+    // the next `304` would serve that body as a `200` reading. So the old
+    // validator is dropped first, the body replaced atomically, and only then the
+    // validator that vouches for it — any interruption leaves no validator, which
+    // costs one unconditional GET and nothing else.
     if let Some(validator) = answer.etag.as_deref()
         && std::fs::create_dir_all(&stored).is_ok()
     {
-        let _ = std::fs::write(stored.join("etag"), validator);
-        let _ = std::fs::write(stored.join("body"), &answer.body);
+        let _ = std::fs::remove_file(stored.join("etag"));
+        if crate::durable::replace(stored.join("body"), &answer.body).is_ok() {
+            let _ = crate::durable::replace(stored.join("etag"), validator);
+        }
     }
     Some((answer.status, answer.body))
 }

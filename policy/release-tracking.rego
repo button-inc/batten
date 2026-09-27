@@ -52,7 +52,7 @@
 #
 #MUTANT-SUITE crates/batten/tests/it/release_tracking.rs
 #MUTANT unpinned-sha-passes|s@^\tnot regex.match(data.batten.patterns\["action-sha-pin"\], call.ref)$@\tfalse@|a_sha_pin_without_its_version_comment_is_a_violation
-#MUTANT refresh-order-ignored|s@^\trefresh < resolver$@\ttrue@|a_tag_refresh_after_the_resolver_is_a_violation
+#MUTANT refresh-order-ignored|s@^\ti < resolver$@\ttrue@|a_tag_refresh_after_the_resolver_is_a_violation
 
 # METADATA
 # description: |
@@ -222,20 +222,40 @@ checkout_line(path, job) := min(lines) + 1 if {
 
 # --- the release path's own shapes ----------------------------------------------
 
-first_line(path, pattern) := min({i | some i, line in code(path); regex.match(pattern, line)})
-
 resolver_at(path) := min({i | some i, line in code(path); contains(line, "git tag --points-at HEAD")})
 
+# The resolver's own STEP, bounded the way `calls` bounds a step (review of
+# #962): a job header or a sequence item on either side.
+resolver_step(path) := [start, stop] if {
+	u := resolver_at(path)
+	bounds := boundaries(path)
+	start := max({b | some b in bounds; b <= u} | {-1})
+	stop := min({b | some b in bounds; b > u} | {count(raw(path))})
+}
+
+# THE OUTPUT WRITE MUST BE IN THE RESOLVER'S OWN STEP. A write anywhere in the
+# file used to satisfy this, so a resolver that stopped writing its output beside
+# another step that still appends to `$GITHUB_OUTPUT` left
+# `steps.release-tag.outputs.tag` empty and every tracking step skipped — the
+# silent failure the gate exists for. `fetch-depth` is per-job for the same reason.
 sourced(path) if {
-	resolver_at(path)
-	some line in code(path)
+	[start, stop] := resolver_step(path)
+	some i, line in code(path)
+	i >= start
+	i < stop
 	regex.match(data.batten.patterns["gha-output-write"], line)
 }
 
+# THE REFRESH MUST BE IN THE RESOLVER'S OWN JOB, ahead of it. File-wide line
+# numbers let a refresh in an EARLIER job satisfy this while the resolver's job
+# still read stale tags; each job is its own checkout.
 refreshed(path) if {
-	refresh := first_line(path, data.batten.patterns["git-tag-refresh"])
 	resolver := resolver_at(path)
-	refresh < resolver
+	[start, _] := job_span(path, job_of(path, resolver))
+	some i, line in code(path)
+	i > start
+	i < resolver
+	regex.match(data.batten.patterns["git-tag-refresh"], line)
 }
 
 # --- findings ---------------------------------------------------------------------

@@ -445,6 +445,28 @@ test_a_comment_naming_an_absent_task_is_not_judged if {
 	count(found) == 0
 }
 
+# A COMMENT BESIDE A REAL CALLER OF THE SAME ABSENT TASK ADDS NO FINDING, and
+# the one that fires points at the caller (review of #962). The comment test is
+# the marker rather than a `run:` key, because a `run: |` block puts its command
+# on a continuation line that a key test would fail to place.
+test_a_comment_beside_a_caller_of_one_absent_task_points_at_the_caller if {
+	found := violation with input as {"tree": {
+		"documents": {
+			"mise.toml": {"tasks": {"present": {}}},
+			".github/workflows/w.yml": {"jobs": {"j": {"steps": [{"run": "mise run absent-task"}]}}},
+		},
+		"lines": {".github/workflows/w.yml": [
+			"# The commit half is `mise run absent-task`, in the hk gate.",
+			"        run: mise run absent-task",
+		]},
+		"tracked": ["mise.toml"],
+		"missing": {},
+	}}
+	count(found) == 1
+	some finding in found
+	finding.subjects[0].line == 2
+}
+
 # AN INTERPOLATED NAME ABSTAINS, and this case is what makes that claim earn
 # itself rather than being asserted in the header.
 test_an_interpolated_task_name_is_not_judged if {

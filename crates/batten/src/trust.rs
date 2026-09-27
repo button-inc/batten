@@ -537,6 +537,10 @@ pub enum WeakeningKind {
     /// A path is gone from `epoch.tracked`, so the `config_epoch` attributes
     /// less than it did (CLOUD-32).
     EpochPathRemoved,
+    /// A `[[record]]` family is gone, so `input.tree.records.<family>` stops
+    /// being projected and every module reading it goes quiet rather than red
+    /// (CLOUD-1810's table; review of #962).
+    RecordRemoved,
     /// The prose-dialect cutover moved LATER, or stopped being declared, so
     /// Ready blocks that owed the claims object no longer do (CLOUD-472).
     ///
@@ -986,6 +990,7 @@ impl WeakeningKind {
         WeakeningKind::RulePredicateChanged,
         WeakeningKind::MinVersionLowered,
         WeakeningKind::EpochPathRemoved,
+        WeakeningKind::RecordRemoved,
         WeakeningKind::ReadyCutoverRelaxed,
         WeakeningKind::VerbRemoved,
         WeakeningKind::PatternRemoved,
@@ -1054,6 +1059,7 @@ impl WeakeningKind {
             WeakeningKind::RulePredicateChanged => "rule-predicate-changed",
             WeakeningKind::MinVersionLowered => "min-version-lowered",
             WeakeningKind::EpochPathRemoved => "epoch-path-removed",
+            WeakeningKind::RecordRemoved => "record-removed",
             WeakeningKind::VerifiedCheckRemoved => "verified-check-removed",
             WeakeningKind::LandingPathRemoved => "landing-path-removed",
             WeakeningKind::FastForwardLaneAdded => "fast-forward-lane-added",
@@ -1298,17 +1304,13 @@ pub const CENSUS: &[FieldCoverage] = &[
     },
     FieldCoverage {
         field: "records",
-        coverage: Coverage::NotPolicyBearing(
-            "the verb-written record families this repository's producers fill (CLOUD-1810). \
-             It IS read by gates — a module reading `input.tree.records.<family>` decides \
-             nothing at all until the family is declared — so the reason is not that it lacks \
-             policy weight. It is that an override cannot speak to it: the key is absent from \
-             `OverrideConfig` and `resolve` reads the table from the committed authority \
-             alone, `board`'s structural guarantee for `epoch`'s reason. The direction is \
-             what makes that sufficient rather than merely convenient — DECLARING a family \
-             only ever arms a gate, and the REMOVAL that would disarm one is unwritable in \
-             the layer an author controls at PR time",
-        ),
+        // COMPARED, AND THE `NotPolicyBearing` READING THIS REPLACED WAS WRONG.
+        // It argued the removal was "unwritable in the layer an author controls at
+        // PR time" — but `batten.toml` IS that layer, and deleting a family there
+        // un-projects it, so every module reading it (absent means silent) goes
+        // quiet with no base-ref weakening reported. `epoch` is compared for the
+        // same reason (review of #962).
+        coverage: Coverage::Compared(&[WeakeningKind::RecordRemoved]),
     },
     FieldCoverage {
         field: "programs",
@@ -2092,6 +2094,18 @@ fn traversal_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     )
 }
 
+/// A declared record family removed (review of #962): removing one un-projects
+/// it, and a module reading `input.tree.records.<family>` reads absent as
+/// silent. Only the removed direction weakens — declaring a family arms a gate.
+fn record_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
+    removed_entries(
+        WeakeningKind::RecordRemoved,
+        &ids(base.records.iter().map(|family| family.record.clone())),
+        &ids(working.records.iter().map(|family| family.record.clone())),
+        "record",
+    )
+}
+
 fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     let mut found = Vec::new();
 
@@ -2285,6 +2299,7 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         "marker",
     ));
     found.extend(traversal_weakenings(base, working));
+    found.extend(record_weakenings(base, working));
     found.extend(removed_entries(
         WeakeningKind::ExecPatternRemoved,
         &ids(base.exec_patterns.iter().map(|row| row.id.clone())),
@@ -4112,6 +4127,22 @@ mod tests {
         // The other direction, and the unchanged one.
         assert!(weakenings(&lower, &base).is_empty());
         assert!(weakenings(&base, &base).is_empty());
+    }
+
+    #[test]
+    fn dropping_a_declared_record_family_is_a_weakening() {
+        let base = config("[[record]]\nrecord = \"done\"\nwriter = \"mise run done-record\"\n");
+        let working = config("");
+        let found = weakenings(&base, &working);
+        assert!(
+            found.iter().any(|w| w.kind == WeakeningKind::RecordRemoved),
+            "{found:?}"
+        );
+        assert!(
+            weakenings(&working, &base)
+                .iter()
+                .all(|w| w.kind != WeakeningKind::RecordRemoved)
+        );
     }
 
     #[test]
