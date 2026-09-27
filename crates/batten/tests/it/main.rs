@@ -208,6 +208,7 @@ mod lease_precondition;
 mod lease_record;
 mod license_table;
 mod linear_check;
+mod lint_deno;
 mod locator_index;
 mod lock_complete;
 mod macos_link;
