@@ -1,0 +1,22 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-step-run 1  batten 
+.SH NAME
+batten\-step\-run \- Run a step\*(Aqs command only when its receipt misses, and record the receipt when it passes
+.SH SYNOPSIS
+\fBbatten step run\fR [\fB\-\-arg\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIstep\fR> <\fIcommand\fR> 
+.SH DESCRIPTION
+Run a step\*(Aqs command only when its receipt misses, and record the receipt when it passes
+.SH OPTIONS
+.TP
+\fB\-\-arg\fR \fI<arg>\fR
+A value the step\*(Aqs verdict depends on beyond its inputs, keyed in order (repeatable)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIstep\fR>
+The step\*(Aqs name, as the consumer\*(Aqs step table declares it
+.TP
+<\fIcommand\fR>
+The step\*(Aqs command, after `\-\-`: run only on a miss, recorded only when it exits 0

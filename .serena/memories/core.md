@@ -161,6 +161,23 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   repos vouch for each other and the branch carries a licence nobody judged.
   Byte-identity of the upstream files is the workflow's half, stated as such —
   this bounds what the diff may say, not what upstream holds.
+- `census.rs` — `batten census shell`, the bash retirement's measurement
+  (CLOUD-843): every shell home counted in code lines, as pointers (a path, a
+  line, a unit's declared name, a count; never a body). **The detection is the
+  ban's, not its own**: manifest bodies, one-liners and array entries, and
+  workflow `run: |` blocks by indent are `policy/shell-banned.rego`'s grammar down
+  to its quirks (a one-liner's first word keeps its quote), and
+  `tests/it/census_shell.rs` pins the ban's count to the census's through the
+  gate's own growth predicate (a base of `c` must not fire, `c - 1` must). Where
+  to look is `[census.shell]` in `batten.toml` — manifests, keys, unit header,
+  workflow globs, exempt globs — so the engine names no consumer path (rule 1);
+  an exempt file is measured and set apart, never totalled, and this repo's
+  exempt list is asserted equal to the ban's `stays_bash`. Not layered (§8): a
+  local file able to add an exempt glob could make a wave read as progress. The
+  other CLOUD-843 foundation verbs (`step check|record|run`, `sbom`, `dist`,
+  `mcp grant|posture`, `board check`, `record divergence`, `record census …`)
+  carry final arguments and answer `unimplemented` at exit 3 until their package
+  lands; the serena launcher's home is the existing `mcp spawn`.
 - `claim.rs` — whether an issue is pullable, and the receipt that records the
   pull (CLOUD-272, CLOUD-431; ported off `mise-tasks/claim-check.sh` by
   CLOUD-1121). The tracker's automation fires on the PR event — the END of the

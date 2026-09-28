@@ -1,0 +1,29 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-record-census 1  batten 
+.SH NAME
+batten\-record\-census \- Record whether a landing was in flight when a container was replaced, and read the verdict back
+.SH SYNOPSIS
+\fBbatten record census\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Record whether a landing was in flight when a container was replaced, and read the verdict back
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SUBCOMMANDS
+.TP
+batten\-record\-census\-note(1)
+Append a landing\*(Aqs beat or its deliberate stop under this container\*(Aqs boot
+.TP
+batten\-record\-census\-record\-boot(1)
+Record this container\*(Aqs boot, once
+.TP
+batten\-record\-census\-report(1)
+Say whether a landing was in flight when the previous container was replaced
+.TP
+batten\-record\-census\-tally(1)
+Count every recorded replacement by what it interrupted
+.TP
+batten\-record\-census\-help(1)
+Print this message or the help of the given subcommand(s)

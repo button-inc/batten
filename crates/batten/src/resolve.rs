@@ -771,6 +771,12 @@ pub struct Resolved {
     /// addition, which house style §8's raise-only rule does not admit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bot_lane: Option<crate::bot::BotLane>,
+    /// The census declarations (CLOUD-843), as the authority states them. Not
+    /// layered, for the reason the neighbours above are not: a local file able to
+    /// add an exempt glob or drop a manifest would make the count SMALLER, and a
+    /// census reading lower is exactly the claim a retirement wave has to earn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub census: Option<crate::census::Census>,
     /// Which layers set each **emitted** key.
     ///
     /// Keyed by the serialized key name, and total over the document rather
@@ -1736,6 +1742,7 @@ fn assemble(
         attribution: repo.attribution.clone(),
         commit: repo.commit.clone(),
         bot_lane: repo.bot_lane.clone(),
+        census: repo.census.clone(),
         judge: repo.judge.clone(),
         design: repo.design.clone(),
         ci: repo.ci.clone(),
@@ -1898,6 +1905,11 @@ fn attribution(
         // The committed authority is the only place a disarm target may be
         // declared, and this row is what says so in the provenance.
         ("wiring", authority_set(repo.wiring.is_some())),
+        // The census declarations (CLOUD-843). `authority_set` for `wiring`'s
+        // reason turned the other way: nothing here is written, but every row
+        // decides what gets COUNTED, and a local file able to add an exempt glob
+        // could make a retirement wave read as progress it never made.
+        ("census", authority_set(repo.census.is_some())),
     ])
 }
 

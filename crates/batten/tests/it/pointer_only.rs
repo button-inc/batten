@@ -151,6 +151,14 @@ const CONTENT: &[Canary] = &[
         // comment above `run_landed_check` claiming it.
         source: "the description of a tracker row read by `landed check`",
     },
+    Canary {
+        tag: "shellbody",
+        // CLOUD-843. The shell census reads every body it counts, and a body is
+        // whatever the consumer wrote — a token, a host name, a path. What it may
+        // emit is a path, a line, a unit's declared name and a count; this is the
+        // byte that decides it.
+        source: "a shell line inside a manifest body or a workflow step the census counts",
+    },
 ];
 
 /// Bytes the caller wrote **as policy**. Only an `Echoes` verb may emit one.
@@ -272,7 +280,15 @@ fn authority(spawning: bool) -> String {
          tasks = \"/nonexistent/{{session}}\"\n\
          \n\
          [epoch]\n\
-         tracked = [\"batten.toml\"]\n",
+         tracked = [\"batten.toml\"]\n\
+         \n\
+         [census.shell]\n\
+         workflows = [\"workflows/*.yml\"]\n\
+         \n\
+         [[census.shell.manifest]]\n\
+         path = \"tasks.toml\"\n\
+         keys = [\"run\"]\n\
+         unit = \"[tasks.\"\n",
         rulepat = canary("rulepat"),
         markertok = canary("markertok"),
         waived = canary("waived"),
@@ -422,6 +438,24 @@ impl Corpus {
             // `**/*.md`) and outside the budget's named file list, so seeding it
             // adds subject matter for exactly one verb.
             .file("landed-merged.tsv", "CLOUD-1120\t726\n")
+            // The two homes `census shell` reads (CLOUD-843), each carrying a
+            // CONTENT canary in the one place the census must count and never
+            // quote: a task body and a workflow step. `emit.sh` above is the
+            // third home, a tracked shell file, and carries its own canaries.
+            .file(
+                "tasks.toml",
+                &format!(
+                    "[tasks.canary]\nrun = '''\necho {}\n'''\n",
+                    canary("shellbody")
+                ),
+            )
+            .file(
+                "workflows/ci.yml",
+                &format!(
+                    "jobs:\n  a:\n    steps:\n      - run: |\n          echo {}\n",
+                    canary("shellbody")
+                ),
+            )
             .file(
                 "transcript.jsonl",
                 &format!(
@@ -738,6 +772,26 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // `doctor target` reaches rustup and the network. A fixture that made it
     // answer would be installing a toolchain target.
     "doctor target",
+    // CLOUD-843's FOUNDATION SKELETONS, here on a bar of their own and named as
+    // such rather than waved through under the one above: each row's arguments
+    // are final and its body lands with the package retiring the shell it
+    // replaces, so its only answer today is `unimplemented` at exit 3. The
+    // pointer-only assertions still run over that refusal unchanged. THE PACKAGE
+    // THAT FILLS A BODY REMOVES ITS NAME HERE, in the same change — a name left
+    // behind after its verb answers is the widening this list's header forbids.
+    "step check",
+    "step record",
+    "step run",
+    "sbom",
+    "dist",
+    "mcp grant",
+    "mcp posture",
+    "board check",
+    "record divergence",
+    "record census note",
+    "record census record-boot",
+    "record census report",
+    "record census tally",
 ];
 
 /// One entry per leaf verb of [`SURFACE`], asserted total by
@@ -1639,6 +1693,97 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "mcp spawn",
         args: &["a-server", "--", "true"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // CLOUD-843's foundation surface. Every row is `PointerOnly` and that is the
+    // disposition each package inherits rather than one this change chose for
+    // them: a step key, an inventory's asset name, a board pointer, a census
+    // count — none has a reason to carry a byte it read. The skeletons answer
+    // `unimplemented` today (see `MAY_ANSWER_COULD_NOT_LOOK`); `census shell`
+    // answers now, over the corpus's task body, workflow step and `emit.sh`,
+    // each of which carries a content canary it must count and never quote.
+    Verb {
+        path: "step check",
+        args: &["a-step"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "step record",
+        args: &["a-step"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "step run",
+        args: &["a-step", "--", "true"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "sbom",
+        args: &["--names"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "dist",
+        args: &["x86_64-unknown-linux-gnu", "--stem"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "mcp grant",
+        args: &["mcp__a__b"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "mcp posture",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "board check",
+        args: &[],
+        stdin: Stdin::Board,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "record divergence",
+        args: &["--ci-workflow", "ci.yml", "--land-workflow", "land.yml"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "record census note",
+        args: &["h"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "record census record-boot",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "record census report",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "record census tally",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "census shell",
+        args: &[],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },

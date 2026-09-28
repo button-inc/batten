@@ -267,6 +267,15 @@ pub fn run(
         crate::cli::RecordCommand::Journal { family } => run_journal(&family),
         crate::cli::RecordCommand::Show { family, key } => run_keyed_show(&family, &key, out),
         crate::cli::RecordCommand::Fold { family } => run_journal_show(&family, out),
+        // CLOUD-843's foundation arms: final arguments, bodies owed by the
+        // packages retiring `land-divergence-record` and `reclaim-census`.
+        crate::cli::RecordCommand::Divergence { .. } => crate::unimplemented("record divergence"),
+        crate::cli::RecordCommand::Census { command } => crate::unimplemented(match command {
+            crate::cli::RecordCensusCommand::Note { .. } => "record census note",
+            crate::cli::RecordCensusCommand::RecordBoot => "record census record-boot",
+            crate::cli::RecordCensusCommand::Report { .. } => "record census report",
+            crate::cli::RecordCensusCommand::Tally => "record census tally",
+        }),
     }
 }
 

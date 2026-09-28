@@ -1,0 +1,25 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-sbom 1  batten 
+.SH NAME
+batten\-sbom \- Derive the SPDX and CycloneDX inventories of this tree, or of a built binary, under the names its release assets carry
+.SH SYNOPSIS
+\fBbatten sbom\fR [\fB\-\-names\fR] [\fB\-\-binary\fR] [\fB\-\-target\fR] [\fB\-\-out\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Derive the SPDX and CycloneDX inventories of this tree, or of a built binary, under the names its release assets carry
+.SH OPTIONS
+.TP
+\fB\-\-names\fR
+Print the asset names as KEY=VALUE lines and exit, without scanning
+.TP
+\fB\-\-binary\fR \fI<binary>\fR
+Inventory this built binary from its own bytes instead of the tree
+.TP
+\fB\-\-target\fR \fI<target>\fR
+The target triple the binary was built for, which names its asset
+.TP
+\fB\-\-out\-dir\fR \fI<out_dir>\fR
+Write the documents under this directory instead of the declared one
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

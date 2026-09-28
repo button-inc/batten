@@ -448,6 +448,134 @@ pub enum Command {
         /// The sub-verb selected.
         command: BenchCommand,
     },
+    /// The step cache (CLOUD-424), retiring `[tasks.step-receipt]` (CLOUD-843).
+    ///
+    /// This and the four below are APPENDED LAST, for the reason above.
+    Step {
+        /// The sub-verb selected.
+        command: StepCommand,
+    },
+    /// The SPDX and `CycloneDX` inventories, retiring `[tasks.sbom]` (CLOUD-843).
+    Sbom(SbomRequest),
+    /// The release build and archive, retiring `mise-tasks/dist.sh` (CLOUD-843).
+    Dist(DistRequest),
+    /// The board discipline, retiring `mise-tasks/graph-check.sh` and its two
+    /// citation siblings (CLOUD-843).
+    Board {
+        /// The sub-verb selected.
+        command: BoardCommand,
+    },
+    /// What this repository declares it is retiring, counted (CLOUD-843).
+    Census {
+        /// The sub-verb selected.
+        command: CensusCommand,
+    },
+}
+
+/// Subcommands of `step` (CLOUD-424, CLOUD-843).
+///
+/// Three arms over one key: `check` and `record` are the pair a caller brackets a
+/// step with, `run` is that bracket composed so the caller writes no shell around
+/// it. The step's inputs and tools are the consumer's step table, never an
+/// argument — a caller that could hand over its own input list could key a
+/// receipt to files the step never read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StepCommand {
+    /// Say `hit` or `miss`, and remember the key a `record` must match.
+    Check {
+        /// The step's declared name.
+        step: String,
+        /// The extra values the key depends on, in the order written.
+        args: Vec<String>,
+    },
+    /// Record the step's receipt, refusing when the inputs moved since `check`.
+    Record {
+        /// The step's declared name.
+        step: String,
+        /// The extra values the key depends on, in the order written.
+        args: Vec<String>,
+    },
+    /// Run the step's command on a miss, and record on a zero exit.
+    Run {
+        /// The step's declared name.
+        step: String,
+        /// The extra values the key depends on, in the order written.
+        args: Vec<String>,
+        /// The command, verbatim. Never empty — the surface requires it.
+        command: Vec<String>,
+    },
+}
+
+/// `sbom`'s flags, as a payload struct for `CheckFlags`' reason: a flag added
+/// later is a field on a `#[non_exhaustive]` struct rather than a break.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct SbomRequest {
+    /// Print the asset names and scan nothing.
+    pub names: bool,
+    /// Inventory this built binary instead of the tree.
+    pub binary: Option<String>,
+    /// The triple the binary was built for, which names its asset.
+    pub target: Option<String>,
+    /// Where to write the documents, instead of the declared directory.
+    pub out_dir: Option<String>,
+}
+
+/// `dist`'s arguments, as a payload struct for [`SbomRequest`]'s reason.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct DistRequest {
+    /// The target triple to build.
+    pub target: String,
+    /// Print the asset stem and build nothing.
+    pub stem: bool,
+    /// `cargo`, `cross` or `zigbuild`; absent is `cargo`.
+    pub build_tool: Option<String>,
+}
+
+/// Subcommands of `board` (CLOUD-843).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BoardCommand {
+    /// Refuse a lying board and print the ready frontier.
+    Check {
+        /// Issue keys to read out of the capture store; empty reads stdin.
+        issues: Vec<String>,
+    },
+}
+
+/// Subcommands of `census` (CLOUD-843).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CensusCommand {
+    /// Count every shell line in the declared homes.
+    Shell {
+        /// Emit the census as byte-stable JSON instead of pointer lines.
+        json: bool,
+    },
+}
+
+/// Subcommands of `record census` (CLOUD-451, retiring `[tasks.reclaim-census]`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RecordCensusCommand {
+    /// Append a landing's beat (`h`) or its deliberate stop (`x`).
+    Note {
+        /// `h` or `x`, as the caller wrote it; the verb refuses anything else.
+        kind: String,
+        /// Why the loop stopped, beside an `x`.
+        reason: Option<String>,
+    },
+    /// Record this container's boot, once.
+    RecordBoot,
+    /// Say whether the previous container was replaced mid-landing.
+    Report {
+        /// Record that this boot's verdict was read, and stay silent after.
+        once: bool,
+    },
+    /// Count every recorded replacement by what it interrupted.
+    Tally,
 }
 
 /// Subcommands of `hk`.
@@ -1359,6 +1487,32 @@ pub enum McpCommand {
         /// The launch line, verbatim. Never empty — the surface requires it.
         command: Vec<String>,
     },
+    /// Apply the committed permissions to a server the host renamed (CLOUD-843,
+    /// retiring `connector-allow-resolve`).
+    Grant {
+        /// The tool name to resolve; absent under `guard` or `aliases`.
+        tool: Option<String>,
+        /// Read a hook payload on stdin and refuse a denied call.
+        guard: bool,
+        /// List each live server's portable alias.
+        aliases: bool,
+        /// The host-injected MCP config to resolve through.
+        config: Option<String>,
+        /// The permission settings to judge, instead of the declared file.
+        settings: Option<String>,
+    },
+    /// Whether this session's servers are granted and attached (CLOUD-843,
+    /// retiring `mcp-attach-check` and `mcp-allow-check --session`).
+    Posture {
+        /// The permission settings to judge, instead of the declared file.
+        settings: Option<String>,
+        /// The host-injected MCP config to resolve through.
+        config: Option<String>,
+        /// The host's MCP connection log tree.
+        logs: Option<String>,
+        /// The spawn ledger `mcp spawn` appends to.
+        spawns: Option<String>,
+    },
 }
 
 /// Subcommands of `target` (CLOUD-1030).
@@ -1522,6 +1676,23 @@ pub enum RecordCommand {
     /// mediated tool on a harness whose spelling is surveyed, and its failure
     /// produces NOTHING — so the exemption it feeds silently cannot fire.
     Closes,
+    /// Record how far the landing loop diverged from linear over a window
+    /// (CLOUD-843, retiring `[tasks.land-divergence-record]`).
+    Divergence {
+        /// The workflow whose runs are the graded CI runs.
+        ci_workflow: String,
+        /// The workflow whose runs are the landing bot's answers.
+        land_workflow: String,
+        /// The window's start, ISO-8601; absent is 24 hours before now.
+        since: Option<String>,
+        /// Pages to read per workflow before the window reads as truncated.
+        max_pages: Option<String>,
+    },
+    /// The reclaim census (CLOUD-843, retiring `[tasks.reclaim-census]`).
+    Census {
+        /// The sub-verb selected.
+        command: RecordCensusCommand,
+    },
 }
 
 /// Subcommands of `receipt`.
@@ -2680,6 +2851,113 @@ fn mcp_of(matches: &ArgMatches) -> Option<McpCommand> {
                 .cloned()
                 .collect::<Vec<_>>(),
         }),
+        ("grant", matches) => Some(McpCommand::Grant {
+            tool: matches.get_one::<String>("tool").cloned(),
+            guard: flag(matches, "guard"),
+            aliases: flag(matches, "aliases"),
+            config: matches.get_one::<String>("config").cloned(),
+            settings: matches.get_one::<String>("settings").cloned(),
+        }),
+        ("posture", matches) => Some(McpCommand::Posture {
+            settings: matches.get_one::<String>("settings").cloned(),
+            config: matches.get_one::<String>("config").cloned(),
+            logs: matches.get_one::<String>("logs").cloned(),
+            spawns: matches.get_one::<String>("spawns").cloned(),
+        }),
+        _ => None,
+    }
+}
+
+/// Every `--arg` in the order written. `get_many`, never `get_one`: the flag is
+/// an `Append` action, and keeping only the last would key two runs alike.
+fn step_args(matches: &ArgMatches) -> Vec<String> {
+    matches
+        .get_many::<String>("arg")
+        .map(|values| values.cloned().collect())
+        .unwrap_or_default()
+}
+
+/// The `step` sub-verb a parse resolved to (CLOUD-843).
+fn step_of(matches: &ArgMatches) -> Option<StepCommand> {
+    match matches.subcommand()? {
+        ("check", matches) => Some(StepCommand::Check {
+            step: matches.get_one::<String>("step").cloned()?,
+            args: step_args(matches),
+        }),
+        ("record", matches) => Some(StepCommand::Record {
+            step: matches.get_one::<String>("step").cloned()?,
+            args: step_args(matches),
+        }),
+        // The trailing argv is `num_args(1..)`, so clap has already refused an
+        // empty command: a run with nothing to run would record a pass nothing
+        // earned.
+        ("run", matches) => Some(StepCommand::Run {
+            step: matches.get_one::<String>("step").cloned()?,
+            args: step_args(matches),
+            command: matches
+                .get_many::<String>("command")?
+                .cloned()
+                .collect::<Vec<_>>(),
+        }),
+        _ => None,
+    }
+}
+
+/// `sbom`'s flags (CLOUD-843). Total: every flag is optional.
+fn sbom_of(matches: &ArgMatches) -> SbomRequest {
+    SbomRequest {
+        names: flag(matches, "names"),
+        binary: matches.get_one::<String>("binary").cloned(),
+        target: matches.get_one::<String>("target").cloned(),
+        out_dir: matches.get_one::<String>("out_dir").cloned(),
+    }
+}
+
+/// `dist`'s arguments (CLOUD-843). The positional is required, so clap has
+/// refused a bare `dist` and `None` is unreachable.
+fn dist_of(matches: &ArgMatches) -> Option<DistRequest> {
+    Some(DistRequest {
+        target: matches.get_one::<String>("target").cloned()?,
+        stem: flag(matches, "stem"),
+        build_tool: matches.get_one::<String>("build_tool").cloned(),
+    })
+}
+
+/// The `board` sub-verb a parse resolved to (CLOUD-843).
+fn board_of(matches: &ArgMatches) -> Option<BoardCommand> {
+    match matches.subcommand()? {
+        ("check", matches) => Some(BoardCommand::Check {
+            issues: matches
+                .get_many::<String>("issue")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
+        }),
+        _ => None,
+    }
+}
+
+/// The `census` sub-verb a parse resolved to (CLOUD-843).
+fn census_of(matches: &ArgMatches) -> Option<CensusCommand> {
+    match matches.subcommand()? {
+        ("shell", matches) => Some(CensusCommand::Shell {
+            json: flag(matches, "json"),
+        }),
+        _ => None,
+    }
+}
+
+/// The `record census` sub-verb a parse resolved to (CLOUD-843).
+fn record_census_of(matches: &ArgMatches) -> Option<RecordCensusCommand> {
+    match matches.subcommand()? {
+        ("note", matches) => Some(RecordCensusCommand::Note {
+            kind: matches.get_one::<String>("kind").cloned()?,
+            reason: matches.get_one::<String>("reason").cloned(),
+        }),
+        ("record-boot", _) => Some(RecordCensusCommand::RecordBoot),
+        ("report", matches) => Some(RecordCensusCommand::Report {
+            once: flag(matches, "once"),
+        }),
+        ("tally", _) => Some(RecordCensusCommand::Tally),
         _ => None,
     }
 }
@@ -2760,6 +3038,17 @@ fn record_of(matches: &ArgMatches) -> Option<RecordCommand> {
         // it, so this arm takes the sub-verb and nothing else.
         ("plan", _) => Some(RecordCommand::Plan),
         ("closes", _) => Some(RecordCommand::Closes),
+        ("divergence", matches) => Some(RecordCommand::Divergence {
+            // Both required by the surface, so clap has refused an argv without
+            // them before this runs.
+            ci_workflow: matches.get_one::<String>("ci_workflow")?.clone(),
+            land_workflow: matches.get_one::<String>("land_workflow")?.clone(),
+            since: matches.get_one::<String>("since").cloned(),
+            max_pages: matches.get_one::<String>("max_pages").cloned(),
+        }),
+        ("census", matches) => {
+            record_census_of(matches).map(|command| RecordCommand::Census { command })
+        }
         _ => None,
     }
 }
@@ -2868,6 +3157,11 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "ci" => ci_of(matches).map(|command| Command::Ci { command }),
         "release" => release_of(matches).map(|command| Command::Release { command }),
         "bench" => bench_of(matches).map(|command| Command::Bench { command }),
+        "step" => step_of(matches).map(|command| Command::Step { command }),
+        "sbom" => Some(Command::Sbom(sbom_of(matches))),
+        "dist" => dist_of(matches).map(Command::Dist),
+        "board" => board_of(matches).map(|command| Command::Board { command }),
+        "census" => census_of(matches).map(|command| Command::Census { command }),
         _ => None,
     }
 }
