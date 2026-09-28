@@ -11870,9 +11870,8 @@ expires = "2027-02-28"
 # the door appended it to the advisory buffer, and `batten adjudicate` wrote
 # NOTHING to stdout, because `UserPromptSubmit` is not in Claude Code's
 # `advisory.delivered_on` (`crates/batten/src/hook.rs`, `ADVISORY_GAPS` names it
-# unprobed). So the one gate that says "this committed grant cannot take effect;
-# the fix is the connector's Tool permissions" was dropped every turn, while
-# sessions were told by memory that no such setting exists.
+# unprobed). So the one gate that says "this committed grant cannot take effect"
+# was dropped every turn.
 #
 # `session-start` IS A MEASURED CHANNEL and the right cadence besides: the
 # connector's per-tool posture is written into the injected wiring when the

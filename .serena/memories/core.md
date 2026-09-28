@@ -48,8 +48,8 @@ Read on demand, never all of them.
   tool or pattern; writing an issue or PR body.
 - `mem:connector-allowlist-recovery` — **any** `MCP tool call requires approval`,
   including `create_session`/`list_sessions`/`get_session` (each answers after an
-  approval; the prompt is the account's connector Tool permissions, which the
-  `mcp-allow-check` session-start finding names — CLOUD-1946); a connector's
+  approval; no user-facing setting clears that prompt, and Claude Code Remote
+  is not listed at claude.ai/customize/connectors — CLOUD-1946); a connector's
   tools start prompting or denying,
   reappear under a different name, or are **absent entirely** ("No such tool
   available"); before telling anyone a connector is unattached or needs

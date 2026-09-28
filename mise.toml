@@ -4773,7 +4773,7 @@ if [[ "$session" = 1 ]] && [[ -n "$config" ]] && [[ -f "$config" ]]; then
 			esac
 		done < <(jq -r --arg p "mcp__${alias}__" '.[] | select(startswith($p)) | sub("^" + $p; "")' <<<"$allows" | grep -vF '*' | sort -u)
 		[[ "$blocked" = 0 ]] ||
-			report "$alias — $blocked allow rule(s) name a tool the connector sets to \`$policies\`, and an allow rule never skips that prompt. Fix it at the connector's Tool permissions, not in $settings (CLOUD-765)."
+			report "$alias — $blocked allow rule(s) name a tool the connector sets to \`$policies\`, and an allow rule never skips that prompt. Nothing in $settings fixes it; where claude.ai/customize/connectors lists the connector, its Tool permissions do; Claude Code Remote is not listed, and no setting is known for it (CLOUD-765, CLOUD-1946)."
 	done < <(paste <(printf '%s\n' "$keys") <(printf '%s\n' "$aliases"))
 	# CLOUD-790. A guard's pre-approved suffixes, judged on every exposed server.
 	preapproved=$(for guard in "$guards"/*-guard.sh; do
@@ -4796,7 +4796,7 @@ if [[ "$session" = 1 ]] && [[ -n "$config" ]] && [[ -f "$config" ]]; then
 		  (.mcpServers // {}) | to_entries[] | (.value.tools // []) | map(select(.name == $t)) | .[] | .permission_policy // empty
 		' "$config" 2>/dev/null)
 		[[ "$blocked" = 0 ]] ||
-			report "$suffix — a guard pre-approves this tool, and the connector sets it to \`$policies\` on $blocked exposed server(s). A hook's \`permissionDecision: allow\` never skips that prompt, so the arm claims an authority it does not hold. Fix it at the connector's Tool permissions, or drop the arm and do the work off the mediated path (CLOUD-790)."
+			report "$suffix — a guard pre-approves this tool, and the connector sets it to \`$policies\` on $blocked exposed server(s). A hook's \`permissionDecision: allow\` never skips that prompt, so the arm claims an authority it does not hold. Allow it at the connector's Tool permissions where claude.ai lists the connector, or drop the arm and do the work off the mediated path (CLOUD-790)."
 	done <<<"$preapproved"
 fi
 exit "$fail"

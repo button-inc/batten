@@ -314,9 +314,9 @@ So:
 - **Call `add_repo` when the task needs a repository outside the session's
   scope.** The owner approves or declines the prompt, and that is their decision
   to make, not one to pre-empt by skipping the call.
-- **The prompt goes away at the account, not here**: claude.ai/customize/connectors
-  → Claude Code Remote → Tool permissions. No `.claude/settings.json` entry moves
-  it (`mem:connector-allowlist-recovery`'s STOP section).
+- **No setting is known that makes the prompt go away.** Claude Code Remote is
+  not listed at claude.ai/customize/connectors, and no `.claude/settings.json`
+  entry moves it (`mem:connector-allowlist-recovery`'s STOP section).
 
 ### `gh` is the route, and nothing upstream is unreachable
 

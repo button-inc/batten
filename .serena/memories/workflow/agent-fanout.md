@@ -39,25 +39,28 @@ requested permission mode. An earlier version of this section said the sessions
 could not be opened and forbade re-testing. Both claims were false, and
 following them re-derived hand dispatch.
 
-**Why every call prompts, and where the fix lives.**
+**Why every call prompts, and what does NOT fix it.**
 
 - The injected wiring (`/tmp/mcp-config-cse_*.json`) sets all 26
   `Claude_Code_Remote` tools to `always_ask`.
-- That posture is the claude.ai account's own connector setting, and the
-  launcher honours it exactly. Claude Docs' allowed tools and the launcher's
-  allowed list matched one for one.
-- A repository `permissions.allow` entry cannot move an ask. The committed file
-  has granted `mcp__Claude_Code_Remote` and `get_session` all along, and
-  `get_session` still prompted. The Claude Code permissions docs say so in as
-  many words: an allow rule for a connector tool set to ask does not take effect.
-- The fix is the account's: claude.ai/customize/connectors → Claude Code Remote
-  → Tool permissions → Always allow. Name it when asked.
-- `mcp-allow-check --session` reports every committed grant the account still
-  asks for, at session start (the `mcp-allow-check` handler row in
-  `batten.toml`). Until 2026-09-28 it ran on `user-prompt-submit`, where Claude
-  Code delivers no advisory, so nobody ever saw it.
-- Upstream reports on the cloud routine path (#61097, #76264) stay relevant.
-  Re-test after a client upgrade rather than trusting any memory, this one
+- **No user-facing setting is known that removes it.** Claude Code Remote is
+  not listed at claude.ai/customize/connectors (the owner checked, 2026-09-28).
+  CLOUD-1946 first landed "Claude Code Remote → Tool permissions → Always
+  allow" as the fix. That was an extrapolation from Claude Docs, which IS
+  listed there and whose allowed tools did match the launcher's list. The
+  claim was false, and it was said to the owner. Never name that path again.
+- A repository `permissions.allow` entry cannot move an ask either. The
+  committed file has granted `mcp__Claude_Code_Remote` and `get_session` all
+  along, and `get_session` still prompted. The Claude Code permissions docs
+  say an allow rule for a connector tool set to ask does not take effect.
+- Upstream, same class, no user-side workaround:
+  [#67371](https://github.com/anthropics/claude-code/issues/67371) (cloud
+  connectors ignore `permissions.allow`; closed not-planned) and
+  [#96638](https://github.com/anthropics/claude-code/issues/96638) (plan mode
+  re-prompts on every call to a parameterized MCP tool; open).
+- `mcp-allow-check --session` reports the unenforceable committed grants at
+  session start. It says the prompt stands, not how to clear it.
+- Re-test after a client upgrade rather than trusting any memory, this one
   included.
 
 **Hand dispatch stays the fallback, never the default.** `CLOUD-731`,

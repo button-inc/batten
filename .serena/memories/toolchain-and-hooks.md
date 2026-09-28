@@ -316,9 +316,9 @@ does not generalise.** The Claude Code Remote session-management tools —
 `create_session`, `list_sessions`, `get_session`, `send_later`, `create_trigger`
 — are `always_ask` by the claude.ai account's connector setting, and an allow
 rule never skips that prompt, at any spelling and at any level: the Claude Code
-permissions docs say so, and #76264's escape 2 records it. The remedy is the
-account's connector Tool permissions (claude.ai/customize/connectors), which the
-launcher honours exactly (measured 2026-09-27, CLOUD-1946). Each call answers
+permissions docs say so, and #76264's escape 2 records it. No user-facing remedy is known: Claude Code
+Remote is not listed at claude.ai/customize/connectors (owner, 2026-09-28;
+CLOUD-1946 first claimed otherwise, and was wrong). Each call answers
 after an approval. `mcp-allow-check --session` reports every committed grant the
 account still asks for, at session start. Read `mem:connector-allowlist-recovery`'s
 STOP section before acting on any `MCP tool call requires approval`.

@@ -1201,14 +1201,14 @@ impl Bound {
     /// connector whose tools are grantable shows a MIX — Linear measured 57
     /// `always_allow` against 1 `always_ask` — where the session-management
     /// server measured 20 of 20 `always_ask`, including the read-only ones. All
-    /// of them asking means the account has granted none of that connector's
-    /// tools, and no REPOSITORY grant moves it; some of them asking is an
-    /// ordinary per-tool posture. Either way the posture is the account's own
-    /// connector setting (its Tool permissions), which the launcher honours
-    /// exactly — measured 2026-09-27, CLOUD-1946: a connector's allowed tools
-    /// and the launcher's allowed list matched one for one. An earlier version
-    /// of this doc said that setting does not exist for the session-management
-    /// connector; it does, and saying otherwise sent sessions to hand dispatch.
+    /// of them asking means no tool of that server can be called unattended, and
+    /// no REPOSITORY grant moves it; some of them asking is an ordinary per-tool
+    /// posture. For a connector claude.ai lists, the posture is the account's
+    /// own Tool permissions, which the launcher honours exactly (measured
+    /// 2026-09-27, CLOUD-1946). The session-management server is NOT listed
+    /// there, so no user-facing setting is known for it. CLOUD-1946 first
+    /// claimed one existed, which was false. What stays true is that each call
+    /// answers after an approval.
     #[must_use]
     pub const fn mandatory(&self) -> bool {
         self.declared > 0 && self.asks == self.declared

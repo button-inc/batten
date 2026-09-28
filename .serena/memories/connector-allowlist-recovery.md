@@ -65,14 +65,14 @@ verified against them.
 **The Claude Code Remote / session-management connector is a different animal
 and NONE of it applies.** Its tools — `create_session`, `list_sessions`,
 `get_session`, `archive_session`, `send_message`, `create_trigger`,
-`send_later`, `add_repo` and the rest — are set to `always_ask` by the claude.ai account's connector setting, all of
-them, read-only ones included. The tool's own prompt says it _"requires explicit
-approval regardless of permission mode."_ **That setting IS the control
-surface** (corrected 2026-09-27, CLOUD-1946; this paragraph said "no control
-surface" before). It lives at claude.ai/customize/connectors → Claude Code
-Remote → Tool permissions, and the launcher honours it exactly: Claude Docs'
-allowed tools and the launcher's allowed list matched one for one. What cannot
-move it is anything in this repository.
+`send_later`, `add_repo` and the rest — are all `always_ask` in the injected wiring, read-only ones included. The
+tool's own prompt says it _"requires explicit approval regardless of permission
+mode."_ **No user-facing control is known for them.** Claude Code Remote is not
+listed at claude.ai/customize/connectors (the owner checked, 2026-09-28). A
+2026-09-27 edit of this paragraph (CLOUD-1946) named "Claude Code Remote → Tool
+permissions" as the control surface. That was an extrapolation from Claude
+Docs, which is listed there, and it was false. Nothing in this repository moves
+the prompt either.
 
 **Every escape has been tested upstream and documented as failing**
 ([anthropics/claude-code#76264](https://github.com/anthropics/claude-code/issues/76264),
@@ -105,12 +105,15 @@ so re-test after a client upgrade and report if it still fails.
   owner approved the call. An earlier version of this list said they could not
   be granted, that the settings screen did not exist, and forbade re-testing.
   All three were false.
-- **The remedy is the account's connector Tool permissions, set to Always
-  allow.** Name that surface when asked. A repository allow rule does not move it.
-  That is escape 2 above, and the Claude Code permissions docs state it too.
-- **`mcp-allow-check --session` reports it at every session start**: a committed
-  grant the account still asks for, with the connector's Tool permissions as the
-  remedy. Read that finding rather than this paragraph.
+- **No remedy is known on the user's side.** Claude Code Remote is not listed at
+  claude.ai/customize/connectors, so never send anyone there for it. A
+  repository allow rule does not move the prompt either: that is escape 2
+  above, and the Claude Code permissions docs say so.
+  [#67371](https://github.com/anthropics/claude-code/issues/67371) (closed as
+  not planned) and [#96638](https://github.com/anthropics/claude-code/issues/96638)
+  (open) are the same class.
+- **`mcp-allow-check --session` reports the unenforceable grants at session
+  start.** It tells you the prompt will stand, never how to clear it.
 - **Sibling sessions only when the owner asks a grooming session to dispatch.**
   Hand dispatch (`CLOUD-731`, `CLOUD-784`, `CLOUD-839`) was recorded under the
   false premise; it is the fallback when an asked-for dispatch cannot run.
@@ -151,8 +154,8 @@ Read the injected config. A connector whose tools are grantable shows a mix —
 Linear measured **57 `always_allow`, 1 `always_ask`**. The remote-session
 connector shows **all 20 `always_ask`, including read-only `get_session` and
 `list_sessions`**. A connector where _every_ tool including the read-only ones
-is `always_ask` is one the account has granted nothing on. No local change will
-move it; the account's connector Tool permissions will.
+is `always_ask` is not grantable from here. No local change moves it, and no user-facing setting
+for it is known.
 
 ## Recovering a DATA connector (Linear/Gmail/Xero), in order
 
@@ -266,10 +269,10 @@ body.
 - An org-level `ask` control on a connector overrides allow rules in every
   permission mode. That was a _separate_, already-cleared defect. Do not send
   someone to check it again — it masked this one and is not this one.
-- The claude.ai per-connector tool permission DOES reach a cloud session: the
-  launcher's allowed-tools list is built from it (measured 2026-09-27,
-  CLOUD-1946). This line used to say it governs claude.ai chats only, which was
-  false.
+- The claude.ai per-connector tool permission reaches a cloud session for a
+  connector it LISTS: Claude Docs' allowed tools matched the launcher's allowed
+  list one for one (measured 2026-09-27). It says nothing about a server that
+  claude.ai does not list, such as Claude Code Remote.
 - **A gate can be green while the connector is unreachable.** `mcp-allow-check`
   passed throughout the session where writes were denied, because it was
   checking a name nothing was using. A gate over settings cannot see which name
