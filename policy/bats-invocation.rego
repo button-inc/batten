@@ -102,7 +102,7 @@ serial_spellings := {
 # (CLOUD-480: a selector that died partway left partial output, and the emptiness
 # check passed over it — a narrow run, which has no symptom).
 counted_markers := {
-	"suites=$(./mise-tasks/suite-select.sh) || suites=\"\"",
+	`suites=$(cargo run --quiet -p batten -- ci suites --base "${BASE_SHA:-origin/main}") || suites=""`,
 	`if [ -z "$suites" ]`,
 	`awk '/^@test /{n++} END{print n+0}'`,
 	`"$ran" != "$expected"`,
@@ -341,7 +341,7 @@ sound_body := concat("", [
 	` --report-formatter junit --output "$report" $suites`,
 	` elapsed=$(($(date +%s) - started))`,
 	` workers=$(nproc)`,
-	` suites=$(./mise-tasks/suite-select.sh) || suites=""`,
+	` suites=$(cargo run --quiet -p batten -- ci suites --base "${BASE_SHA:-origin/main}") || suites=""`,
 	` if [ -z "$suites" ]; then :; fi`,
 	` awk '/^@test /{n++} END{print n+0}' $suites`,
 	` [ "$ran" != "$expected" ]`,

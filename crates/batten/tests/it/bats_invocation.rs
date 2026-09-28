@@ -168,7 +168,7 @@ run = '''
 
 fn sound_body() -> String {
     [
-        r#"suites=$(./mise-tasks/suite-select.sh) || suites="""#,
+        r#"suites=$(cargo run --quiet -p batten -- ci suites --base "${BASE_SHA:-origin/main}") || suites="""#,
         r#"if [ -z "$suites" ]; then suites=$(git ls-files); fi"#,
         r"expected=$(awk '/^@test /{n++} END{print n+0}' $suites)",
         "workers=$(nproc)",
