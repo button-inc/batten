@@ -1277,7 +1277,7 @@ run = 'cargo nextest run --workspace --no-fail-fast "$@"'
 
 [tasks."test:cargo"]
 #MUTANT-SUITE crates/batten/tests/it/test_cargo_path.rs
-#MUTANT installed-batten-visible|s@\[ "[$][{]f##[*]/[}]" = batten \] || @@|the_mask_hides_every_batten_and_keeps_the_rest
+#MUTANT installed-batten-visible|s@\[ "[$][{]f##[*]/[}]" = batten \] [[:punct:]][[:punct:]] @@|the_mask_hides_every_batten_and_keeps_the_rest
 description = "Run the Rust workspace test suite"
 # Routed through the per-step receipt (CLOUD-424): same sources, same command,
 # same toolchain ⇒ same verdict, so a hit answers from the receipt instead of
