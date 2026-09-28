@@ -10048,11 +10048,17 @@ keep = 2
 # `declared 298, live 337, tolerance 10`: the staleness arm again, not the disk
 # (18336 MB free against a learned 16020). 45.65 per stem x 337 is 15384, derived
 # by the same stem model and said so; cold's basis moves and its floor does not.
+# THE 2026-09-28 WARM RESCALE, 337 -> 348, the bash-retirement integration branch
+# (CLOUD-843). Trunk already stood at 347, one inside the tolerance, and merging
+# the line-unit shell ban's `shell_banned.rs` took the live count to 348:
+# `target-prune` refused at `declared 337, live 348, tolerance 10`, the staleness
+# arm and not the disk (16564 MB free). 45.65 per stem x 348 is 15886, derived by
+# the same stem model and said so; cold's basis moves and its floor does not.
 [prune.warm]
-mb = 15384
-worst_mb = 15384
+mb = 15886
+worst_mb = 15886
 multiplier = 1
-measured = "2026-09-26"
+measured = "2026-09-28"
 
 [prune.cold]
 mb = 21455
@@ -10536,7 +10542,7 @@ measured = "2026-09-07"
 # basis refresh is a trend counter and not a byte budget.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 337
+count = 348
 tolerance = 10
 
 # COLD'S BASIS MOVES AND COLD'S FLOOR DOES NOT, and that is the entry above
@@ -10559,7 +10565,7 @@ glob = "crates/batten/tests/**/*.rs"
 # 298, moved with warm's by the 2026-09-25 entry above and for the reason the
 # 2026-09-06 entry measured: a basis refreshed on one arm and not the other makes
 # the very next lap refuse on the arm that was left behind.
-count = 337
+count = 348
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
