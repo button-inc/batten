@@ -191,10 +191,11 @@ fn collect_seeded(name: &str, others: &str, seeds: &[&str]) -> (Vec<bool>, Strin
 /// `target/<triple>/tmp`, and the collector used to take `target/tmp` alone, so
 /// the musl lane's parent grew across runs and rode the cache into the next job.
 /// Alone, the collector takes both — and publishes both as covered roots.
-///
-/// MUTANT collector-skips-triple-roots|s@ "$base"/\*/tmp; do@; do@|a_target_triples_scratch_is_collected_too
-/// — `.config/nextest.toml` has no `batten mutate` sweep route, so this row is
-/// inert under the sweep and its kill was shown by hand.
+//
+// The declared mutation, in a plain comment because it is shell rather than
+// prose. `.config/nextest.toml` has no `batten mutate` sweep route, so the row is
+// inert under the sweep and its kill was shown by hand (CLOUD-1976):
+// MUTANT collector-skips-triple-roots|s@ "$base"/\*/tmp; do@; do@|a_target_triples_scratch_is_collected_too
 #[test]
 fn a_target_triples_scratch_is_collected_too() {
     let (survived, published) = collect_seeded(
