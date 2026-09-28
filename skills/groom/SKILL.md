@@ -82,8 +82,12 @@ run in parallel.
 
 - The validator is **report-only**. It never writes a file or the tracker. The
   grooming session applies every fix itself, one row at a time.
-- Its value is that it did not write the row. Models under-ask unless pushed
-  to, which is why the brief demands its questions.
+- Its value is that it did not write the row. Measured on CLOUD-1968: a fresh
+  isolated read caught every seeded defect with or without this skill, while
+  the recorded failures were all main sessions linting rows they had just
+  written. The isolation is the lever; do not skip it because L1 looked clean.
+  Models also under-ask unless pushed to, which is why the brief demands
+  its questions.
 - Every finding is either fixed in the row with evidence, or answered in the
   row. A divergence between its restated goal and yours is a defect in the row.
 - Post its report on the row as a comment, with the fixes it caused.

@@ -13,7 +13,8 @@ HARD RULES: You are REPORT-ONLY. Do not write, edit or create any file. Do not
 call any tracker or write tool. Do not commit, push or run task runners. Use
 Read, Grep and Glob.
 
-The row body is at <scratch-file>. Read it.
+The row body is at <scratch-file>. Read it. Do not read `skills/groom/evals/`:
+it holds seeded answers, and reading it makes your report worthless as a check.
 
 For every claim the row makes about the tree (paths, symbols, test names, tasks,
 rule names, what a function does today), verify it against the repository. Also
