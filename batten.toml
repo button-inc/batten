@@ -5860,6 +5860,31 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "migrate the predicate onto a rule kind, or waive the increase deliberately with a reason and an expiry; which of the two is the whole question"
 
+# CLOUD-1925. This repository's rule is no bash unless there is no other choice,
+# measured in LINES: `policy/shell-banned.rego` refuses any rise in inline shell
+# lines, a task gaining shell, workflow shell growth and new shell files. It
+# lands BESIDE the two body-count rows above rather than replacing them in one
+# step, because removing a rule is a weakening and a weakening is admitted only
+# by a recorded answer (CLOUD-1078) — which a released binary must record. The
+# rows and their waivers are deleted in the change after CLOUD-1078 ships.
+#
+# `line_sources` is where a SHEBANG can be read on an added path; the extension
+# arm reads `delta.added` over `**` and needs no lines.
+[[rule]]
+id = "shell write other"
+kind = "policy"
+scope = "tree"
+base = "origin/main"
+delta_sources = ["**"]
+line_sources = [
+  "mise.toml",
+  ".github/workflows/*.yml",
+  "mise-tasks/**",
+  ".claude/hooks/**",
+]
+module = "policy/shell-banned.rego"
+severity = "deny"
+
 # CLOUD-1709. THE THIRD SURFACE, AND THE LARGEST. `bash-surface-not-growing`
 # globs `mise-tasks/**`; CLOUD-1137 closed the `mise.toml` and `.claude/**` holes
 # above. `.github/workflows/**` was left, and it is bigger than either: 28 files
@@ -14012,6 +14037,78 @@ the successor on a `// carried:`, `// subsumed:` or `// changed:` row.
 id = "rule read first"
 kind = "document"
 target = "rules/policy-modules.md"
+
+# --- this repository's shell ban (CLOUD-1925) --------------------------------
+#
+# Four classes, one module (`policy/shell-banned.rego`). None declares an
+# override: relaxing the ban is a weakening, and a weakening is admitted only by
+# a human's recorded answer (CLOUD-1078), never by a route an author walks alone.
+
+[[verdict]]
+id = "task write refused"
+gloss = "mise.toml's shell code lines rose against the base"
+class = """
+This repository runs no bash unless there is no other choice. A task body's \
+shell lines — a `run = '''`/`\"\"\"` string, or a `run` one-liner or array entry \
+carrying shell syntax — may fall and may never rise. #962 moved 2,720 lines of \
+bash into these strings while the old body-count rows read one per body. Put the \
+decision in a `policy/*.rego` module, the fetch in a declared recorder, and the \
+glue in an argv `run = [...]` or `depends`; what is left over is a verb.
+"""
+
+[[verdict.route]]
+id = "rule read first"
+kind = "document"
+target = "policy/shell-banned.rego"
+
+[[verdict]]
+id = "task add refused"
+gloss = "a mise task that carried no shell at the base carries some now"
+class = """
+The arm relocation cannot offset: moving a body into a task while deleting a \
+bigger one elsewhere keeps the line count level and still gives a task shell it \
+did not have. The pointer is the task's header. Deleting shell is always free, \
+and an edit inside a body that does not grow it is admitted, so a fix to an \
+existing body lands; a new one does not.
+"""
+
+[[verdict.route]]
+id = "rule read first"
+kind = "document"
+target = "policy/shell-banned.rego"
+
+[[verdict]]
+id = "step write refused"
+gloss = "a workflow's run: shell lines rose against the base"
+class = """
+A workflow step is where a shell line is the native spelling, which is why the \
+step itself stays allowed and a single-command `run: mise run <task>` is not \
+counted. What is counted is the shell around it: every code line of a \
+`run: |`/`run: >` block and every one-liner carrying shell syntax. Move the \
+logic into a declared task or the engine and call it from the step.
+"""
+
+[[verdict.route]]
+id = "rule read first"
+kind = "document"
+target = "policy/shell-banned.rego"
+
+[[verdict]]
+id = "shell place refused"
+gloss = "a shell script was added outside the fixed set of files that must be shell"
+class = """
+A `.sh`, `.bash` or `.bats` path, or a file whose shebang names a shell, was \
+added. The only files that must be shell are the ones that run where the engine \
+cannot: the installer and bootstrap that bring it to a host, the git hook \
+launcher mise's shims cannot reach, and clap's generated completions. They are \
+`stays_bash` in the module, asserted exactly by its tier, so the set cannot widen \
+quietly. Anything else is a verb, a module or a recorder.
+"""
+
+[[verdict.route]]
+id = "rule read first"
+kind = "document"
+target = "policy/shell-banned.rego"
 
 # --- the same rule, said before the work instead of after it (CLOUD-1131) -----
 
