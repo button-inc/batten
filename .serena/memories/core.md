@@ -1060,6 +1060,10 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   exhaustion while reading as a stop, and a zero bound would never leave the
   seed. The answer is a REDUCTION — present, count, or the node names along the
   chain, which are paths and so are pointers under rule 4 — never the walk.
+- `propose.rs` — candidate resolutions for a conflicted replay, never applied
+  (CLOUD-1956): a pure diff3 merge per path, returned only when every region
+  matches a built-in shape (`comment-only`, `list-union`, `json-array-union`).
+  `gitwrite` writes the candidate; `--resolve` stays the only act that applies one.
 - `gitwrite.rs` — the LOCAL git writes: a loose object into the odb, and a ref
   moved (CLOUD-1274's D2). Placed by EFFECT rather than by subject, which is the
   whole reason it is not part of `git.rs`: that module is read-only over gix and

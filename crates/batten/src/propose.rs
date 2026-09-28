@@ -34,8 +34,33 @@
 
 use std::fmt;
 use std::num::NonZeroU8;
+use std::sync::LazyLock;
 
 use regex::Regex;
+
+/// `KEY = "a,b,c"` with the quoting kept, for [`list_union`].
+static ASSIGNMENT: LazyLock<Regex> = LazyLock::new(|| {
+    #[expect(
+        clippy::unwrap_used,
+        reason = "a literal pattern with no input: it compiles or the binary does not"
+    )]
+    Regex::new(r#"^(\s*[A-Za-z0-9_.:-]+\s*=\s*")([^"]*)("[ \t]*\r?\n?)$"#).unwrap()
+});
+
+/// One `"string",` array element, for [`json_array_union`].
+static ELEMENT: LazyLock<Regex> = LazyLock::new(|| {
+    #[expect(
+        clippy::unwrap_used,
+        reason = "a literal pattern with no input: it compiles or the binary does not"
+    )]
+    Regex::new(r#"^(\s*)"([^"\\]*)",(\r?\n?)$"#).unwrap()
+});
+
+/// Git's default marker width, and never zero.
+const MARKER_SIZE: NonZeroU8 = match NonZeroU8::new(MARKER) {
+    Some(size) => size,
+    None => unreachable!(),
+};
 
 /// The regularity a conflict region matched, reported beside its candidate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -92,11 +117,11 @@ pub fn propose(ancestor: &[u8], ours: &[u8], theirs: &[u8]) -> Option<Proposal> 
 /// The three-way text merge with every conflict kept as diff3 markers.
 fn diff3(ancestor: &[u8], ours: &[u8], theirs: &[u8]) -> Option<String> {
     let mut out = Vec::new();
-    let mut input = Default::default();
+    let mut input = gix_diff::blob::InternedInput::default();
     let options = gix::merge::blob::builtin_driver::text::Options {
         conflict: gix::merge::blob::builtin_driver::text::Conflict::Keep {
             style: gix::merge::blob::builtin_driver::text::ConflictStyle::Diff3,
-            marker_size: NonZeroU8::new(MARKER).expect("seven is not zero"),
+            marker_size: MARKER_SIZE,
         },
         ..Default::default()
     };
@@ -193,11 +218,9 @@ fn comment_only(ours: &[&str], base: &[&str], theirs: &[&str]) -> Option<(String
 
 /// `KEY = "a,b,c"`, one line per side, same key and same quoting on every side.
 fn list_union(ours: &[&str], base: &[&str], theirs: &[&str]) -> Option<(String, Shape)> {
-    let assignment = Regex::new(r#"^(\s*[A-Za-z0-9_.:-]+\s*=\s*")([^"]*)("[ \t]*\r?\n?)$"#)
-        .expect("the assignment pattern compiles");
     let split = |lines: &[&str]| -> Option<(String, Vec<String>, String)> {
         let [line] = lines else { return None };
-        let caps = assignment.captures(line)?;
+        let caps = ASSIGNMENT.captures(line)?;
         let items = caps[2]
             .split(',')
             .filter(|item| !item.is_empty())
@@ -222,13 +245,11 @@ fn list_union(ours: &[&str], base: &[&str], theirs: &[&str]) -> Option<(String, 
 /// side may be empty: both sides adding at the same position is the commonest
 /// allow-list race.
 fn json_array_union(ours: &[&str], base: &[&str], theirs: &[&str]) -> Option<(String, Shape)> {
-    let element =
-        Regex::new(r#"^(\s*)"([^"\\]*)",(\r?\n?)$"#).expect("the element pattern compiles");
     let parse = |lines: &[&str]| -> Option<Vec<(String, String, String)>> {
         lines
             .iter()
             .map(|line| {
-                let caps = element.captures(line)?;
+                let caps = ELEMENT.captures(line)?;
                 Some((caps[1].to_owned(), caps[2].to_owned(), caps[3].to_owned()))
             })
             .collect()
@@ -248,10 +269,14 @@ fn json_array_union(ours: &[&str], base: &[&str], theirs: &[&str]) -> Option<(St
         &values(&base_parsed),
         &values(&theirs_parsed),
     );
-    let text = merged
-        .iter()
-        .map(|value| format!("{indent}\"{value}\",{newline}"))
-        .collect();
+    let mut text = String::new();
+    for value in &merged {
+        text.push_str(&indent);
+        text.push('"');
+        text.push_str(value);
+        text.push_str("\",");
+        text.push_str(&newline);
+    }
     Some((text, Shape::JsonArrayUnion))
 }
 
@@ -276,6 +301,7 @@ fn union(ours: &[String], base: &[String], theirs: &[String]) -> Vec<String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
 

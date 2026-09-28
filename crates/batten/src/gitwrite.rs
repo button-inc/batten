@@ -616,19 +616,29 @@ fn replay_range(
         }
     }
 
+    finish(dir, &repo, branch, tip, cursor, replayed).map(|rebase| (rebase, Vec::new()))
+}
+
+/// Move `branch` to the replayed head and make the worktree match.
+///
+/// The count is what was REPLAYED, not what was walked: a dropped commit
+/// contributes no commit to the new head, and reporting the range's length
+/// would claim a head carries commits it does not.
+fn finish(
+    dir: &Path,
+    repo: &gix::Repository,
+    branch: &str,
+    tip: gix::ObjectId,
+    cursor: gix::ObjectId,
+    replayed: usize,
+) -> Result<Rebase> {
     let now = cursor.to_hex().to_string();
     set_ref(dir, branch, &now)?;
-    update_worktree(&repo, tip, cursor)?;
-    // The count is what was REPLAYED, not what was walked: a dropped commit
-    // contributes no commit to the new head, and reporting the range's length
-    // would claim a head carries commits it does not.
-    Ok((
-        Rebase::Replayed {
-            head: now,
-            commits: replayed,
-        },
-        Vec::new(),
-    ))
+    update_worktree(repo, tip, cursor)?;
+    Ok(Rebase::Replayed {
+        head: now,
+        commits: replayed,
+    })
 }
 
 /// Move `branch` to `to` and make the worktree match — `git reset --hard`.
@@ -806,7 +816,7 @@ fn candidates(
                         anyhow::anyhow!("gitwrite: {} will not create: {err}", parent.display())
                     })?;
                 }
-                std::fs::write(&file, &proposal.bytes).map_err(|err| {
+                crate::durable::replace(&file, &proposal.bytes).map_err(|err| {
                     anyhow::anyhow!("gitwrite: {} will not write: {err}", file.display())
                 })?;
                 Some((file, proposal.shapes))

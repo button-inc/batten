@@ -312,6 +312,11 @@ declared_modules := {
 	# are: a gate declared `read` must not reach a write, and the read-only
 	# allowlist is derived from that declaration rather than reviewed.
 	"gitwrite",
+	# `propose` arrived with CLOUD-1956 as `gitwrite`'s one caller-side helper: a
+	# PURE merge over three byte slices, called from the replay step. It imports
+	# nothing of the crate's, so it can sit under `gitwrite` without a cycle; the
+	# file it names a candidate into is `gitwrite`'s to write, not its own.
+	"propose",
 	# `land` arrived with CLOUD-1335 and is the first CONSUMER of the two above
 	# rather than a third adapter: it composes `lease`'s fetch with `gitwrite`'s
 	# replay into one lap and writes down what the replay did. It reaches those
