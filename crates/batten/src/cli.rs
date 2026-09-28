@@ -1693,14 +1693,27 @@ pub enum RecordCommand {
     /// Record how far the landing loop diverged from linear over a window
     /// (CLOUD-843, retiring `[tasks.land-divergence-record]`).
     Divergence {
-        /// The workflow whose runs are the graded CI runs.
-        ci_workflow: String,
-        /// The workflow whose runs are the landing bot's answers.
-        land_workflow: String,
+        /// The workflow whose runs are the graded CI runs; absent reads
+        /// `$LAND_CI_WORKFLOW`.
+        ci_workflow: Option<String>,
+        /// The workflow whose runs are the landing bot's answers; absent reads
+        /// `$LAND_WORKFLOW`.
+        land_workflow: Option<String>,
         /// The window's start, ISO-8601; absent is 24 hours before now.
         since: Option<String>,
         /// Pages to read per workflow before the window reads as truncated.
         max_pages: Option<String>,
+    },
+    /// Record which recent required-check failures never reached a verdict
+    /// (CLOUD-843, retiring `[tasks.nonverdict-record]`).
+    Nonverdict {
+        /// How many recent failed runs to read; absent is 30.
+        window: Option<String>,
+        /// Jobs excluded by name, such as a fan-in whose failure its siblings
+        /// manufacture.
+        exclude_jobs: Vec<String>,
+        /// Step-name prefixes that mark a failed step as verdict-bearing.
+        verdict_steps: Vec<String>,
     },
     /// The reclaim census (CLOUD-843, retiring `[tasks.reclaim-census]`).
     Census {
@@ -3062,12 +3075,23 @@ fn record_of(matches: &ArgMatches) -> Option<RecordCommand> {
                 .unwrap_or_default(),
         }),
         ("divergence", matches) => Some(RecordCommand::Divergence {
-            // Both required by the surface, so clap has refused an argv without
-            // them before this runs.
-            ci_workflow: matches.get_one::<String>("ci_workflow")?.clone(),
-            land_workflow: matches.get_one::<String>("land_workflow")?.clone(),
+            // Optional on the surface: the verb falls back to the environment the
+            // lander already reads, and refuses when neither names a workflow.
+            ci_workflow: matches.get_one::<String>("ci_workflow").cloned(),
+            land_workflow: matches.get_one::<String>("land_workflow").cloned(),
             since: matches.get_one::<String>("since").cloned(),
             max_pages: matches.get_one::<String>("max_pages").cloned(),
+        }),
+        ("nonverdict", matches) => Some(RecordCommand::Nonverdict {
+            window: matches.get_one::<String>("window").cloned(),
+            exclude_jobs: matches
+                .get_many::<String>("exclude_job")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
+            verdict_steps: matches
+                .get_many::<String>("verdict_step")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
         }),
         ("census", matches) => {
             record_census_of(matches).map(|command| RecordCommand::Census { command })

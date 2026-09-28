@@ -320,7 +320,11 @@ fn validate_select(select: &[String]) -> std::result::Result<(), String> {
 /// Applied to every BOUND value and to every parameter, so a branch name with a
 /// slash, an instant with colons or an operator like `>=` reaches the forge as
 /// one parameter value rather than as syntax the URI parser rejects or splits.
-fn encode(value: &str) -> String {
+///
+/// `pub(crate)` since `ci_signal`'s producers bind a caller's instant into a
+/// query parameter: a second encoder would be a second answer to which bytes
+/// survive a URL.
+pub(crate) fn encode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.bytes() {
         if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {

@@ -31,6 +31,9 @@ pub mod carry;
 pub mod census;
 pub mod checks_green;
 pub mod ci;
+/// The CI-signal producers — landing divergence and non-verdict failures —
+/// walked over the forge and recorded for a module to decide over (CLOUD-843).
+pub mod ci_signal;
 pub mod claim;
 pub mod cli;
 pub mod commit;

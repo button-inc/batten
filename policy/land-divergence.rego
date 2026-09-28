@@ -10,9 +10,9 @@
 # THE SPLIT WAS ALREADY THERE AND THE PORT ONLY MOVED ITS HALVES, exactly as the
 # `nonverdict` pair's was: `land-divergence` measured and `land-divergence-assert`
 # decided, kept apart because a measurement needs the network and a token and a
-# decision needs neither (CLOUD-1559). The measurement is
-# `[tasks.land-divergence-record]`; this file is the decision, and no decision
-# changed hands. The pagination walk, the ETag cache, the `total_count` truncation
+# decision needs neither (CLOUD-1559). The measurement is `batten record
+# divergence` (CLOUD-843, off `[tasks.land-divergence-record]`); this file is the
+# decision, and no decision changed hands. The pagination walk, the ETag cache, the `total_count` truncation
 # guard and every instant subtraction stay outside: house style §5 makes `check`
 # `read` and incapable of spawning, and `Fact::Instant` projects `null` to every
 # module, which `clippy.toml` and `crates/batten/tests/clock_ban.rs` hold.

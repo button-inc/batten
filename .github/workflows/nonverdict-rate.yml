@@ -75,15 +75,18 @@ jobs:
       # expansion is textual substitution into the shell script, which zizmor gates
       # at high severity.
       # THE SPLIT THE PORT FORCED (CLOUD-1717). The producer makes the
-      # conditional `gh` reads and classifies each failed job from its own
+      # conditional forge reads and classifies each failed job from its own
       # per-step conclusions; the engine adjudicates what it recorded. Neither
       # half can hold the other: section 5 makes `check` `read` and incapable of
-      # spawning the reads below.
+      # spawning the reads below. The producer is `batten record nonverdict`
+      # (CLOUD-843): `final` is the fan-in and the two prefixes are how this
+      # repository renders a verdict, so they are its arguments, never the
+      # engine's literals; the roster is `mise.toml [env]`'s `CI_REQUIRED_CHECKS`.
       - name: Measure which required-check failures never reached a verdict
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: mise run nonverdict-record > "$RUNNER_TEMP/nonverdict.txt"
+        run: mise run batten -- record nonverdict --exclude-job final --verdict-step 'Run mise run ' --verdict-step 'Run mise exec -- ' > "$RUNNER_TEMP/nonverdict.txt"
       - name: Publish the records
         shell: bash
         run: |

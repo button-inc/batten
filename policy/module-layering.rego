@@ -689,6 +689,13 @@ declared_modules := {
 	# mints no `Finding` and reaches no decider, and it starts no program, which
 	# is what keeps the verb on the derived read-only allowlist.
 	"census",
+	# `ci_signal` arrived with CLOUD-843's `p2-divergence` package, in
+	# `forge_query`'s class: a PRODUCER that walks `forge`'s window over `rest`'s
+	# transport and writes through `record`'s named-family store. It measures the
+	# landing loop and the non-verdict failures and decides neither; the modules
+	# reading its two families do. It reaches the network, so it joins
+	# `forge_query` on every forbidden edge below.
+	"ci_signal",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
@@ -753,7 +760,7 @@ forbidden[from] contains to if {
 		# network by the route the `rest` entry refuses, one name later.
 		"hook": {
 			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
-			"pr_watch", "fast_forward", "main_watch", "forge_query",
+			"pr_watch", "fast_forward", "main_watch", "forge_query", "ci_signal",
 		},
 		# `repair` RUNS A CONSUMER'S DECLARED COMMAND ON THE MEDIATED PATH
 		# (CLOUD-1639), so it inherits `hook`'s set entire and for the same
@@ -776,7 +783,7 @@ forbidden[from] contains to if {
 		# `crate::repair`'s header carry the other half.
 		"repair": {
 			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
-			"pr_watch", "fast_forward", "main_watch", "forge_query",
+			"pr_watch", "fast_forward", "main_watch", "forge_query", "ci_signal",
 		},
 		# `check` NAMES NO MODULE TODAY, so this row is INERT — and that is worth
 		# stating rather than leaving a reader to infer enforcement from a table
@@ -792,7 +799,7 @@ forbidden[from] contains to if {
 		# not fire, which is how a row with no possible subject announces itself.
 		"check": {
 			"lease", "gitwrite", "land",
-			"pr_watch", "fast_forward", "main_watch", "forge_query",
+			"pr_watch", "fast_forward", "main_watch", "forge_query", "ci_signal",
 		},
 		# And the other direction, which is `symbols`' and `pinned`'s row again: the
 		# dispatcher sits below the engine and must not reach the module that
@@ -892,6 +899,8 @@ forbidden[from] contains to if {
 		# producer that reached the engine deciding over its record would be a
 		# measurement that knew which verdict it was feeding (CLOUD-843).
 		"forge_query": {"rules", "hook"},
+		# `ci_signal -> {rules, hook}`, for `forge_query`'s reason.
+		"ci_signal": {"rules", "hook"},
 	}
 	some to in targets
 }
@@ -1128,6 +1137,24 @@ test_the_mediated_path_must_not_reach_the_forge_query_producer if {
 # AND THE ARRANGEMENT: the producer composes the window, the transport and the
 # record store, and the verb dispatch reaches it. A table that banned the module
 # outright would satisfy the case above.
+# The CI-signal producers, both directions, on `forge_query`'s terms.
+test_the_mediated_path_must_not_reach_the_ci_signal_producers if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("ci_signal", 31)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/ci_signal.rs",
+		[internal("rules", 12)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/ci_signal.rs",
+		[internal("forge", 10), internal("rest", 11), internal("record", 12), internal("forge_query", 13)],
+	)
+}
+
 test_the_forge_query_producer_reaches_what_it_composes if {
 	count(violation) == 0 with input as judging(
 		"crates/batten/src/forge_query.rs",

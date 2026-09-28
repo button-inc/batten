@@ -2406,13 +2406,16 @@ writer = "mise run attestation-record"
 record = "timeout-drift"
 writer = "mise run timeout-drift-record"
 
-# CLOUD-484's measuring half, ported off `nonverdict-scan.sh` under CLOUD-1717.
-# The decider half is `policy/nonverdict.rego`; the split is the retired pair's
-# own, kept for its own reason — a measurement needs the network and a token, a
-# decision needs neither.
+# CLOUD-484's measuring half, ported off `nonverdict-scan.sh` under CLOUD-1717
+# and off its task body into `batten record nonverdict` under CLOUD-843. The
+# decider half is `policy/nonverdict.rego`; the split is the retired pair's own,
+# kept for its own reason — a measurement needs the network and a token, a
+# decision needs neither. The fan-in and the two verdict-step spellings are this
+# repository's facts, so they are the verb's arguments; the roster is
+# `$CI_REQUIRED_CHECKS` from `mise.toml [env]`.
 [[record]]
 record = "nonverdict"
-writer = "mise run nonverdict-record"
+writer = "batten record nonverdict --exclude-job final --verdict-step 'Run mise run ' --verdict-step 'Run mise exec -- '"
 
 # CLOUD-192's reading half, ported off `done-check.sh` under CLOUD-1717. The
 # decision is `policy/done.rego`; the reading needs stdin payloads and `git log`.
@@ -2509,12 +2512,14 @@ regex = 'git fetch.*--tags'
 id = "tag-exists-probe"
 regex = 'rev-parse.*refs/tags/'
 
-# CLOUD-492's measuring half, ported off `land-divergence.sh` under CLOUD-1717.
-# The decider half is `policy/land-divergence.rego`; the split is the retired
-# pair's own, for the reason the `nonverdict` pair's is.
+# CLOUD-492's measuring half, ported off `land-divergence.sh` under CLOUD-1717
+# and off its task body into `batten record divergence` under CLOUD-843. The
+# decider half is `policy/land-divergence.rego`; the split is the retired pair's
+# own, for the reason the `nonverdict` pair's is. The two workflows come from
+# `$LAND_CI_WORKFLOW` and `$LAND_WORKFLOW` in `mise.toml [env]`.
 [[record]]
 record = "land-divergence"
-writer = "mise run land-divergence-record"
+writer = "batten record divergence"
 
 [[pattern]]
 id = "closed-issue-status"
@@ -15763,7 +15768,7 @@ rate-limit problem, not a clean window.
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "mise run nonverdict-record"
+target = "batten record nonverdict --exclude-job final --verdict-step 'Run mise run ' --verdict-step 'Run mise exec -- '"
 
 [[verdict]]
 id = "job answer missing"
@@ -15779,7 +15784,7 @@ never linted anything.
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "mise run nonverdict-record"
+target = "batten record nonverdict --exclude-job final --verdict-step 'Run mise run ' --verdict-step 'Run mise exec -- '"
 
 # CLOUD-492's eight readings, ported off `land-divergence-assert.sh` under
 # CLOUD-1717.
@@ -15796,7 +15801,7 @@ zero fast-forward refusals over a window carrying 598. Narrow the window.
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "mise run land-divergence-record"
+target = "batten record divergence"
 
 [[verdict]]
 id = "lane count spent"
@@ -15810,7 +15815,7 @@ matrix, which is the mechanism working.
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "mise run land-divergence-record"
+target = "batten record divergence"
 
 [[verdict]]
 id = "lane grade red"
@@ -15823,7 +15828,7 @@ spent a full matrix to say so.
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "mise run land-divergence-record"
+target = "batten record divergence"
 
 [[verdict]]
 id = "lane reach late"
@@ -15837,7 +15842,7 @@ a late one is a matrix billed for a verdict nobody reads.
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "mise run land-divergence-record"
+target = "batten record divergence"
 
 [[verdict]]
 id = "lease guard dropped"
@@ -15850,7 +15855,7 @@ admitted-successor bound means something is spending CI without holding it.
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "mise run land-divergence-record"
+target = "batten record divergence"
 
 [[verdict]]
 id = "lane measure late"
@@ -15863,7 +15868,7 @@ and must not be read as one.
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "mise run land-divergence-record"
+target = "batten record divergence"
 
 [[verdict]]
 id = "job measure late"
@@ -15877,7 +15882,7 @@ matrix apart from a saturated pool (CLOUD-501).
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "mise run land-divergence-record"
+target = "batten record divergence"
 
 [[verdict]]
 id = "branch reach stale"
@@ -15891,7 +15896,7 @@ Any refusal at all is a divergence, so the budget is zero.
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "mise run land-divergence-record"
+target = "batten record divergence"
 
 # CLOUD-349's two readings, ported off `branch-age-check.sh` under CLOUD-1717.
 [[verdict]]

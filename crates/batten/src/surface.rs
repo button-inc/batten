@@ -2695,27 +2695,23 @@ const BOARD_ISSUE: FlagDecl = FlagDecl {
 
 /// `--ci-workflow <file>` on `record divergence`.
 ///
-/// REQUIRED, and a flag rather than a literal: which workflow carries the graded
-/// CI runs is the consumer's fact (rule 1), and a default would be a name out of
-/// one repository's `.github`.
-const DIVERGENCE_CI: FlagDecl = FlagDecl {
-    required: true,
-    ..FlagDecl::valued(
-        "ci_workflow",
-        "ci-workflow",
-        "The workflow file whose runs are the graded CI runs",
-    )
-};
+/// A flag rather than a literal: which workflow carries the graded CI runs is the
+/// consumer's fact (rule 1), and a default would be a name out of one
+/// repository's `.github`. Absent, the verb reads `$LAND_CI_WORKFLOW`, and it
+/// refuses when neither names one.
+const DIVERGENCE_CI: FlagDecl = FlagDecl::valued(
+    "ci_workflow",
+    "ci-workflow",
+    "The workflow file whose runs are the graded CI runs (default: $LAND_CI_WORKFLOW)",
+);
 
-/// `--land-workflow <file>` on `record divergence`, required for the same reason.
-const DIVERGENCE_LAND: FlagDecl = FlagDecl {
-    required: true,
-    ..FlagDecl::valued(
-        "land_workflow",
-        "land-workflow",
-        "The workflow file whose runs are the landing bot's answers",
-    )
-};
+/// `--land-workflow <file>` on `record divergence`, for the same reason; absent,
+/// the verb reads `$LAND_WORKFLOW`, the variable `land fast-forward` reads.
+const DIVERGENCE_LAND: FlagDecl = FlagDecl::valued(
+    "land_workflow",
+    "land-workflow",
+    "The workflow file whose runs are the landing bot's answers (default: $LAND_WORKFLOW)",
+);
 
 /// `--since <instant>` on `record divergence`: the window's start.
 const DIVERGENCE_SINCE: FlagDecl = FlagDecl::valued(
@@ -2730,6 +2726,38 @@ const DIVERGENCE_MAX_PAGES: FlagDecl = FlagDecl::valued(
     "max-pages",
     "Pages of runs to read per workflow before the window reads as truncated (default: 10)",
 );
+
+/// `--window <n>` on `record nonverdict`: how many recent failed runs to read.
+const NONVERDICT_WINDOW: FlagDecl = FlagDecl::valued(
+    "window",
+    "window",
+    "How many recent failed runs to read, 1 to 100 (default: 30)",
+);
+
+/// `--exclude-job <name>` on `record nonverdict`, repeatable: a job whose
+/// failure its siblings manufacture, such as a fan-in, which is the consumer's
+/// name to give.
+const NONVERDICT_EXCLUDE: FlagDecl = FlagDecl {
+    value: ValueDecl::StrMany,
+    ..FlagDecl::valued(
+        "exclude_job",
+        "exclude-job",
+        "A job never counted, such as a fan-in whose failure its siblings cause (repeatable)",
+    )
+};
+
+/// `--verdict-step <prefix>` on `record nonverdict`, repeatable and REQUIRED:
+/// how a job renders a verdict is the consumer's fact, and with no prefix every
+/// failure would read as a non-verdict.
+const NONVERDICT_STEP: FlagDecl = FlagDecl {
+    value: ValueDecl::StrMany,
+    required: true,
+    ..FlagDecl::valued(
+        "verdict_step",
+        "verdict-step",
+        "A step-name prefix that marks a failed step as verdict-bearing (repeatable)",
+    )
+};
 
 /// `<kind>` on `record census note`.
 const CENSUS_KIND: FlagDecl =
@@ -6427,8 +6455,9 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     // How far the landing loop diverged from linear over a window (retiring
     // `land-divergence-record`). `write`: it reads the forge and records a family.
-    // Could-not-look — a truncated walk, an unreadable page — is exit 3 and
-    // records nothing.
+    // Could-not-look — no remote, or an unreadable CI run or landing list — is
+    // exit 3 and removes the record; a window read in PART is recorded, counted
+    // in `unreadable` for the module to decide over.
     CommandDecl {
         path: "record divergence",
         id: "record.divergence",
@@ -6442,6 +6471,18 @@ pub const SURFACE: &[CommandDecl] = &[
             DIVERGENCE_SINCE,
             DIVERGENCE_MAX_PAGES,
         ],
+    },
+    // Which recent required-check failures never reached a verdict (retiring
+    // `nonverdict-record`). `write`, on `record divergence`'s terms: it reads the
+    // forge and records a family, and could-not-look is exit 3.
+    CommandDecl {
+        path: "record nonverdict",
+        id: "record.nonverdict",
+        about: "Record which recent required-check failures never reached a verdict",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[NONVERDICT_WINDOW, NONVERDICT_EXCLUDE, NONVERDICT_STEP],
     },
     // The reclaim census (retiring `[tasks.reclaim-census]`): whether active work
     // was live when a container was replaced. A noun, because its four arms have

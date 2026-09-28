@@ -70,13 +70,16 @@ jobs:
       #
       # GH_TOKEN through env, never interpolated into the run block: a `${{ }}`
       # expansion is textual substitution into the shell script, which zizmor
-      # gates at high severity.
+      # gates at high severity. The window's start travels the same way, as
+      # `BATTEN_DIVERGENCE_SINCE`, which the verb reads when `--since` is absent;
+      # the two workflows are `mise.toml [env]`'s `LAND_CI_WORKFLOW` and
+      # `LAND_WORKFLOW` (CLOUD-843).
       - name: Measure the landing loop's divergence from linear
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BATTEN_DIVERGENCE_SINCE: ${{ inputs.since }}
-        run: mise run land-divergence-record > "$RUNNER_TEMP/divergence.txt"
+        run: mise run batten -- record divergence > "$RUNNER_TEMP/divergence.txt"
       - name: Publish the records
         shell: bash
         run: |

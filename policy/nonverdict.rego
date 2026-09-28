@@ -13,8 +13,8 @@
 # THE SPLIT WAS ALREADY THERE AND THE PORT ONLY MOVED ITS HALVES. The retired pair
 # was `nonverdict-scan` (measure) and `nonverdict-assert` (decide), kept apart for
 # exactly CLOUD-1559's reason: a measurement needs the network and a token, a
-# decision needs neither. So the scan became `[tasks.nonverdict-record]` and the
-# assert became this file, and no decision changed hands — which is why the
+# decision needs neither. So the scan became `[tasks.nonverdict-record]` — now
+# `batten record nonverdict` (CLOUD-843) — and the assert became this file, and no decision changed hands — which is why the
 # classification predicate below is absent from here. Whether a failed step is a
 # verdict is read off the API payload's own `steps[]`, which `check` cannot fetch
 # (house style §5 makes it `read` and incapable of spawning).
