@@ -34,11 +34,11 @@ fn a_content_block_envelope_unwraps_to_the_payload_a_bare_one_carries() {
 }
 
 use batten::facts::{
-    AGENT_SOURCED, BASE_DELTA, CAPTURED, COMMIT_META, Class, Cost, DOCUMENT, EXTERNAL, EXTRACTED,
-    FORGE, Fact, GIT_HEAD, GIT_HISTORY, GIT_RANGE, GIT_REF, GIT_REMOTE, GIT_STATUS, GIT_WORKTREES,
-    INSTANT, INVOCATIONS, KEYS, LANDING, LINES, Look, MINTED, PINNED, PLAN, PRODUCED, PROSPECTIVE,
-    RECEIPTS, RECORDS, RECORDS_BLOCKED, REVIEW, STAGED, STATE, STOP, SYMBOLS, Surface, TASKS,
-    TOOL_VERDICT, TRACKED, USES, WAIVED,
+    AGENT_SOURCED, BASE_DELTA, CAPTURED, COMMIT_META, Class, Cost, DISPATCH_CLEARED, DOCUMENT,
+    EXTERNAL, EXTRACTED, FORGE, Fact, GIT_HEAD, GIT_HISTORY, GIT_RANGE, GIT_REF, GIT_REMOTE,
+    GIT_STATUS, GIT_WORKTREES, INSTANT, INVOCATIONS, KEYS, LANDING, LINES, Look, MINTED, PINNED,
+    PLAN, PRODUCED, PROSPECTIVE, RECEIPTS, RECORDS, RECORDS_BLOCKED, REVIEW, STAGED, STATE, STOP,
+    SYMBOLS, Surface, TASKS, TOOL_VERDICT, TRACKED, USES, WAIVED,
 };
 
 #[test]
@@ -153,6 +153,8 @@ fn every_fact_returns_its_stated_const() {
             Fact::RecordsBlocked => RECORDS_BLOCKED,
             Fact::Instant => INSTANT,
             Fact::Pinned => PINNED,
+            // CLOUD-1978. Two file stats for this call's own prompt digest.
+            Fact::DispatchCleared => DISPATCH_CLEARED,
         }
     };
 
@@ -161,7 +163,7 @@ fn every_fact_returns_its_stated_const() {
     // rather than quietly shrinking the census.
     assert_eq!(
         Fact::ALL.len(),
-        38,
+        39,
         "the census covers every fact; update this count deliberately when the \
          model gains or loses one"
     );

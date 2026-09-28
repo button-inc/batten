@@ -152,6 +152,92 @@ fn an_mcp_read_verb_is_preapproved() {
     assert_granted_by(&read, "call read now");
 }
 
+/// THE MEASURED CASE (CLOUD-1978): a session-management read in plan mode is
+/// granted. Measured 2026-09-28 against the live host — with this grant, the
+/// call ran and the owner saw no dialog.
+#[test]
+fn a_session_read_is_preapproved_in_plan_mode() {
+    let read = envelope(
+        "plan",
+        "mcp__Claude_Code_Remote__get_session",
+        &serde_json::json!({}),
+    );
+    assert_granted_by(&read, "call read now");
+}
+
+/// A prompt unique to one case, and its receipts removed when the case ends,
+/// so the real checkout's store keeps nothing a case wrote.
+struct Dispatch {
+    prompt: String,
+    git_dir: PathBuf,
+}
+
+impl Dispatch {
+    fn new(case: &str) -> Self {
+        let prompt = format!("dispatch fixture {case} {}", std::process::id());
+        let git_dir = batten::git::git_dir(&root()).expect("the checkout has a git dir");
+        Dispatch { prompt, git_dir }
+    }
+
+    fn linted(&self) -> &Self {
+        batten::dispatch::record_brief(&self.git_dir, &self.prompt).expect("store writable");
+        self
+    }
+
+    fn approved(&self) -> &Self {
+        let asked = format!("Dispatch brief:{}?", batten::dispatch::digest(&self.prompt));
+        let input = serde_json::json!({ "questions": [{ "question": asked, "options": [] }] });
+        let result = serde_json::json!({ "answers": { asked: batten::dispatch::APPROVE_LABEL } });
+        batten::dispatch::record_approvals(&self.git_dir, &input, &result).expect("store writable");
+        self
+    }
+
+    fn call(mode: &str, prompt: &str) -> String {
+        envelope(
+            mode,
+            "mcp__Claude_Code_Remote__create_session",
+            &serde_json::json!({ "prompt": prompt }),
+        )
+    }
+}
+
+impl Drop for Dispatch {
+    fn drop(&mut self) {
+        let digest = batten::dispatch::digest(&self.prompt);
+        let store = self.git_dir.join("batten-receipts");
+        for name in [batten::dispatch::BRIEF, batten::dispatch::APPROVED] {
+            let _ = std::fs::remove_file(store.join(format!("{name}.{digest}")));
+        }
+    }
+}
+
+#[test]
+fn a_linted_and_approved_dispatch_is_preapproved_in_auto() {
+    let fixture = Dispatch::new("cleared");
+    fixture.linted().approved();
+    assert_granted_by(&Dispatch::call("auto", &fixture.prompt), "call open now");
+}
+
+/// THE CASE `dispatch-uncleared` KILLS: linted but never approved — the owner
+/// rejected the bundle or has not answered — so the host keeps asking.
+#[test]
+fn a_dispatch_without_approval_is_not_preapproved() {
+    let fixture = Dispatch::new("unapproved");
+    fixture.linted();
+    assert_not_granted(&Dispatch::call("auto", &fixture.prompt));
+}
+
+/// The grant is bound to the bytes the owner saw: an edited prompt clears
+/// nothing, and auto mode is the only mode the ruling grants in.
+#[test]
+fn an_edited_prompt_or_another_mode_is_not_preapproved() {
+    let fixture = Dispatch::new("edited");
+    fixture.linted().approved();
+    let edited = format!("{} and one more thing", fixture.prompt);
+    assert_not_granted(&Dispatch::call("auto", &edited));
+    assert_not_granted(&Dispatch::call("default", &fixture.prompt));
+}
+
 #[test]
 fn an_mcp_write_is_not_preapproved() {
     let write = envelope(

@@ -450,6 +450,14 @@ value is what does the work, and it is a boolean rather than the string `true`."
             PresetModule {
                 scope: RuleScope::MediatedCall,
                 provider: None,
+                pointer: "<preset:claude-code-cloud>/dispatch-is-preapproved.rego",
+                source: include_str!(
+                    "policy/presets/claude-code-cloud/dispatch-is-preapproved.rego"
+                ),
+            },
+            PresetModule {
+                scope: RuleScope::MediatedCall,
+                provider: None,
                 pointer: "<preset:claude-code-cloud>/plan-mode-refuses-writes.rego",
                 source: include_str!(
                     "policy/presets/claude-code-cloud/plan-mode-refuses-writes.rego"

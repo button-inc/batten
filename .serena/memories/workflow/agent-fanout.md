@@ -39,7 +39,27 @@ requested permission mode. An earlier version of this section said the sessions
 could not be opened and forbade re-testing. Both claims were false, and
 following them re-derived hand dispatch.
 
-**Why every call prompts, and what does NOT fix it.**
+**What clears the prompts (measured 2026-09-28, CLOUD-1978).**
+
+- **Reads never prompt.** CLOUD-1949's `read-only-is-preapproved` preset
+  pre-approves every MCP read verb. With it live, `get_session` ran in plan mode
+  and the owner saw no dialog; `list_sessions` and `read_documentation` match
+  the same regex. If a read prompts, the mediator is stale: run
+  `batten doctor mediator`, then `batten startup --repair`.
+- **Dispatch (`create_session` and `send_message`) is pre-approved in auto mode
+  by receipt.**
+  1. Draft each prompt and run `batten lint brief` on the exact bytes you will
+     send. A pass writes `brief.<sha256>`.
+  2. Put the bundle to the owner with ONE `AskUserQuestion`. Name each prompt
+     as `brief:<sha256>` (from `batten::dispatch::digest`) in the question or an
+     option, and offer the option labelled exactly `Approve dispatch`. That
+     answer writes `dispatch-approved.<sha256>`.
+  3. Send the byte-identical prompt. The preset rule `call open now` grants it.
+- **Any other answer is not a refusal.** It means improve the prompts or wait
+  for input. Revise, re-lint, and ask again.
+- An edited prompt has a new digest and prompts again.
+
+**Why every call used to prompt, and what does NOT fix it.**
 
 - The injected wiring (`/tmp/mcp-config-cse_*.json`) sets all 26
   `Claude_Code_Remote` tools to `always_ask`.
@@ -84,11 +104,10 @@ paste has to be the thing in front of them.
 
 **Two consequences of hand dispatch that bite, both measured:**
 
-- `get_session` is blocked too, so a child's `permission_mode` cannot be read
-  back after it starts. CLOUD-728 measured the cost: five bundles came up
-  `default` instead of the intended mode and ran to landed unsupervised. Whoever
-  opens the sessions confirms the mode in the UI; no agent can confirm it for
-  them.
+- A child's `permission_mode` must be READ BACK with `get_session` after it
+  starts, which is prompt-free since CLOUD-1949 (measured 2026-09-28).
+  CLOUD-728 measured the cost of not reading it: five bundles came up
+  `default` instead of the intended mode and ran to landed unsupervised.
 - The mode is **not inherited** from the pasting session in the way the
   parameter docs below imply. Read that section for what the values do, not for
   what a dispatcher can rely on.

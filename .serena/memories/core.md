@@ -2066,6 +2066,14 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   required and non-`Option` by an equally deliberate decision; the faithful fix
   (per-kind presence, so the derived SCHEMA stops flagging a correct judge row)
   is CLOUD-445.
+- `dispatch.rs` — parallel-session dispatch cleared by receipt (CLOUD-1978).
+  `batten lint brief` passing writes `brief.<sha256>` for the prompt's own
+  bytes. The owner's `Approve dispatch` answer to an `AskUserQuestion` naming
+  `brief:<sha256>` writes `dispatch-approved.<sha256>`, read from the host's
+  result and never the caller's input. `cleared` answers the
+  `dispatch-cleared` fact the `claude-code-cloud` preset grants
+  `create_session`/`send_message` on in auto mode. Digests and a boolean only;
+  never a byte of a prompt.
 - `design.rs` — design-evidence integrity gates (CLOUD-53): is the RECORD behind a
   decision sound, whatever the decision was? Input is a JSONL claim stream on
   **stdin and nothing else** (CLOUD-324) — stdin SUBSUMES a config path (a corpus

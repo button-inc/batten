@@ -5060,6 +5060,10 @@ pub struct Facts<'a> {
     /// is the COMMON case (CLOUD-388) and allows: a session with no transcript
     /// has not established that nothing was stranded.
     pub extracted: &'a crate::facts::Look<std::collections::BTreeMap<String, usize>>,
+    /// Whether this call's session-management prompt carries both dispatch
+    /// receipts (CLOUD-1978). Could-not-look allows nothing extra: the grant
+    /// reads only `true`.
+    pub dispatch: &'a crate::facts::Look<()>,
 }
 
 impl<'a> Facts<'a> {
@@ -5103,6 +5107,9 @@ impl<'a> Facts<'a> {
             // Could-not-look, never an empty count set: a caller that resolved
             // nothing has not established that this session did nothing.
             extracted: &crate::facts::Look::CouldNotLook,
+            // Could-not-look, never `false`: a caller that resolved nothing has
+            // not established that a prompt is uncleared.
+            dispatch: &crate::facts::Look::CouldNotLook,
         }
     }
 }
@@ -6832,6 +6839,14 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                     serde_json::Value::Null
                 }
                 crate::facts::Look::Is(programs) => serde_json::json!(programs),
+            }),
+            // A BOOLEAN AND NOTHING ELSE (CLOUD-1978): `false` for a call that is
+            // not a session-management method or whose prompt lacks a receipt,
+            // `null` only when the store could not be located.
+            crate::facts::Fact::DispatchCleared => Some(match facts.dispatch {
+                crate::facts::Look::Is(()) => serde_json::Value::Bool(true),
+                crate::facts::Look::IsNot => serde_json::Value::Bool(false),
+                crate::facts::Look::CouldNotLook => serde_json::Value::Null,
             }),
             crate::facts::Fact::AgentSourced => Some(facts.sourced.as_ref().map_or(
                 serde_json::Value::Null,
@@ -10496,6 +10511,7 @@ mod tests {
                 tasks: &crate::facts::Look::CouldNotLook,
                 extracted: &crate::facts::Look::CouldNotLook,
                 pinned: &crate::facts::Look::CouldNotLook,
+                dispatch: &crate::facts::Look::CouldNotLook,
             },
         )
     }

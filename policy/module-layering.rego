@@ -107,6 +107,10 @@ declared_modules := {
 	# CLOUD-1050 and it worked a fourth: the module was written, its tests were
 	# green, and this rule is what said nobody had placed it.
 	"patch", "symbols", "semver",
+	# `dispatch` arrived with CLOUD-1978 and this rule named it on the last gate
+	# before landing. It reaches only `minted` (the receipt directory) and
+	# `durable` (the write); `lib` and `hook` read it, and it reads neither.
+	"dispatch",
 	# `review` arrived with CLOUD-472 and this rule named it an eighth time —
 	# module written, both test tiers green, and nobody had placed it. It is
 	# `symbols`' class exactly: an acquisition module resolving a `Cost::Effect`

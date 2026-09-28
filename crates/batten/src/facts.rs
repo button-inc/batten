@@ -755,6 +755,13 @@ pub enum Fact {
     /// same shape [`Fact::Stop`] takes: the price counted here is the price of
     /// the reading, not of the thing being read.
     Pinned,
+    /// Whether the prompt a session-management call carries has BOTH a passing
+    /// brief-lint receipt and the owner's approval receipt (CLOUD-1978).
+    ///
+    /// Two file stats under `$GIT_DIR`, keyed by the prompt's own digest, so a
+    /// prompt edited after approval clears nothing. `false` on every call that is
+    /// not such a method; `null` when the store could not be located.
+    DispatchCleared,
 }
 
 /// [`Fact::Receipts`] — a file and two git refs (`hook.rs`'s receipt read).
@@ -1458,6 +1465,11 @@ pub const INSTANT: Class = Class::new(Cost::Free, Surface::Check);
 /// and would say something false about what a call costs.
 pub const PINNED: Class = Class::new(Cost::Read, Surface::Hook);
 
+/// [`Fact::DispatchCleared`] — two file stats under `$GIT_DIR` for a digest of
+/// the call's own argument (CLOUD-1978). A read, and asked only of the
+/// mediated call it is about.
+pub const DISPATCH_CLEARED: Class = Class::new(Cost::Read, Surface::Hook);
+
 impl Fact {
     /// Every fact the boundary resolves today, so [`Fact::class`] is total.
     pub const ALL: &'static [Fact] = &[
@@ -1499,6 +1511,7 @@ impl Fact {
         Fact::RecordsBlocked,
         Fact::Instant,
         Fact::Pinned,
+        Fact::DispatchCleared,
     ];
 
     /// The stable lowercase token (§6) — the field name in `lib.rs`'s `Facts`.
@@ -1543,6 +1556,7 @@ impl Fact {
             Fact::RecordsBlocked => "records-blocked",
             Fact::Instant => "instant",
             Fact::Pinned => "pinned-programs",
+            Fact::DispatchCleared => "dispatch-cleared",
         }
     }
 
@@ -1595,6 +1609,7 @@ impl Fact {
             Fact::RecordsBlocked => RECORDS_BLOCKED,
             Fact::Instant => INSTANT,
             Fact::Pinned => PINNED,
+            Fact::DispatchCleared => DISPATCH_CLEARED,
         }
     }
 
@@ -1677,6 +1692,7 @@ impl Fact {
             | Fact::BaseDelta
             | Fact::Records
             | Fact::RecordsBlocked
+            | Fact::DispatchCleared
             | Fact::Instant => false,
         }
     }
@@ -1833,7 +1849,10 @@ impl Fact {
             // through the pin — and a tree walk has no command to ask it of. A
             // gate wanting the same set asks the pin directly, which it may,
             // being an `Effect` surface (CLOUD-1028).
-            | Fact::Pinned => None,
+            | Fact::Pinned
+            // CLOUD-1978. Hook-only: the question is about THIS call's argument,
+            // and a tree walk has no call.
+            | Fact::DispatchCleared => None,
         }
     }
 
@@ -1926,7 +1945,7 @@ impl Fact {
             // count, and it is the seam this function's own doc says to split
             // along. `Instant` arriving is what took it past its ceiling, exactly
             // as `Landing` did for the git family.
-            Fact::Instant => Self::scalar_schema_fragment(self),
+            Fact::Instant | Fact::DispatchCleared => Self::scalar_schema_fragment(self),
             // The description-only family delegates, for the same reason and
             // along the same kind of seam as the git family below: every one of
             // these constrains nothing but its own prose, so a match arm each
@@ -2168,6 +2187,10 @@ impl Fact {
             // predicate over it must not hold. Collapsing the two would make
             // `--instant` optional in the worst way: a forgotten flag would date
             // every record to 1970 and report every lease expired.
+            Fact::DispatchCleared => serde_json::json!({
+                "type": ["boolean", "null"],
+                "description": "Fact::DispatchCleared (CLOUD-1978). TRUE when this call is a session-management method (`create_session`, `send_message`) whose prompt's SHA-256 has BOTH a passing `batten lint brief` receipt and the owner's approval receipt; FALSE for any other call or any prompt missing either receipt; NULL when the receipt store could not be located. Keyed by the prompt's own bytes, so a prompt edited after approval is false. A boolean and nothing else: no byte of the prompt reaches this document.",
+            }),
             Fact::Instant => serde_json::json!({
                 "type": ["integer", "null"],
                 "description": "Fact::Instant (CLOUD-1170). The epoch second the CALLER supplied, as data -- never a clock the engine read. A module compares a recorded stamp against it and a fixture pins both, so the same instant yields byte-identical output, which is what a clock READ can never do. NULL when the caller supplied none: that is could-not-look, NOT the epoch, and a predicate over it must not hold.",
@@ -2297,6 +2320,7 @@ impl Fact {
             | Fact::ToolVerdict
             | Fact::Minted
             | Fact::Captured
+            | Fact::DispatchCleared
             | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact described_schema_fragment does not own",
             }),
@@ -2450,6 +2474,7 @@ impl Fact {
             | Fact::Tasks
             | Fact::Extracted
             | Fact::Landing
+            | Fact::DispatchCleared
             | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact keyed_read_schema_fragment does not own",
             }),
@@ -2656,6 +2681,7 @@ impl Fact {
             | Fact::Tasks
             | Fact::Extracted
             | Fact::Pinned
+            | Fact::DispatchCleared
             | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact git_schema_fragment does not own",
             }),

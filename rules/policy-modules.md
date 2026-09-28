@@ -373,6 +373,9 @@ suite green throughout. Spelled that way deliberately: `rules-drift` holds every
 backticked, fully-qualified key in this file to the generated schema, so naming
 the wrong one even as a warning is itself the defect — a reader copies it, and
 the gate is right to refuse.
+`input.facts["dispatch-cleared"]` is a boolean for a session-management call
+whose prompt carries both dispatch receipts (CLOUD-1978), `null` when the
+receipt store could not be located.
 `input.facts["pinned-programs"]` is the landed example; `input.facts.tasks` is
 the task runner's own argv, read from a receipt minted at session start so the
 mediated path parses no manifest (CLOUD-856); and `input.facts.extracted` is a

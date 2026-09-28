@@ -105,6 +105,13 @@ so re-test after a client upgrade and report if it still fails.
   owner approved the call. An earlier version of this list said they could not
   be granted, that the settings screen did not exist, and forbade re-testing.
   All three were false.
+- **The remedy is batten's pre-approval, measured 2026-09-28 (CLOUD-1978).**
+  The `claude-code-cloud` preset's PreToolUse `allow` DID clear the prompt on
+  `get_session`: the owner saw no dialog. Reads are covered by
+  `read-only-is-preapproved`. `create_session`/`send_message` are covered by
+  `dispatch-is-preapproved` in auto mode, once the prompt has a brief-lint
+  receipt and an owner-approval receipt (`mem:workflow/agent-fanout`). The
+  earlier prompts predate that preset, or came with a stale mediator.
 - **No remedy is known on the user's side.** Claude Code Remote is not listed at
   claude.ai/customize/connectors, so never send anyone there for it. A
   repository allow rule does not move the prompt either: that is escape 2

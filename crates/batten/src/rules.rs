@@ -9630,7 +9630,9 @@ pub(crate) fn tree_document(
             | crate::facts::Fact::Prospective
             // CLOUD-1028: hook-surface, and its question is about a command the
             // tree surface does not have.
-            | crate::facts::Fact::Pinned => continue,
+            | crate::facts::Fact::Pinned
+            // CLOUD-1978: hook-surface; its question is about a call's argument.
+            | crate::facts::Fact::DispatchCleared => continue,
         };
         tree.insert(key.to_owned(), value);
     }
