@@ -1592,6 +1592,28 @@ const LAND_RESOLVE: FlagDecl = FlagDecl {
     value: ValueDecl::StrMany,
 };
 
+/// `--propose`: write a candidate for each conflicted path a shape covers
+/// (CLOUD-1956).
+///
+/// **A candidate is never applied.** The replay still stops and moves nothing;
+/// each candidate is written under the git dir for a person to read and pass back
+/// as `--resolve <path>=<file>`, which stays the only act that puts a resolution
+/// into a tree. On `land replay` and never on `land lap`, for [`LAND_RESOLVE`]'s
+/// reason: nothing unattended should even be handed a merge to trust.
+const LAND_PROPOSE: FlagDecl = FlagDecl {
+    id: "propose",
+    long: Some("propose"),
+    short: None,
+    help: "On a conflict, write a candidate merge for each path a known shape covers",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
 /// `<field>`: which advisory field `lease peek` prints.
 ///
 /// A closed set, because the whole value of `peek` over reading the status prose
@@ -5901,7 +5923,7 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_VERDICT,
         effect: Effect::Write,
-        flags: &[LAND_REFERENCE, LAND_RESOLVE],
+        flags: &[LAND_REFERENCE, LAND_RESOLVE, LAND_PROPOSE],
     },
     // `write`, and the write is the RECORD rather than the wait: asking two
     // questions is a read, and what this leaves behind is both arms' answers for

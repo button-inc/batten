@@ -386,6 +386,99 @@ pub fn replay_onto(
     Ok(replayed)
 }
 
+/// [`replay`], and on a conflict a candidate per conflicted path (CLOUD-1956).
+///
+/// Its own entry point, never a flag on [`replay`]: the LAP calls [`replay`], and
+/// an unattended loop must not even be handed a merge to trust. Candidates land
+/// under the git dir's `batten-propose/<commit>/`, so a second conflict at a later
+/// commit cannot overwrite the one a person is reading.
+///
+/// # Errors
+///
+/// As [`replay`], plus a git dir that will not resolve or a candidate that will
+/// not write.
+pub fn replay_proposing(
+    root: &Path,
+    remote: &str,
+    reference: &str,
+    branch: &str,
+    resolutions: &[String],
+) -> Result<(Replay, Vec<gitwrite::Candidate>)> {
+    let tracking = tracking_ref(reference);
+    advance(root, remote, reference, &tracking)?;
+    replay_onto_proposing(root, &tracking, branch, resolutions)
+}
+
+/// The half of [`replay_proposing`] after the fetch, for [`replay_onto`]'s reason:
+/// it is what a test can drive against a real conflicting tree.
+///
+/// # Errors
+///
+/// As [`replay_onto`], plus a git dir that will not resolve or a candidate that
+/// will not write.
+pub fn replay_onto_proposing(
+    root: &Path,
+    tracking: &str,
+    branch: &str,
+    resolutions: &[String],
+) -> Result<(Replay, Vec<gitwrite::Candidate>)> {
+    let into = crate::git::git_dir(root)
+        .context("land: the git dir holding proposals will not resolve")?
+        .join("batten-propose");
+    let (outcome, candidates) = gitwrite::rebase_proposing(
+        root,
+        &format!("refs/heads/{branch}"),
+        tracking,
+        resolutions,
+        &into,
+    )
+    .with_context(|| format!("land: replay {branch} onto {tracking}"))?;
+    let replayed = match outcome {
+        Rebase::Conflicted { commit, paths } => Replay::Conflicted { commit, paths },
+        Rebase::Current => Replay::Current,
+        Rebase::Replayed { head, commits } => Replay::Replayed { head, commits },
+    };
+    record(root, branch, &replayed)?;
+    Ok((replayed, candidates))
+}
+
+/// What a `--propose` stop adds to [`conflict_stop`]: one line per conflicted
+/// path, naming its candidate and shapes or saying none exists (CLOUD-1956).
+///
+/// Pointers only (rule 4): the path, the file and the shape tokens, never a byte
+/// of either side. A path with no candidate is SAID, not skipped, so a reader
+/// never mistakes a short list for a complete one.
+#[must_use]
+pub fn proposal_lines(reference: &str, candidates: &[gitwrite::Candidate]) -> Vec<String> {
+    let mut lines = Vec::with_capacity(candidates.len() + 1);
+    for candidate in candidates {
+        match &candidate.proposal {
+            Some((file, shapes)) => {
+                let shapes: Vec<&str> = shapes.iter().map(|shape| shape.as_str()).collect();
+                lines.push(format!(
+                    "land: proposed {} ({}) at {}",
+                    candidate.path,
+                    shapes.join(","),
+                    file.display()
+                ));
+            }
+            None => lines.push(format!(
+                "land: no candidate for {} — a region matched no known shape; merge it by hand",
+                candidate.path
+            )),
+        }
+    }
+    if candidates
+        .iter()
+        .any(|candidate| candidate.proposal.is_some())
+    {
+        lines.push(format!(
+            "land: read each candidate, then: batten land replay {reference} --resolve <path>=<file> — a candidate is never applied for you"
+        ));
+    }
+    lines
+}
+
 /// Where a remote reference is tracked locally.
 ///
 /// `refs/heads/main` on the remote is `refs/remotes/origin/main` here. Written as

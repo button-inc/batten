@@ -368,7 +368,45 @@ pub fn rebase_resolving(
     onto: &str,
     resolutions: &[String],
 ) -> Result<Rebase> {
-    replay_range(dir, branch, onto, onto, resolutions)
+    replay_range(dir, branch, onto, onto, resolutions, None).map(|(rebase, _)| rebase)
+}
+
+/// One conflicted path's candidate, if a shape covered every region of it
+/// (CLOUD-1956).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Candidate {
+    /// The conflicted path, as [`Rebase::Conflicted`] names it.
+    pub path: String,
+    /// Where the candidate was written and the shapes that made it, or `None`
+    /// when any region matched no shape — the path is then the human's alone.
+    pub proposal: Option<(std::path::PathBuf, Vec<crate::propose::Shape>)>,
+}
+
+/// [`rebase_resolving`], and on a conflict a candidate per conflicted path
+/// written under `into` (CLOUD-1956).
+///
+/// **A candidate is never applied.** The replay stops and moves nothing exactly
+/// as without `into`; what differs is that each conflicted path whose every
+/// region matches a [`crate::propose::Shape`] gets its merge written to
+/// `into/<path>`, for a person to read and pass back as `--resolve
+/// <path>=<file>`. The module header's refusal of auto-resolution is untouched:
+/// the only act that writes a resolution into a tree is still the caller's.
+///
+/// A separate entry point rather than a field on [`Rebase::Conflicted`], because
+/// that enum is public and a field added to it is a semver break for a feature
+/// that adds a capability.
+///
+/// # Errors
+///
+/// As [`rebase_resolving`], plus a candidate that cannot be written under `into`.
+pub fn rebase_proposing(
+    dir: &Path,
+    branch: &str,
+    onto: &str,
+    resolutions: &[String],
+    into: &Path,
+) -> Result<(Rebase, Vec<Candidate>)> {
+    replay_range(dir, branch, onto, onto, resolutions, Some(into))
 }
 
 /// Replay `upstream..branch` onto `onto`, and update the worktree to match.
@@ -389,7 +427,7 @@ pub fn rebase_resolving(
 ///
 /// As [`rebase`].
 pub fn replay_onto(dir: &Path, branch: &str, upstream: &str, onto: &str) -> Result<Rebase> {
-    replay_range(dir, branch, upstream, onto, &[])
+    replay_range(dir, branch, upstream, onto, &[], None).map(|(rebase, _)| rebase)
 }
 
 /// The replay every entry point above funnels into.
@@ -403,7 +441,8 @@ fn replay_range(
     upstream: &str,
     onto: &str,
     resolutions: &[String],
-) -> Result<Rebase> {
+    propose_into: Option<&Path>,
+) -> Result<(Rebase, Vec<Candidate>)> {
     let repo = crate::git::open_for_write(dir)?;
     let resolve = |rev: &str| {
         repo.rev_parse_single(rev)
@@ -431,7 +470,7 @@ fn replay_range(
             .merge_base(base, tip)
             .is_ok_and(|found| found.detach() == base)
     {
-        return Ok(Rebase::Current);
+        return Ok((Rebase::Current, Vec::new()));
     }
 
     let walk = repo
@@ -506,6 +545,7 @@ fn replay_range(
         options: &options,
         committer: &committer,
         empty,
+        propose_into,
     };
     let mut cursor = base;
     let mut replayed = 0usize;
@@ -564,11 +604,14 @@ fn replay_range(
                     *used.entry(path).or_insert(0) += 1;
                 }
             }
-            Step::Conflicted(paths) => {
-                return Ok(Rebase::Conflicted {
-                    commit: original.to_hex().to_string(),
-                    paths,
-                });
+            Step::Conflicted(paths, candidates) => {
+                return Ok((
+                    Rebase::Conflicted {
+                        commit: original.to_hex().to_string(),
+                        paths,
+                    },
+                    candidates,
+                ));
             }
         }
     }
@@ -579,10 +622,13 @@ fn replay_range(
     // The count is what was REPLAYED, not what was walked: a dropped commit
     // contributes no commit to the new head, and reporting the range's length
     // would claim a head carries commits it does not.
-    Ok(Rebase::Replayed {
-        head: now,
-        commits: replayed,
-    })
+    Ok((
+        Rebase::Replayed {
+            head: now,
+            commits: replayed,
+        },
+        Vec::new(),
+    ))
 }
 
 /// Move `branch` to `to` and make the worktree match — `git reset --hard`.
@@ -628,8 +674,8 @@ enum Step {
     /// every later commit in the range, and a walk that could not tell would hand
     /// the same worktree bytes to a second merge of that path nobody inspected.
     Resolved(gix::ObjectId, Vec<String>),
-    /// The paths it conflicts at.
-    Conflicted(Vec<String>),
+    /// The paths it conflicts at, and a candidate per path when asked for one.
+    Conflicted(Vec<String>, Vec<Candidate>),
 }
 
 /// Replay one commit onto `cursor`, three-way merging its own change in.
@@ -727,6 +773,60 @@ struct Replay<'a> {
     committer: &'a gix::actor::Signature,
     /// The empty tree, for a root commit's absent parent.
     empty: gix::ObjectId,
+    /// Where to write a candidate per conflicted path (CLOUD-1956); `None`
+    /// proposes nothing, which is every caller but `land replay --propose`.
+    propose_into: Option<&'a Path>,
+}
+
+/// A candidate per conflicted path, written under `into` (CLOUD-1956).
+///
+/// `trees` is `[ancestor, ours, theirs]`. A path absent from any of the three is
+/// an add/delete or rename conflict, which no text shape describes, so it gets no
+/// candidate rather than a guess at which side meant to exist.
+fn candidates(
+    repo: &gix::Repository,
+    trees: [gix::ObjectId; 3],
+    paths: &[String],
+    into: &Path,
+) -> Result<Vec<Candidate>> {
+    let mut found = Vec::with_capacity(paths.len());
+    for path in paths {
+        let [ancestor, ours, theirs] = trees.map(|tree| blob_at(repo, tree, path));
+        let proposal = match (ancestor, ours, theirs) {
+            (Some(ancestor), Some(ours), Some(theirs)) => {
+                crate::propose::propose(&ancestor, &ours, &theirs)
+            }
+            _ => None,
+        };
+        let proposal = match proposal {
+            Some(proposal) => {
+                let file = into.join(path);
+                if let Some(parent) = file.parent() {
+                    std::fs::create_dir_all(parent).map_err(|err| {
+                        anyhow::anyhow!("gitwrite: {} will not create: {err}", parent.display())
+                    })?;
+                }
+                std::fs::write(&file, &proposal.bytes).map_err(|err| {
+                    anyhow::anyhow!("gitwrite: {} will not write: {err}", file.display())
+                })?;
+                Some((file, proposal.shapes))
+            }
+            None => None,
+        };
+        found.push(Candidate {
+            path: path.clone(),
+            proposal,
+        });
+    }
+    Ok(found)
+}
+
+/// The bytes at `path` in `tree`, or `None` when the path is absent there.
+fn blob_at(repo: &gix::Repository, tree: gix::ObjectId, path: &str) -> Option<Vec<u8>> {
+    let tree = repo.find_tree(tree).ok()?;
+    let entry = tree.lookup_entry_by_path(path).ok()??;
+    let object = entry.object().ok()?;
+    Some(object.data.clone())
 }
 
 fn replay(
@@ -741,6 +841,7 @@ fn replay(
         options,
         committer,
         empty,
+        propose_into,
     } = *ctx;
     let commit = repo
         .find_commit(original)
@@ -786,7 +887,11 @@ fn replay(
         // paths the caller did not mention — the auto-resolution this module
         // exists to refuse, arrived at by omission rather than by a flag.
         if paths.is_empty() || !paths.iter().all(|path| resolutions.contains_key(path)) {
-            return Ok(Step::Conflicted(paths));
+            let candidates = match propose_into {
+                Some(into) => candidates(repo, [ancestor, ours, theirs], &paths, into)?,
+                None => Vec::new(),
+            };
+            return Ok(Step::Conflicted(paths, candidates));
         }
 
         for path in &paths {

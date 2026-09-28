@@ -522,6 +522,9 @@ pub enum LandCommand {
         /// person saying *I merged this by hand*, which is the loop's one human
         /// stop being taken rather than skipped.
         resolve: Vec<String>,
+        /// Write a candidate per conflicted path a known shape covers
+        /// (CLOUD-1956). Never applied: `--resolve` stays the only act that is.
+        propose: bool,
     },
     /// Ask whether this head is green and whether its base still holds, and act
     /// on whichever answers first.
@@ -2178,6 +2181,7 @@ fn land_of(matches: &ArgMatches) -> Option<LandCommand> {
                 .get_many::<String>("resolve")
                 .map(|found| found.cloned().collect())
                 .unwrap_or_default(),
+            propose: matches.get_flag("propose"),
         }),
         ("wait", matches) => Some(LandCommand::Wait {
             reference: reference_of(matches),

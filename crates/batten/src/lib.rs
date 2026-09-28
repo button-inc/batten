@@ -104,6 +104,7 @@ pub mod policy;
 pub mod pr_watch;
 pub mod preset;
 pub mod probe_verdict;
+pub mod propose;
 pub mod provision;
 pub mod prune;
 pub mod race;
@@ -7786,11 +7787,15 @@ fn run_land(
             run_land_verify(root, &standing, &branch, None, out, err)
         }
         cli::LandCommand::FastForward => run_land_fast_forward(root, &branch, out, err),
-        cli::LandCommand::Replay { reference, resolve } => {
+        cli::LandCommand::Replay {
+            reference,
+            resolve,
+            propose,
+        } => {
             let Some(url) = land_remote(root, err)? else {
                 return Ok(ExitCode::Internal);
             };
-            run_land_replay(root, &url, reference, &branch, resolve, out)
+            run_land_replay(root, &url, reference, &branch, resolve, *propose, out)
         }
         // NO REMOTE RESOLVED HERE ANY MORE. The staleness arm asks the FORGE
         // through its conditional endpoint rather than the git remote, so this
@@ -8970,7 +8975,9 @@ fn run_the_step(
         // NO RESOLUTIONS ON THE LAP, ever. A lap runs unattended, so a resolution
         // it could apply would be one nobody looked at — `gitwrite`'s
         // auto-resolution refusal, reached through the driver rather than a flag.
-        land::Step::Replay => run_land_replay(root, url, reference, branch, &[], out)?,
+        // NO PROPOSALS EITHER (CLOUD-1956), for the same reason: nothing unattended
+        // is handed a merge to trust.
+        land::Step::Replay => run_land_replay(root, url, reference, branch, &[], false, out)?,
         land::Step::Verify => run_land_verify(root, bet, branch, Some(reference), out, err)?,
         land::Step::Lease => run_land_lease(root, branch, out, err)?,
         land::Step::Ready => run_land_ready(root, branch, bet, ledger, out, err)?,
@@ -9938,11 +9945,23 @@ fn run_land_replay(
     reference: &str,
     branch: &str,
     resolve: &[String],
+    propose: bool,
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
-    match land::replay(root, url, reference, branch, resolve)? {
+    let (replayed, candidates) = if propose {
+        land::replay_proposing(root, url, reference, branch, resolve)?
+    } else {
+        (
+            land::replay(root, url, reference, branch, resolve)?,
+            Vec::new(),
+        )
+    };
+    match replayed {
         land::Replay::Conflicted { commit, paths } => {
             for line in land::conflict_stop(branch, reference, &commit, &paths) {
+                writeln!(out, "{line}")?;
+            }
+            for line in land::proposal_lines(reference, &candidates) {
                 writeln!(out, "{line}")?;
             }
             Ok(ExitCode::Violation)
