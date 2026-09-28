@@ -665,6 +665,13 @@ declared_modules := {
 	# functions over `std::fs` and a path. Every module that mutates a file calls
 	# it, so it must sit below all of them, which a leaf does by construction.
 	"durable",
+	# `graph_check` arrived with CLOUD-1221, the port of `mise-tasks/graph-check.sh`,
+	# and sits BESIDE `race` for `race`'s reason: it renders a verdict about a
+	# tracker board rather than about the tree, so it mints no `Finding` and joins
+	# no store. It reaches `ready` for the one grammar, `board` for the consumer's
+	# column words, `landed` for the declared-no-commit reading, and `durable` for
+	# the `board-move.<KEY>` receipt — never `hook`, `rules` or `findings`.
+	"graph_check",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.

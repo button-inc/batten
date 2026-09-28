@@ -2746,6 +2746,13 @@ view` and no argument, which reads the CURRENT BRANCH — so under a detached
   carry a closing keyword because fast-forward landing puts it in the PR body —
   so it would fire on honestly-closed rows, which is the gate whose first firing
   is a false positive and whose exception rots.
+- `graph_check.rs` — the board-graph gate behind `batten ready graph`
+  (CLOUD-1221, ported off `mise-tasks/graph-check.sh`). Judges a piped board
+  set: the `blockedBy` frontier, cycles, dangling blockers, WIP, status claims
+  in prose, milestone inheritance, and `todo-not-ready` by calling `ready::lint`
+  in process — so the board and the refinement gate share ONE grammar rather
+  than the two the shell pair kept. Mints the `board-move.<KEY>` receipts the
+  move guard reads, fail-soft, through `durable::replace`.
 - `ready.rs` — the Definition-of-Ready grammar as a predicate over a tracker
   payload (CLOUD-179, ported off `mise-tasks/ready-lint.sh` by CLOUD-1121 when
   `shell-retirement` made editing a shell rule refusable). **Rust rather than

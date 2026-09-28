@@ -1069,6 +1069,9 @@ mod tests {
             // The refinement gate, ported off `mise-tasks/ready-lint.sh` in
             // the same change and for the same reason.
             "ready".to_owned(),
+            // The board-graph gate, ported off `mise-tasks/graph-check.sh` by
+            // CLOUD-1221 so the board is judged by the one Ready grammar above.
+            "ready graph".to_owned(),
             "ready lint".to_owned(),
             "receipt".to_owned(),
             // CLOUD-1753's port of `tree-clean`. The CHEAP end of a pair whose

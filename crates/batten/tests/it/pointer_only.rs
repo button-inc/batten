@@ -1055,6 +1055,15 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The board-graph gate over the same payload shape `landed check` reads: every
+    // report line is `<id> <rule>`, and the frontier and WIP lines carry keys and a
+    // count, so a row's description has no field to travel in.
+    Verb {
+        path: "ready graph",
+        args: &[],
+        stdin: Stdin::Board,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "claim check",
         args: &["--issue", "CLOUD-1"],

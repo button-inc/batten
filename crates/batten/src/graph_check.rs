@@ -351,6 +351,28 @@ pub fn check(payloads: &[serde_json::Value], words: &Vocabulary<'_>) -> Outcome 
         judged: board.ids(),
         ..Outcome::default()
     };
+    // THE ORDER IS THE REPORT'S ORDER, which `released` and the parity run read:
+    // row rules, graph coherence, status claims, then the frontier.
+    row_rules(&board, words, payloads, &mut out);
+    let edges = coherence(&board, payloads, &mut out);
+    status_claims(&board, words, payloads, &mut out);
+    frontier(&board, words, &edges, &mut out);
+    out.wip = board
+        .rows
+        .iter()
+        .filter(|row| row.status == words.in_progress)
+        .count();
+    out
+}
+
+/// The rules each row answers on its own: assignment, the declared-no-commit
+/// exemption, and the milestone claim (CLOUD-695, CLOUD-599, CLOUD-771).
+fn row_rules(
+    board: &Board<'_>,
+    words: &Vocabulary<'_>,
+    payloads: &[serde_json::Value],
+    out: &mut Outcome,
+) {
     let started = |status: &str| {
         status == words.ready || status == words.in_progress || status == words.review
     };
@@ -414,7 +436,15 @@ pub fn check(payloads: &[serde_json::Value], words: &Vocabulary<'_>) -> Outcome 
             }
         }
     }
+}
 
+/// The set's graph: whether it can be judged, what it points outside itself at,
+/// and whether it cycles. Returns the edges the frontier walks.
+fn coherence(
+    board: &Board<'_>,
+    payloads: &[serde_json::Value],
+    out: &mut Outcome,
+) -> Vec<(String, String)> {
     // --- graph coherence -------------------------------------------------------
     //
     // ANTI-VACUITY FIRST (CLOUD-251): an ABSENT `blockedBy` is unjudgeable, an
@@ -462,8 +492,16 @@ pub fn check(payloads: &[serde_json::Value], words: &Vocabulary<'_>) -> Outcome 
         out.violation("graph", &format!("blockedby-cycle ({})", cycle.join(" ")));
     }
 
-    status_claims(&board, words, payloads, &mut out);
+    edges
+}
 
+/// Which ready-queue rows are schedulable, each exclusion attributed.
+fn frontier(
+    board: &Board<'_>,
+    words: &Vocabulary<'_>,
+    edges: &[(String, String)],
+    out: &mut Outcome,
+) {
     // --- the frontier ------------------------------------------------------------
     //
     // A ready-queue row is on the frontier iff its own payload passes the one
@@ -508,7 +546,7 @@ pub fn check(payloads: &[serde_json::Value], words: &Vocabulary<'_>) -> Outcome 
         let mut blocking = String::new();
         let mut unknown = String::new();
         let mut retired = String::new();
-        for (from, to) in &edges {
+        for (from, to) in edges {
             if *from != row.id {
                 continue;
             }
@@ -518,7 +556,7 @@ pub fn check(payloads: &[serde_json::Value], words: &Vocabulary<'_>) -> Outcome 
                 unknown.push_str(to);
                 continue;
             }
-            if !blocker_resolved(&board, words, to) {
+            if !blocker_resolved(board, words, to) {
                 ok = false;
                 blocking.push(' ');
                 blocking.push_str(to);
@@ -549,13 +587,6 @@ pub fn check(payloads: &[serde_json::Value], words: &Vocabulary<'_>) -> Outcome 
             out.note(&row.id, &format!("excluded (blocked-by{blocking})"));
         }
     }
-
-    out.wip = board
-        .rows
-        .iter()
-        .filter(|row| row.status == words.in_progress)
-        .count();
-    out
 }
 
 /// Every `(dependent, blocker)` edge, ordered by the dependent's key then the
@@ -644,69 +675,17 @@ fn status_claims(
     payloads: &[serde_json::Value],
     out: &mut Outcome,
 ) {
-    // ANTI-VACUITY: a set whose descriptions were projected away has nothing to
-    // scan, and "found no claims" would read as "made no false claims".
-    let no_description: Vec<String> = board
-        .rows
-        .iter()
-        .filter(|row| {
-            !row.payload
-                .get("description")
-                .is_some_and(serde_json::Value::is_string)
-        })
-        .map(|row| row.id.clone())
-        .collect();
-    if !no_description.is_empty() {
-        out.unjudged(
-            "graph",
-            &format!(
-                "unjudgeable-description ({})",
-                sorted(no_description).join(" ")
-            ),
-        );
-    }
-
-    let mut columns: Vec<String> = payloads
-        .iter()
-        .filter_map(|row| row.get("status").map(text))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    // LONGEST FIRST, so a leftmost-first engine picks what a leftmost-longest one
-    // would: a column that is a prefix of another never wins over it.
-    columns.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
-    let alphabet = columns
-        .iter()
-        .map(|column| regex::escape(column))
-        .collect::<Vec<_>>()
-        .join("|");
-    let key = words.grammar.key_pattern();
-    let connective = words.connective.as_str();
-    let filler = r"[^[:alnum:]\\\n]*";
-    let capspan = r"[A-Z][A-Za-z]*(?:[ \t\r]+[A-Z][A-Za-z]*)*";
-    let Ok(claim) = Regex::new(&format!(
-        "(?:{key}){filler}(?:(?:{connective}){filler})?(?:{alphabet})"
-    )) else {
-        return;
-    };
-    let Ok(unspellable) = Regex::new(&format!(
-        "(?:{key}){filler}(?:{connective}){filler}({capspan})"
-    )) else {
-        return;
-    };
-    let Ok(key_re) = Regex::new(key) else {
-        return;
-    };
-    let Ok(column_re) = Regex::new(&format!("(?:{alphabet})")) else {
-        return;
-    };
-    let Ok(whole_column) = Regex::new(&format!("^(?:{alphabet})$")) else {
-        return;
-    };
-    let Ok(code_span) = Regex::new("`[^`]*`") else {
-        return;
-    };
-    let Ok(quoted) = Regex::new("\"[^\"]*\"") else {
+    unjudgeable_descriptions(board, out);
+    let Some(Scan {
+        claim,
+        unspellable,
+        key_re,
+        column_re,
+        whole_column,
+        code_span,
+        quoted,
+    }) = Scan::new(words, payloads)
+    else {
         return;
     };
 
@@ -768,6 +747,82 @@ fn status_claims(
             };
             out.unjudged("graph", &format!("status-claim-unscannable ({} claims {cited} is {token}, which no piped issue occupies — pipe one that does)", row.id));
         }
+    }
+}
+
+/// ANTI-VACUITY for the claim scan: a set whose descriptions were projected away
+/// has nothing to scan, and "found no claims" would read as "made no false
+/// claims".
+fn unjudgeable_descriptions(board: &Board<'_>, out: &mut Outcome) {
+    let no_description: Vec<String> = board
+        .rows
+        .iter()
+        .filter(|row| {
+            !row.payload
+                .get("description")
+                .is_some_and(serde_json::Value::is_string)
+        })
+        .map(|row| row.id.clone())
+        .collect();
+    if !no_description.is_empty() {
+        out.unjudged(
+            "graph",
+            &format!(
+                "unjudgeable-description ({})",
+                sorted(no_description).join(" ")
+            ),
+        );
+    }
+}
+
+/// The patterns one status-claim scan runs, composed once per set.
+struct Scan {
+    claim: Regex,
+    unspellable: Regex,
+    key_re: Regex,
+    column_re: Regex,
+    whole_column: Regex,
+    code_span: Regex,
+    quoted: Regex,
+}
+
+impl Scan {
+    /// Compose the scan over the set's occupied columns, or `None` when a
+    /// pattern will not compile — nothing is then scanned, as before the split.
+    fn new(words: &Vocabulary<'_>, payloads: &[serde_json::Value]) -> Option<Self> {
+        let mut columns: Vec<String> = payloads
+            .iter()
+            .filter_map(|row| row.get("status").map(text))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        // LONGEST FIRST, so a leftmost-first engine picks what a leftmost-longest
+        // one would: a column that is a prefix of another never wins over it.
+        columns.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+        let alphabet = columns
+            .iter()
+            .map(|column| regex::escape(column))
+            .collect::<Vec<_>>()
+            .join("|");
+        let key = words.grammar.key_pattern();
+        let connective = words.connective.as_str();
+        let filler = r"[^[:alnum:]\\\n]*";
+        let capspan = r"[A-Z][A-Za-z]*(?:[ \t\r]+[A-Z][A-Za-z]*)*";
+        Some(Self {
+            claim: Regex::new(&format!(
+                "(?:{key}){filler}(?:(?:{connective}){filler})?(?:{alphabet})"
+            ))
+            .ok()?,
+            unspellable: Regex::new(&format!(
+                "(?:{key}){filler}(?:{connective}){filler}({capspan})"
+            ))
+            .ok()?,
+            key_re: Regex::new(key).ok()?,
+            column_re: Regex::new(&format!("(?:{alphabet})")).ok()?,
+            whole_column: Regex::new(&format!("^(?:{alphabet})$")).ok()?,
+            code_span: Regex::new("`[^`]*`").ok()?,
+            quoted: Regex::new("\"[^\"]*\"").ok()?,
+        })
     }
 }
 
