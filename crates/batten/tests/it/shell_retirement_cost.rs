@@ -23,12 +23,13 @@
 //! percentage-band timing assertion would be the thing rust.md refuses; these are
 //! step-change detectors.
 //!
-//! **The Windows reading is why `RATIO` is 8 rather than 3, and it is recorded
-//! rather than tuned away.** The two platforms agree on the term this case names
+//! **The Windows reading is why `RATIO` stopped being 3, and macOS's (10.4x on
+//! a fast runner) is why it stopped being 8; both are recorded rather than
+//! tuned away.** The two platforms agree on the term this case names
 //! — four more deletions cost 0.06s here and 0.12s there, against first-two steps
 //! of 0.49s and 1.31s — and disagree on the ratio of the index build to the
 //! floor, which is a machine property and not the module's. A bound that a green
-//! tree fails on a slower box is measuring the box.
+//! tree fails on a slower or faster box is measuring the box.
 //!
 //! Three further guards: the floor case fails LOUDLY if the fixture corpus ever
 //! stops being large enough for the term to exist (an anti-vacuity term — a
@@ -70,12 +71,19 @@ const RUNS: usize = 3;
 /// is the percentage-band assertion `rules/rust.md` refuses wearing a
 /// step-change detector's clothes.
 ///
-/// 8 is the step-change line: ~2.6x above the worst passing reading either
-/// platform produced, and ~26x below the 210x the unflattened module reads. The
-/// linearity term below is what actually names the defect and it is unmoved;
-/// this is the coarse bound beside it, and it only has to refuse a shape nothing
-/// between those two numbers can produce.
-const RATIO: u32 = 8;
+/// **And 8 was wrong for the same reason 3 was.** The macOS runner reads
+/// 10.4x on a green tree (0 deletions 67.8ms, 2 deletions 605ms, 6 deletions
+/// 702ms, #1051's matrix on 63a21a5a): a fast machine shrinks the floor's scan
+/// far more than the index build, so the ratio GROWS with speed. The linearity
+/// term on that same run passed by 5x (97ms against 537ms), so the module was
+/// correct and the bound was not.
+///
+/// 30 is the step-change line: ~2.9x above the worst passing reading any
+/// platform has produced, and ~7x below the 210x the unflattened module reads.
+/// The linearity term below is what actually names the defect and it is
+/// unmoved; this is the coarse bound beside it, and it only has to refuse a
+/// shape nothing between those two numbers can produce.
+const RATIO: u32 = 30;
 
 /// Below this, the fixture corpus is too small for the term to be measurable at
 /// all and the ratio assertions would pass over nothing.
@@ -233,8 +241,8 @@ fn deleting_six_governed_paths_costs_a_flat_multiple_of_the_floor() {
     // that grew quadratically and then flattened, or over one whose constant had
     // exploded. `RATIO` is deliberately loose, and its doc comment says why: the
     // floor builds no index and every deleting arm does, so the ratio between them
-    // is a machine property — 2.5x here, 3.1x on the Windows runner — against 210x
-    // unflattened. Nothing between 8x and 210x is a shape this module can produce.
+    // is a machine property — 2.5x here, 3.1x on the Windows runner, 10.4x on macOS — against 210x
+    // unflattened. Nothing between 30x and 210x is a shape this module can produce.
     assert!(
         six <= floor * RATIO,
         "six deletions cost more than {RATIO}x the zero-deletion floor — {table}"
