@@ -295,6 +295,7 @@ mod policy_presets;
 mod policy_severity;
 mod policy_test_suite;
 mod policy_tree;
+mod policy_walk;
 mod policy_whole_set;
 mod pr_partition_restated;
 #[cfg(unix)]

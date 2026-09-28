@@ -382,6 +382,14 @@ pub struct Bundle {
     /// against. `BTreeSet` so the collision refusal names ids in a stable order —
     /// §6's byte-stability reaches a config error's text too.
     declared: BTreeSet<String>,
+    /// The packages the bundle's modules declared, relative to `data.batten`
+    /// (CLOUD-1969).
+    ///
+    /// Recorded from `add_policy`'s own answer at [`compile`], because the
+    /// result document cannot say which of its members are packages and which
+    /// are rule values — and reading a rule value as a package is how a parsed
+    /// document's own `deny` key became a finding.
+    packages: BTreeSet<Vec<String>>,
     /// The enabling row's severity, and its per-predicate overrides (CLOUD-1131).
     ///
     /// **The bundle carried none until this row, and the mediated surface read
@@ -611,6 +619,7 @@ impl Clone for Bundle {
             id: self.id.clone(),
             modules: self.modules.clone(),
             declared: self.declared.clone(),
+            packages: self.packages.clone(),
             severity: self.severity,
             predicate_severity: self.predicate_severity.clone(),
             engine: self.engine.clone(),
@@ -1199,6 +1208,8 @@ fn without_test_rules(source: &str) -> String {
 /// the smoke query, when `rules` answers a shape that is not a set of ids, or
 /// when a `violation` reachable on an empty document raises an id the bundle
 /// does not declare.
+//MUTANT-SUITE crates/batten/tests/it/policy_walk.rs
+//MUTANT package-address-dropped|s@            packages.insert(relative);@            packages.insert(Vec::new());@|the_module_s_own_violation_still_raises
 pub fn compile(
     id: &str,
     sources: &[(String, String)],
@@ -1231,10 +1242,16 @@ pub fn compile(
             ))
         })?;
     let mut modules = Vec::new();
+    let mut packages = BTreeSet::new();
     for (path, source) in sources {
-        engine
+        let package = engine
             .add_policy(path.clone(), source.clone())
             .map_err(|err| UsageError::raise(format!("`{path}` does not compile: {err}")))?;
+        // A package outside `data.batten` is unreachable by the one query this
+        // gate runs, so it has no address to record.
+        if let Some(relative) = relative_package(&package) {
+            packages.insert(relative);
+        }
         modules.push(Module { path: path.clone() });
     }
 
@@ -1262,7 +1279,7 @@ pub fn compile(
     // WHAT THE BUNDLE PUBLISHES, read once. A bundle whose modules carry no
     // `rules` rule publishes nothing, which is exactly the pre-CLOUD-832 module
     // and is not an error — it simply cannot use the attributed shape.
-    let declared = collect_strings(&smoke, RULES_RULE).ok_or_else(|| {
+    let declared = collect_strings(&smoke, &packages, RULES_RULE).ok_or_else(|| {
         UsageError::raise(format!(
             "`{pointer}` answered `{RULES_RULE}` with a shape that is not a set of ids"
         ))
@@ -1274,7 +1291,7 @@ pub fn compile(
     // empty document reaches; `deny` treats an undeclared id met later as
     // could-not-look, because a denial this gate cannot attribute is not one it
     // can honestly report.
-    for violation in collect_violations(&smoke).unwrap_or_default() {
+    for violation in collect_violations(&smoke, &packages).unwrap_or_default() {
         let Some(named) = violation.rule.as_deref() else {
             continue;
         };
@@ -1289,6 +1306,7 @@ pub fn compile(
         id: id.to_owned(),
         modules,
         declared,
+        packages,
         // `Deny` until an enabling row says otherwise: `compile` is handed
         // sources rather than a rule, and the strict reading is the safe default
         // for the value that decides whether a refusal refuses.
@@ -1299,21 +1317,24 @@ pub fn compile(
     })
 }
 
-/// Walk a `data.batten` result for every member named `rule_name`, at any depth,
-/// and read its strings.
+/// Read the strings of every rule named `rule_name` in the bundle's packages.
 ///
 /// **This is what pins the RULE NAME rather than the package** (CLOUD-837). The
-/// query is rooted at `data.batten` and this walk finds `deny`, `violation` and
-/// `rules` wherever they sit under it — so `package batten.git`,
+/// query is rooted at `data.batten` and this reads `deny`, `violation` and
+/// `rules` in every package a module declared under it — so `package batten.git`,
 /// `package batten.ci` and `package batten.board` are all reachable, and 79
 /// predicates need not share one flat namespace.
 ///
 /// `None` is could-not-look at every call site, never "no denials": a member
 /// whose value is neither a set nor an array decided nothing readable, and
 /// guessing it is empty is CLOUD-251's vacuous pass.
-fn collect_strings(results: &regorus::QueryResults, rule_name: &str) -> Option<BTreeSet<String>> {
+fn collect_strings(
+    results: &regorus::QueryResults,
+    packages: &BTreeSet<Vec<String>>,
+    rule_name: &str,
+) -> Option<BTreeSet<String>> {
     let mut found = BTreeSet::new();
-    for value in package_members(results, rule_name) {
+    for value in package_members(results, packages, rule_name) {
         match value {
             regorus::Value::Set(items) => {
                 for item in items.iter() {
@@ -1349,15 +1370,22 @@ fn collect_strings(results: &regorus::QueryResults, rule_name: &str) -> Option<B
 /// without reopening the free-string hole: a bare member is a class with no
 /// predicate id and no pointers, attributed to the enabling row, and it is held
 /// to the registry exactly as an attributed one is.
-fn collect_deny_messages(results: &regorus::QueryResults) -> Option<Vec<String>> {
-    collect_string_list(results, DENY_RULE)
+fn collect_deny_messages(
+    results: &regorus::QueryResults,
+    packages: &BTreeSet<Vec<String>>,
+) -> Option<Vec<String>> {
+    collect_string_list(results, packages, DENY_RULE)
 }
 
 /// Every string in a set- or array-valued rule named `rule` under the package,
 /// or `None` for a shape this gate cannot read.
-fn collect_string_list(results: &regorus::QueryResults, rule: &str) -> Option<Vec<String>> {
+fn collect_string_list(
+    results: &regorus::QueryResults,
+    packages: &BTreeSet<Vec<String>>,
+    rule: &str,
+) -> Option<Vec<String>> {
     let mut messages = Vec::new();
-    for value in package_members(results, rule) {
+    for value in package_members(results, packages, rule) {
         match value {
             regorus::Value::Set(items) => {
                 for item in items.iter() {
@@ -1395,9 +1423,12 @@ fn collect_string_list(results: &regorus::QueryResults, rule: &str) -> Option<Ve
 /// there would be satisfied by an invented one. A `subjects` that is present and
 /// is NOT a list of readable shapes is could-not-look, because a module speaking
 /// a dialect this decoder does not have is not a module reporting nothing.
-fn collect_violations(results: &regorus::QueryResults) -> Option<Vec<Violation>> {
+fn collect_violations(
+    results: &regorus::QueryResults,
+    packages: &BTreeSet<Vec<String>>,
+) -> Option<Vec<Violation>> {
     let mut violations = Vec::new();
-    for value in package_members(results, VIOLATION_RULE) {
+    for value in package_members(results, packages, VIOLATION_RULE) {
         let items: Vec<&regorus::Value> = match value {
             regorus::Value::Set(items) => items.iter().collect(),
             regorus::Value::Array(items) => items.iter().collect(),
@@ -1449,46 +1480,73 @@ fn read_subjects(value: &regorus::Value) -> Option<Vec<crate::verdict::Subject>>
     Some(subjects)
 }
 
-/// Every value named `rule_name` anywhere under the queried package.
+/// Every value named `rule_name` that is a RULE of one of the bundle's own
+/// packages (CLOUD-1969).
 ///
-/// Recurses into object values, which is what a sub-package is in the `data`
-/// document: `package batten.git`'s rules appear as `{"git": {"deny": …}}` under
-/// `data.batten`. Only objects are descended into — a rule's own value is a set,
-/// an array or a scalar, and treating one of those as a namespace would let a
-/// module's DATA masquerade as a predicate.
+/// `package batten.git`'s rules appear as `{"git": {"deny": …}}` under
+/// `data.batten`, so a package is an address into the result, and `packages` is
+/// the set of addresses the bundle's modules declared — [`compile`] records each
+/// one from `add_policy`'s own answer. The member is read AT that address and
+/// nowhere below it.
+///
+/// **THIS USED TO BE A WALK OF EVERY OBJECT, AND THAT WAS THE DEFECT.** The walk
+/// descended into any object-valued member on the premise that a helper rule
+/// whose value is an object "finds nothing". A rule bound to a parsed document
+/// is exactly such a helper, and a document is free to carry a `deny`,
+/// `violation`, `rules` or `preapprove` key of its own. Measured:
+/// `harness-grant.rego` bound `.claude/settings.json` as a rule, and that file's
+/// six-entry `permissions.deny` came back as six unattributed findings on a tree
+/// the module judged clean. On the `preapprove` channel the same shape would have
+/// been a GRANT authored by a data file. The `data` document does not say which
+/// members are packages; the modules do, so the answer comes from them.
 fn package_members<'a>(
     results: &'a regorus::QueryResults,
+    packages: &BTreeSet<Vec<String>>,
     rule_name: &str,
 ) -> Vec<&'a regorus::Value> {
+    let rule = regorus::Value::from(rule_name);
     let mut found = Vec::new();
     for result in &results.result {
         for expression in &result.expressions {
-            descend(&expression.value, rule_name, &mut found);
+            for package in packages {
+                if let Some(member) = at_package(&expression.value, package)
+                    .and_then(|value| value.as_object().ok())
+                    .and_then(|object| object.get(&rule))
+                {
+                    found.push(member);
+                }
+            }
         }
     }
     found
 }
 
-/// The recursive half of [`package_members`].
-fn descend<'a>(value: &'a regorus::Value, rule_name: &str, found: &mut Vec<&'a regorus::Value>) {
-    let Ok(object) = value.as_object() else {
-        return;
-    };
-    for (key, child) in object {
-        let Ok(name) = key.as_string() else {
-            continue;
-        };
-        if name.as_ref() == rule_name {
-            found.push(child);
-        } else {
-            // A sub-package, or a helper rule whose value happens to be an
-            // object. Descending into the latter costs a walk and finds nothing,
-            // which is cheaper than the alternative — asking regorus which
-            // members are packages, a distinction the `data` document does not
-            // carry.
-            descend(child, rule_name, found);
-        }
+/// The object a package occupies in a `data.batten` result, if the result has it.
+///
+/// Absent is ordinary rather than a fault: a package whose rules all came back
+/// undefined contributes no key at all, which is the empty contribution.
+fn at_package<'a>(root: &'a regorus::Value, package: &[String]) -> Option<&'a regorus::Value> {
+    package.iter().try_fold(root, |value, segment| {
+        value
+            .as_object()
+            .ok()?
+            .get(&regorus::Value::from(segment.as_str()))
+    })
+}
+
+/// A package path as `add_policy` reports it, relative to [`PACKAGE_QUERY`].
+///
+/// `data.batten` is the root (`[]`) and `data.batten.git.ci` is `["git", "ci"]`.
+/// A package outside `data.batten` is `None`: the query never reaches it, so it
+/// can contribute nothing to this gate, which is what an unreachable address
+/// should mean.
+fn relative_package(package: &str) -> Option<Vec<String>> {
+    let rest = package.strip_prefix(PACKAGE_QUERY)?;
+    if rest.is_empty() {
+        return Some(Vec::new());
     }
+    let rest = rest.strip_prefix('.')?;
+    Some(rest.split('.').map(ToOwned::to_owned).collect())
 }
 
 /// Evaluate a bundle over an input document and return its denials.
@@ -1533,7 +1591,7 @@ pub fn deny(bundle: &Bundle, input: &str) -> Look<Vec<Violation>> {
     };
 
     let mut violations = Vec::new();
-    match collect_deny_messages(&answered) {
+    match collect_deny_messages(&answered, &bundle.packages) {
         Some(tokens) => violations.extend(tokens.into_iter().map(|verdict| Violation {
             rule: None,
             verdict,
@@ -1541,7 +1599,7 @@ pub fn deny(bundle: &Bundle, input: &str) -> Look<Vec<Violation>> {
         })),
         None => return Look::CouldNotLook,
     }
-    match collect_violations(&answered) {
+    match collect_violations(&answered, &bundle.packages) {
         Some(entries) => {
             for entry in entries {
                 if let Some(named) = entry.rule.as_deref()
@@ -1572,7 +1630,7 @@ pub fn preapprove(bundle: &Bundle, input: &str) -> Look<Vec<String>> {
     let Ok(answered) = engine.eval_query(PACKAGE_QUERY.to_owned(), false) else {
         return Look::CouldNotLook;
     };
-    let Some(ids) = collect_string_list(&answered, PREAPPROVE_RULE) else {
+    let Some(ids) = collect_string_list(&answered, &bundle.packages, PREAPPROVE_RULE) else {
         return Look::CouldNotLook;
     };
     if ids.iter().any(|id| !bundle.declared.contains(id.as_str())) {
