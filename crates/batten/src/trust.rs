@@ -1476,6 +1476,18 @@ pub const CENSUS: &[FieldCoverage] = &[
         coverage: Coverage::Compared(&[WeakeningKind::WiringDisarmRemoved]),
     },
     FieldCoverage {
+        field: "census",
+        coverage: Coverage::NotPolicyBearing(
+            "the shell census's declarations (CLOUD-843): where `batten census shell` looks \
+             and which files it sets apart. It MEASURES and decides nothing — no gate reads \
+             the table, and the refusal the count reports on is the shell ban's, whose own \
+             rows are compared. An override cannot speak to it either: `resolve` reads it \
+             from the committed authority alone, and `census_shell.rs` pins its `exempt` \
+             list to the ban's `stays_bash`, so a widened exemption fails there rather than \
+             passing as a smaller count",
+        ),
+    },
+    FieldCoverage {
         field: "provisions",
         coverage: Coverage::Compared(&[WeakeningKind::ProvisionRemoved]),
     },

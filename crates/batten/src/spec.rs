@@ -814,6 +814,10 @@ mod tests {
             // it prices.
             "bench".to_owned(),
             "bench tokens".to_owned(),
+            // The board discipline's verb (CLOUD-843). The noun is unclassified
+            // because the tracker-hygiene packages may hang recording arms under it.
+            "board".to_owned(),
+            "board check".to_owned(),
             // The handle-navigation noun (CLOUD-121). `capture show`, not a
             // bare `show`: §2 is noun-verb and lists no bare `show`, and the
             // noun is what gives lifecycle (`prune`) somewhere to live.
@@ -822,6 +826,9 @@ mod tests {
             "capture list".to_owned(),
             "capture prune".to_owned(),
             "capture show".to_owned(),
+            // The shell census (CLOUD-843): the bash retirement's measurement.
+            "census".to_owned(),
+            "census shell".to_owned(),
             "check".to_owned(),
             // The green-verdict noun and its verb (CLOUD-1143), ported off
             // `mise-tasks/checks-green.sh` on the terms `claim` below
@@ -870,6 +877,8 @@ mod tests {
             "defects query".to_owned(),
             "design".to_owned(),
             "design audit".to_owned(),
+            // The release-artifact packager (CLOUD-843), retiring `dist.sh`.
+            "dist".to_owned(),
             "doctor".to_owned(),
             "doctor egress".to_owned(),
             "doctor gate".to_owned(),
@@ -993,6 +1002,10 @@ mod tests {
             // for any consumer reading an entry as a prefix (CLOUD-121).
             "mcp".to_owned(),
             "mcp call".to_owned(),
+            // The two MCP readers (CLOUD-843): the allowlist resolver and the
+            // session posture check. Both on the read-only allowlist above.
+            "mcp grant".to_owned(),
+            "mcp posture".to_owned(),
             // CLOUD-1753's port of the MCP launcher shim. A LEAF under the noun
             // rather than a noun of its own, and that placement is the port's one
             // improvement: the retired shell read the server out of its own file
@@ -1115,12 +1128,21 @@ mod tests {
             // CLOUD-1190 inverts those when the imperative grammar lands, and
             // a third row spelled the old way would be a third row to invert.
             "record".to_owned(),
+            // The reclaim census (CLOUD-843, retiring `reclaim-census`). Three
+            // leaves record; `tally` folds and is on the read-only allowlist.
+            "record census".to_owned(),
+            "record census note".to_owned(),
+            "record census record-boot".to_owned(),
+            "record census report".to_owned(),
+            "record census tally".to_owned(),
             "record closes".to_owned(),
             // CLOUD-1717's READING door, and the write band is where it belongs:
             // it applies a reading the engine owns and WRITES the result, so it
             // is absent from the read-only allowlist above for `record named`'s
             // reason. The spawn its input comes from stays in the task.
             "record derive".to_owned(),
+            // The land-divergence producer (CLOUD-843), a forge-window write.
+            "record divergence".to_owned(),
             // The two READ leaves of this noun (CLOUD-1713). They fold and
             // print what the write leaves already stored, which is why they —
             // alone under `record` — are also on the read-only allowlist above.
@@ -1157,6 +1179,8 @@ mod tests {
             // interim programs it compares.
             "release".to_owned(),
             "release install".to_owned(),
+            // The SBOM producer (CLOUD-843): a write verb, off the allowlist.
+            "sbom".to_owned(),
             // The API-compatibility noun (CLOUD-1050), ported off
             // `mise-tasks/semver.sh` when CLOUD-1059 made editing a shell
             // rule refusable. §2 gains the noun in the same change, which is
@@ -1194,6 +1218,12 @@ mod tests {
             "state migrate".to_owned(),
             "state record".to_owned(),
             "state settle".to_owned(),
+            // The step cache (CLOUD-843, retiring `step-receipt`). All four rows
+            // are unclassified: `run` executes the command it is handed.
+            "step".to_owned(),
+            "step check".to_owned(),
+            "step record".to_owned(),
+            "step run".to_owned(),
             // The build-tree noun (CLOUD-1030), ported off
             // `mise-tasks/target-prune.sh` for `semver`'s reason above. Both
             // rows are `Effect::Destructive` and so are deliberately absent
