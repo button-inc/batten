@@ -42,25 +42,27 @@ import rego.v1
 
 rules contains "grant carry missing"
 
-# The committed settings document, bound only when the engine parsed it.
-#
-# ABSENT IS NOT CLEAN AND NOT A REFUSAL. A tree whose `.claude/settings.json`
-# will not parse leaves this undefined and every rule below silent; the
-# could-not-look finding is `input.tree.missing`'s, which the engine owns.
-settings := document if {
-	document := input.tree.documents[".claude/settings.json"]
-	is_object(document)
-}
-
 # The inert block: any `autoMode` key at all, whatever it holds. An empty one is
 # refused too, because it reads to the next author as the place a grant goes.
+#
+# THE DOCUMENT IS READ INLINE AND NEVER BOUND AS A RULE, and that is load-bearing.
+# The engine collects `deny`, `violation` and `rules` members at ANY depth under
+# `data.batten` (`policy.rs`, `collect_strings`), so a rule whose value is the
+# settings document hands the engine its `permissions.deny` array as bare deny
+# tokens. Measured: six findings, one per denied tool, on a file with no
+# `autoMode` at all.
+#
+# ABSENT IS NOT CLEAN AND NOT A REFUSAL. A tree whose `.claude/settings.json`
+# will not parse leaves the body undefined; the could-not-look finding is
+# `input.tree.missing`'s, which the engine owns.
 violation contains {
 	"rule": "grant carry missing",
 	"verdict": "grant carry missing",
 	"subjects": [{"path": ".claude/settings.json"}],
 } if {
-	settings
-	"autoMode" in object.keys(settings)
+	document := input.tree.documents[".claude/settings.json"]
+	is_object(document)
+	"autoMode" in object.keys(document)
 }
 
 # --- the load-time tier ------------------------------------------------------
@@ -94,4 +96,4 @@ test_no_settings_file_answers_nothing if {
 }
 
 #MUTANT-SUITE crates/batten/tests/it/harness_grant.rs
-#MUTANT grant-unread|s@^\t"autoMode" in object.keys\(settings\)$@\tfalse@|a_committed_grant_is_refused
+#MUTANT grant-unread|s@^\t"autoMode" in object.keys\(document\)$@\tfalse@|a_committed_grant_is_refused

@@ -15,13 +15,20 @@
 //! engine parsed the dotfile. So `a_committed_grant_is_refused` firing IS the
 //! evidence that the document was read.
 //!
-//! Three observations, each here because dropping it lets another pass over a
+//! Five observations, each here because dropping it lets another pass over a
 //! predicate that decides nothing:
 //!
 //! * `a_committed_grant_is_refused` — the class the row exists for, and the
 //!   reachability proof above.
-//! * `settings_without_the_block_are_clean` — the anti-vacuity mirror. Without
-//!   it, a predicate refusing every settings file passes the case above.
+//! * `an_empty_committed_block_is_refused` — the key is the predicate, not its
+//!   contents.
+//! * `a_block_beside_permissions_is_refused` — the shape this repository
+//!   shipped, where a readable table sat beside the unreadable one.
+//! * `settings_without_the_block_are_clean` — the anti-vacuity mirror, and the
+//!   engine-walk case: its fixture carries a `permissions.deny` list, which a
+//!   module binding the document as a rule leaks as bare deny tokens because
+//!   the engine collects `deny` at any depth. A `with input as` case cannot see
+//!   that; only this tier can.
 //! * `an_absent_settings_file_answers_nothing` — could-not-look is not a
 //!   refusal.
 //!
@@ -113,12 +120,49 @@ fn a_committed_grant_is_refused() {
 }
 
 #[test]
+fn an_empty_committed_block_is_refused() {
+    // AN EMPTY BLOCK IS STILL THE WRONG PLACE. It grants nothing either way, and
+    // it reads to the next author as the slot a grant goes in — which is how the
+    // measured block grew.
+    let repo = fixture("empty", Some(r#"{"autoMode": {}}"#));
+    let outcome = check(&repo);
+    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
+    assert_eq!(
+        outcome.status.code(),
+        Some(2),
+        "an empty committed autoMode block must refuse\n{answer}{cause}"
+    );
+    assert!(answer.contains("grant carry missing"), "{answer}{cause}");
+}
+
+#[test]
+fn a_block_beside_permissions_is_refused() {
+    // THE SHAPE THIS REPOSITORY ACTUALLY SHIPPED: a real `permissions` table the
+    // host does read, with the inert block beside it.
+    let repo = fixture(
+        "beside",
+        Some(
+            r#"{"permissions": {"allow": ["Bash(batten:*)"]}, "autoMode": {"allow": ["$defaults"]}}"#,
+        ),
+    );
+    let outcome = check(&repo);
+    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
+    assert_eq!(
+        outcome.status.code(),
+        Some(2),
+        "a committed block beside permissions must refuse\n{answer}{cause}"
+    );
+    assert!(answer.contains("grant carry missing"), "{answer}{cause}");
+}
+
+#[test]
 fn settings_without_the_block_are_clean() {
-    // THE ANTI-VACUITY MIRROR. A predicate that refused any settings file at all
-    // satisfies the case above and fails here.
+    // THE ANTI-VACUITY MIRROR, and the engine-walk case. A predicate that refused
+    // any settings file fails here; so does a module that binds the document as
+    // a rule, because the engine reads `permissions.deny` as deny tokens.
     let repo = fixture(
         "clean",
-        Some(r#"{"permissions": {"allow": ["Bash(batten:*)"]}}"#),
+        Some(r#"{"permissions": {"allow": ["Bash(batten:*)"], "deny": ["mcp__x__y"]}}"#),
     );
     let outcome = check(&repo);
     let (answer, cause) = (stdout(&outcome), stderr(&outcome));
