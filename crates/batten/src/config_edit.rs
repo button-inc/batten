@@ -39,8 +39,8 @@
 //! It belongs to a `fix` running under `enforce`, never to `check`, which is
 //! declared `read`.
 //!
-//! This module reaches nothing else in the crate. It is plumbing that a `fix`
-//! calls, so it is placed below every decider.
+//! It reaches one thing in the crate, `durable`, for the write. It is plumbing
+//! that a `fix` calls, so it is placed below every decider.
 
 use std::fs;
 use std::path::Path;
@@ -125,7 +125,10 @@ pub fn apply_file(format: Format, path: &Path, edits: &[Edit]) -> Result<bool> {
     if edited == source {
         return Ok(false);
     }
-    fs::write(path, edited).with_context(|| format!("writing `{}`", path.display()))?;
+    // Through `durable::replace` (temp, fsync, rename): a repair that a crash
+    // leaves half-written has destroyed the file it was meant to fix.
+    crate::durable::replace(path, edited)
+        .with_context(|| format!("writing `{}`", path.display()))?;
     Ok(true)
 }
 

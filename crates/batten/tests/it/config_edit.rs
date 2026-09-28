@@ -179,11 +179,11 @@ fn a_remove_drops_only_that_key() {
         path: path(&["dependencies", "zeta"]),
     };
     let edited = config_edit::apply(Format::Toml, FIXTURE, &[edit]).unwrap();
-    let expected: String = FIXTURE
-        .lines()
-        .filter(|line| !line.starts_with("zeta"))
-        .map(|line| format!("{line}\n"))
-        .collect();
+    let mut expected = String::new();
+    for line in FIXTURE.lines().filter(|line| !line.starts_with("zeta")) {
+        expected.push_str(line);
+        expected.push('\n');
+    }
     assert_eq!(edited, expected);
 }
 
