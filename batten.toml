@@ -10500,6 +10500,14 @@ measured = "2026-09-07"
 # trunk's new `could_not_look_laundered.rs`, and reads **298**. The floors stay
 # where the trunk re-measured them (warm 12144 MB, dated 2026-09-24), because a
 # basis refresh is a trend counter and not a byte budget.
+#
+# THE 2026-09-28 MOVE, 337 -> 348, BOTH BASES, AND NEITHER FLOOR MOVES. The gate's
+# own reading, not a scan's: the trunk stood at ten past the basis, and this
+# branch's `record_verdicts.rs` (CLOUD-1965) made it eleven, one outside the
+# tolerance. `target-prune` reported `declared 337, live 348`. The floors stay
+# on the precedents above verbatim: a basis refresh is a trend counter, not a
+# byte budget, and this lap closed at 16770MB free against a 15384MB warm floor.
+# NO FLOOR MEASUREMENT IS CLAIMED BY THIS ENTRY.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
 count = 348
