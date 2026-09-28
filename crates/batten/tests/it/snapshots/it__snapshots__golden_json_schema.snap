@@ -2825,6 +2825,32 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "record query",
+          "id": "record.query",
+          "about": "Run a declared `[[forge.query]]` read and record its reduction as the family it names",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "id",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The `[[forge.query]]` id, which is also the record family written"
+            },
+            {
+              "name": "input",
+              "short": null,
+              "long": "input",
+              "takes_value": true,
+              "positional": false,
+              "help": "A `<name>=<value>` binding for one of the query's own placeholders (repeatable)"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "record show",
           "id": "record.show",
           "about": "Read one keyed record back: `hit` and the value, or `miss`",

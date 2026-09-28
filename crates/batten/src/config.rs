@@ -2060,6 +2060,14 @@ fn validate_sections(config: &Config) -> Result<()> {
         Native::RecordTableRefused,
         crate::record::validate(&config.records, &config.recorders),
     )?;
+    // `[[forge.query]]` rows (CLOUD-843), AFTER the record table because each
+    // row writes a family a `[[record]]` row must declare, and that refusal is
+    // only honest once the declarations are known to be well formed. A plain
+    // `?` rather than `under(..)`: `[forge]` is a singleton table, which the
+    // `Vec<T>` census does not reach, exactly as `[ci]` and `[perf]` below.
+    if let Some(forge) = &config.forge {
+        crate::forge_query::validate(&forge.query, &config.records)?;
+    }
     // `[budget]` is a table rather than a list, so the census below (which scans
     // `Vec<T>` fields) does not reach it — but the failure it guards against is
     // the same one: a table that parses and gates nothing. A `[budget]` header

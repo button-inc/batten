@@ -35,7 +35,9 @@
 //! # Truncation is a verdict, never a short list
 //!
 //! The reason [`window`] returns [`Window::Truncated`] rather than the rows it
-//! managed to read is measured rather than theoretical. Three programs
+//! managed to read is measured rather than theoretical — and since CLOUD-843 the
+//! variant carries those rows too, so the prefix is available to a caller that
+//! names the arm saying it is one, and to no caller that does not. Three programs
 //! discovered the trap independently and guarded it three ways —
 //! `merged-pr-keys` against its `--limit`, `land-divergence` against
 //! `total_count`, and `timeout-drift` **not at all**, silently trusting one
@@ -256,7 +258,17 @@ pub enum Window {
     /// is how many rows were collected; `total` is the forge's own count where
     /// the endpoint states one, and `None` where it does not — in which case the
     /// evidence is that the last page came back full at the page budget.
+    ///
+    /// **And carries the PREFIX itself** (CLOUD-843). The variant used to hold
+    /// only the count, so a producer whose job is to RECORD a window — and let a
+    /// module decide what a partial one means — had nothing to record but the
+    /// fact of truncation. The verdict is still the variant: a caller that
+    /// matches `Whole` alone cannot mistake these rows for the collection, and
+    /// one that wants them has to name the arm that says they are a prefix.
     Truncated {
+        /// The rows collected before the window ran out — a PREFIX, never the
+        /// collection. `rows.len() == read`.
+        rows: Vec<serde_json::Value>,
         /// Rows collected before the window ran out.
         read: usize,
         /// The collection's own size, where the endpoint reports it.
@@ -299,6 +311,24 @@ pub enum Window {
 /// `total_count` arithmetic, the same validator store on disk. Only the socket
 /// is stubbed, which is the only part a fixture was ever stubbing.
 pub type Transport<'a> = &'a dyn Fn(&str, Option<&str>) -> Option<crate::rest::Answer>;
+
+/// Where an ORDERED collection's window ends, as a predicate over one row.
+///
+/// **The caller's claim about the collection's order, and only the caller can
+/// make it** (CLOUD-843). A collection the forge returns newest-first has no row
+/// inside a "since" window after the first row outside it, so every page past
+/// that one is a request spent reading rows the caller will discard — and, on an
+/// endpoint whose `total_count` counts the WHOLE collection, a walk that ignored
+/// the order would report a window it had fully covered as truncated.
+///
+/// So a row satisfying this ends the walk and the window counts as having
+/// reached its end. It does NOT filter: the page it arrived on is returned
+/// whole, rows past the stop included, because which of them the caller keeps is
+/// the caller's reduction and a second filter here would be a second authority
+/// over it. A predicate the collection's real order does not honour ends the
+/// walk early and reports a prefix as whole — which is why this is an argument
+/// the caller must pass rather than an inference [`window`] makes.
+pub type Stop<'a> = &'a dyn Fn(&serde_json::Value) -> bool;
 
 /// The validator store's path for one URL.
 ///
@@ -390,8 +420,8 @@ pub fn window(
 
 /// [`window`], over a caller-supplied [`Transport`].
 ///
-/// The whole of the walk lives here; [`window`] is this with the live transport
-/// bound. See [`Transport`] for why the seam is an argument.
+/// [`window`] is this with the live transport bound. See [`Transport`] for why
+/// the seam is an argument.
 #[must_use]
 pub fn window_over(
     git_dir: &Path,
@@ -399,6 +429,38 @@ pub fn window_over(
     params: &[(&str, &str)],
     shape: Shape,
     max_pages: u32,
+    fetch: Transport<'_>,
+) -> Window {
+    window_until(git_dir, path, params, shape, max_pages, None, fetch)
+}
+
+/// [`window_over`], ending early where the caller says its ordered collection
+/// has left the window.
+///
+/// The whole of the walk lives here, and the two functions above are this with
+/// no [`Stop`]. `None` is exactly the walk it always was: a caller with no
+/// claim about the collection's order passes none, and nothing about the three
+/// answers changes for it.
+///
+/// A walk that STOPPED reached its window's end, so it is [`Window::Whole`]
+/// whatever `total_count` says — that count is about the collection, which the
+/// caller has just said extends past the window on purpose.
+// THE WALK'S OWN DISCRIMINATION (CLOUD-843). The first two restore the walk this
+// replaced — a stop that ends nothing, and a stop that ends the walk but is then
+// judged by `total_count` and reported truncated. The third drops the prefix the
+// truncated arm now carries, which a count-only assertion cannot see.
+//MUTANT-SUITE crates/batten/tests/it/forge_window.rs
+//MUTANT stop-never-ends-the-walk|s@^        stopped = stop.is_some_and(|stop| batch.iter().any(stop));$@        stopped = false;@|a_row_past_the_window_ends_the_walk_and_the_window_is_whole
+//MUTANT stopped-walk-judged-by-count|s@^    let reached_the_end = stopped$@    let reached_the_end = false@|a_row_past_the_window_ends_the_walk_and_the_window_is_whole
+//MUTANT truncation-drops-the-prefix|s@^            rows,$@            rows: Vec::new(),@|a_collection_larger_than_the_window_is_truncated
+#[must_use]
+pub fn window_until(
+    git_dir: &Path,
+    path: &str,
+    params: &[(&str, &str)],
+    shape: Shape,
+    max_pages: u32,
+    stop: Option<Stop<'_>>,
     fetch: Transport<'_>,
 ) -> Window {
     // `git_dir` EXPLICITLY, as every other function in this module takes it.
@@ -427,6 +489,7 @@ pub fn window_over(
     let mut total: Option<usize> = None;
     let mut pages = 0_u32;
     let mut ended = false;
+    let mut stopped = false;
 
     while pages < max_pages {
         let page = pages + 1;
@@ -481,25 +544,31 @@ pub fn window_over(
             Some(size) => batch.len() < size,
             None => batch.is_empty(),
         };
+        // THE CALLER'S ORDER CLAIM, read over the page before it joins the rest:
+        // one row past the window on this page means no later page holds a row
+        // inside it.
+        stopped = stop.is_some_and(|stop| batch.iter().any(stop));
         rows.extend(batch);
         // `total_count` ends it too, and is checked FIRST where the endpoint
         // states one: it is the forge's own answer about the collection, where
         // a short page is an inference from the window.
-        if total.is_some_and(|count| rows.len() >= count) || short {
+        if stopped || total.is_some_and(|count| rows.len() >= count) || short {
             ended = true;
             break;
         }
     }
 
-    let reached_the_end = match total {
-        Some(count) => rows.len() >= count,
-        None => ended,
-    };
+    let reached_the_end = stopped
+        || match total {
+            Some(count) => rows.len() >= count,
+            None => ended,
+        };
     if reached_the_end {
         Window::Whole(rows)
     } else {
         Window::Truncated {
             read: rows.len(),
+            rows,
             total,
             pages,
         }

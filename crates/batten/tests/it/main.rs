@@ -178,6 +178,7 @@ mod fixture_forks;
 mod fixture_repos;
 mod forced_push;
 mod forge_facts;
+mod forge_query;
 mod forge_window;
 mod frontmatter_gates;
 mod fuzz_corpus;

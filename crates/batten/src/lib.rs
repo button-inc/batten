@@ -58,6 +58,9 @@ pub mod fast_forward;
 pub mod fetch;
 pub mod findings;
 pub mod forge;
+/// Declared `[[forge.query]]` reads, walked and reduced into a record family a
+/// module decides over (CLOUD-843).
+pub mod forge_query;
 pub mod git;
 pub mod gitwrite;
 pub mod graph;
@@ -9611,7 +9614,11 @@ fn landed_for_real(root: &Path, url: &str, branch: &str, out: &mut dyn Write) ->
 ///
 /// `None` is could-not-look and callers must say so rather than reporting a
 /// verdict about the branch.
-fn repo_slug(root: &Path) -> Option<String> {
+///
+/// `pub(crate)` since CLOUD-843: `forge_query` binds a `[[forge.query]]` row's
+/// `{owner}`/`{repo}` from it, and a second derivation of the slug would be a
+/// second answer to which repository a forge read is about.
+pub(crate) fn repo_slug(root: &Path) -> Option<String> {
     if let Ok(declared) = std::env::var("GH_REPO")
         && !declared.trim().is_empty()
     {

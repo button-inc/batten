@@ -670,6 +670,17 @@ declared_modules := {
 	# functions over `std::fs` and a path. Every module that mutates a file calls
 	# it, so it must sit below all of them, which a leaf does by construction.
 	"durable",
+	# `forge_query` arrived with CLOUD-843's forge-read foundation. It is a
+	# PRODUCER in `record`'s class, and it sits directly above the three modules
+	# it composes: it walks `forge`'s window over `rest`'s transport and writes
+	# through `record`'s named-family store, reaching `landed` for the instant
+	# parser and `receipt` for the formatter rather than growing a third clock.
+	#
+	# IT DECIDES NOTHING, which is what keeps it out of the layer above: whether a
+	# recorded window is healthy is the module that reads the family. And it
+	# reaches the network, so its `hook`, `repair` and `check` edges are forbidden
+	# below for `rest`'s reason — one hop over `rest` is still the network.
+	"forge_query",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
@@ -729,9 +740,12 @@ forbidden[from] contains to if {
 		# credential and makes the call — so `hook -> rest` reached the network
 		# by exactly the route the `fetch` entry refuses, one name later. Found
 		# in review.
+		# `forge_query` joins for `rest`'s reason one hop further out (CLOUD-843):
+		# it reaches `rest`, so a mediated call able to reach it reaches the
+		# network by the route the `rest` entry refuses, one name later.
 		"hook": {
 			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
-			"pr_watch", "fast_forward", "main_watch",
+			"pr_watch", "fast_forward", "main_watch", "forge_query",
 		},
 		# `repair` RUNS A CONSUMER'S DECLARED COMMAND ON THE MEDIATED PATH
 		# (CLOUD-1639), so it inherits `hook`'s set entire and for the same
@@ -754,7 +768,7 @@ forbidden[from] contains to if {
 		# `crate::repair`'s header carry the other half.
 		"repair": {
 			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
-			"pr_watch", "fast_forward", "main_watch",
+			"pr_watch", "fast_forward", "main_watch", "forge_query",
 		},
 		# `check` NAMES NO MODULE TODAY, so this row is INERT — and that is worth
 		# stating rather than leaving a reader to infer enforcement from a table
@@ -770,7 +784,7 @@ forbidden[from] contains to if {
 		# not fire, which is how a row with no possible subject announces itself.
 		"check": {
 			"lease", "gitwrite", "land",
-			"pr_watch", "fast_forward", "main_watch",
+			"pr_watch", "fast_forward", "main_watch", "forge_query",
 		},
 		# And the other direction, which is `symbols`' and `pinned`'s row again: the
 		# dispatcher sits below the engine and must not reach the module that
@@ -866,6 +880,10 @@ forbidden[from] contains to if {
 		# `asked -> {lint, rules, hook}`: the ledger must not reach the deciders
 		# that read it. See its placement above.
 		"asked": {"lint", "rules", "hook"},
+		# `forge_query -> {rules, hook}`, `symbols`' pair for `record`'s reason: a
+		# producer that reached the engine deciding over its record would be a
+		# measurement that knew which verdict it was feeding (CLOUD-843).
+		"forge_query": {"rules", "hook"},
 	}
 	some to in targets
 }
@@ -1081,6 +1099,36 @@ test_the_mediated_path_must_not_reach_the_tier_over_the_transport if {
 	count(violation) == 1 with input as judging(
 		"crates/batten/src/hook.rs",
 		[internal("rest", 31)],
+	)
+}
+
+# CLOUD-843's producer, both directions. The mediated call must not reach it —
+# it is `rest` one hop further out — and it must not reach the engine that
+# decides over what it records.
+test_the_mediated_path_must_not_reach_the_forge_query_producer if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("forge_query", 31)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/forge_query.rs",
+		[internal("rules", 12)],
+	)
+}
+
+# AND THE ARRANGEMENT: the producer composes the window, the transport and the
+# record store, and the verb dispatch reaches it. A table that banned the module
+# outright would satisfy the case above.
+test_the_forge_query_producer_reaches_what_it_composes if {
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/forge_query.rs",
+		[internal("forge", 10), internal("rest", 11), internal("record", 12), internal("landed", 13)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/record.rs",
+		[internal("forge_query", 20)],
 	)
 }
 

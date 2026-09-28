@@ -106,10 +106,19 @@ fn a_collection_larger_than_the_window_is_truncated() {
         1,
     );
     match answer {
-        Window::Truncated { read, total, pages } => {
+        Window::Truncated {
+            rows,
+            read,
+            total,
+            pages,
+        } => {
             assert_eq!(read, 2, "the truncation names how much it read");
             assert_eq!(total, Some(4), "and what the collection actually holds");
             assert_eq!(pages, 1, "and the budget it spent");
+            // THE PREFIX TRAVELS WITH THE VERDICT (CLOUD-843): a producer that
+            // records a window needs the rows it read, labelled as a prefix.
+            assert_eq!(rows.len(), read, "the prefix is exactly what was read");
+            assert_eq!(rows[0]["id"], 1, "in the order the forge served it");
         }
         other => panic!("a window short of `total_count` must be Truncated, got {other:?}"),
     }
@@ -274,11 +283,111 @@ fn a_full_last_page_with_no_total_is_truncated_rather_than_whole() {
     }]);
     let answer = windowed(&git, &canned, "repos/o/r/pulls", Shape::Bare, 1);
     match answer {
-        Window::Truncated { read, total, pages } => {
+        Window::Truncated {
+            rows,
+            read,
+            total,
+            pages,
+        } => {
             assert_eq!(read, 2);
+            assert_eq!(rows.len(), 2);
             assert_eq!(total, None, "the endpoint states no count");
             assert_eq!(pages, 1);
         }
         other => panic!("a full page at the budget with no count is Truncated, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// The stop predicate: an ORDERED collection's window ends early (CLOUD-843).
+// ---------------------------------------------------------------------------
+
+/// Run one walk with a stop predicate over canned pages.
+fn stopping(
+    store: &Path,
+    canned: &Canned,
+    max_pages: u32,
+    stop: Option<batten::forge::Stop<'_>>,
+) -> Window {
+    batten::forge::window_until(
+        store,
+        "repos/o/r/actions/runs",
+        &[("per_page", "2")],
+        Shape::Wrapped("workflow_runs"),
+        max_pages,
+        stop,
+        &|path, etag| canned.answer(path, etag),
+    )
+}
+
+/// Two full pages of a forty-row collection, newest first by `id`.
+fn forty() -> Canned {
+    Canned::new(&[
+        Page {
+            status: 200,
+            etag: None,
+            body: r#"{"total_count": 40, "workflow_runs": [{"id": 40}, {"id": 39}]}"#,
+        },
+        Page {
+            status: 200,
+            etag: None,
+            body: r#"{"total_count": 40, "workflow_runs": [{"id": 38}, {"id": 37}]}"#,
+        },
+    ])
+}
+
+#[test]
+fn a_row_past_the_window_ends_the_walk_and_the_window_is_whole() {
+    // THE DISCRIMINATING CASE for the stop. `total_count` says forty and the
+    // budget is five pages; the caller says rows under 40 are outside its window
+    // and the collection is newest-first. So one page answers the question, and
+    // the window is WHOLE — reading on would spend requests on rows the caller
+    // discards, and judging by `total_count` would call a covered window
+    // truncated.
+    let store = scratch("stop-whole");
+    let canned = forty();
+    let stop = |row: &serde_json::Value| row["id"].as_u64().is_some_and(|id| id < 40);
+    let answer = stopping(&store, &canned, 5, Some(&stop));
+    match answer {
+        Window::Whole(rows) => {
+            assert_eq!(rows.len(), 2, "the stopping page is returned whole");
+        }
+        other => panic!("a walk that stopped reached its window's end, got {other:?}"),
+    }
+    assert_eq!(
+        canned.calls.borrow().len(),
+        1,
+        "no page past the stop is asked for"
+    );
+}
+
+#[test]
+fn with_no_stop_the_same_collection_is_walked_to_the_budget() {
+    // THE ANTI-VACUITY MIRROR: without it, a walk that always stopped after one
+    // page would pass the case above. No predicate is exactly the old walk.
+    let store = scratch("stop-none");
+    let canned = forty();
+    let answer = stopping(&store, &canned, 2, None);
+    match answer {
+        Window::Truncated { read, pages, .. } => {
+            assert_eq!(read, 4);
+            assert_eq!(pages, 2);
+        }
+        other => panic!("forty rows through a two-page budget is truncated, got {other:?}"),
+    }
+    assert_eq!(canned.calls.borrow().len(), 2);
+}
+
+#[test]
+fn a_stop_no_row_satisfies_changes_nothing() {
+    // A predicate that never holds must leave the verdict exactly where the
+    // count puts it: the stop ends a walk, it never widens one into `Whole`.
+    let store = scratch("stop-never");
+    let canned = forty();
+    let never = |_: &serde_json::Value| false;
+    let answer = stopping(&store, &canned, 2, Some(&never));
+    assert!(
+        matches!(answer, Window::Truncated { read: 4, .. }),
+        "{answer:?}"
+    );
 }

@@ -267,6 +267,9 @@ pub fn run(
         crate::cli::RecordCommand::Journal { family } => run_journal(&family),
         crate::cli::RecordCommand::Show { family, key } => run_keyed_show(&family, &key, out),
         crate::cli::RecordCommand::Fold { family } => run_journal_show(&family, out),
+        crate::cli::RecordCommand::Query { id, inputs } => {
+            crate::forge_query::run(&id, &inputs, overrides, err)
+        }
     }
 }
 
@@ -584,7 +587,7 @@ const JOURNAL_STORE: &str = "batten-journals";
 /// record outside the store the reader looks in — which is not a security
 /// boundary here so much as a silent miss: the write succeeds, the read finds
 /// nothing, and the gate reads clean.
-fn safe_component(what: &str, value: &str) -> Result<String> {
+pub(crate) fn safe_component(what: &str, value: &str) -> Result<String> {
     let clean = value.trim();
     if clean.is_empty()
         || clean == "."
@@ -600,7 +603,12 @@ fn safe_component(what: &str, value: &str) -> Result<String> {
     Ok(clean.to_owned())
 }
 
-/// The non-document inputs a family was handed, as a key/value map.
+/// The `--input <key>=<value>` tokens a `record` leaf was handed, as a map.
+///
+/// Shared by `record derive` and `record query` (CLOUD-843) rather than parsed
+/// twice: both take the same flag spelling, and two parsers of one token shape
+/// are two answers to whether `a=b=c` binds `a` — `verb` only names the leaf in
+/// the refusal.
 ///
 /// # Errors
 ///
@@ -608,22 +616,22 @@ fn safe_component(what: &str, value: &str) -> Result<String> {
 /// key given twice — a repeated key is a caller who believes both values are in
 /// effect, and silently keeping one would run the reading on an input nobody
 /// asked for.
-fn derive_inputs(inputs: &[String]) -> Result<BTreeMap<String, String>> {
+pub(crate) fn inputs_of(verb: &str, inputs: &[String]) -> Result<BTreeMap<String, String>> {
     let mut parsed = BTreeMap::new();
     for token in inputs {
         let Some((key, value)) = token.split_once('=') else {
             return Err(UsageError::raise(format!(
-                "record derive: `--input {token}` is not `<key>=<value>`"
+                "{verb}: `--input {token}` is not `<key>=<value>`"
             )));
         };
         if key.is_empty() {
-            return Err(UsageError::raise(
-                "record derive: an input with no key names nothing".to_owned(),
-            ));
+            return Err(UsageError::raise(format!(
+                "{verb}: an input with no key names nothing"
+            )));
         }
         if parsed.insert(key.to_owned(), value.to_owned()).is_some() {
             return Err(UsageError::raise(format!(
-                "record derive: input `{key}` was given twice"
+                "{verb}: input `{key}` was given twice"
             )));
         }
     }
@@ -723,7 +731,7 @@ pub fn run_derive(
     overrides: &Overrides,
     out: &mut dyn std::io::Write,
 ) -> Result<ExitCode> {
-    let inputs = derive_inputs(inputs)?;
+    let inputs = inputs_of("record derive", inputs)?;
     let derived = derive_reading(family, &inputs, overrides)?;
     let family = safe_component("family", family)?;
     store_derived(&family, &derived)?;
@@ -1027,24 +1035,78 @@ fn emit_derived(derived: &str, out: &mut dyn std::io::Write) -> Result<ExitCode>
 pub fn run_named(family: &str) -> Result<ExitCode> {
     let family = safe_component("family", family)?;
     let raw = verdict_lines()?;
+    store_named("record named", &family, &raw)?;
+    Ok(ExitCode::Success)
+}
+
+/// The path one named family's record lives at for this branch.
+///
+/// **The one composition of that path for every verb that writes the policy
+/// store** (CLOUD-843). `record named` read its body from stdin and composed the
+/// path inline; `record query` computes its body in process, and a second inline
+/// composition would be a second spelling of the key the projection reads — the
+/// drift CLOUD-1300's claim partition exists to close.
+///
+/// # Errors
+///
+/// A [`UsageError`] naming `verb` when this is not a git repository or HEAD
+/// resolves to no commit, so there is nothing to key on.
+fn named_path(verb: &str, family: &str) -> Result<PathBuf> {
     let root = Path::new(".");
     let git_dir = git::git_dir(root).map_err(|_| {
-        UsageError::raise(
-            "record named: not a git repository, so there is nothing to key on".to_owned(),
-        )
+        UsageError::raise(format!(
+            "{verb}: not a git repository, so there is nothing to key on"
+        ))
     })?;
     let Ok(branch) = git::record_key(root) else {
-        return Err(UsageError::raise(
-            "record named: HEAD resolves to no commit, so there is nothing to key the record on"
-                .to_owned(),
-        ));
+        return Err(UsageError::raise(format!(
+            "{verb}: HEAD resolves to no commit, so there is nothing to key the record on"
+        )));
     };
     let claim = claim_of(&git_dir, &branch);
-    store(
-        &crate::recorder::record_path(&git_dir, &family, &branch, claim.as_deref()),
-        &raw,
-    )?;
-    Ok(ExitCode::Success)
+    Ok(crate::recorder::record_path(
+        &git_dir,
+        family,
+        &branch,
+        claim.as_deref(),
+    ))
+}
+
+/// Write one named family's record for this branch, whole.
+///
+/// `family` must already be a single path component; the callers hold it to
+/// [`safe_component`] first, which is where a bad name is a usage error.
+///
+/// # Errors
+///
+/// As [`named_path`], and an internal error when the store cannot be written.
+pub(crate) fn store_named(verb: &str, family: &str, body: &str) -> Result<()> {
+    store(&named_path(verb, family)?, body)
+}
+
+/// Remove one named family's record for this branch, where one exists.
+///
+/// **For a producer that could not look** (CLOUD-843). An absent record is how
+/// could-not-look reads on the policy surface, and a producer that failed while
+/// a previous run's record still sat in the store would leave that record
+/// answering as the current reading — a module cannot tell a stale window from
+/// a fresh one, because the clock is not on its surface. Removing it makes the
+/// absence true. A record that was never there is already absent, so that is not
+/// an error.
+///
+/// # Errors
+///
+/// As [`named_path`], and an internal error when an existing record cannot be
+/// removed.
+pub(crate) fn clear_named(verb: &str, family: &str) -> Result<()> {
+    let path = named_path(verb, family)?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => {
+            Err(error).with_context(|| format!("remove the stale record {}", path.display()))
+        }
+    }
 }
 
 /// The record path for one (family, key) pair.

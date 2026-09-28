@@ -1192,6 +1192,29 @@ fn authority(
     }
 }
 
+/// The committed authority ALONE, for a verb reading a table no layer may touch
+/// (CLOUD-843).
+///
+/// `[forge]` is that kind of table and is not carried on [`Resolved`]: its
+/// `[[forge.query]]` rows name the endpoint a producer reads and the fields it
+/// records, so a local file able to edit one could repoint a measurement or widen
+/// its reduction back to the payload — `mcp`'s reasoning, one table over. Reading
+/// layer 1 through [`authority`] keeps `--config-from` and `--config-in`
+/// honoured exactly as [`resolve`] honours them, without widening the resolved
+/// document every `config show` emits.
+///
+/// # Errors
+///
+/// As [`resolve`], for the authority layer.
+pub(crate) fn committed(dir: &Path, overrides: &Overrides) -> Result<config::Config> {
+    authority(
+        dir,
+        overrides.config_from.as_deref(),
+        overrides.config_in.as_deref(),
+    )
+    .map(|(config, _, _)| config)
+}
+
 /// [`resolve`], with the env layer supplied by `env` so it is testable without
 /// mutating the process environment.
 ///

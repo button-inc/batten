@@ -2792,6 +2792,24 @@ view` and no argument, which reads the CURRENT BRANCH — so under a detached
   same two functions the reader calls. A record for a tool nobody declared is
   therefore unspellable. Stricter than `forge::parse` in one place: a line with no
   token is refused rather than skipped, because a producer emitting one has a bug.
+- `forge_query.rs` — declared forge reads, recorded for a module to decide over
+  (CLOUD-843, the A-forge foundation). A `[[forge.query]]` row (`rest::Query`:
+  an endpoint template with `{owner}`/`{repo}`/`{since}` and caller-bound
+  placeholders, a `rows` key or a bare array, `per_page` capped at 100, a
+  required `max_pages`, an optional `since` window with a `stop` order claim, and
+  a non-empty `select` reduction) is walked by `batten record query <id>` through
+  `forge::window_until` over `rest::get` and written as the family `<id>` through
+  `record::store_named` — `row<TAB><json>` lines closed by one
+  `window<TAB>state=whole|truncated…` line. **Named `record query`, not
+  `record forge`**: that leaf already records a commit's check verdicts from
+  stdin, and one positional meaning either a ref or a query id would pick its store by
+  guessing. **It decides nothing**; a truncated window keeps its PREFIX with the
+  state saying so, because `Window::Truncated` now carries its rows. Could-not-look
+  (no remote, no clock, a refusing forge, an undated row under `since`) REMOVES
+  the stale record and exits 3, since a module cannot date a window. The row's
+  `id` must be a declared `[[record]]` family, refused at load, so a query no
+  module can read is unwritable. `[forge]` is read from the committed authority
+  alone (`resolve::committed`), never layered.
 - `severity.rs` — the severity taxonomy (CLOUD-168): one rank table plus the
   adapter across the three axes — `RuleSeverity` (config, CLOUD-61),
   `AdvisoryTier` (the one _stored_ severity, CLOUD-80/78), `ReportLevel`
