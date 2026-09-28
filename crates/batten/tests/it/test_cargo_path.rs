@@ -13,7 +13,6 @@ use crate::common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 const OPEN: &str = "# >>> no-batten-path";
 const CLOSE: &str = "# <<< no-batten-path";
@@ -41,12 +40,18 @@ fn stub(dir: &Path, name: &str) {
 }
 
 /// What `command -v <name>` resolves to after the mask, one entry per name.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the mask is shell the task runs under `sh`, so running it under `sh` is the only reading of the shipped bytes"
+)]
 fn resolved_after_mask(dirs: &[PathBuf], target: &Path, names: &[&str]) -> Vec<Option<String>> {
-    let probe: String = names
-        .iter()
-        .map(|name| format!("command -v {name} || echo MISSING\n"))
-        .collect();
-    let out = Command::new("/bin/sh")
+    let mut probe = String::new();
+    for name in names {
+        probe.push_str("command -v ");
+        probe.push_str(name);
+        probe.push_str(" || echo MISSING\n");
+    }
+    let out = std::process::Command::new("/bin/sh")
         .arg("-c")
         .arg(format!("{}\n{probe}", mask()))
         // The system directories stay last, as on any real PATH: the mask itself
@@ -113,7 +118,11 @@ fn a_path_without_batten_is_untouched() {
     let root = common::scratch("test-cargo-path-clean");
     let other = root.join("other");
     stub(&other, "tool");
-    let found = resolved_after_mask(&[other.clone()], &root.join("target"), &["tool"]);
+    let found = resolved_after_mask(
+        std::slice::from_ref(&other),
+        &root.join("target"),
+        &["tool"],
+    );
     assert_eq!(
         found[0].as_deref(),
         Some(other.join("tool").to_str().expect("utf-8 path"))
