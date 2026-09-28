@@ -4,13 +4,16 @@
 .SH NAME
 batten\-land\-replay \- Advance the base and replay this branch onto it, recording the outcome
 .SH SYNOPSIS
-\fBbatten land replay\fR [\fB\-\-resolve\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIreference\fR> 
+\fBbatten land replay\fR [\fB\-\-resolve\fR] [\fB\-\-propose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIreference\fR> 
 .SH DESCRIPTION
 Advance the base and replay this branch onto it, recording the outcome
 .SH OPTIONS
 .TP
 \fB\-\-resolve\fR \fI<resolve>\fR
 A path whose conflict is resolved in the worktree (repeatable)
+.TP
+\fB\-\-propose\fR
+On a conflict, write a candidate merge for each path a known shape covers
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

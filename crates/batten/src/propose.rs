@@ -33,7 +33,6 @@
 //! merge never conflicts on a file one side left alone.
 
 use std::fmt;
-use std::num::NonZeroU8;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -55,12 +54,6 @@ static ELEMENT: LazyLock<Regex> = LazyLock::new(|| {
     )]
     Regex::new(r#"^(\s*)"([^"\\]*)",(\r?\n?)$"#).unwrap()
 });
-
-/// Git's default marker width, and never zero.
-const MARKER_SIZE: NonZeroU8 = match NonZeroU8::new(MARKER) {
-    Some(size) => size,
-    None => unreachable!(),
-};
 
 /// The regularity a conflict region matched, reported beside its candidate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -102,48 +95,16 @@ pub struct Proposal {
     pub shapes: Vec<Shape>,
 }
 
-/// Propose a merge of `ours` (trunk) and `theirs` (the branch's commit) over
-/// `ancestor`, or `None` when any conflict region matches no shape.
+/// The conflict-marker width `gitwrite`'s diff3 writes and this module reads.
+pub const MARKER: u8 = 7;
+
+/// Replace every diff3 region of `marked` by its shape's merge, or `None` when
+/// any region matches no shape.
 ///
-/// `None` too for bytes that are not UTF-8 and for a merge with no conflict — the
-/// replay only asks about a path it could not merge, and a clean merge here would
-/// mean the two merges disagree, which is not something to guess past.
+/// `marked` is [`crate::gitwrite::diff3`]'s output: the merge itself stays in
+/// the git module (the gix confinement), and this half stays pure text.
 #[must_use]
-pub fn propose(ancestor: &[u8], ours: &[u8], theirs: &[u8]) -> Option<Proposal> {
-    let marked = diff3(ancestor, ours, theirs)?;
-    resolve_marked(&marked)
-}
-
-/// The three-way text merge with every conflict kept as diff3 markers.
-fn diff3(ancestor: &[u8], ours: &[u8], theirs: &[u8]) -> Option<String> {
-    let mut out = Vec::new();
-    let mut input = gix_diff::blob::InternedInput::default();
-    let options = gix::merge::blob::builtin_driver::text::Options {
-        conflict: gix::merge::blob::builtin_driver::text::Conflict::Keep {
-            style: gix::merge::blob::builtin_driver::text::ConflictStyle::Diff3,
-            marker_size: MARKER_SIZE,
-        },
-        ..Default::default()
-    };
-    let resolution = gix::merge::blob::builtin_driver::text(
-        &mut out,
-        &mut input,
-        gix::merge::blob::builtin_driver::text::Labels::default(),
-        ours,
-        ancestor,
-        theirs,
-        options,
-    );
-    if resolution != gix::merge::blob::Resolution::Conflict {
-        return None;
-    }
-    String::from_utf8(out).ok()
-}
-
-const MARKER: u8 = 7;
-
-/// Replace every diff3 region of `marked` by its shape's merge.
-fn resolve_marked(marked: &str) -> Option<Proposal> {
+pub fn propose(marked: &str) -> Option<Proposal> {
     let ours_open = "<".repeat(usize::from(MARKER));
     let base_open = "|".repeat(usize::from(MARKER));
     let divider = "=".repeat(usize::from(MARKER));
@@ -303,6 +264,11 @@ fn union(ours: &[String], base: &[String], theirs: &[String]) -> Vec<String> {
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
+    /// The replay's own path: `gitwrite`'s diff3, then the shapes.
+    fn propose(ancestor: &[u8], ours: &[u8], theirs: &[u8]) -> Option<super::Proposal> {
+        super::propose(&crate::gitwrite::diff3(ancestor, ours, theirs)?)
+    }
+
     use super::*;
 
     fn text(proposal: &Proposal) -> &str {
