@@ -19,6 +19,7 @@
 
 use crate::common;
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
@@ -36,18 +37,20 @@ fn config() -> String {
         ("step write refused", "workflow shell rose"),
         ("shell place refused", "a shell file was added"),
     ] {
-        text.push_str(&format!(
+        let _ = write!(
+            text,
             "\n[[verdict]]\nid = \"{id}\"\ngloss = \"{gloss}\"\nclass = \"{gloss}.\"\n\n\
              [[verdict.route]]\nid = \"rule read first\"\nkind = \"document\"\n\
              target = \"policy/shell-banned.rego\"\n"
-        ));
+        );
     }
-    text.push_str(&format!(
+    let _ = write!(
+        text,
         "\n[[rule]]\nid = \"{RULE}\"\nkind = \"policy\"\nscope = \"tree\"\n\
          base = \"origin/main\"\ndelta_sources = [\"**\"]\n\
          line_sources = [\"mise.toml\", \".github/workflows/*.yml\", \"mise-tasks/**\", \".claude/hooks/**\"]\n\
          module = \"policy/shell-banned.rego\"\nseverity = \"deny\"\n"
-    ));
+    );
     text
 }
 
@@ -84,7 +87,7 @@ fn check(dir: &Path) -> Output {
 fn manifest(tasks: &[(&str, &[&str])]) -> String {
     let mut text = String::new();
     for (name, body) in tasks {
-        text.push_str(&format!("[tasks.{name}]\nrun = '''\n"));
+        let _ = write!(text, "[tasks.{name}]\nrun = '''\n");
         for line in *body {
             text.push_str(line);
             text.push('\n');
