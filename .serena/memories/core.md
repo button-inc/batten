@@ -40,7 +40,7 @@ Read on demand, never all of them.
   diagnosing a 403/429/abuse response.
 - `mem:toolchain-and-hooks` — pinning a tool, adding a task, touching `hk.pkl`
   or the gate. **Before editing a `mise-tasks/*.sh` or a `tests/**/\*.bats`, the
-  binding rule is `.claude/rules/toolchain.md`'s two shapes\*\* — retire it whole
+binding rule is `.claude/rules/toolchain.md`'s two shapes\*\* — retire it whole
   or leave it — not this memory, which describes the layer being retired.
 - `mem:serena-setup` — a Serena worktree or index misbehaves; changing
   `.serena/` config.
@@ -732,8 +732,8 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
 - `config_edit.rs` — format-preserving edits to a committed config file, the
   substrate a rule's `fix` writes through (CLOUD-1575). A seam with one backend
   per `Format`, TOML via `toml_edit` for now. The contract is that the output
-  differs from the input only at the edited key. A leaf: it reaches nothing in
-  this crate.
+  differs from the input only at the edited key. It reaches one module in this
+  crate, `durable`, for the crash-safe write.
 - `contract.rs` — the contract-drift predicate (CLOUD-461, CLOUD-525): hash the
   `[contract] tracked` surface, compare against this session's snapshot under
   `$GIT_DIR/batten-contract/<session>`, and report the change-set **once** on the
