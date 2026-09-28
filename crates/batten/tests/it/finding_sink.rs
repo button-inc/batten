@@ -261,6 +261,15 @@ fn a_comment_alone_is_not_a_home() {
     fired(&result, 1);
     // It names the PRACTICE: what is missing is an open row.
     assert!(result.1.contains("OPEN row"), "{}", result.1);
+    // And the READ that makes a row's column known (CLOUD-1963): a comment is
+    // credited only on a row this clone read, and a refusal that never says which
+    // read that is leaves the agent guessing — measured, a `list_issues` listing
+    // was taken for one and recorded nothing.
+    assert!(
+        result.1.contains("batten mcp call <server> get_issue"),
+        "{}",
+        result.1
+    );
     // A comment PLUS a new open row is the working practice, and passes.
     let turns = Turns::new("comment-and-row")
         .prompt()

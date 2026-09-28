@@ -4256,6 +4256,7 @@ exit 2
 #MUTANT terminal-row-is-a-home|s@#open\$'@#'@|an_annotation_on_a_terminal_row_still_reports
 #MUTANT citation-never-fires|s@^CITATION=.*@CITATION='^\$never'@|a_cited_finding_with_no_durable_write_fires
 #MUTANT sidechain-credited|s@select(.isSidechain != true)@select(true)@|a_subagents_write_is_not_credited_to_the_turn
+#MUTANT remedy-names-no-read|s@A read is recorded by batten mcp call <server> get_issue on that row@A read is recorded@|a_comment_alone_is_not_a_home
 #MUTANT whole-transcript-judged|s@^start=\$(tail -n 1 @start=$(head -n 1 @|only_the_last_turn_is_judged
 description = "Gate: a turn that cites path:line evidence and makes no durable write stranded a finding (reads a Stop payload or transcript path on stdin; pointer-only)"
 shell = "bash -c"
@@ -4364,7 +4365,7 @@ fi
 # OPEN row, and an author who commented the finding believes it written down.
 {
 	echo "turn:$turns finding-without-durable-write"
-	echo "The last of $turns turn(s) cited path:line evidence and gave it no OPEN row. Writing to a row that is closed — or to one this clone has recorded no read of — records the finding without scheduling it. Go re-derive it and file an open issue linked \`relatedTo\` the source, or put it on a row that is still open."
+	echo "The last of $turns turn(s) cited path:line evidence and gave it no OPEN row. Writing to a row that is closed — or to one this clone has recorded no read of — records the finding without scheduling it. Go re-derive it and file an open issue linked \`relatedTo\` the source, or put it on a row that is still open. A read is recorded by batten mcp call <server> get_issue on that row; a listing records none."
 } >&2
 exit 1
 {% endraw %}
