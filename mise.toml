@@ -6870,8 +6870,13 @@ if [ -n "$forge_sha" ] && [ -n "$forge_fanin" ]; then
 	# Filtered here rather than at the fan-in test alone, because a skipped job in
 	# a real run rendered no verdict either: recording `<job> skipped` would say
 	# that job refused.
+	#
+	# MEMBERSHIP IN THE DECLARED SET, not a literal (CLOUD-1965): `skipped` alone
+	# left `cancelled` — equally a run that judged nothing — recorded as graded.
+	#MUTANT-SUITE crates/batten/tests/it/record_verdicts.rs
+	#MUTANT producer-admits-unanswered-conclusion|s@index($c)@true@|an_unanswered_conclusion_is_not_recorded_as_a_grading
 	if forge_runs=$(gh api "repos/$forge_repo/commits/$forge_sha/check-runs?per_page=100" \
-		--jq '.check_runs | group_by(.name) | map(max_by([(.started_at // ""), (.id // 0)])) | map(select(.conclusion != null and .conclusion != "skipped")) | .[] | "\(.name)\t\(.conclusion)"' 2>/dev/null); then
+		--jq '.check_runs | group_by(.name) | map(max_by([(.started_at // ""), (.id // 0)])) | map(select(.conclusion as $c | $c != null and ((env.CI_ANSWERED_CONCLUSIONS // "") | split(",") | index($c)))) | .[] | "\(.name)\t\(.conclusion)"' 2>/dev/null); then
 		# The fan-in decides whether ANY record is written; the name filter then
 		# decides what the record may spell.
 		forge_graded=$(printf '%s\n' "$forge_runs" |
