@@ -895,19 +895,31 @@ fn update_worktree(repo: &gix::Repository, was: gix::ObjectId, now: gix::ObjectI
         .diff_tree_to_tree(Some(&before), Some(&after), None)
         .map_err(|err| anyhow::anyhow!("gitwrite: the worktree delta will not compute: {err}"))?;
     let mut touched: std::collections::BTreeSet<Vec<u8>> = std::collections::BTreeSet::new();
-    let mut gone: Vec<Vec<u8>> = Vec::new();
+    let mut gone: std::collections::BTreeSet<Vec<u8>> = std::collections::BTreeSet::new();
+    // A DELETED TREE IS A DIRECTORY, NOT A FILE (CLOUD-1948). The delta reports a
+    // removed subtree as one Deletion at the directory's own path, and the loop
+    // below used to hand that path to `remove_file` — `EISDIR`, and the error
+    // returned before every later deletion, so a base that retired a directory
+    // left the rest of what it deleted on disk as untracked files a reader could
+    // commit straight back. Measured on #962's base: 50 files stranded.
+    let mut gone_trees: Vec<Vec<u8>> = Vec::new();
     for change in &changes {
         let path = change.location().to_vec();
-        if matches!(
-            change,
-            gix::object::tree::diff::ChangeDetached::Deletion { .. }
-        ) {
-            gone.push(path);
-        } else {
-            touched.insert(path);
+        match change {
+            gix::object::tree::diff::ChangeDetached::Deletion { entry_mode, .. }
+                if entry_mode.is_tree() =>
+            {
+                gone_trees.push(path);
+            }
+            gix::object::tree::diff::ChangeDetached::Deletion { .. } => {
+                gone.insert(path);
+            }
+            _ => {
+                touched.insert(path);
+            }
         }
     }
-    if touched.is_empty() && gone.is_empty() {
+    if touched.is_empty() && gone.is_empty() && gone_trees.is_empty() {
         return Ok(());
     }
 
@@ -918,6 +930,20 @@ fn update_worktree(repo: &gix::Repository, was: gix::ObjectId, now: gix::ObjectI
     if let Ok(current) = repo.index() {
         for entry in current.entries() {
             held.insert(entry.path(&current).to_vec(), entry.stat);
+        }
+    }
+    // Every TRACKED file under a deleted tree is unlinked, read off the index this
+    // clone already holds rather than off a directory walk: a walk would delete
+    // whatever is under the path, and an untracked file there is the user's, not
+    // the replay's. The delta may or may not also report each child — the set
+    // makes that question moot.
+    for tree in &gone_trees {
+        let mut prefix = tree.clone();
+        prefix.push(b'/');
+        for path in held.keys() {
+            if path.starts_with(&prefix) {
+                gone.insert(path.clone());
+            }
         }
     }
 
@@ -947,10 +973,24 @@ fn update_worktree(repo: &gix::Repository, was: gix::ObjectId, now: gix::ObjectI
         .map_err(|err| anyhow::anyhow!("gitwrite: the index will not write: {err}"))?;
 
     // Writing ADDS and OVERWRITES; nothing above removes. So a path the new tree
-    // does not carry has to be unlinked here, or a rebase that deletes a file
-    // leaves it on disk and the next `verify` compiles a file that is not in the
-    // commit.
-    for path in &gone {
+    // does not carry has to be unlinked, or a rebase that deletes a file leaves
+    // it on disk and the next `verify` compiles a file that is not in the commit.
+    remove_gone(&workdir, &gone, gone_trees)
+}
+
+/// Unlink every deleted path, then prune the directories the base deleted.
+///
+/// ONE UNREMOVABLE PATH DOES NOT STRAND THE REST. Every deletion is attempted and
+/// the failures are reported together afterwards: returning on the first is what
+/// left 50 files behind (CLOUD-1948), and a partial worktree is worse than a loud
+/// one because it reads as the branch's own untracked work.
+fn remove_gone(
+    workdir: &Path,
+    gone: &std::collections::BTreeSet<Vec<u8>>,
+    mut gone_trees: Vec<Vec<u8>>,
+) -> Result<()> {
+    let mut refused: Vec<String> = Vec::new();
+    for path in gone {
         let Ok(relative) = std::str::from_utf8(path) else {
             continue;
         };
@@ -958,12 +998,35 @@ fn update_worktree(repo: &gix::Repository, was: gix::ObjectId, now: gix::ObjectI
         match std::fs::remove_file(&target) {
             Ok(()) => {}
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => {
-                return Err(anyhow::anyhow!(
-                    "gitwrite: {relative} will not delete: {err}"
-                ));
-            }
+            Err(err) => refused.push(format!("{relative}: {err}")),
         }
+    }
+    // Then the emptied directories, DEEPEST FIRST so a parent is only tried once
+    // its children are gone. `remove_dir` and never `remove_dir_all`: a directory
+    // still holding an untracked file keeps it, which is the user's file and not
+    // this replay's to delete — so "not empty" is the honest outcome, not a fault.
+    //MUTANT-SUITE crates/batten/tests/it/rebase.rs
+    //MUTANT gone-directory-left-on-disk|s@^    gone_trees.sort_by_key(|tree| std::cmp::Reverse(tree.len()));$@    gone_trees.clear();@|a_directory_the_base_deleted_leaves_the_worktree
+    gone_trees.sort_by_key(|tree| std::cmp::Reverse(tree.len()));
+    for tree in &gone_trees {
+        let Ok(relative) = std::str::from_utf8(tree) else {
+            continue;
+        };
+        match std::fs::remove_dir(workdir.join(relative)) {
+            Ok(()) => {}
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                ) => {}
+            Err(err) => refused.push(format!("{relative}: {err}")),
+        }
+    }
+    if let Some(first) = refused.first() {
+        return Err(anyhow::anyhow!(
+            "gitwrite: {} path(s) will not delete, first {first}",
+            refused.len()
+        ));
     }
     Ok(())
 }

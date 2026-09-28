@@ -880,6 +880,168 @@ fn a_path_the_base_deleted_leaves_the_worktree() {
     );
 }
 
+/// [`commit`] with ONE subdirectory, because a flat tree cannot carry the case
+/// CLOUD-1948 measured: a base that deletes a whole directory.
+fn commit_with_dir(
+    repo: &gix::Repository,
+    parents: &[gix::ObjectId],
+    files: Files<'_>,
+    dir: Option<(&str, Files<'_>)>,
+) -> gix::ObjectId {
+    let blob = |name: &str, body: &str| gix::objs::tree::Entry {
+        mode: gix::objs::tree::EntryKind::Blob.into(),
+        filename: name.into(),
+        oid: repo.write_blob(body.as_bytes()).expect("blob").detach(),
+    };
+    let mut entries: Vec<gix::objs::tree::Entry> =
+        files.iter().map(|(name, body)| blob(name, body)).collect();
+    if let Some((name, children)) = dir {
+        let mut inner: Vec<gix::objs::tree::Entry> = children
+            .iter()
+            .map(|(child, body)| blob(child, body))
+            .collect();
+        inner.sort_by(|left, right| left.filename.cmp(&right.filename));
+        let subtree = repo
+            .write_object(&gix::objs::Tree { entries: inner })
+            .expect("subtree")
+            .detach();
+        entries.push(gix::objs::tree::Entry {
+            mode: gix::objs::tree::EntryKind::Tree.into(),
+            filename: name.into(),
+            oid: subtree,
+        });
+    }
+    // Git sorts a tree entry as if its name ended in `/`; the fixture's names are
+    // chosen so plain byte order agrees, and a mismatch would still hash.
+    entries.sort_by(|left, right| left.filename.cmp(&right.filename));
+    let tree = repo
+        .write_object(&gix::objs::Tree { entries })
+        .expect("tree")
+        .detach();
+    let who = gix::actor::Signature {
+        name: "Fixture".into(),
+        email: "fixture@example.invalid".into(),
+        time: gix::date::Time::new(1_700_000_000, 0),
+    };
+    repo.write_object(&gix::objs::Commit {
+        tree,
+        parents: parents.iter().copied().collect(),
+        author: who.clone(),
+        committer: who,
+        encoding: None,
+        message: "fixture\n".into(),
+        extra_headers: Vec::new(),
+    })
+    .expect("commit")
+    .detach()
+}
+
+/// **A DIRECTORY THE BASE DELETED LEAVES THE WORKTREE, AND SO DOES EVERYTHING
+/// DELETED AFTER IT** (CLOUD-1948).
+///
+/// The delta reports a removed subtree as one deletion at the directory's path,
+/// and `remove_file` on a directory is `EISDIR`. The replay used to return on
+/// that first error, so `zz.txt` — deleted too, but ordered after the
+/// directory — stayed on disk as an untracked file. Measured on #962's base: 50
+/// retired programs stranded that way. Both halves are asserted: the directory
+/// is gone, and the later deletion still happened.
+#[test]
+fn a_directory_the_base_deleted_leaves_the_worktree() {
+    let (dir, repo) = init("rebase-delete-dir");
+    let flat: Files<'_> = &[("kept.txt", "kept\n"), ("zz.txt", "zz\n")];
+    let tools: Files<'_> = &[("a.sh", "a\n"), ("b.sh", "b\n")];
+    let base = commit_with_dir(&repo, &[], flat, Some(("tools", tools)));
+
+    // The trunk retires the whole `tools/` directory and `zz.txt`.
+    let moved = commit_with_dir(&repo, &[base], &[("kept.txt", "kept\n")], None);
+
+    // The branch adds a file of its own.
+    let side: Files<'_> = &[
+        ("kept.txt", "kept\n"),
+        ("work.txt", "work\n"),
+        ("zz.txt", "zz\n"),
+    ];
+    let tip = commit_with_dir(&repo, &[base], side, Some(("tools", tools)));
+
+    point(&dir, "refs/heads/main", moved);
+    point(&dir, "refs/heads/work", tip);
+    materialise(&dir, side);
+    std::fs::create_dir_all(dir.join("tools")).expect("fixture dir");
+    materialise(&dir.join("tools"), tools);
+    // The index must hold the tracked children, as a real checkout's does.
+    let mut index = repo
+        .index_from_tree(&repo.find_commit(tip).expect("tip").tree_id().expect("tree"))
+        .expect("index");
+    index
+        .write(gix::index::write::Options::default())
+        .expect("write index");
+
+    let outcome = gitwrite::rebase(&dir, "refs/heads/work", "refs/heads/main").expect("rebase");
+    assert!(
+        matches!(outcome, Rebase::Replayed { .. }),
+        "a deleted directory on one side is not a conflict, got {outcome:?}"
+    );
+    assert!(
+        !dir.join("tools").exists(),
+        "the deleted directory is still on disk"
+    );
+    assert!(
+        !dir.join("zz.txt").exists(),
+        "a deletion ordered after the directory was stranded"
+    );
+    assert!(
+        dir.join("work.txt").is_file(),
+        "the branch's own file survived"
+    );
+}
+
+/// **AN UNTRACKED FILE IN A DELETED DIRECTORY IS THE USER'S, AND STAYS.**
+///
+/// The tracked children go and the directory is kept holding the one file the
+/// replay never owned — `remove_dir`, never `remove_dir_all`. "Not empty" is the
+/// honest outcome there, so the replay still lands rather than refusing.
+#[test]
+fn an_untracked_file_keeps_its_deleted_directory() {
+    let (dir, repo) = init("rebase-delete-dir-untracked");
+    let tools: Files<'_> = &[("a.sh", "a\n")];
+    let base = commit_with_dir(
+        &repo,
+        &[],
+        &[("kept.txt", "kept\n")],
+        Some(("tools", tools)),
+    );
+    let moved = commit_with_dir(&repo, &[base], &[("kept.txt", "kept\n")], None);
+    let side: Files<'_> = &[("kept.txt", "kept\n"), ("work.txt", "work\n")];
+    let tip = commit_with_dir(&repo, &[base], side, Some(("tools", tools)));
+
+    point(&dir, "refs/heads/main", moved);
+    point(&dir, "refs/heads/work", tip);
+    materialise(&dir, side);
+    std::fs::create_dir_all(dir.join("tools")).expect("fixture dir");
+    materialise(&dir.join("tools"), tools);
+    std::fs::write(dir.join("tools/mine.local"), "mine\n").expect("untracked file");
+    let mut index = repo
+        .index_from_tree(&repo.find_commit(tip).expect("tip").tree_id().expect("tree"))
+        .expect("index");
+    index
+        .write(gix::index::write::Options::default())
+        .expect("write index");
+
+    let outcome = gitwrite::rebase(&dir, "refs/heads/work", "refs/heads/main").expect("rebase");
+    assert!(
+        matches!(outcome, Rebase::Replayed { .. }),
+        "got {outcome:?}"
+    );
+    assert!(
+        !dir.join("tools/a.sh").exists(),
+        "the tracked child is still on disk"
+    );
+    assert!(
+        dir.join("tools/mine.local").is_file(),
+        "the replay deleted a file it never owned"
+    );
+}
+
 // --- unwinding a speculation (CLOUD-862, CLOUD-1456) --------------------------
 //
 // The two primitives the lap's bet settle is built on, driven over a real
