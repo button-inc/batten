@@ -462,8 +462,33 @@ pub(crate) fn committed_fixture_with_protected(name: &str) -> PathBuf {
     let committed = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let authority =
         std::fs::read_to_string(committed.join("batten.toml")).expect("read the committed config");
+    // The owner's three classes, UNIONED into whatever set is declared rather
+    // than injected only when none is. Since CLOUD-1078 a narrower set is live —
+    // just the asked ledger — and reading "a set is declared" as "the owner's
+    // set is on" left this fixture guarding the ledger alone, so every
+    // `.serena/memories` case here turned green-for-the-wrong-reason red.
+    let owners = [".serena/memories/**", "batten.toml", ".github/workflows/**"];
     let config = if committed_protected_declared() {
-        authority
+        let line = authority
+            .lines()
+            .find(|line| line.starts_with("protected = ["))
+            .expect("the declared set's line")
+            .to_owned();
+        let declared: toml::Value =
+            toml::from_str(&line).expect("the declared set is one TOML key");
+        let mut entries: Vec<String> = declared["protected"]
+            .as_array()
+            .expect("an array")
+            .iter()
+            .filter_map(|entry| entry.as_str().map(str::to_owned))
+            .collect();
+        for owner in owners {
+            if !entries.iter().any(|entry| entry == owner) {
+                entries.push(owner.to_owned());
+            }
+        }
+        let quoted: Vec<String> = entries.iter().map(|entry| format!("\"{entry}\"")).collect();
+        authority.replacen(&line, &format!("protected = [{}]", quoted.join(", ")), 1)
     } else {
         authority.replacen(
             "must_land_on = \"origin/main\"\n",

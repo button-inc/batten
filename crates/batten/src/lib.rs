@@ -17308,6 +17308,7 @@ fn record_asked_at(
 /// [`mint_receipts_for_test`]'s reason: the half that writes the ledger and the
 /// half that reads it must be shown to agree through the real boundary.
 #[doc(hidden)]
+#[must_use]
 pub fn record_asked_for_test(
     harness: hook::Harness,
     raw_tool: &str,
