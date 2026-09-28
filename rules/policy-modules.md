@@ -233,7 +233,22 @@ A **tree**-scoped module (`scope = "tree"`, run by `batten check`) reads
 `input.tree.landing`, and the git
 family —
 `input.tree.git-head`, `input.tree.git-refs`, `input.tree.git-ranges`,
-`input.tree.git-remote`, `input.tree.git-status`, `input.tree.git-worktrees`.
+`input.tree.git-remote`, `input.tree.git-status`, `input.tree.git-worktrees`,
+and the repository-state three CLOUD-843 added — `input.tree["git-tags"]`,
+`input.tree["git-config"]`, `input.tree["git-index"]`.
+
+**The repository-state three each key by the declaration as written, and each
+keeps an ANSWER apart from could-not-look one level down** (CLOUD-843). A tag
+glob (`tags = [...]`, matched as `git tag --list` matches) that selects nothing
+is an empty list, and unlike `git-history` the family does NOT null on a shallow
+clone, because a listing walks no history. A config key (`git_config = [...]`)
+that no scope sets has a `null` `effective` and an empty `scopes` map; each value
+carries git's own `boolean` reading, so a module never re-implements
+`--type=bool`. A pathspec (`index = [...]`, git's rules without magic) carries
+`entries`, `diverged` and `untracked`, and a clean spec is three answers, not
+`null`. `commit-meta` was widened in the same row — `subject`, `authored`,
+`committed`, `signed` (header presence, never validity) and `paths` — and still
+has no body field.
 
 **`git-worktrees` is the one whose EMPTY value is an answer, so it is worth the
 sentence the rest of the family does not need** (CLOUD-1424). Everywhere else here

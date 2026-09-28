@@ -3215,24 +3215,31 @@ pub fn base_delta(
         .and_then(|resolved| repository.find_object(resolved).ok())
         .and_then(|object| object.try_into_commit().ok())
         .and_then(|commit| commit.time().ok())
-        .map(|time| {
-            // FIXED-WIDTH UTC, which is what makes a lexicographic compare
-            // downstream equal a chronological one. `time.seconds` is the epoch
-            // second and the offset is discarded on purpose — two commits written
-            // in different zones must still order correctly, and rendering the
-            // local offset would break exactly that.
-            let seconds = time.seconds;
-            let days = seconds.div_euclid(86_400);
-            let rest = seconds.rem_euclid(86_400);
-            let (year, month, day) = civil_from_days(days);
-            format!(
-                "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
-                rest / 3600,
-                (rest % 3600) / 60,
-                rest % 60,
-            )
-        });
+        .map(|time| iso_utc(time.seconds));
     Ok(Some(delta))
+}
+
+/// An epoch second as FIXED-WIDTH ISO-8601 UTC — `2026-09-28T12:34:56Z`.
+///
+/// Fixed width is what makes a lexicographic compare downstream equal a
+/// chronological one, so a module orders two of these with `<` and never parses
+/// a date. The offset a signature was written in is discarded on purpose: two
+/// commits written in different zones must still order correctly, and rendering
+/// the local offset would break exactly that.
+///
+/// One renderer for every date this module projects (`base-date`, and the tag and
+/// commit dates CLOUD-843 added), so the family cannot grow two spellings of one
+/// instant that compare unequal.
+fn iso_utc(seconds: i64) -> String {
+    let days = seconds.div_euclid(86_400);
+    let rest = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rest / 3600,
+        (rest % 3600) / 60,
+        rest % 60,
+    )
 }
 
 /// The civil date a count of days since the Unix epoch names.
@@ -3965,14 +3972,42 @@ pub struct RangeCommit {
 /// strings, and a trailer is a `Key: value` line — the same shape
 /// `input.tree.records` already claims. A message body is prose the author wrote
 /// and is not.
+///
+/// **Widened by CLOUD-843, and every added field is a pointer, a date or a
+/// bit.** The retiring bash read a range for five more things than identity: the
+/// subject (`%s`, which [`RangeCommit`] already admits as the log's own pointer),
+/// the two dates, whether the commit HEADER carries a signature (`cat-file
+/// commit | sed '/^$/q'` matched for `gpgsig`), and which paths it touched
+/// (`show --name-only`). None of those is prose, so none moves rule 4; the body
+/// is still structurally absent.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct CommitMeta {
     /// The commit's sha.
     pub commit: String,
+    /// Its subject line — git's `%s`, the pointer the log itself renders.
+    pub subject: String,
     /// `%an <%ae>` — the author identity.
     pub author: String,
     /// `%cn <%ce>` — the committer identity.
     pub committer: String,
+    /// `%aI`, rendered by [`iso_utc`] so it orders lexicographically.
+    pub authored: String,
+    /// `%cI`, rendered the same way.
+    pub committed: String,
+    /// Whether the commit header carries a signature (`gpgsig`, or
+    /// `gpgsig-sha256` in an object-format-sha256 repository).
+    ///
+    /// **Presence, never validity.** Verifying a signature needs a keyring and a
+    /// program, which is `Cost::Effect` and a different fact; the gate this exists
+    /// for asks whether a commit carries a key NOBODY can check, and presence is
+    /// the whole of that question.
+    pub signed: bool,
+    /// The repo-relative paths the commit changed against its FIRST parent —
+    /// `show --name-only` — sorted. A root commit is diffed against the empty
+    /// tree, so every path it carries is a change.
+    ///
+    /// Paths, never hunks: which files moved is a pointer, what they say is not.
+    pub paths: Vec<String>,
     /// `%(trailers:only,unfold)`, as whole `Key: value` lines.
     pub trailers: Vec<String>,
 }
@@ -4028,6 +4063,18 @@ pub struct GitFacts {
     /// did not resolve — the family's own could-not-look shape, one level up
     /// from a range that is absent from `ranges`.
     pub base_delta: Option<BaseDelta>,
+    /// The declared tag globs' matching tags, with their dates (CLOUD-843). A
+    /// glob that matched nothing is present with an EMPTY list — an answer —
+    /// where `None` is the references that could not be read.
+    pub tags: Option<BTreeMap<String, Vec<TagFact>>>,
+    /// The declared config keys, as git resolves them and per scope
+    /// (CLOUD-843). A declared key set nowhere is PRESENT with a null
+    /// `effective` — an answer — where `None` is the config that could not be
+    /// opened.
+    pub config: Option<BTreeMap<String, ConfigFact>>,
+    /// The declared pathspecs' index entries, divergence and untracked paths
+    /// (CLOUD-843). `None` is the index that could not be read.
+    pub index: Option<BTreeMap<String, IndexFact>>,
 }
 
 /// Acquire [`HeadFact`].
@@ -4577,24 +4624,113 @@ pub fn metadata_facts(
         if resolve_ref(dir, base)?.is_none() || resolve_ref(dir, head)?.is_none() {
             continue;
         }
+        // ONE open for the range, where this used to open the repository once per
+        // commit through `commit_record`. The widening (CLOUD-843) added a tree
+        // diff per commit, and paying a repository open on top of it for every
+        // commit in an unbounded range is the cost `COMMIT_META`'s doc says to
+        // measure rather than quote.
+        let repo = open(dir)?;
         let mut commits = Vec::new();
         for subject in subjects_in_range(dir, base, head)? {
             // Skipped rather than fatal, and skipped rather than fabricated: a
             // commit whose object cannot be peeled contributes nothing, where an
             // entry with empty identity fields would read to a module as a commit
             // authored by nobody.
-            if let Ok(record) = commit_record(dir, &subject.commit) {
-                commits.push(CommitMeta {
-                    commit: subject.commit,
-                    author: record.author,
-                    committer: record.committer,
-                    trailers: record.trailers,
-                });
+            if let Some(meta) = commit_meta(&repo, &subject.commit) {
+                commits.push(meta);
             }
         }
         facts.insert(range.clone(), commits);
     }
     Ok(facts)
+}
+
+/// One commit's [`CommitMeta`], or `None` when any field cannot be read.
+///
+/// All-or-nothing, for [`metadata_facts`]' reason: an entry with a field quietly
+/// defaulted is a commit a module decides over as though git had said it. The
+/// identity strings are rendered exactly as [`commit_record`] renders them, so the
+/// attribution verb and a module reading this fact agree on who authored a commit.
+fn commit_meta(repo: &gix::Repository, sha: &str) -> Option<CommitMeta> {
+    let id = gix::ObjectId::from_hex(sha.as_bytes()).ok()?;
+    let commit = repo.find_commit(id).ok()?;
+    let author = commit.author().ok()?;
+    let committer = commit.committer().ok()?;
+    let message = commit.message().ok()?;
+    let trailers = message
+        .body()
+        .map(|body| {
+            body.trailers()
+                .map(|trailer| format!("{}: {}", trailer.token, trailer.value))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    // THE HEADER, never the message: a `gpgsig` line in a BODY is prose somebody
+    // typed, and the bash this ports matched only up to the first blank line for
+    // exactly that reason.
+    let signed = commit
+        .decode()
+        .ok()?
+        .extra_headers
+        .iter()
+        .any(|(name, _)| *name == "gpgsig" || *name == "gpgsig-sha256");
+    Some(CommitMeta {
+        commit: sha.to_owned(),
+        subject: message.summary().to_string(),
+        author: format!("{} <{}>", author.name, author.email),
+        committer: format!("{} <{}>", committer.name, committer.email),
+        authored: iso_utc(author.seconds()),
+        committed: iso_utc(committer.seconds()),
+        signed,
+        paths: commit_paths(repo, &commit)?,
+        trailers,
+    })
+}
+
+/// The paths `commit` changed against its first parent, sorted — `show
+/// --name-only`, in process.
+///
+/// Its own walk rather than [`commit_changes`], deliberately: that one reads
+/// every changed blob's content for the patch identity, and a name list needs
+/// none of it. Tree rows are dropped for `tree_changes`' reason — the recursion
+/// already delivers every blob beneath with its full path — and a gitlink is
+/// kept, because `--name-only` names a moved submodule pointer too.
+fn commit_paths(repo: &gix::Repository, commit: &gix::Commit<'_>) -> Option<Vec<String>> {
+    use gix_diff::tree::recorder::Change as Recorded;
+
+    let new_tree = commit.tree().ok()?;
+    let old_tree = match commit.parent_ids().next() {
+        Some(parent) => repo.find_commit(parent.detach()).ok()?.tree().ok()?,
+        None => repo.empty_tree(),
+    };
+    let hash = repo.object_hash();
+    let mut recorder = gix_diff::tree::Recorder::default();
+    gix_diff::tree(
+        gix::objs::TreeRefIter::from_bytes(&old_tree.data, hash),
+        gix::objs::TreeRefIter::from_bytes(&new_tree.data, hash),
+        gix_diff::tree::State::default(),
+        &repo.objects,
+        &mut recorder,
+    )
+    .ok()?;
+    let mut paths: Vec<String> = recorder
+        .records
+        .into_iter()
+        .filter_map(|change| match change {
+            Recorded::Addition {
+                entry_mode, path, ..
+            }
+            | Recorded::Deletion {
+                entry_mode, path, ..
+            }
+            | Recorded::Modification {
+                entry_mode, path, ..
+            } => (!entry_mode.is_tree()).then(|| path.to_string()),
+        })
+        .collect();
+    paths.sort();
+    paths.dedup();
+    Some(paths)
 }
 
 /// What one declared target's landing scan answered, projected for a rule to read
@@ -4667,6 +4803,529 @@ pub fn landing_facts(dir: &Path, declared: &[String]) -> Result<BTreeMap<String,
         );
     }
     Ok(facts)
+}
+
+// ---------------------------------------------------------------------------
+// The retirement's git projections (CLOUD-843, package a-git).
+//
+// Forty-five task-runner bodies spawn `git` to READ a fact and then decide over
+// it in shell: which tags exist and when each was cut, what a range's commits
+// carry, how the checkout's config resolves a signing key, and what the index
+// holds under a set of paths. Every one of those is a read gix answers in
+// process, so each is a declared projection here and the decision moves to a
+// module — no spawn, no second git invoker, and the family's standing rule held
+// at the boundary: a declaration bounds the read, and could-not-look is `None`
+// one level up, never an empty answer.
+
+/// One tag a declared glob matched, with its dates (CLOUD-843).
+///
+/// The tag's short NAME, the commit it peels to, and two instants — never the
+/// tag message, which is prose its author wrote, for the reason [`CommitMeta`]
+/// has no body.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct TagFact {
+    /// The tag's short name — `v1.2.3`, never `refs/tags/v1.2.3`.
+    pub tag: String,
+    /// The commit it peels to, through any chain of tag objects.
+    pub commit: String,
+    /// Whether a tag OBJECT exists, or the ref names the commit directly.
+    pub annotated: bool,
+    /// When the tag was cut, as git's `creatordate` reads it: the TAGGER's time
+    /// for an annotated tag, the commit's committer time for a lightweight one —
+    /// fixed-width UTC by [`iso_utc`].
+    ///
+    /// `None` for an annotated tag whose header carries no tagger, which git
+    /// renders as an empty date. A fabricated instant there would order a
+    /// malformed tag among real ones; could-not-look keeps it out of every
+    /// comparison a module makes.
+    pub created: Option<String>,
+    /// The peeled commit's committer date, fixed-width UTC.
+    pub committed: String,
+}
+
+/// Every tag each DECLARED glob matches, with its dates (CLOUD-843).
+///
+/// **`git tag --list <glob>`'s matching, by git's own implementation.** The glob
+/// is applied to the short name with `wildmatch` and no flags — the call
+/// `ref-filter` makes for a tag listing — so `v[0-9]*` here selects exactly what
+/// it selects there. [`history_facts`]' tag queries match through the crate's
+/// path selector instead, whose `*` stops at `/`; the two are different questions
+/// (a history pattern versus a listing) and this one is the listing the retiring
+/// bodies ran.
+///
+/// A glob that matched nothing is PRESENT with an empty list: `no release tags
+/// exist` is an answer a release gate decides on. A tag whose target does not
+/// peel to a commit is skipped rather than reported with an empty sha — a tag on
+/// a blob is a real thing in git and is not an answer to "which commit shipped".
+///
+/// Sorted by tag name, byte order, so the projection is byte-stable where the
+/// reference iterator's order is not a promise. Version order is a DECISION about
+/// the names and belongs to the module reading them.
+///
+/// # Errors
+///
+/// Raises when the repository cannot be opened or its references cannot be read —
+/// could-not-look about the whole family, which the caller projects as `null`.
+pub fn tag_facts(dir: &Path, declared: &[String]) -> Result<BTreeMap<String, Vec<TagFact>>> {
+    let repo = open(dir)?;
+    let refusal = || UsageError::raise("could not read this repository's tags".to_owned());
+    let platform = repo.references().map_err(|_| refusal())?;
+    let mut every: Vec<TagFact> = Vec::new();
+    for reference in platform.tags().map_err(|_| refusal())?.flatten() {
+        let name = reference.name().shorten().to_string();
+        if let Some(fact) = tag_fact(&repo, &reference, name) {
+            every.push(fact);
+        }
+    }
+    every.sort_by(|left, right| left.tag.cmp(&right.tag));
+    let mut facts = BTreeMap::new();
+    for glob in declared {
+        let matched: Vec<TagFact> = every
+            .iter()
+            .filter(|fact| tag_glob_matches(glob, &fact.tag))
+            .cloned()
+            .collect();
+        facts.insert(glob.clone(), matched);
+    }
+    Ok(facts)
+}
+
+/// Whether `glob` selects `tag` the way `git tag --list` does.
+fn tag_glob_matches(glob: &str, tag: &str) -> bool {
+    gix::glob::wildmatch(glob.into(), tag.into(), gix::glob::wildmatch::Mode::empty())
+}
+
+/// One tag ref's [`TagFact`], or `None` when it does not name a commit.
+fn tag_fact(
+    repo: &gix::Repository,
+    reference: &gix::Reference<'_>,
+    tag: String,
+) -> Option<TagFact> {
+    // The ref's OWN target first, before any peel: whether a tag object exists,
+    // and who cut it, are properties of that object and a peel discards it —
+    // `tagger_of`'s reason, one function over.
+    let direct = reference.target().try_id()?.to_owned();
+    let object = repo.find_object(direct).ok()?;
+    let annotated = object.kind == gix::object::Kind::Tag;
+    let tagged = if annotated {
+        object
+            .try_to_tag_ref()
+            .ok()?
+            .tagger()
+            .ok()
+            .flatten()
+            .map(|signature| signature.seconds())
+    } else {
+        None
+    };
+    let commit = object.peel_to_commit().ok()?;
+    let committed = commit.time().ok()?.seconds;
+    Some(TagFact {
+        tag,
+        commit: commit.id().to_string(),
+        annotated,
+        created: if annotated {
+            tagged.map(iso_utc)
+        } else {
+            Some(iso_utc(committed))
+        },
+        committed: iso_utc(committed),
+    })
+}
+
+/// One config value as a scope sets it (CLOUD-843).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ConfigValue {
+    /// The raw value, or `None` for an IMPLICIT one — a key written with no `=`,
+    /// which git reads as boolean true and which has no string to report.
+    pub value: Option<String>,
+    /// git's boolean reading of it — `--type=bool` — or `None` when the value is
+    /// not a boolean git accepts.
+    ///
+    /// **Normalised here because the retiring body proved it has to be.**
+    /// `git config --get` returns the stored text, git accepts `1`, `on`, `yes`,
+    /// `0`, `off`, `no` and the empty string as booleans, and a comparison against
+    /// the literals `true`/`false` was wrong in BOTH directions until that body
+    /// added `--type=bool`. A module handed only the raw text would have to carry
+    /// git's boolean grammar a second time; this is git's parser, once.
+    pub boolean: Option<bool>,
+}
+
+/// One declared config key, resolved and per scope (CLOUD-843).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ConfigFact {
+    /// The value in force — git's last-one-wins across every scope — or `None`
+    /// when no scope sets the key. `None` here is an ANSWER (unset), because the
+    /// config was read; could-not-look is the whole fact being `None`.
+    pub effective: Option<ConfigValue>,
+    /// Scope -> the value THAT scope sets (its last), keyed by git's own scope
+    /// names: `system`, `global`, `local`, `worktree`, `command`. A scope that does
+    /// not set the key is ABSENT, never present with a null.
+    ///
+    /// Per scope because the retiring signing gate's whole question is a
+    /// CONFLICT between scopes — something outside the checkout turns signing on
+    /// and nothing local answers it — which the effective value alone cannot
+    /// express.
+    pub scopes: BTreeMap<String, ConfigValue>,
+}
+
+/// The DECLARED config keys as git resolves them, per scope (CLOUD-843).
+///
+/// Read through [`open_configured`] for [`config_value`]'s reason: the subject IS
+/// the resolved configuration, and an isolated handle would report every
+/// globally-set key as unset. Discovery still runs isolated, so the environment
+/// picks neither the repository nor the answer — only the scopes git itself
+/// consults contribute, and `GIT_CONFIG_GLOBAL` / `GIT_CONFIG_NOSYSTEM` move them
+/// exactly as they move git.
+///
+/// **The declaration is the bound, and here it is also the secrecy bound.** A
+/// config file can carry a credential helper's argument or a URL with a token in
+/// it; only a key a row names is read, so no module sees a value nobody asked
+/// for. What a module does with a value is non-negotiable rule 4's business at the
+/// report: a key name is a pointer, a value may not be.
+///
+/// # Errors
+///
+/// Raises when `dir` is not inside a repository this binary can open.
+pub fn config_facts(dir: &Path, declared: &[String]) -> Result<BTreeMap<String, ConfigFact>> {
+    let repo = open_configured(dir)?;
+    let snapshot = repo.config_snapshot();
+    let file = snapshot.plumbing();
+    Ok(declared
+        .iter()
+        .map(|key| (key.clone(), config_fact(file, key)))
+        .collect())
+}
+
+/// Whether `key` is a config key git could address — `section.name` or
+/// `section.subsection.name` — so a row naming anything else is refused at load
+/// rather than resolving to a permanent `unset`.
+#[must_use]
+pub fn config_key_parses(key: &str) -> bool {
+    gix::config::KeyRef::parse_unvalidated(key.into()).is_some_and(|parsed| {
+        !parsed.section_name.is_empty()
+            && !parsed.value_name.is_empty()
+            && parsed
+                .subsection_name
+                .is_none_or(|subsection| !subsection.is_empty())
+    })
+}
+
+/// One key's [`ConfigFact`], walking the sections in git's precedence order.
+///
+/// Walked by hand rather than through gix's `string()`, and the difference is a
+/// defect in the other direction: that accessor skips an IMPLICIT value and falls
+/// back to an earlier scope's, where git's last-one-wins counts the implicit one.
+/// A local `[commit] gpgsign` with no `=` would then report a global value — the
+/// conflict the signing gate exists to see, hidden by the reader.
+fn config_fact(file: &gix::config::File, key: &str) -> ConfigFact {
+    let mut fact = ConfigFact {
+        effective: None,
+        scopes: BTreeMap::new(),
+    };
+    let Some(parsed) = gix::config::KeyRef::parse_unvalidated(key.into()) else {
+        return fact;
+    };
+    let Some(sections) = file.sections_by_name(parsed.section_name) else {
+        return fact;
+    };
+    for section in sections {
+        if section.header().subsection_name() != parsed.subsection_name {
+            continue;
+        }
+        let Some(raw) = section.value_implicit(parsed.value_name) else {
+            continue;
+        };
+        let value = ConfigValue {
+            boolean: match raw.as_ref() {
+                // Implicit: git reads a bare key as true.
+                None => Some(true),
+                Some(text) => gix::config::Boolean::try_from(gix::bstr::BStr::new(text))
+                    .ok()
+                    .map(|boolean| boolean.0),
+            },
+            value: raw.map(|text| text.to_string()),
+        };
+        fact.scopes.insert(
+            config_scope(section.meta().source).to_owned(),
+            value.clone(),
+        );
+        fact.effective = Some(value);
+    }
+    fact
+}
+
+/// git's own name for the scope a config source belongs to — the word `git
+/// config --show-scope` prints.
+///
+/// Exhaustive over [`gix::config::Source`] with no wildcard, so a source gix adds
+/// later fails to compile here rather than reporting under a guessed scope.
+const fn config_scope(source: gix::config::Source) -> &'static str {
+    match source {
+        gix::config::Source::GitInstallation | gix::config::Source::System => "system",
+        gix::config::Source::Git | gix::config::Source::User => "global",
+        gix::config::Source::Local => "local",
+        gix::config::Source::Worktree => "worktree",
+        gix::config::Source::Env
+        | gix::config::Source::Cli
+        | gix::config::Source::Api
+        | gix::config::Source::EnvOverride => "command",
+    }
+}
+
+/// One index entry under a declared pathspec — `git ls-files -s`'s columns
+/// (CLOUD-843).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct IndexEntry {
+    /// The repo-relative path.
+    pub path: String,
+    /// The mode, six octal digits as git prints it — `100644`, `100755`,
+    /// `120000`, `160000`.
+    pub mode: String,
+    /// The object id the index records.
+    pub oid: String,
+    /// The merge stage: `0` for an ordinary entry, `1`–`3` for a conflict's
+    /// sides.
+    pub stage: u32,
+}
+
+/// One declared pathspec's view of the index and the working tree (CLOUD-843).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct IndexFact {
+    /// Every index entry the pathspec selects, in index order (path, then
+    /// stage) — `git ls-files -s -- <spec>`.
+    pub entries: Vec<IndexEntry>,
+    /// The selected TRACKED paths whose working-tree state differs from the index
+    /// — `git diff --name-only -- <spec>`: edited, deleted, re-typed, a flipped
+    /// executable bit where `core.fileMode` is on, and every unmerged path.
+    pub diverged: Vec<String>,
+    /// The selected paths the index does not carry and the repository does not
+    /// ignore — `git ls-files --others --exclude-standard -- <spec>`, on the
+    /// crate's one tree walker so "ignored" means what it means to every rule.
+    pub untracked: Vec<String>,
+}
+
+/// The index and working-tree state under each DECLARED pathspec (CLOUD-843).
+///
+/// The three reads a content-keyed step cache makes before it trusts a key —
+/// `diff --quiet`, `ls-files --others` and `ls-files -s`, each `-- <specs>` —
+/// as one projection, so the cache and any module asking the same question read
+/// one answer. Keyed by the pathspec as declared; a multi-spec question is the
+/// union of its specs' answers, which the reader composes.
+///
+/// **Pathspecs are git's, without magic.** A spec with no wildcard selects itself
+/// and everything beneath it as a directory; one with a wildcard is matched by
+/// git's own `wildmatch` with no flags, so `*` crosses `/` exactly as it does in
+/// `git ls-files '*.toml'`. `.` selects everything. A `:`-magic spec is refused
+/// at load ([`pathspec_is_supported`]) rather than read as a literal.
+///
+/// # What is compared, and the direction it errs in
+///
+/// Content by hash, for [`working_tree_changes`]' reason, and with its stated
+/// cost: clean/smudge filters are not applied, so a repository that rewrites
+/// content on checkout can show a path as diverged whose committed content is
+/// unchanged. That is the OVER-reporting direction, and for a cache key it is the
+/// safe one: a false divergence re-runs a step, a missed one skips a step that
+/// had to run. A gitlink is skipped for that function's reason too — whether a
+/// submodule's own worktree moved is a question about another repository — and
+/// an entry flagged assume-unchanged or skip-worktree is not compared, because
+/// git does not compare it either.
+///
+/// # Errors
+///
+/// Raises when the repository cannot be opened, its index cannot be read, or the
+/// working tree cannot be walked — could-not-look for the whole family.
+pub fn index_facts(dir: &Path, declared: &[String]) -> Result<BTreeMap<String, IndexFact>> {
+    let repo = open(dir)?;
+    // THIS CHECKOUT'S OWN WORKDIR, for `working_tree_changes`' measured reason:
+    // `repo_root` answers with the common dir's parent, so a linked worktree
+    // would compare its own index against the MAIN checkout's files.
+    let root = repo
+        .workdir()
+        .map(Path::to_path_buf)
+        .map_or_else(|| repo_root(dir), Ok)?;
+    let index = repo
+        .index_or_empty()
+        .map_err(|_| UsageError::raise("could not read the git index".to_owned()))?;
+    // `core.fileMode` decides whether a flipped executable bit is a divergence,
+    // exactly as it decides it for git. Read from the repository's own config —
+    // `git init` writes it there — with git's default when absent.
+    let filemode = repo
+        .config_snapshot()
+        .boolean("core.filemode")
+        .unwrap_or(true);
+    let hash = repo.object_hash();
+    let mut facts: BTreeMap<String, IndexFact> = declared
+        .iter()
+        .map(|spec| (spec.clone(), IndexFact::default()))
+        .collect();
+    let mut tracked: BTreeSet<String> = BTreeSet::new();
+    for entry in index.entries() {
+        // A path is bytes; one that is not UTF-8 is dropped rather than lossily
+        // converted, which is this module's standing rule.
+        let Ok(path) = std::str::from_utf8(entry.path(&index)) else {
+            continue;
+        };
+        tracked.insert(path.to_owned());
+        let selecting: Vec<&String> = declared
+            .iter()
+            .filter(|spec| pathspec_matches(spec, path))
+            .collect();
+        // Nothing selected it, so nothing is hashed: the declaration bounds the
+        // content reads, and only the index listing itself is whole-tree.
+        if selecting.is_empty() {
+            continue;
+        }
+        let row = IndexEntry {
+            path: path.to_owned(),
+            mode: format!("{:06o}", entry.mode.bits()),
+            oid: entry.id.to_string(),
+            stage: entry.stage_raw(),
+        };
+        let diverged = entry_diverges(&root, path, entry, hash, filemode);
+        for spec in selecting {
+            let Some(fact) = facts.get_mut(spec) else {
+                continue;
+            };
+            fact.entries.push(row.clone());
+            // One path per conflict's three stages, not three.
+            if diverged && fact.diverged.last().is_none_or(|last| last != path) {
+                fact.diverged.push(path.to_owned());
+            }
+        }
+    }
+    for path in crate::rules::tree_files(&root)? {
+        // `.git` in a LINKED worktree is a regular file, and it is never tree
+        // content — `working_tree_changes` measured the same false entry.
+        if path == ".git" || tracked.contains(&path) {
+            continue;
+        }
+        for spec in declared {
+            if pathspec_matches(spec, &path)
+                && let Some(fact) = facts.get_mut(spec)
+            {
+                fact.untracked.push(path.clone());
+            }
+        }
+    }
+    Ok(facts)
+}
+
+/// Whether the working tree's copy of an index entry differs from it — one
+/// path's `git diff --name-only`.
+fn entry_diverges(
+    root: &Path,
+    path: &str,
+    entry: &gix::index::Entry,
+    hash: gix::hash::Kind,
+    filemode: bool,
+) -> bool {
+    use gix::index::entry::{Flags, Mode};
+    // AN UNMERGED PATH IS A DIFFERENCE, whatever the file holds: `git diff`
+    // reports it and exits non-zero, and a step cache trusting a conflicted tree
+    // would record a verdict over bytes nobody resolved.
+    if entry.stage_raw() != 0 {
+        return true;
+    }
+    if entry
+        .flags
+        .intersects(Flags::ASSUME_VALID | Flags::SKIP_WORKTREE)
+    {
+        return false;
+    }
+    if entry.mode == Mode::COMMIT {
+        return false;
+    }
+    let absolute = root.join(path);
+    let Ok(metadata) = std::fs::symlink_metadata(&absolute) else {
+        // Tracked and gone is a deletion.
+        return true;
+    };
+    let want_link = entry.mode == Mode::SYMLINK;
+    let content = if metadata.is_symlink() {
+        if !want_link {
+            return true;
+        }
+        std::fs::read_link(&absolute)
+            .map(|target| target.to_string_lossy().into_owned().into_bytes())
+    } else if metadata.is_file() {
+        if want_link {
+            return true;
+        }
+        std::fs::read(&absolute)
+    } else {
+        // A directory where the index records a file is a type change.
+        return true;
+    };
+    let Ok(content) = content else {
+        return true;
+    };
+    let Ok(hashed) = gix::objs::compute_hash(hash, gix::object::Kind::Blob, &content) else {
+        return true;
+    };
+    if hashed != entry.id {
+        return true;
+    }
+    // The executable bit, where the platform has one and the repository asks for
+    // it to count. A symlink carries no mode of its own.
+    filemode && !want_link && mode_diverges(&metadata, entry.mode == Mode::FILE_EXECUTABLE)
+}
+
+/// Whether the file's executable bit disagrees with what the index records.
+#[cfg(unix)]
+fn mode_diverges(metadata: &std::fs::Metadata, recorded_executable: bool) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    (metadata.permissions().mode() & 0o111 != 0) != recorded_executable
+}
+
+/// No executable bit to read, so nothing to compare: git on such a platform runs
+/// with `core.fileMode = false` for the same reason.
+#[cfg(not(unix))]
+fn mode_diverges(_metadata: &std::fs::Metadata, _recorded_executable: bool) -> bool {
+    false
+}
+
+/// Whether a git pathspec — without magic — selects `path` (CLOUD-843).
+///
+/// git's `match_pathspec_item`, the two arms that apply to a file: the spec as a
+/// LITERAL, selecting itself and everything beneath it as a directory, and — when
+/// it carries a wildcard — `wildmatch` with no flags over the whole path, so `*`
+/// crosses `/`. A trailing `/` selects only beneath. `.` and a leading `./` are
+/// the root, as git reads them relative to it.
+#[must_use]
+pub fn pathspec_matches(spec: &str, path: &str) -> bool {
+    let spec = spec.strip_prefix("./").unwrap_or(spec);
+    if spec.is_empty() || spec == "." {
+        return true;
+    }
+    let (literal, beneath_only) = match spec.strip_suffix('/') {
+        Some(directory) => (directory, true),
+        None => (spec, false),
+    };
+    if (!beneath_only && path == literal)
+        || path
+            .strip_prefix(literal)
+            .is_some_and(|rest| rest.starts_with('/'))
+    {
+        return true;
+    }
+    spec.contains(['*', '?', '[', '\\'])
+        && gix::glob::wildmatch(
+            spec.into(),
+            path.into(),
+            gix::glob::wildmatch::Mode::empty(),
+        )
+}
+
+/// Whether this build reads `spec` as git would — refused at load otherwise.
+///
+/// Empty is not a pathspec (git refuses it), and a leading `:` is pathspec MAGIC
+/// — `:(exclude)`, `:!`, `:/` — which [`pathspec_matches`] does not implement. Read
+/// as a literal it would select nothing and report a clean tree over paths the
+/// spec meant; refusing it keeps that from being a silent answer.
+#[must_use]
+pub fn pathspec_is_supported(spec: &str) -> bool {
+    !spec.is_empty() && !spec.starts_with(':')
 }
 
 #[cfg(test)]
@@ -5658,4 +6317,85 @@ mod tests {
         }
         assert_eq!(Evidence::NoContent.target_commit(), None);
     }
+
+    #[test]
+    fn a_pathspec_selects_itself_and_what_lies_beneath_it_as_git_does() {
+        // git's `match_pathspec_item`, the arms a file meets (CLOUD-843). A
+        // literal is itself and a directory prefix — never a string prefix, so
+        // `src` does not select `srcs/x`; a wildcard is `wildmatch` with no flags,
+        // so `*` crosses `/` as it does in `git ls-files '*.toml'`.
+        let cases = [
+            ("src", "src", true),
+            ("src", "src/lib.rs", true),
+            ("src", "srcs/lib.rs", false),
+            ("src/", "src", false),
+            ("src/", "src/lib.rs", true),
+            ("./src", "src/a/b.rs", true),
+            (".", "anything/at/all", true),
+            ("*.toml", "batten.toml", true),
+            ("*.toml", "crates/batten/Cargo.toml", true),
+            ("tests/*.bats", "tests/x.bats", true),
+            ("tests/*.bats", "tests/x.rs", false),
+            ("crates/*/src", "crates/batten/src/lib.rs", false),
+            ("docs", "src/docs", false),
+        ];
+        for (spec, path, want) in cases {
+            assert_eq!(pathspec_matches(spec, path), want, "{spec} against {path}");
+        }
+    }
+
+    #[test]
+    fn a_pathspec_this_build_would_misread_is_refused() {
+        assert!(pathspec_is_supported("src"));
+        assert!(pathspec_is_supported("*.rs"));
+        assert!(!pathspec_is_supported(""));
+        assert!(!pathspec_is_supported(":(exclude)src"));
+        assert!(!pathspec_is_supported(":!src"));
+    }
+
+    #[test]
+    fn a_config_key_is_addressable_only_with_a_section_and_a_name() {
+        assert!(config_key_parses("commit.gpgsign"));
+        assert!(config_key_parses("remote.origin.url"));
+        assert!(!config_key_parses("gpgsign"));
+        assert!(!config_key_parses(".gpgsign"));
+        assert!(!config_key_parses("commit."));
+        assert!(!config_key_parses("remote..url"));
+    }
+
+    #[test]
+    fn an_instant_renders_fixed_width_utc() {
+        // Fixed width is what lets a module order two dates with `<`; the pinned
+        // readings are the ones `git_state_facts.rs` asserts over the binary.
+        assert_eq!(iso_utc(0), "1970-01-01T00:00:00Z");
+        assert_eq!(iso_utc(1_577_934_245), "2020-01-02T03:04:05Z");
+        assert_eq!(iso_utc(1_622_548_800), "2021-06-01T12:00:00Z");
+    }
 }
+
+/*
+The mutations CLOUD-843's a-git package declares over this module's retirement
+projections. Each removes or inverts one decision, and the named case is the one
+that stops discriminating. The suite is the compiled-binary tier, because each
+case asserts the projection against `git` itself over one fixture.
+
+A ROW'S SCRIPT MAY CARRY NO `|` of its own (`rows_in` splits on every one), so a
+row naming a closure or a disjunction mutates the one operand it is about.
+
+#MUTANT-SUITE crates/batten/tests/it/git_state_facts.rs
+#MUTANT tag-glob-ignored|s@wildmatch(glob.into(), tag.into()@wildmatch("*".into(), tag.into()@|a_tag_glob_lists_the_tags_it_matches_and_no_others
+#MUTANT tagger-date-ignored|s@            tagged.map(iso_utc)@            Some(iso_utc(committed))@|a_tag_is_dated_by_its_tagger_when_annotated_and_by_its_commit_when_not
+#MUTANT lightweight-undated|s@^            Some(iso_utc(committed))$@            None@|a_tag_is_dated_by_its_tagger_when_annotated_and_by_its_commit_when_not
+#MUTANT signature-header-ignored|s@\*name == "gpgsig" @false @|a_signature_header_reads_signed_and_the_same_word_in_a_body_does_not
+#MUTANT paths-against-empty-tree|s@        Some(parent) => repo.find_commit(parent.detach()).ok()?.tree().ok()?,@        Some(_) => repo.empty_tree(),@|commit_meta_carries_the_subject_the_dates_and_the_paths_a_commit_touched
+#MUTANT dates-swapped|s@        authored: iso_utc(author.seconds()),@        authored: iso_utc(committer.seconds()),@|commit_meta_carries_the_subject_the_dates_and_the_paths_a_commit_touched
+#MUTANT effective-first-wins|s@        fact.effective = Some(value);@        fact.effective = fact.effective.or(Some(value));@|git_config_reports_the_value_in_force_and_what_each_scope_set
+#MUTANT implicit-not-true|s@                None => Some(true),@                None => None,@|git_config_reports_the_value_in_force_and_what_each_scope_set
+#MUTANT global-scope-mislabelled|s@=> "global",@=> "system",@|git_config_reports_the_value_in_force_and_what_each_scope_set
+#MUTANT unaddressable-key-accepted|s@        !parsed.section_name.is_empty()@        true@|a_config_key_git_cannot_address_is_refused_at_load
+#MUTANT index-spec-ignored|s@    let spec = spec.strip_prefix("./").unwrap_or(spec);@    let spec = ".";@|the_index_under_a_pathspec_is_ls_files_stage_entry_for_entry
+#MUTANT content-divergence-missed|s@^    if hashed != entry.id {$@    if false {@|divergence_and_untracked_paths_are_reported_beneath_the_pathspec_only
+#MUTANT untracked-dropped|s@                fact.untracked.push(path.clone());@@|divergence_and_untracked_paths_are_reported_beneath_the_pathspec_only
+#MUTANT file-mode-ignored|s@^    filemode .. !want_link @    !want_link @|a_flipped_executable_bit_diverges_only_where_file_mode_counts
+#MUTANT magic-pathspec-accepted|s@    !spec.is_empty() .. !spec.starts_with(':')@    !spec.is_empty()@|a_magic_pathspec_is_refused_at_load_rather_than_read_as_a_literal
+*/

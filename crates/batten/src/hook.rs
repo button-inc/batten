@@ -7011,7 +7011,15 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // group below, and bounded by how many worktrees exist rather than by
             // anything a row declares. Its subject is the checkout's own hygiene,
             // which is a gate's question and not a question about a command.
-            | crate::facts::Fact::GitWorktrees => None,
+            | crate::facts::Fact::GitWorktrees
+            // CLOUD-843. A tag listing grows with the repository, and the index
+            // family hashes every selected file and walks the checkout — both
+            // unbounded against a per-call budget. Config is the cheap one and
+            // sits here for `GitHead`'s reason below rather than for cost: no
+            // mediated row asks it, so nothing on this path would fill it.
+            | crate::facts::Fact::GitTags
+            | crate::facts::Fact::GitConfig
+            | crate::facts::Fact::GitIndex => None,
             // The other three are cheap enough for this path — one ref read
             // each, under what `Receipts` already spends — and are absent anyway,
             // because NOTHING ON THIS PATH RESOLVES THEM. `facts.rs` classifies
@@ -10602,6 +10610,9 @@ mod tests {
             commits: Vec::new(),
             staged: Vec::new(),
             history: Vec::new(),
+            tags: Vec::new(),
+            git_config: Vec::new(),
+            index: Vec::new(),
             state: Vec::new(),
             forge: Vec::new(),
             tools: Vec::new(),
