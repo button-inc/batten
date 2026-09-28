@@ -1848,7 +1848,20 @@ commit, in this checkout. The receipt is missing, older than the row allows, rec
 against a different head, or records something the row does not accept -- and the refusal \
 names which, because the four call for different repairs. Re-running the check is the \
 remedy for a missing one and useless for a refuted one.",
-        routes: &[read("config read first", "batten.toml")],
+        routes: &[
+            read("config read first", "batten.toml"),
+            // CLOUD-1823's route, declared where the refusal lands (CLOUD-1977).
+            // A red check writes no receipt, so `turn mint ahead` over a red head
+            // refuses as MISSING, never as `receipt read other`. The route there
+            // alone was unreachable from the deadlock it was written for:
+            // `admit_mediated` binds to the class the refusal carries.
+            admit(
+                "articulate the stale receipt",
+                "the check this receipt names is red on this head for a reason only a write can \
+repair, so re-running it cannot change its answer, and the work the receipt was taken about is \
+already pushed",
+            ),
+        ],
         applicability: Applicability::Advice,
     },
     VendoredVerdict {

@@ -316,6 +316,11 @@ const ANSWERS: &str = "precondition=verify is red on this head for a reason only
 /// refusal names no path, so it binds every artifact it names (CLOUD-1871) — which
 /// is also what keeps an admission taken for one situation from covering another.
 fn override_verb(dir: &Path, verb: &[&str], stdin: &str) -> std::process::Output {
+    override_as(dir, "receipt read other", verb, stdin)
+}
+
+/// [`override_verb`] for the refusal class `class`, read off the refusal the same way.
+fn override_as(dir: &Path, class: &str, verb: &[&str], stdin: &str) -> std::process::Output {
     let refused = run_with_stdin(
         dir,
         &["adjudicate", "--harness", "exit-code"],
@@ -329,18 +334,18 @@ fn override_verb(dir: &Path, verb: &[&str], stdin: &str) -> std::process::Output
     let subject = said
         .lines()
         .find_map(|line| {
-            let rest = line.split("receipt read other ").nth(1)?;
+            let rest = line.split(&format!("{class} ")).nth(1)?;
             let artifacts = rest.split(" turn mint ahead").next()?;
             Some(artifacts.split_whitespace().collect::<Vec<_>>().join(","))
         })
-        .unwrap_or_else(|| panic!("the write is refused as `receipt read other`: {said}"));
+        .unwrap_or_else(|| panic!("the write is refused as `{class}`: {said}"));
     let mut args = vec!["override"];
     args.extend_from_slice(verb);
     args.extend_from_slice(&[
         "--rule",
         "turn mint ahead",
         "--verdict",
-        "receipt read other",
+        class,
         "--subject",
         &subject,
     ]);
@@ -421,6 +426,40 @@ fn a_spent_admission_clears_a_superseded_receipt() {
     assert!(
         !said.contains("re-running verify"),
         "the articulation stays in the store: {said}"
+    );
+}
+
+#[test]
+fn a_spent_admission_clears_a_missing_receipt() {
+    // CLOUD-1977. A red `verify` records no receipt, so a punt over a red head is
+    // refused as MISSING, never as `receipt read other`. With the route declared
+    // only on the superseded class, `override request` refused this situation
+    // outright ("declares no `override` route") and the wedge CLOUD-1823 named was
+    // still closed for the one case that produces it: no receipt at all.
+    let dir = repo("punt-missing-admitted");
+    punt(&dir);
+    let class = "receipt read missing";
+
+    let requested = override_as(&dir, class, &["request"], ANSWERS);
+    assert!(
+        requested.status.success(),
+        "the missing class declares the articulation route: {}",
+        stderr(&requested)
+    );
+    let admission = String::from_utf8(requested.stdout)
+        .expect("stdout is UTF-8")
+        .trim()
+        .to_owned();
+    let spent = override_as(&dir, class, &["spend", "--admission", &admission], "");
+    assert!(
+        spent.status.success(),
+        "the admission spends: {}",
+        stderr(&spent)
+    );
+    assert_eq!(
+        verdict(&dir, "src/tracked.rs"),
+        Some(0),
+        "a spent admission clears the write over a missing receipt"
     );
 }
 
