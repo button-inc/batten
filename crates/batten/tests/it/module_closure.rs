@@ -296,7 +296,9 @@ fn no_module_leaves_the_plumbing() {
     // whatever the tree happens to say today.
     let arrived: Vec<&String> = plumbing.difference(&recorded).collect();
     if !arrived.is_empty() {
-        println!("arrived in the plumbing since PLUMBING was recorded: {arrived:?}");
+        report(&format!(
+            "arrived in the plumbing since PLUMBING was recorded: {arrived:?}"
+        ));
     }
 }
 
@@ -350,11 +352,17 @@ fn print_the_distribution() {
     for (size, module) in &sizes {
         by_size.entry(*size).or_default().push(module.as_str());
     }
-    println!("total modules: {}", sizes.len());
+    report(&format!("total modules: {}", sizes.len()));
     for (size, modules) in &by_size {
-        println!(
+        report(&format!(
             "  closure {size:3}: {:3} modules  {modules:?}",
             modules.len()
-        );
+        ));
     }
+}
+
+/// Stderr, as `bundle.rs`'s `skipped` does: the workspace denies `print_stdout`.
+fn report(line: &str) {
+    use std::io::Write as _;
+    drop(writeln!(std::io::stderr(), "{line}"));
 }
