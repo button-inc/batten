@@ -304,16 +304,19 @@ resolution as `get_check_runs` above, for the same reason. `gh pr create` and
 
 ## `add_repo` is blocked, so the repo scope cannot be widened at all
 
-Measured 2026-08-21. `add_repo` is served by the Claude Code Remote toolbox
-server, whose every tool carries a mandatory-approval flag and returns
-`MCP tool call requires approval` (`mem:connector-allowlist-recovery`'s STOP
-section has the mechanism and the upstream issues). So:
+`add_repo` is served by the Claude Code Remote toolbox server, whose every tool
+the claude.ai account sets to `always_ask`. Measured 2026-08-21, it returned
+`MCP tool call requires approval` with nobody to approve. Its siblings
+`list_sessions`, `create_session` and `get_session` answered on 2026-09-27 once
+the owner approved each call (CLOUD-1946), and `add_repo` has the same posture.
+So:
 
-- **A session cannot attach a second repository**, for any purpose — not to read
-  one, not to clone one, not to comment on its issues.
-- **The scope you start with is the scope you have.** The system prompt's "call
-  `add_repo` to bring in a repository" is unreachable here; do not offer it to
-  the user as a next step, and do not spend a turn on it.
+- **Call `add_repo` when the task needs a repository outside the session's
+  scope.** The owner approves or declines the prompt, and that is their decision
+  to make, not one to pre-empt by skipping the call.
+- **The prompt goes away at the account, not here**: claude.ai/customize/connectors
+  → Claude Code Remote → Tool permissions. No `.claude/settings.json` entry moves
+  it (`mem:connector-allowlist-recovery`'s STOP section).
 
 ### `gh` is the route, and nothing upstream is unreachable
 

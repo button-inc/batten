@@ -17,7 +17,7 @@
 //! would exit `0` and fail. No separate reachability case is needed, and adding
 //! one would assert the same fact twice.
 //!
-//! Four observations, per CLOUD-418, each here because dropping it lets another
+//! Five observations, per CLOUD-418, each here because dropping it lets another
 //! pass over a predicate that decides nothing:
 //!
 //! * `the_landed_shape_is_clean` — the positive.
@@ -26,6 +26,8 @@
 //! * `a_dropped_sentinel_is_refused` — the anti-vacuity mirror. Without it the
 //!   positive is satisfied by a predicate that only ever looks for `batten`, and
 //!   the sentinel guarantee ships as coverage having never been walked.
+//! * `a_dropped_read_clause_is_refused` — CLOUD-1946's clause, whose absence
+//!   puts a prompt back on every plan-mode read.
 //! * `an_absent_settings_file_answers_nothing` — could-not-look is not a
 //!   refusal. Without it, a predicate that refused unconditionally passes the
 //!   two negative cases.
@@ -80,7 +82,22 @@ class = "A fixture copy of the shipped class; the registry's own row is in batte
 id = "task run first"
 kind = "document"
 target = "harness-grant.rego"
+
+[[verdict]]
+id = "plan read dropped"
+gloss = "a read-only call stops for a human again in plan mode"
+class = "A fixture copy of the shipped class; the registry's own row is in batten.toml."
+
+[[verdict.route]]
+id = "task run first"
+kind = "document"
+target = "harness-grant.rego"
 "#;
+
+/// The read-only clause as the landed settings carry it, abbreviated to the two
+/// phrases the predicate reads (CLOUD-1946).
+const READS: &str =
+    "EVERY READ-ONLY CALL IS ALLOWED, ALWAYS, IN EVERY PERMISSION MODE, PLAN MODE INCLUDED.";
 
 /// A repository fixture, optionally carrying a settings file with `allow`.
 ///
@@ -114,11 +131,9 @@ fn check(repo: &Path) -> Output {
 #[test]
 fn the_landed_shape_is_clean() {
     // THE POSITIVE. The shape CLOUD-1247 landed: the mediator named, the
-    // sentinel kept.
-    let repo = fixture(
-        "clean",
-        Some(r#"["$defaults", "Allow every `batten` subcommand."]"#),
-    );
+    // sentinel kept — and, since CLOUD-1946, the read-only clause beside them.
+    let allow = format!(r#"["$defaults", "Allow every `batten` subcommand.", "{READS}"]"#);
+    let repo = fixture("clean", Some(&allow));
     let outcome = check(&repo);
     let (answer, cause) = (stdout(&outcome), stderr(&outcome));
     assert_eq!(
@@ -134,7 +149,8 @@ fn a_dropped_grant_is_refused() {
     // only raisable if the engine parsed a path under `.claude/`. A walker that
     // skipped dotfile directories would leave `grants` undefined, Rego would read
     // that as *does not hold*, and this case would exit 0.
-    let repo = fixture("dropped-grant", Some(r#"["$defaults"]"#));
+    let allow = format!(r#"["$defaults", "{READS}"]"#);
+    let repo = fixture("dropped-grant", Some(&allow));
     let outcome = check(&repo);
     let (answer, cause) = (stdout(&outcome), stderr(&outcome));
     assert_eq!(
@@ -150,16 +166,33 @@ fn a_dropped_sentinel_is_refused() {
     // THE ANTI-VACUITY MIRROR. A predicate that only ever looked for `batten`
     // satisfies both cases above and is silent here, shipping the sentinel
     // guarantee as coverage that was never walked.
-    let repo = fixture(
-        "dropped-sentinel",
-        Some(r#"["Allow every `batten` subcommand."]"#),
-    );
+    let allow = format!(r#"["Allow every `batten` subcommand.", "{READS}"]"#);
+    let repo = fixture("dropped-sentinel", Some(&allow));
     let outcome = check(&repo);
     let (answer, cause) = (stdout(&outcome), stderr(&outcome));
     assert_eq!(
         outcome.status.code(),
         Some(2),
         "dropping $defaults must refuse in its own right\n{answer}{cause}"
+    );
+    assert!(answer.contains("grant carry missing"), "{answer}{cause}");
+}
+
+#[test]
+fn a_dropped_read_clause_is_refused() {
+    // CLOUD-1946. The owner's rule that every read-only call is allowed in every
+    // mode, plan mode included, lives in this clause; dropping it puts the prompt
+    // back on every plan-mode read while the mediator grant still looks intact.
+    let repo = fixture(
+        "dropped-reads",
+        Some(r#"["$defaults", "Allow every `batten` subcommand."]"#),
+    );
+    let outcome = check(&repo);
+    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
+    assert_eq!(
+        outcome.status.code(),
+        Some(2),
+        "dropping the read-only clause must refuse\n{answer}{cause}"
     );
     assert!(answer.contains("grant carry missing"), "{answer}{cause}");
 }

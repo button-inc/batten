@@ -11368,46 +11368,6 @@ preapproves = true
 owner = "CLOUD-312"
 expires = "2027-02-28"
 
-# CLOUD-312 row 8: `mcp-allow-check --session` retires THROUGH THE DOOR, beside its
-# own sibling. `mcp-attach-check` above went first as the cheapest honest proof of
-# the door; this is the same event and the same shape, so what is left to decide is
-# only the two things that differ.
-#
-# NO MATCHER, DELIBERATELY. Row 5 needed one because `pre-tool` fires per tool call,
-# so an unnarrowed handler doubled the mediated cost of every call it was silent on
-# (measured: 41.5 ms against a 21 ms path). `user-prompt-submit` fires once per
-# prompt and carries no tool, so there is nothing to narrow and a matcher here would
-# be a column that reads as a restriction and expresses none. The absence is the
-# statement.
-#
-# THE ARGUMENT IS THE WHOLE POINT OF THE ROW. This file's own scope split lives on
-# `--session`: three predicates are pure functions of the committed settings, so they
-# belong to the commit and run in the hk gate and CI; the fourth reads which servers
-# THIS session attached, which is a property of the world. Only this registration
-# passes the flag, and moving it here keeps that split declared in the one authority
-# rather than spelled in a settings file the gate cannot read.
-#
-# ITS `exit 2` IS SAFE HERE, and that is a property of the door rather than luck.
-# The script exits 2 for could-not-look — unparseable settings, or no `jq` on the
-# PATH a by-path hook inherits — and 2 is the deny code. A deny at
-# `user-prompt-submit` is DEMOTED TO ADVICE (`lib.rs`, "a refusal is demoted to
-# advice on a moment that cannot carry one"), so an unreadable settings file reports
-# and never costs the author their prompt. Registered directly, the same exit was
-# whatever the host chose to make of it.
-#
-# `timeout_ms` is measured rather than defaulted, like its sibling: the three
-# committed-settings predicates are `jq` over one file, and the session predicate
-# reads the generated MCP config and the client's logs. It returns in tens of
-# milliseconds warm, so 2000 is two orders of headroom.
-[[hook.handler]]
-id = "mcp-allow-check"
-on = "user-prompt-submit"
-run = ["mise", "run", "-q", "mcp-allow-check", "--", "--session"]
-# Two `mise run`s with the resolver nested, ~750ms each in this checkout.
-timeout_ms = 5000
-owner = "CLOUD-312"
-expires = "2027-02-28"
-
 # THE STRANDED-FINDING CHECK, at the end of the turn that stranded it (CLOUD-252),
 # retired off `mise-tasks/finding-sink-check.sh` under CLOUD-1717. A `stop` row is
 # the engine's end-of-turn ladder's SECOND rung, after the completion reading and
@@ -11799,6 +11759,43 @@ run = ["mise", "run", "gh-preflight"]
 # ITS TIMEOUT IS THE PAIR'S LARGE HALF: this one opens the network and walks
 # several endpoints, which is what the retired script's 120s was actually for.
 timeout_ms = 120000
+owner = "CLOUD-312"
+expires = "2027-02-28"
+
+# CLOUD-312 row 8: `mcp-allow-check --session`, THROUGH THE DOOR, AT SESSION START
+# (CLOUD-1946).
+#
+# IT SPOKE TO NOBODY FOR ITS WHOLE LIFE ON `user-prompt-submit`, and that is the
+# reason it is here. Measured 2026-09-28: the row reported `Claude_Code_Remote — 2
+# allow rule(s) name a tool the connector sets to always_ask` on every prompt,
+# the door appended it to the advisory buffer, and `batten adjudicate` wrote
+# NOTHING to stdout, because `UserPromptSubmit` is not in Claude Code's
+# `advisory.delivered_on` (`crates/batten/src/hook.rs`, `ADVISORY_GAPS` names it
+# unprobed). So the one gate that says "this committed grant cannot take effect;
+# the fix is the connector's Tool permissions" was dropped every turn, while
+# sessions were told by memory that no such setting exists.
+#
+# `session-start` IS A MEASURED CHANNEL and the right cadence besides: the
+# connector's per-tool posture is written into the injected wiring when the
+# launcher starts the session and read from nowhere else, so a per-prompt check
+# re-derives a fact that cannot change within the session.
+#
+# THE ARGUMENT IS THE WHOLE POINT OF THE ROW. This file's own scope split lives on
+# `--session`: three predicates are pure functions of the committed settings, so they
+# belong to the commit and run in the hk gate and CI; the fourth reads which servers
+# THIS session attached, which is a property of the world. Only this registration
+# passes the flag, and moving it here keeps that split declared in the one authority
+# rather than spelled in a settings file the gate cannot read.
+#
+# AFTER THE PROVISIONING ROWS, because its could-not-look arm is "no `jq` on the
+# PATH", which `session-install` is what provides. A deny at `session-start` is
+# demoted to advice (`lib.rs`), so exit 2 reports and never costs the session.
+[[hook.handler]]
+id = "mcp-allow-check"
+on = "session-start"
+run = ["mise", "run", "-q", "mcp-allow-check", "--", "--session"]
+# Two `mise run`s with the resolver nested, ~750ms each in this checkout.
+timeout_ms = 5000
 owner = "CLOUD-312"
 expires = "2027-02-28"
 
@@ -13423,6 +13420,25 @@ rather than a second reason folded into the first.
 id = "task run first"
 kind = "command"
 target = "restore the `$defaults` sentinel to .claude/settings.json's autoMode.allow"
+
+[[verdict]]
+id = "plan read dropped"
+gloss = "a read-only call stops for a human again in plan mode"
+class = """
+The repository owner's standing rule is that every read-only call is allowed in \
+every permission mode, plan mode included (CLOUD-1946). Plan mode consults the \
+auto-mode classifier while `useAutoModeDuringPlan` holds, so the rule lives in \
+one `autoMode.allow` clause naming READ-ONLY and PLAN MODE. A settings file that \
+drops the clause, or sets `useAutoModeDuringPlan` to false, puts an approval \
+prompt back on every plan-mode read while the mediator grant still reads intact. \
+A connector tool the claude.ai account sets to ask prompts regardless; that is \
+the account's Tool permissions, reported by `mcp-allow-check --session`.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "restore the read-only clause to .claude/settings.json's autoMode.allow and leave useAutoModeDuringPlan unset or true"
 
 [[verdict]]
 id = "shell add refused"

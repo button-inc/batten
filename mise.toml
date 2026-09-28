@@ -4573,7 +4573,7 @@ exit 0
 #                             (`batten policy tools`). An under-matching deny fails
 #                             OPEN, silently (CLOUD-178). An unreadable engine is
 #                             could-not-look: the predicate is skipped and says so.
-# World-scoped, only with `--session` (the `user-prompt-submit` handler row):
+# World-scoped, only with `--session` (the `session-start` handler row, CLOUD-1946):
 #   CLOUD-765  an allow rule on the toolbox alias whose tool the connector sets to
 #              anything but `always_allow` — no allow rule skips that prompt. The
 #              alias comes from `[tasks.connector-allow-resolve] --aliases`, the one

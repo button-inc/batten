@@ -1201,10 +1201,14 @@ impl Bound {
     /// connector whose tools are grantable shows a MIX — Linear measured 57
     /// `always_allow` against 1 `always_ask` — where the session-management
     /// server measured 20 of 20 `always_ask`, including the read-only ones. All
-    /// of them asking is a **mandatory-approval** connector, which no local grant
-    /// moves; some of them asking is an ordinary one. A predicate that reported
-    /// both identically would send somebody to a settings screen that does not
-    /// exist for the first, which this memory records having happened.
+    /// of them asking means the account has granted none of that connector's
+    /// tools, and no REPOSITORY grant moves it; some of them asking is an
+    /// ordinary per-tool posture. Either way the posture is the account's own
+    /// connector setting (its Tool permissions), which the launcher honours
+    /// exactly — measured 2026-09-27, CLOUD-1946: a connector's allowed tools
+    /// and the launcher's allowed list matched one for one. An earlier version
+    /// of this doc said that setting does not exist for the session-management
+    /// connector; it does, and saying otherwise sent sessions to hand dispatch.
     #[must_use]
     pub const fn mandatory(&self) -> bool {
         self.declared > 0 && self.asks == self.declared

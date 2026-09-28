@@ -67,6 +67,21 @@ keeps_the_defaults if {
 	entry == sentinel
 }
 
+# CLOUD-1946. The owner's standing rule, as the committed file must carry it:
+# every read-only call is allowed in every permission mode, plan mode included.
+# Plan mode consults this classifier only while `useAutoModeDuringPlan` holds,
+# and it defaults on, so ABSENT is the landed state and only an explicit `false`
+# withdraws the clause from plan mode.
+reads_everywhere if {
+	some entry in grants
+	contains(entry, "READ-ONLY")
+	contains(entry, "PLAN MODE")
+}
+
+plan_uses_the_classifier if {
+	not input.tree.documents[".claude/settings.json"].useAutoModeDuringPlan == false
+}
+
 # The grant is gone, so this repository's own binary is refused by the layer that
 # actually decides.
 violation contains {
@@ -88,6 +103,26 @@ violation contains {
 	not keeps_the_defaults
 }
 
+# The read-only clause is gone, or plan mode was told not to consult it: a
+# plan-mode read stops for a human again, which is the prompt the owner removed.
+violation contains {
+	"rule": "grant carry missing",
+	"verdict": "plan read dropped",
+	"subjects": [{"path": ".claude/settings.json"}],
+} if {
+	grants
+	not reads_everywhere
+}
+
+violation contains {
+	"rule": "grant carry missing",
+	"verdict": "plan read dropped",
+	"subjects": [{"path": ".claude/settings.json"}],
+} if {
+	grants
+	not plan_uses_the_classifier
+}
+
 # --- the load-time tier ------------------------------------------------------
 #
 # These pin the PREDICATE. They cannot pin that the ENGINE builds
@@ -99,12 +134,32 @@ violation contains {
 
 settings(entries) := {"tree": {"documents": {".claude/settings.json": {"autoMode": {"allow": entries}}}}}
 
+reads := "EVERY READ-ONLY CALL IS ALLOWED, ALWAYS, IN EVERY PERMISSION MODE, PLAN MODE INCLUDED."
+
 test_the_landed_shape_is_clean if {
-	count(violation) == 0 with input as settings(["$defaults", "Allow every `batten` subcommand."])
+	count(violation) == 0 with input as settings(["$defaults", "Allow every `batten` subcommand.", reads])
+}
+
+test_a_dropped_read_clause_is_refused if {
+	some v in violation with input as settings(["$defaults", "Allow every `batten` subcommand."])
+	v.verdict == "plan read dropped"
+}
+
+# The clause kept and plan mode told not to run the classifier is the same
+# prompt by another route, so it is the same class.
+test_plan_mode_switched_off_is_refused if {
+	doc := {"autoMode": {"allow": ["$defaults", "batten", reads]}, "useAutoModeDuringPlan": false}
+	some v in violation with input as {"tree": {"documents": {".claude/settings.json": doc}}}
+	v.verdict == "plan read dropped"
+}
+
+test_plan_mode_switched_on_is_clean if {
+	doc := {"autoMode": {"allow": ["$defaults", "batten", reads]}, "useAutoModeDuringPlan": true}
+	count(violation) == 0 with input as {"tree": {"documents": {".claude/settings.json": doc}}}
 }
 
 test_a_dropped_grant_is_refused if {
-	some v in violation with input as settings(["$defaults"])
+	some v in violation with input as settings(["$defaults", reads])
 	v.verdict == "grant declare absent"
 }
 
@@ -112,12 +167,12 @@ test_a_dropped_grant_is_refused if {
 # predicate that only ever looks for `batten`, and the sentinel guarantee ships
 # as coverage having never been walked.
 test_a_dropped_sentinel_is_refused if {
-	some v in violation with input as settings(["Allow every `batten` subcommand."])
+	some v in violation with input as settings(["Allow every `batten` subcommand.", reads])
 	v.verdict == "default carry dropped"
 }
 
-test_both_missing_raises_both if {
-	count(violation) == 2 with input as settings([])
+test_all_missing_raises_all_three if {
+	count(violation) == 3 with input as settings([])
 }
 
 # COULD NOT LOOK IS NOT A REFUSAL, and this is the case that keeps the module
@@ -132,3 +187,4 @@ test_no_settings_file_answers_nothing if {
 
 #MUTANT-SUITE crates/batten/tests/it/harness_grant.rs
 #MUTANT grant-unread|s@^\tgrants$@\tfalse@|a_dropped_grant_is_refused
+#MUTANT read-clause-unchecked|s@^\tnot reads_everywhere$@\tfalse@|a_dropped_read_clause_is_refused

@@ -25,35 +25,44 @@ refuses the shapes above.
 Everything below is about sibling SESSIONS, each with its own container and
 clone. None of it licenses subagent implementers inside one container.
 
-## READ FIRST: you cannot open the sessions. `create_session` is blocked upstream.
+## READ FIRST: the session tools work, each call after an approval (measured 2026-09-27)
 
-**Every parameter this memory documents for `create_session` — permission mode,
-effort, title, tags — is accurate and unusable, because the call itself is
-refused.** It returns `MCP tool call requires approval`, in every session, with
-no human to approve it. Do not probe it "to see if it works now". Do not add an
-allow rule. Do not send anyone to a settings screen.
+**When to open a sibling session at all:** only when the owner tells a grooming
+session to groom and dispatch a bundle. Work the owner hands THIS session is
+done by this session, serially, in this checkout. Handing it to a sibling is a
+punt, whatever the tool allows.
 
-Why, sourced rather than re-derived
-([#76264](https://github.com/anthropics/claude-code/issues/76264),
-[#61044](https://github.com/anthropics/claude-code/issues/61044),
-[#61097](https://github.com/anthropics/claude-code/issues/61097); full detail and
-the recognisable tell in `mem:connector-allowlist-recovery`'s STOP section): the
-session-management tools carry a **mandatory-approval flag** — _"requires
-explicit approval regardless of permission mode"_ — and all three escapes are
-documented as tested and failing (`bypassPermissions`, an explicit
-`permissions.allow` entry for the exact tool name, and a `PreToolUse` hook
-returning allow). A second upstream defect has the CCR proxy refusing
-server-side, before the permission layer is reached.
+**What the tools do, measured rather than remembered (CLOUD-1946).**
+`list_sessions`, `create_session` and `get_session` all answered on 2026-09-27,
+each after the owner approved the call. `create_session` started a child in the
+requested permission mode. An earlier version of this section said the sessions
+could not be opened and forbade re-testing. Both claims were false, and
+following them re-derived hand dispatch.
 
-**The governing principle, and the reason this keeps recurring:** the refusal is
-the REMOTE's behaviour, and **we can only change our harness.** Every attempt so
-far has tried to change the remote's mind — a grant, a translation, a
-bypass — and every one of them is a documented dead end. Design around it
-instead.
+**Why every call prompts, and where the fix lives.**
 
-**So the fleet is dispatched BY HAND**, and that is settled rather than a
-workaround to re-litigate: `CLOUD-731`, `CLOUD-784`, `CLOUD-839` are the
-precedents. **What an agent produces is the prompts, not the sessions.**
+- The injected wiring (`/tmp/mcp-config-cse_*.json`) sets all 26
+  `Claude_Code_Remote` tools to `always_ask`.
+- That posture is the claude.ai account's own connector setting, and the
+  launcher honours it exactly. Claude Docs' allowed tools and the launcher's
+  allowed list matched one for one.
+- A repository `permissions.allow` entry cannot move an ask. The committed file
+  has granted `mcp__Claude_Code_Remote` and `get_session` all along, and
+  `get_session` still prompted. The Claude Code permissions docs say so in as
+  many words: an allow rule for a connector tool set to ask does not take effect.
+- The fix is the account's: claude.ai/customize/connectors → Claude Code Remote
+  → Tool permissions → Always allow. Name it when asked.
+- `mcp-allow-check --session` reports every committed grant the account still
+  asks for, at session start (the `mcp-allow-check` handler row in
+  `batten.toml`). Until 2026-09-28 it ran on `user-prompt-submit`, where Claude
+  Code delivers no advisory, so nobody ever saw it.
+- Upstream reports on the cloud routine path (#61097, #76264) stay relevant.
+  Re-test after a client upgrade rather than trusting any memory, this one
+  included.
+
+**Hand dispatch stays the fallback, never the default.** `CLOUD-731`,
+`CLOUD-784` and `CLOUD-839` recorded it under the false premise. When a
+dispatch the owner asked for cannot run, produce the prompts, as below.
 
 **Write them BOTH places, and this is not a style point — getting it wrong
 withholds the deliverable.** The board is where they must persist, because chat

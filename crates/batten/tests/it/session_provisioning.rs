@@ -125,7 +125,7 @@ use common::{at_root, git_in, scratch, stderr, stdout, write};
 ///
 /// A LIST RATHER THAN A COUNT, because a count cannot tell an added row from a
 /// renamed one, and the ordering claim below needs the names anyway.
-const DECLARED: [&str; 12] = [
+const DECLARED: [&str; 13] = [
     "session-stamp",
     "session-install",
     "session-submodules",
@@ -157,6 +157,11 @@ const DECLARED: [&str; 12] = [
     // reading of a diff that shows the name gone.
     "session-container-preflight",
     "session-credential",
+    // CLOUD-1946: the connector-ask check, moved off `user-prompt-submit`, where
+    // Claude Code delivers no advisory, so its finding was dropped every turn.
+    // After the provisioning rows because its could-not-look arm is a missing
+    // `jq`, which `session-install` provides.
+    "mcp-allow-check",
     "session-census",
 ];
 
@@ -753,6 +758,74 @@ fn every_handler_row_is_read() {
         "a row on another event is read too, so `session_rows` is filtering \
          rather than being all there is"
     );
+}
+
+/// Rows that still report on a Claude Code event whose advisory channel nobody
+/// has probed, stated so the census below can be exact rather than lenient.
+/// CLOUD-1961 owns emptying it; a row leaving this list is what closing the gap
+/// looks like, in `ADVISORY_GAPS`' shape one table over.
+const UNHEARD: [&str; 3] = [
+    "mcp-attach-check",
+    "turn-cross-check",
+    "head-move-mediator-check",
+];
+
+/// Whether Claude Code carries an advisory emitted on the event a row names.
+///
+/// Asks the engine's own table twice — the host's spelling for the token, then
+/// whether that spelling is in `delivered_on` — so the census cannot drift from
+/// what the door actually renders.
+fn claude_hears(on: &str) -> bool {
+    let wiring = batten::hook::Harness::ClaudeCode
+        .wiring()
+        .expect("Claude Code is an installable harness");
+    let Some((_, spelling)) = wiring
+        .spellings
+        .iter()
+        .find(|(event, _)| event.as_str() == on)
+    else {
+        return false;
+    };
+    let capabilities = batten::hook::Harness::ClaudeCode.capabilities();
+    capabilities.advisory_reachable(spelling)
+}
+
+// THE ANTI-VACUITY ARM IS THE SECOND LOOP. A `claude_hears` answering yes for
+// everything passes the first loop over any tree, which is the exact false green
+// this census exists to refuse: the finding the door drops looks, from the
+// config, identical to one it delivers.
+//MUTANT hears-everything|s@^    capabilities.advisory_reachable(spelling)$@    !capabilities.events.is_empty() \&\& !spelling.is_empty()@|every_reporting_handler_speaks_on_a_delivered_channel
+#[test]
+fn every_reporting_handler_speaks_on_a_delivered_channel() {
+    // CLOUD-1946. A handler's exit-1 report joins the advisory buffer, and the
+    // buffer reaches the model only on an event in `delivered_on`. Measured
+    // 2026-09-28: `mcp-allow-check` on `user-prompt-submit` reported a connector
+    // grant that could not take effect on every prompt, and `batten adjudicate`
+    // wrote nothing to stdout. The row read as a gate and decided nothing.
+    let rows = handler_rows();
+    for row in &rows {
+        if UNHEARD.contains(&row.id.as_str()) {
+            continue;
+        }
+        assert!(
+            claude_hears(&row.on),
+            "{} reports on `{}`, where Claude Code delivers no advisory, so its \
+             findings are dropped; move it to a delivered event or name it in \
+             UNHEARD with the row that closes it",
+            row.id,
+            row.on
+        );
+    }
+    for id in UNHEARD {
+        let row = rows
+            .iter()
+            .find(|row| row.id == id)
+            .unwrap_or_else(|| panic!("{id} is still declared, or leaves UNHEARD"));
+        assert!(
+            !claude_hears(&row.on),
+            "{id} is heard now; remove it from UNHEARD"
+        );
+    }
 }
 
 #[test]
