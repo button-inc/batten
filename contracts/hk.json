@@ -50,6 +50,7 @@
             "cargo-fmt",
             "cargo-clippy",
             "test",
+            "signing-posture-record",
             "batten-check",
             "policy-test",
             "memories-check"
@@ -286,21 +287,27 @@
           "parallelGroupId": "group_0"
         },
         {
-          "name": "batten-check",
+          "name": "signing-posture-record",
           "status": "included",
           "orderIndex": 38,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "policy-test",
+          "name": "batten-check",
           "status": "included",
           "orderIndex": 39,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "memories-check",
+          "name": "policy-test",
           "status": "included",
           "orderIndex": 40,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "memories-check",
+          "status": "included",
+          "orderIndex": 41,
           "parallelGroupId": "group_0"
         }
       ]
@@ -418,6 +425,7 @@
             "cargo-fmt",
             "cargo-clippy",
             "test",
+            "signing-posture-record",
             "batten-check",
             "policy-test"
           ]
@@ -653,15 +661,21 @@
           "parallelGroupId": "group_0"
         },
         {
-          "name": "batten-check",
+          "name": "signing-posture-record",
           "status": "included",
           "orderIndex": 38,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "policy-test",
+          "name": "batten-check",
           "status": "included",
           "orderIndex": 39,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "policy-test",
+          "status": "included",
+          "orderIndex": 40,
           "parallelGroupId": "group_0"
         }
       ]

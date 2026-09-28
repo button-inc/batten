@@ -677,6 +677,13 @@ local gate = new Mapping<String, Step> {
   // target-dir lock, and dropping the chain would put it back in contention with
   // `test` — the race CLOUD-201 and CLOUD-220 were both about. What delegation
   // moved is which binary does the scanning, not whether one has to be built.
+  // The producer `commit grade unsafe` reads, re-run before the judge so the
+  // record describes THIS range (see `batten-check`'s `depends`).
+  ["signing-posture-record"] {
+    profiles = List("slow")
+    glob = List("**")
+    check = "mise run signing-posture-record"
+  }
   ["batten-check"] {
     // `slow` tier: `cargo run`, so it pays a debug build — 9.47s cold, 133-141ms
     // warm (CLOUD-212 run 1, D8).
@@ -687,7 +694,12 @@ local gate = new Mapping<String, Step> {
     // two are unordered, so a commit that moved `hk.pkl` could be adjudicated
     // against a record keyed to the previous bytes — absent rather than wrong, by
     // the keying's design, but silent for that run.
-    depends = List("test", "pkl")
+    // `signing-posture-record` for the same reason: `commit grade unsafe` reads the
+    // record that task writes, keyed by branch and claim but NOT by head, so a
+    // record left by an earlier range judged this one. Measured on #1051: a lap
+    // carrying a speculated range recorded trunk's signed release commit, and
+    // every later lap refused that commit after the range was gone.
+    depends = List("test", "pkl", "signing-posture-record")
     glob =
       List(
         "batten.toml",
