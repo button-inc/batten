@@ -17,6 +17,7 @@
 #MUTANT projection-unread|s@^        let projected = free_mb.saturating_sub(burn);$@        let projected = free_mb;@|a_falling_series_reclaims_before_the_floor_is_crossed
 #MUTANT reclaim-under-held-lock|s@^            Err(std::fs::TryLockError::WouldBlock) => return None,$@            Err(std::fs::TryLockError::WouldBlock) => {}@|a_tree_under_a_held_build_lock_survives_the_reclaim
 #MUTANT reclaim-unlink-unmeasured|s@^        lines.push(format!("disk-unlink-ms {}", self.wall_ms));$@@|an_exhausted_volume_never_starts_the_gate_and_records_the_reclaim
+#MUTANT admission-floor-judged-mid-lap|s@^    floor.mb.saturating_sub(floor.worst_mb)$@    floor.mb@|a_lap_below_the_admission_floor_but_within_its_budget_runs
 */
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -96,7 +97,7 @@ fn a_tree_under_a_held_build_lock_survives_the_reclaim() {
     lock.lock().unwrap();
     std::fs::File::create(tree.join("release/.cargo-lock")).unwrap();
 
-    batten::disk_watch::reclaim(&tree, &rules("target", 1)).expect("reclaim");
+    batten::disk_watch::reclaim(&tree, &rules("target", 1), 1).expect("reclaim");
     assert_eq!(survivors(&debug), 3, "a building profile loses nothing");
     assert_eq!(
         survivors(&release),
@@ -105,7 +106,7 @@ fn a_tree_under_a_held_build_lock_survives_the_reclaim() {
     );
 
     drop(lock);
-    batten::disk_watch::reclaim(&tree, &rules("target", 1)).expect("reclaim");
+    batten::disk_watch::reclaim(&tree, &rules("target", 1), 1).expect("reclaim");
     assert_eq!(survivors(&debug), 2, "released, keep = 2 applies again");
 }
 
@@ -175,6 +176,30 @@ fn a_volume_with_room_runs_the_gate() {
         tree: repo.join("target"),
         config: &config,
         free_mb: Box::new(|| Ok(1_000_000)),
+    };
+    let verified = batten::land::verify_raced(&repo, "work", &command, &[], &[], None, Some(watch))
+        .expect("the lap answers");
+    assert!(
+        matches!(verified, batten::land::Verified::Clean(_)),
+        "{verified:?}"
+    );
+    assert!(repo.join("gate-ran.cfg").exists(), "the gate ran");
+}
+
+/// THE STOP #1036'S FIRST LAP MADE, as a case. A lap spends the headroom its
+/// admission certified, so a reading below the warm floor is ordinary mid-gate.
+/// Only past the worst measured lap — into the multiplier's margin — is it off
+/// model. Here the floor is far above the reading, but the worst lap on record
+/// leaves a reserve of 1MB, so 10MB free is a lap within its budget.
+#[test]
+fn a_lap_below_the_admission_floor_but_within_its_budget_runs() {
+    let (repo, command) = gated("prune-watch-within-budget");
+    let mut config = rules("target", 100_000_000);
+    config.warm.worst_mb = 99_999_999;
+    let watch = batten::land::DiskWatch {
+        tree: repo.join("target"),
+        config: &config,
+        free_mb: Box::new(|| Ok(10)),
     };
     let verified = batten::land::verify_raced(&repo, "work", &command, &[], &[], None, Some(watch))
         .expect("the lap answers");

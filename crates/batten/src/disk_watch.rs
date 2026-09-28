@@ -35,6 +35,26 @@
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 //MUTANT projection-unread|s@^        let projected = free_mb.saturating_sub(burn);$@        let projected = free_mb;@|a_falling_series_reclaims_before_the_floor_is_crossed
 //MUTANT reclaim-unlink-unmeasured|s@^        lines.push(format!("disk-unlink-ms {}", self.wall_ms));$@@|an_exhausted_volume_never_starts_the_gate_and_records_the_reclaim
+//MUTANT admission-floor-judged-mid-lap|s@^    floor.mb.saturating_sub(floor.worst_mb)$@    floor.mb@|a_lap_below_the_admission_floor_but_within_its_budget_runs
+
+/// The free space below which a RUNNING lap is off its measured model, in MB.
+///
+/// **NOT THE ADMISSION FLOOR, and the difference was measured.** The warm floor
+/// certifies, once, at a lap's open, that the worst lap on record fits with the
+/// multiplier's margin. A healthy lap then SPENDS that headroom — that is what
+/// it was certified for — so judging mid-gate readings against the admission
+/// floor stops laps for being ordinary. #1036's first lap consumed 6368MB, read
+/// 15375MB free against a 15384MB floor, and this arm stopped a gate that had
+/// just printed `fast-forward-green`.
+///
+/// The lap is off-model only once it has eaten past its worst measured
+/// consumption into the multiplier's margin: `mb − worst_mb`. That is where
+/// reclaiming earns its cost, and where "nothing left to reclaim" means the
+/// volume, not the tree, is about to decide the verdict.
+#[must_use]
+pub const fn reserve_mb(floor: &crate::prune::Floor) -> u64 {
+    floor.mb.saturating_sub(floor.worst_mb)
+}
 
 /// How often the watcher samples, in seconds.
 ///
@@ -107,7 +127,7 @@ impl Pressure {
 pub struct Reclaimed {
     /// Free space after the reclaim, in megabytes.
     pub free_mb: u64,
-    /// The floor in force after it.
+    /// The running lap's reserve it was judged against ([`reserve_mb`]).
     pub floor_mb: u64,
     /// Megabytes the reclaim freed, superseded and escalated together.
     pub freed_mb: u64,
@@ -149,16 +169,23 @@ impl Reclaimed {
 /// measured racing the builds. Every removal goes through `prune`'s own build-lock
 /// claim, so a profile a build holds is skipped rather than pulled from under it.
 ///
+/// Judged against `reserve_mb`, the running lap's reserve, never `prune`'s own
+/// admission floor — see [`reserve_mb`] for why the two differ.
+///
 /// # Errors
 ///
 /// `prune`'s could-not-look: an absent tree, or free space that cannot be read.
-pub fn reclaim(tree: &std::path::Path, config: &crate::prune::Prune) -> anyhow::Result<Reclaimed> {
+pub fn reclaim(
+    tree: &std::path::Path,
+    config: &crate::prune::Prune,
+    reserve_mb: u64,
+) -> anyhow::Result<Reclaimed> {
     let started = std::time::Instant::now();
     let outcome = crate::prune::prune(tree, config, false, None)?;
     let wall_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     Ok(Reclaimed {
         free_mb: outcome.free_mb,
-        floor_mb: outcome.floor_mb,
+        floor_mb: reserve_mb,
         freed_mb: outcome.reclaimed_mb + outcome.escalated_mb.unwrap_or(0),
         escalated: outcome.escalated_mb.is_some(),
         wall_ms,

@@ -1330,8 +1330,8 @@ pub fn verify_raced(
     });
     let started = std::time::Instant::now();
     let mut disk = disk.map(|watch| {
-        let pressure =
-            crate::disk_watch::Pressure::new(watch.config.warm.mb, crate::disk_watch::HORIZON);
+        let reserve = crate::disk_watch::reserve_mb(&watch.config.warm);
+        let pressure = crate::disk_watch::Pressure::new(reserve, crate::disk_watch::HORIZON);
         (watch, pressure)
     });
 
@@ -1544,6 +1544,14 @@ fn watch_arm(
                     arms.escalated
                         .store(true, std::sync::atomic::Ordering::Relaxed);
                 }
+                // A GATE THAT ALREADY ANSWERED KEEPS ITS ANSWER. Measured on
+                // #1036's first lap: the gate printed `fast-forward-green`,
+                // set `stop`, and this arm — mid-turn when it did — cancelled a
+                // finished group and claimed the race. A verdict that exists is
+                // never replaced by a reading taken after it.
+                if arms.stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
                 if reclaimed.exhausted() {
                     // NOTHING LEFT THE RULES MAY RECLAIM, so the gate dies
                     // of the volume either way; stopping it now spends
@@ -1604,9 +1612,12 @@ fn disk_turn(
     let at = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     match pressure.observe(at, free) {
         crate::disk_watch::Reading::Clear => None,
-        crate::disk_watch::Reading::Reclaim => {
-            crate::disk_watch::reclaim(&watch.tree, watch.config).ok()
-        }
+        crate::disk_watch::Reading::Reclaim => crate::disk_watch::reclaim(
+            &watch.tree,
+            watch.config,
+            crate::disk_watch::reserve_mb(&watch.config.warm),
+        )
+        .ok(),
     }
 }
 
