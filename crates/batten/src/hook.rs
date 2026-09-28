@@ -13637,6 +13637,14 @@ deny contains "refused by themodule" if {
                 None,
             );
         }
+        if class == crate::verdict::Native::ReceiptUnusable.id() {
+            return receipt_refusal(
+                &shape("r", "unused", None),
+                "verify",
+                Validity::Missing,
+                None,
+            );
+        }
         panic!(
             "{class} declares an override route and this table has no sample for it. \
              Add one built the way its deny site builds a refusal — do NOT relax the \
