@@ -21088,6 +21088,7 @@ fn run_doctor(
             run_doctor_toolchain(manifest, json, out)
         }
         cli::DoctorCommand::Target { ref target } => doctor::run_target(target, out, err),
+        cli::DoctorCommand::Config { json } => run_doctor_config(json, out),
     }
 }
 
@@ -21334,6 +21335,25 @@ fn run_doctor_commit_gate(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
     // The parent's promise, inherited rather than re-decided: `ExitCode::Violation`
     // is unreachable here, because a mediating harness reads `2` as a deny and
     // "this clone has no commit hooks" is not "policy says no".
+    Ok(if check.ok {
+        ExitCode::Success
+    } else {
+        ExitCode::Usage
+    })
+}
+
+/// Does this build resolve every row of the committed config?
+///
+/// **The bare report's `config` [`doctor::Check`], asked alone**, for
+/// [`run_doctor_commit_gate`]'s reason: a `[[startup]]` row needs a command that
+/// answers this question and no other. Rationale on [`cli::DoctorCommand::Config`].
+fn run_doctor_config(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
+    let check = doctor::diagnose_config(&std::env::current_dir()?);
+    if json {
+        writeln!(out, "{}", serde_json::to_string_pretty(&check)?)?;
+    } else {
+        output::line(out, &check)?;
+    }
     Ok(if check.ok {
         ExitCode::Success
     } else {

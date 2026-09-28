@@ -454,6 +454,46 @@ fn a_healthy_repository_exits_zero() {
     );
 }
 
+// --- doctor config: the `config` check, asked alone ----------------------------
+
+/// A config whose second row names a key no build knows, so this build drops it.
+const DROPPED_ROW: &str = r#"version = 1
+
+[[hook.handler]]
+id = "from-a-newer-schema"
+on = "user-prompt-submit"
+run = ["true"]
+owner = "CLOUD-1775"
+expires = "2027-02-28"
+this_key_does_not_exist_in_any_version = true
+"#;
+
+/// THE SKEW NO STARTUP ROW COULD SEE: an installed engine older than the tree
+/// loads the committed config and drops every row naming a key it does not know.
+/// `config show` exits `0` over that by design, so a `[[startup]]` row needs a
+/// verb whose exit status IS the drop.
+#[test]
+fn doctor_config_fails_on_a_row_this_build_cannot_resolve() {
+    let dir = scratch("doctor-config-dropped", true, Some(DROPPED_ROW));
+    let output = doctor(&dir, &["config"]);
+    assert_eq!(output.status.code(), Some(1), "got: {}", stdout(&output));
+    assert_eq!(stdout(&output), "config failed config-rows-dropped\n");
+}
+
+/// The anti-vacuity half: a verb that always failed would pass the case above and
+/// fail every startup forever with a repair that cannot clear it.
+#[test]
+fn doctor_config_passes_a_config_this_build_resolves() {
+    let dir = scratch("doctor-config-clean", false, Some("version = 1\n"));
+    let output = doctor(&dir, &["config"]);
+    assert_eq!(output.status.code(), Some(0), "got: {}", stdout(&output));
+    assert_eq!(
+        stdout(&output),
+        "config ok\n",
+        "asked alone: no git or program check rides along"
+    );
+}
+
 #[test]
 fn a_missing_config_exits_one_and_names_the_reason() {
     let dir = scratch("doctor-no-config", true, None);

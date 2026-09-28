@@ -1744,6 +1744,21 @@ pub enum DoctorCommand {
         /// The target triple to install, as `rustup target list` spells it.
         target: String,
     },
+    /// Whether this build resolves every row of the committed config, asked alone.
+    ///
+    /// APPENDED LAST, for the reason [`DoctorCommand::Egress`] records.
+    ///
+    /// **The bare report's `config` check, as a sub-verb for a `[[startup]]` row**,
+    /// on [`DoctorCommand::CommitGate`]'s reason: a startup row decides on an exit
+    /// status. The skew it catches is an installed engine OLDER than the tree —
+    /// both can report one version — which loads the committed config and drops
+    /// every row naming a key it does not know (`config-rows-dropped`). `config
+    /// show` exits `0` over that by design, so no startup row could see it.
+    /// [`crate::doctor::diagnose_config`] is the one predicate both reach.
+    Config {
+        /// Emit the diagnosis as byte-stable JSON.
+        json: bool,
+    },
 }
 
 /// Subcommands of `generate`.
@@ -2090,6 +2105,9 @@ fn doctor_of(matches: &ArgMatches) -> DoctorCommand {
             json: flag(matches, "json"),
         },
         Some(("gate", matches)) => DoctorCommand::CommitGate {
+            json: flag(matches, "json"),
+        },
+        Some(("config", matches)) => DoctorCommand::Config {
             json: flag(matches, "json"),
         },
         Some(("toolchain", matches)) => DoctorCommand::Toolchain {

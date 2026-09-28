@@ -17907,3 +17907,22 @@ id = "mediator-matches-the-tree"
 gloss = "the engine adjudicating this tree was built from it, so a declared gate is not silently dropped"
 check = ["batten", "doctor", "mediator"]
 repair = ["mise", "run", "install:local"]
+
+# AND THE ENGINE ON `PATH` MUST RESOLVE EVERY ROW OF THIS CONFIG.
+#
+# `mediator-matches-the-tree` compares the planted binary with the tree's build by
+# content and time, so it passes whenever the two agree — including when BOTH
+# predate the config, which is how a rebase that brings a new key under a live
+# branch leaves a session: the engine loads `batten.toml`, drops each row naming a
+# key it does not know, and every dropped row decides nothing. Both binaries can
+# report one version over that, so no version comparison can see it either.
+# `engine-reads-the-authority` asks `config show`, which exits `0` over a drop by
+# design. Only the bare report's `config` check answered `config-rows-dropped`,
+# and no row asked it; `doctor config` is that check alone. An installed engine
+# too old to know the sub-verb fails it as a usage error, and the same repair —
+# the tree's build — is the right one there too.
+[[startup]]
+id = "engine-resolves-every-row"
+gloss = "the engine on PATH resolves every row of this config, so none is dropped undecided"
+check = ["batten", "doctor", "config"]
+repair = ["mise", "run", "install:local"]

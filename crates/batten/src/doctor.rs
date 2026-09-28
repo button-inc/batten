@@ -1271,6 +1271,41 @@ fn is_runnable_hook(at: &Path) -> bool {
     }
 }
 
+/// The bare report's `config` check (CLOUD-1428), and `doctor config`'s whole
+/// answer.
+///
+/// One predicate reached from both, on [`diagnose_commit_gate`]'s reason: a
+/// startup row asks it alone, and a second reading could drift from the report.
+#[must_use]
+pub fn diagnose_config(dir: &Path) -> Check {
+    match config::load(&dir.join(config::CONFIG_FILE)) {
+        // Loading proves the file parses and the version gates pass; resolving
+        // proves the §8 chain (including a `batten.local.toml`) is coherent too.
+        // Both are wanted — a config that parses but whose local override is
+        // refused is not a working setup.
+        // A ROW THIS BUILD COULD NOT RESOLVE IS A FAILING CHECK, not a clean
+        // load with a footnote (CLOUD-1428). The file loads by design — that is
+        // the whole repair, and the alternative was every gate off at once —
+        // but each dropped row is a declared gate that is NOT running, and a
+        // green `doctor` over one is the same vacuous pass one layer along.
+        // This is the arm that gives the drop an exit code rather than a
+        // message: `config show` names the rows, and nothing else was reading.
+        //MUTANT-SUITE crates/batten/tests/it/doctor.rs
+        //MUTANT dropped-rows-pass|s@Check::failed(CONFIG, "config-rows-dropped")@Check::passed(CONFIG)@|doctor_config_fails_on_a_row_this_build_cannot_resolve
+        Ok(config) if !config.unresolvable.is_empty() => {
+            Check::failed(CONFIG, "config-rows-dropped")
+        }
+        Ok(_) => match resolve::resolve(dir, &crate::Overrides::default()) {
+            Ok(_) => Check::passed(CONFIG),
+            Err(_) => Check::failed(CONFIG, "config-unresolvable"),
+        },
+        Err(_) if !dir.join(config::CONFIG_FILE).exists() => {
+            Check::failed(CONFIG, "config-missing")
+        }
+        Err(_) => Check::failed(CONFIG, "config-invalid"),
+    }
+}
+
 /// Whether this checkout's commit path runs the gate (CLOUD-1398).
 ///
 /// **The predicate, asked only where a caller asks for it** — `doctor
@@ -1455,30 +1490,7 @@ fn handler_program_resolves(dir: &Path, program: &str) -> bool {
 pub fn diagnose(dir: &Path) -> Report {
     let mut checks = Vec::new();
 
-    checks.push(match config::load(&dir.join(config::CONFIG_FILE)) {
-        // Loading proves the file parses and the version gates pass; resolving
-        // proves the §8 chain (including a `batten.local.toml`) is coherent too.
-        // Both are wanted — a config that parses but whose local override is
-        // refused is not a working setup.
-        // A ROW THIS BUILD COULD NOT RESOLVE IS A FAILING CHECK, not a clean
-        // load with a footnote (CLOUD-1428). The file loads by design — that is
-        // the whole repair, and the alternative was every gate off at once —
-        // but each dropped row is a declared gate that is NOT running, and a
-        // green `doctor` over one is the same vacuous pass one layer along.
-        // This is the arm that gives the drop an exit code rather than a
-        // message: `config show` names the rows, and nothing else was reading.
-        Ok(config) if !config.unresolvable.is_empty() => {
-            Check::failed(CONFIG, "config-rows-dropped")
-        }
-        Ok(_) => match resolve::resolve(dir, &crate::Overrides::default()) {
-            Ok(_) => Check::passed(CONFIG),
-            Err(_) => Check::failed(CONFIG, "config-unresolvable"),
-        },
-        Err(_) if !dir.join(config::CONFIG_FILE).exists() => {
-            Check::failed(CONFIG, "config-missing")
-        }
-        Err(_) => Check::failed(CONFIG, "config-invalid"),
-    });
+    checks.push(diagnose_config(dir));
 
     checks.push(match git::repo_root(dir) {
         Ok(_) => Check::passed(GIT_REPO),

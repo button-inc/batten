@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-doctor-config 1  batten 
+.SH NAME
+batten\-doctor\-config \- Diagnose whether this build resolves every row of the config
+.SH SYNOPSIS
+\fBbatten doctor config\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Diagnose whether this build resolves every row of the config
+.SH OPTIONS
+.TP
+\fB\-J\fR, \fB\-\-json\fR
+Emit byte\-stable JSON instead of pointer lines
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

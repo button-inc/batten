@@ -3472,6 +3472,19 @@ pub const SURFACE: &[CommandDecl] = &[
     // `crates/batten/tests/it/surface.rs` go red at once. Measured here rather
     // than reasoned — no verb on this surface has ever carried an internal
     // hyphen, and this is why. Do not reintroduce one.
+    // THE BARE REPORT'S `config` CHECK, ASKED ALONE, on `doctor gate`'s reason
+    // below: a `[[startup]]` row decides on an exit status, and the one skew no
+    // row could see — an installed engine older than the tree, dropping every
+    // row whose key it does not know — exits `0` from `config show` by design.
+    CommandDecl {
+        path: "doctor config",
+        id: "doctor.config",
+        about: "Diagnose whether this build resolves every row of the config",
+        data_channel: true,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[JSON],
+    },
     CommandDecl {
         path: "doctor gate",
         id: "doctor.gate",
