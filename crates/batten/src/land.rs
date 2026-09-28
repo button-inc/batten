@@ -3316,6 +3316,7 @@ mod lap_tests {
         // sets the same names.
         crate::rest::declare(crate::rest::Forge {
             credential_names: vec![String::from("GH_TOKEN"), String::from("GITHUB_TOKEN")],
+            query: Vec::new(),
         });
         let config = crate::pr_watch::Config {
             sha: String::from("0000000000000000000000000000000000000000"),

@@ -2041,6 +2041,13 @@
           "items": {
             "type": "string"
           }
+        },
+        "query": {
+          "description": "The paginated reads this consumer declares, each recorded by\n`batten record query <id>` (CLOUD-843).\n\n**Declared HERE, interpreted in [`crate::forge_query`]**, and the split is\nthe layering rather than a filing accident: this table is the `[forge]`\nsection and this module is its owner, while the template grammar, the\nwalk and the reduction reach `git`, `forge` and `record` — edges this\nmodule, which reaches `fetch` alone, must not grow. So the rows are plain\ndata here and every reading of them is that module's.\n\n**No weakening comparison in `trust.rs`, and the absence is argued.**\nDeleting a row is LOUD rather than silent: the `[[record]]` row that\ndeclares its family still names `record query <id>` as the writer, and\nthat invocation then exits 1 on an id nothing declares. Editing a row's\nendpoint, window or reduction changes WHAT is measured, and none of those\nhas a monotone reading a raise-only clamp could order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Query"
+          }
         }
       },
       "additionalProperties": false
@@ -3095,6 +3102,72 @@
       "required": [
         "warm",
         "cold"
+      ]
+    },
+    "Query": {
+      "description": "One `[[forge.query]]` row: a declared, paginated REST read and the reduction\na producer records from it (CLOUD-843).\n\n# Why a row rather than a verb per measurement\n\nEleven shell bodies each re-derived the same four things — an endpoint with\nthe repository spliced in, a pagination walk, a date cut-off and a `jq`\nprojection — and three of them got the truncation wrong three different ways\n([`crate::forge`]'s header). One declared row per read puts the consumer's\nfacts (which endpoint, which fields, which window) in the committed authority\nand leaves the mechanism in the engine, which is non-negotiable rule 1's split\nexactly: nothing here names an endpoint, and nothing in `batten.toml` walks a\npage.\n\nThe row's `id` is also the RECORD FAMILY it writes, and a `[[record]]` row\nmust declare that family — a query nothing projects would write a store no\nmodule can read, which is CLOUD-1810's dead gate one table over, refused at\nload rather than discovered as a green run.",
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "description": "The API-relative endpoint, with no leading slash and no query string,\ne.g. `repos/{owner}/{repo}/actions/runs`.\n\n`{owner}` and `{repo}` are resolved from the checkout's forge remote;\n`{since}` is the window's cut-off instant where `since` is declared; any\nother `{name}` is bound by `record query --input name=value`. A\nplaceholder nobody binds is a usage error, never a literal brace on the\nwire — the forge client this replaces expanded `{owner}/{repo}` itself,\nand a port that inherited the spelling without the expansion 404'd on\nevery call (`land_forge_reads.rs`).",
+          "type": "string"
+        },
+        "id": {
+          "description": "The query's name, which `record query` takes and which is also the record\nfamily it writes. One path component.",
+          "type": "string"
+        },
+        "max_pages": {
+          "description": "The page budget. Required and at least 1, for [`crate::forge::window`]'s\nreason: every caller that took a default took a different one.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "params": {
+          "description": "Further query-string parameters, as `name = \"template\"`. Values take the\nsame placeholders as `endpoint` and are percent-encoded after binding.\n\n`page` and `per_page` are the walk's own and are refused here.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "per_page": {
+          "description": "Rows asked for per page, `1..=100`.\n\nRequired, because it is also the walk's END-OF-COLLECTION signal where\nthe endpoint states no count: a page shorter than this is the last. The\nforge silently clamps above 100, so a larger value would make every full\npage look short and end the walk after one page reporting it whole.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "rows": {
+          "description": "Where the rows are in the response body: absent means the body IS the\narray; a key names the array an object wraps, e.g. `workflow_runs`.\n\nNamed rather than sniffed, for [`crate::forge::Shape`]'s reason. A wrong\nanswer is loud rather than silent: an object read as bare is not an array,\nwhich the walk reports as could-not-look.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "select": {
+          "description": "The reduction: which fields of each row are recorded, as dot-separated\npaths (`head_commit.id`, `pull_requests.0.number`).\n\nRequired and non-empty. The whole row is NEVER recorded — a forge row\ncarries titles, bodies and URLs, and non-negotiable rule 4 is decided\nhere, at the declaration, rather than hoped for at every reader. A path\nthat resolves to nothing records `null`, so every row has every key.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "since": {
+          "description": "A trailing time window over the rows, and whether it may end the walk.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Since"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "endpoint",
+        "per_page",
+        "max_pages",
+        "select"
       ]
     },
     "Read": {
@@ -4433,6 +4506,32 @@
         "class",
         "code",
         "family"
+      ]
+    },
+    "Since": {
+      "description": "A `[[forge.query]]` row's time window: keep the rows whose `field` is an\nRFC 3339 instant no older than `seconds` before the producer's clock.\n\nThe clock is the PRODUCER's (house style §5): a module sees the rows already\nwindowed and the cut-off as a token in the record, and `Fact::Instant` stays\n`null` on every policy surface.",
+      "type": "object",
+      "properties": {
+        "field": {
+          "description": "The row field carrying the instant, as a dot-separated path.",
+          "type": "string"
+        },
+        "seconds": {
+          "description": "The window's length, back from now, in seconds. At least 1.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "stop": {
+          "description": "The collection is ordered newest-first on `field`, so the first row older\nthan the cut-off ends the walk.\n\n**A claim only the consumer can make**, which is why it defaults off: a\nwalk that stopped on a collection that was NOT so ordered would report a\nprefix as the whole window ([`crate::forge::Stop`]).",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "field",
+        "seconds"
       ]
     },
     "Sink": {

@@ -499,6 +499,88 @@ pub fn day_of(instant: &str) -> Option<i64> {
     Some(era * 146_097 + day_of_era - 719_468)
 }
 
+/// Seconds since the epoch for an RFC 3339 instant, or `None` when it cannot be
+/// read as one (CLOUD-843, the forge-query foundation).
+///
+/// [`day_of`]'s sibling at a finer grain, and it REUSES that function for the
+/// date half rather than carrying a second civil-calendar conversion: two
+/// conversions over one calendar are two answers to "what day is this", and the
+/// one that is wrong is only found by a date near a boundary.
+///
+/// # Why a second resolution at all
+///
+/// [`day_of`] answers in whole days because the bound it serves is a day count.
+/// A producer windowing a forge collection "since this instant" is not: a
+/// twenty-five-hour window judged at day resolution admits up to a day of rows
+/// the caller excluded, and the rows at the edge are exactly the ones a
+/// percentile over the window is most sensitive to.
+///
+/// # Strict, in the direction that refuses
+///
+/// `YYYY-MM-DDTHH:MM:SS`, an optional fraction (dropped — the window is in whole
+/// seconds), and a zone that is `Z` or `±HH:MM`. A zone is REQUIRED: an instant
+/// with no offset is a wall-clock reading on an unknown clock, and guessing UTC
+/// would silently move every row by the writer's offset. The separator may be
+/// `T`, `t` or a space, which is what the RFC itself admits.
+#[must_use]
+pub fn second_of(instant: &str) -> Option<i64> {
+    let days = day_of(instant)?;
+    let bytes = instant.as_bytes();
+    if !matches!(bytes.get(10), Some(b'T' | b't' | b' ')) {
+        return None;
+    }
+    if bytes.get(13) != Some(&b':') || bytes.get(16) != Some(&b':') {
+        return None;
+    }
+    let (hour, minute, second) = (
+        two_digits(bytes, 11)?,
+        two_digits(bytes, 14)?,
+        two_digits(bytes, 17)?,
+    );
+    // 60 IS A LEAP SECOND and the RFC admits it; it reads as the last second of
+    // the minute plus one, which is where the instant actually is.
+    if hour > 23 || minute > 59 || second > 60 {
+        return None;
+    }
+    let mut rest = instant.get(19..)?;
+    if let Some(fraction) = rest.strip_prefix('.') {
+        let digits = fraction.bytes().take_while(u8::is_ascii_digit).count();
+        if digits == 0 {
+            return None;
+        }
+        rest = fraction.get(digits..)?;
+    }
+    let offset = match rest {
+        "Z" | "z" => 0,
+        zone => {
+            let zone = zone.as_bytes();
+            let sign = match zone.first() {
+                Some(b'+') => 1,
+                Some(b'-') => -1,
+                _ => return None,
+            };
+            if zone.len() != 6 || zone.get(3) != Some(&b':') {
+                return None;
+            }
+            let (hours, minutes) = (two_digits(zone, 1)?, two_digits(zone, 4)?);
+            if hours > 23 || minutes > 59 {
+                return None;
+            }
+            sign * (hours * 3_600 + minutes * 60)
+        }
+    };
+    // The offset is SUBTRACTED: `10:00+02:00` is `08:00Z`.
+    Some(days * 86_400 + hour * 3_600 + minute * 60 + second - offset)
+}
+
+/// Two ASCII digits at `index` as a number, or `None` where either is not one.
+fn two_digits(bytes: &[u8], index: usize) -> Option<i64> {
+    let tens = *bytes.get(index)?;
+    let ones = *bytes.get(index + 1)?;
+    (tens.is_ascii_digit() && ones.is_ascii_digit())
+        .then(|| i64::from(tens - b'0') * 10 + i64::from(ones - b'0'))
+}
+
 /// How long a claim may sit untouched, and the instant it is measured against.
 ///
 /// **The instant is supplied rather than read**, which is the same split
@@ -1136,6 +1218,55 @@ mod tests {
         // A known offset, so the arithmetic is pinned and not merely non-None.
         let (earlier, later) = (day_of("2026-08-18"), day_of("2026-08-20"));
         assert_eq!(later.zip(earlier).map(|(a, b)| a - b), Some(2));
+    }
+
+    /// `second_of` pinned against KNOWN epoch values, not merely non-None — the
+    /// same standard the case above holds `day_of` to. `1_788_000_000` is
+    /// 2026-08-29T10:40:00Z, which `receipt::rfc3339_utc` independently renders.
+    #[test]
+    fn an_instant_reads_to_the_second_and_its_offset_is_applied() {
+        assert_eq!(second_of("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(second_of("2026-08-29T10:40:00Z"), Some(1_788_000_000));
+        assert_eq!(
+            crate::receipt::rfc3339_utc(1_788_000_000),
+            "2026-08-29T10:40:00Z",
+            "the formatter and the parser agree about one instant"
+        );
+        // One second apart is one second apart: the grain `day_of` cannot see.
+        assert_eq!(
+            second_of("2026-08-29T10:40:01Z")
+                .zip(second_of("2026-08-29T10:40:00Z"))
+                .map(|(a, b)| a - b),
+            Some(1)
+        );
+        // A fraction is dropped, and an offset is SUBTRACTED to reach UTC.
+        assert_eq!(second_of("2026-08-29T10:40:00.987Z"), Some(1_788_000_000));
+        assert_eq!(second_of("2026-08-29T12:40:00+02:00"), Some(1_788_000_000));
+        assert_eq!(second_of("2026-08-29T05:10:00-05:30"), Some(1_788_000_000));
+        assert_eq!(second_of("2026-08-29 10:40:00z"), Some(1_788_000_000));
+    }
+
+    /// Every shape that is not an instant is `None`, and the zone-less one is the
+    /// load-bearing refusal: guessing UTC for a wall-clock reading moves every row
+    /// by the writer's offset, silently.
+    #[test]
+    fn a_stamp_that_is_not_an_rfc3339_instant_is_unreadable() {
+        for stamp in [
+            "2026-08-29",
+            "2026-08-29T10:40:00",
+            "2026-08-29T10:40Z",
+            "2026-08-29X10:40:00Z",
+            "2026-08-29T24:00:00Z",
+            "2026-08-29T10:60:00Z",
+            "2026-08-29T10:40:61Z",
+            "2026-08-29T10:40:00.Z",
+            "2026-08-29T10:40:00+0200",
+            "2026-08-29T10:40:00+24:00",
+            "2026-08-29T10:40:00Zjunk",
+            "not-a-dateT10:40:00Z",
+        ] {
+            assert_eq!(second_of(stamp), None, "{stamp:?} is not an instant");
+        }
     }
 
     #[test]

@@ -90,6 +90,123 @@ pub struct Forge {
     /// spellings it used to carry.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub credential_names: Vec<String>,
+    /// The paginated reads this consumer declares, each recorded by
+    /// `batten record query <id>` (CLOUD-843).
+    ///
+    /// **Declared HERE, interpreted in [`crate::forge_query`]**, and the split is
+    /// the layering rather than a filing accident: this table is the `[forge]`
+    /// section and this module is its owner, while the template grammar, the
+    /// walk and the reduction reach `git`, `forge` and `record` — edges this
+    /// module, which reaches `fetch` alone, must not grow. So the rows are plain
+    /// data here and every reading of them is that module's.
+    ///
+    /// **No weakening comparison in `trust.rs`, and the absence is argued.**
+    /// Deleting a row is LOUD rather than silent: the `[[record]]` row that
+    /// declares its family still names `record query <id>` as the writer, and
+    /// that invocation then exits 1 on an id nothing declares. Editing a row's
+    /// endpoint, window or reduction changes WHAT is measured, and none of those
+    /// has a monotone reading a raise-only clamp could order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub query: Vec<Query>,
+}
+
+/// One `[[forge.query]]` row: a declared, paginated REST read and the reduction
+/// a producer records from it (CLOUD-843).
+///
+/// # Why a row rather than a verb per measurement
+///
+/// Eleven shell bodies each re-derived the same four things — an endpoint with
+/// the repository spliced in, a pagination walk, a date cut-off and a `jq`
+/// projection — and three of them got the truncation wrong three different ways
+/// ([`crate::forge`]'s header). One declared row per read puts the consumer's
+/// facts (which endpoint, which fields, which window) in the committed authority
+/// and leaves the mechanism in the engine, which is non-negotiable rule 1's split
+/// exactly: nothing here names an endpoint, and nothing in `batten.toml` walks a
+/// page.
+///
+/// The row's `id` is also the RECORD FAMILY it writes, and a `[[record]]` row
+/// must declare that family — a query nothing projects would write a store no
+/// module can read, which is CLOUD-1810's dead gate one table over, refused at
+/// load rather than discovered as a green run.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct Query {
+    /// The query's name, which `record query` takes and which is also the record
+    /// family it writes. One path component.
+    pub id: String,
+    /// The API-relative endpoint, with no leading slash and no query string,
+    /// e.g. `repos/{owner}/{repo}/actions/runs`.
+    ///
+    /// `{owner}` and `{repo}` are resolved from the checkout's forge remote;
+    /// `{since}` is the window's cut-off instant where `since` is declared; any
+    /// other `{name}` is bound by `record query --input name=value`. A
+    /// placeholder nobody binds is a usage error, never a literal brace on the
+    /// wire — the forge client this replaces expanded `{owner}/{repo}` itself,
+    /// and a port that inherited the spelling without the expansion 404'd on
+    /// every call (`land_forge_reads.rs`).
+    pub endpoint: String,
+    /// Where the rows are in the response body: absent means the body IS the
+    /// array; a key names the array an object wraps, e.g. `workflow_runs`.
+    ///
+    /// Named rather than sniffed, for [`crate::forge::Shape`]'s reason. A wrong
+    /// answer is loud rather than silent: an object read as bare is not an array,
+    /// which the walk reports as could-not-look.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<String>,
+    /// Further query-string parameters, as `name = "template"`. Values take the
+    /// same placeholders as `endpoint` and are percent-encoded after binding.
+    ///
+    /// `page` and `per_page` are the walk's own and are refused here.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub params: std::collections::BTreeMap<String, String>,
+    /// Rows asked for per page, `1..=100`.
+    ///
+    /// Required, because it is also the walk's END-OF-COLLECTION signal where
+    /// the endpoint states no count: a page shorter than this is the last. The
+    /// forge silently clamps above 100, so a larger value would make every full
+    /// page look short and end the walk after one page reporting it whole.
+    pub per_page: u32,
+    /// The page budget. Required and at least 1, for [`crate::forge::window`]'s
+    /// reason: every caller that took a default took a different one.
+    pub max_pages: u32,
+    /// A trailing time window over the rows, and whether it may end the walk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<Since>,
+    /// The reduction: which fields of each row are recorded, as dot-separated
+    /// paths (`head_commit.id`, `pull_requests.0.number`).
+    ///
+    /// Required and non-empty. The whole row is NEVER recorded — a forge row
+    /// carries titles, bodies and URLs, and non-negotiable rule 4 is decided
+    /// here, at the declaration, rather than hoped for at every reader. A path
+    /// that resolves to nothing records `null`, so every row has every key.
+    pub select: Vec<String>,
+}
+
+/// A `[[forge.query]]` row's time window: keep the rows whose `field` is an
+/// RFC 3339 instant no older than `seconds` before the producer's clock.
+///
+/// The clock is the PRODUCER's (house style §5): a module sees the rows already
+/// windowed and the cut-off as a token in the record, and `Fact::Instant` stays
+/// `null` on every policy surface.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct Since {
+    /// The row field carrying the instant, as a dot-separated path.
+    pub field: String,
+    /// The window's length, back from now, in seconds. At least 1.
+    pub seconds: u64,
+    /// The collection is ordered newest-first on `field`, so the first row older
+    /// than the cut-off ends the walk.
+    ///
+    /// **A claim only the consumer can make**, which is why it defaults off: a
+    /// walk that stopped on a collection that was NOT so ordered would report a
+    /// prefix as the whole window ([`crate::forge::Stop`]).
+    #[serde(default)]
+    pub stop: bool,
 }
 
 /// What the loaded config declared about the forge, set once per process.
@@ -764,7 +881,8 @@ mod tests {
         assert_eq!(
             pick(
                 &Forge {
-                    credential_names: Vec::new()
+                    credential_names: Vec::new(),
+                    query: Vec::new(),
                 },
                 env
             ),
@@ -775,6 +893,7 @@ mod tests {
             pick(
                 &Forge {
                     credential_names: vec![String::from("TOKEN")],
+                    query: Vec::new(),
                 },
                 env
             ),
@@ -788,6 +907,7 @@ mod tests {
             pick(
                 &Forge {
                     credential_names: vec![String::from("TOKEN")],
+                    query: Vec::new(),
                 },
                 |name| if name == "GH_TOKEN" {
                     Some(String::from("leaked"))
@@ -807,6 +927,7 @@ mod tests {
             pick(
                 &Forge {
                     credential_names: vec![String::from("EMPTY"), String::from("TOKEN")],
+                    query: Vec::new(),
                 },
                 env
             ),

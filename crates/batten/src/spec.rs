@@ -1120,6 +1120,10 @@ mod tests {
             // The plan a branch declared, so `plan-complete` decides over a
             // record rather than over a transcript it cannot re-read.
             "record plan".to_owned(),
+            // CLOUD-843's forge-read door. The write band for `record derive`'s
+            // reason, and more so: it reaches the network as well as the store,
+            // so it is absent from the read-only allowlist above.
+            "record query".to_owned(),
             "record show".to_owned(),
             // The per-suite cost corpus (CLOUD-352), whose store is a COMMITTED
             // file rather than the out-of-tree record tree: its reader is a

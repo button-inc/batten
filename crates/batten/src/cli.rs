@@ -1522,6 +1522,20 @@ pub enum RecordCommand {
     /// mediated tool on a harness whose spelling is surveyed, and its failure
     /// produces NOTHING — so the exemption it feeds silently cannot fire.
     Closes,
+    /// Run a declared `[[forge.query]]` read and record its reduction as the
+    /// family the query names (CLOUD-843).
+    ///
+    /// [`RecordCommand::Named`]'s sibling with the producer moved IN: where that
+    /// leaf takes a body some task already fetched and projected, this one
+    /// fetches, walks and reduces from the committed row, so the pagination and
+    /// the projection are engine code with tests rather than a pipeline beside a
+    /// task.
+    Query {
+        /// The `[[forge.query]]` id, which is also the family written.
+        id: String,
+        /// `<name>=<value>` bindings for the row's own placeholders.
+        inputs: Vec<String>,
+    },
 }
 
 /// Subcommands of `receipt`.
@@ -2760,6 +2774,15 @@ fn record_of(matches: &ArgMatches) -> Option<RecordCommand> {
         // it, so this arm takes the sub-verb and nothing else.
         ("plan", _) => Some(RecordCommand::Plan),
         ("closes", _) => Some(RecordCommand::Closes),
+        ("query", matches) => Some(RecordCommand::Query {
+            id: matches.get_one::<String>("id")?.clone(),
+            // `derive`'s reason: a query binding no placeholder of its own passes
+            // the flag never, and an absent repeatable flag is an empty selection.
+            inputs: matches
+                .get_many::<String>("input")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
+        }),
         _ => None,
     }
 }

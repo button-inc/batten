@@ -2031,6 +2031,17 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::ToolVerdict,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-843's forge-read door. The corpus declares no `[[forge.query]]`, so
+    // this answers the usage refusal — naming the id it was given and nothing
+    // the forge could have said, which is the arm a canary could reach. The
+    // success path writes the reduction to a store and says nothing; that half
+    // is `forge_query.rs`'s own byte-for-byte assertion over the record.
+    Verb {
+        path: "record query",
+        args: &["census"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // Their READ halves. Over this corpus the stores are empty, so the answers
     // are `miss` and `nothing` — which is the state that matters most here: a
     // reader that cannot find a record is exactly where a program is tempted to

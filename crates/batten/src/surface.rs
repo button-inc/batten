@@ -1248,6 +1248,27 @@ const DERIVE_INPUT: FlagDecl = FlagDecl {
     value: ValueDecl::StrMany,
 };
 
+/// A `<name>=<value>` binding for one of a `[[forge.query]]` row's own
+/// placeholders (CLOUD-843).
+///
+/// `DERIVE_INPUT`'s spelling and its `StrMany` reason, with its own help: what a
+/// key MEANS here is a placeholder in the row's endpoint or parameters, and a key
+/// the row names no placeholder for is a usage error rather than an ignored
+/// value. `owner`, `repo` and `since` are the engine's to bind and are refused.
+const QUERY_INPUT: FlagDecl = FlagDecl {
+    id: "input",
+    long: Some("input"),
+    short: None,
+    help: "A `<name>=<value>` binding for one of the query's own placeholders (repeatable)",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::StrMany,
+};
+
 /// `--rule <id>` on `enforce`: the same narrowing, on the verb that spawns.
 ///
 /// # This reverses a recorded decision, and that decision named its condition
@@ -5603,6 +5624,33 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[],
+    },
+    // CLOUD-843's forge-read door: `record named` with the producer moved IN.
+    // Eleven shell bodies each spelled a paginated `gh api`, a `jq` projection
+    // and a date cut-off; the row declares all three and this walks, reduces and
+    // writes the family the row names.
+    //
+    // `record query`, NOT `record forge`, and the collision is why: `record
+    // forge <ref>` already records a commit's check verdicts from stdin, and a
+    // leaf that took either a ref or a query id in one positional would decide
+    // which store it writes by guessing what the argument names.
+    //
+    // `Effect::Write`, never `Read`: it writes a record, and it reaches the
+    // network, which the derived read-only allowlist must never advertise.
+    CommandDecl {
+        path: "record query",
+        id: "record.query",
+        about: "Run a declared `[[forge.query]]` read and record its reduction as the family it names",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[
+            FlagDecl::positional(
+                "id",
+                "The `[[forge.query]]` id, which is also the record family written",
+            ),
+            QUERY_INPUT,
+        ],
     },
     // A NEW NOUN rather than a flag on an existing verb, and two shapes were
     // considered and died on the same rule (CLOUD-893). `generate hooks --write`
