@@ -1,0 +1,433 @@
+# No bash in this repository unless there is no other choice (CLOUD-1925).
+#
+# Batten the ENGINE allows shell: other consumers run bash in `mise.toml` task
+# bodies and workflow steps, and that is their business. THIS repository does
+# not, so the ban is a consumer module and not a core rule (non-negotiable rule 1).
+#
+# ─── WHY THE TWO ROWS IT REPLACES DID NOTHING ────────────────────────────────
+#
+# `task carry other` and `task write other` were `kind = "ratchet"` rows over the
+# literal `run = """`, counted with `str::matches` — so a 245-line body counted as
+# ONE. #962 moved 2,720 lines of bash out of `mise-tasks/` into `mise.toml` strings
+# and those counts moved 36 -> 70 and 4 -> 11, which two waivers then admitted on
+# the claim that "the bash surface falls". Nothing computed that claim. Replayed
+# over history, this module refuses #962's squash (+2,720 inline lines), and the
+# two relocations after it, `f8b18c5` (+187) and `f8df73e` (+32).
+#
+# ─── WHAT IT COUNTS: SHELL LINES, WHEREVER THEY LIVE ─────────────────────────
+#
+# * A `mise.toml` task body: every non-blank, non-comment line inside a
+#   `run = """` / `run = '''` string, and every single-line or array `run` string
+#   that carries shell syntax (a metacharacter, a control keyword, a `VAR=`
+#   prefix). A plain argv — `run = "cargo nextest run"` — is not shell.
+# * A workflow step: every non-blank, non-comment line of a `run: |` / `run: >`
+#   block, and a one-line `run:` carrying shell syntax.
+# * A file: a `.sh`, `.bash` or `.bats` path, or a shebang naming a shell.
+#
+# ─── WHAT IT REFUSES: GROWTH AND APPEARANCE, NEVER AN EDIT ───────────────────
+#
+# An edit-level ban was measured and rejected: it refuses one-line fixes to live
+# inline bodies (`e9770e4`, `17dcc76`, `f325eb0`), which is the deadlock that
+# kept a dead `ready-lint.sh` alive behind `shell edit refused` for weeks. So:
+#
+# * `task write refused` — `mise.toml`'s shell line count rose against the base.
+# * `task add refused`   — a task that carried no shell at the base carries some
+#   now. This is the arm relocation cannot offset: moving a body in while deleting
+#   a bigger one elsewhere keeps the count level and still adds a task.
+# * `step write refused` — a workflow's shell line count rose.
+# * `shell place refused` — a shell file was added outside `stays_bash`.
+#
+# Deleting shell is always free. The standing corpus is unwound by the waves
+# under CLOUD-843, and every wave must move these counts down.
+#
+# ─── THE EXEMPTIONS, EACH BECAUSE THERE IS NO OTHER CHOICE ───────────────────
+#
+# `stays_bash` names the files that must be shell. It is asserted EXACTLY by the
+# compiled tier, so growing it is a failing change a reviewer sees, never a quiet
+# widening. There is no override route and no waiver answer here: relaxing this
+# module is a weakening, and a weakening is admitted only by a human's recorded
+# answer (CLOUD-1078).
+#
+#MUTANT task-growth-unchecked|s@^\thead_count > base_count$@\tfalse@|a_task_body_grown_by_one_line_is_refused
+#MUTANT task-appearance-unchecked|s@not trim_space(head_manifest\[h\]) in base_tasks@false@|a_body_moved_into_a_new_task_is_refused_even_when_the_total_falls
+#MUTANT one-liner-unread|s@^\tshell_syntax(value)$@\tfalse@|a_shell_one_liner_added_to_a_task_is_refused
+#MUTANT workflow-growth-unchecked|s@^\tworkflow_count(head) > workflow_count(base)$@\tfalse@|a_workflow_run_block_grown_is_refused
+#MUTANT file-extension-unread|s@^shell_file(path) if shell_path(path)$@shell_file(path) if false@|an_added_shell_script_is_refused
+#
+#MUTANT-SUITE crates/batten/tests/it/shell_banned.rs
+
+# METADATA
+# description: |
+#   Bound to the TREE surface: `scope = "tree"`, so it reads the tree document
+#   and never the mediated `{call, facts}` shape.
+#   THE BRACKETS ARE NOT STYLE: the schema file carries a hyphen, so the dotted
+#   form is a parse error reported as `invalid schema reference`.
+#   THIS BLOCK IS YAML AND MUST STAY THE LAST COMMENT BLOCK BEFORE `package`.
+# schemas:
+#   - input: schema["policy-input.schema"]
+package batten.shell_banned
+
+import rego.v1
+
+rules contains "shell write other"
+
+# NULL when the base rev did not resolve, and `null` is not `undefined`, so the
+# delta is bound only for an object and every arm is undefined without it rather
+# than vacuously clean (`shell-retirement`'s reason, verbatim).
+delta := d if {
+	d := input.tree["base-delta"]
+	is_object(d)
+}
+
+# ---------------------------------------------------------------------------
+# The exemptions: files that must be shell because nothing else can run there.
+# ---------------------------------------------------------------------------
+
+stays_bash := {
+	# Runs before batten exists on the host: it is how the binary arrives.
+	"install.sh",
+	# The pre-toolchain bootstrap, for `install.sh`'s reason.
+	"setup.sh",
+	# The git hook launcher: mise's shims are off PATH where git runs it.
+	".claude/hooks/git-hook.sh",
+	# Generated by clap from the command surface; nobody authors it.
+	"completions/batten.bash",
+}
+
+# ---------------------------------------------------------------------------
+# What counts as shell.
+# ---------------------------------------------------------------------------
+
+metacharacters := ["|", ";", "&", "$", "`", "<", ">", "(", ")"]
+
+keywords := {"if", "for", "while", "until", "case", "set", "export", "source", "."}
+
+code_line(line) if {
+	text := trim_space(line)
+	text != ""
+	not startswith(text, "#")
+}
+
+# A command string that a shell, rather than an argv, is needed to run.
+shell_syntax(value) if {
+	some character in metacharacters
+	contains(value, character)
+}
+
+shell_syntax(value) if {
+	first := split(trim_space(value), " ")[0]
+	first in keywords
+}
+
+shell_syntax(value) if {
+	first := split(trim_space(value), " ")[0]
+	contains(first, "=")
+}
+
+shell_path(path) if endswith(path, ".sh")
+
+shell_path(path) if endswith(path, ".bash")
+
+shell_path(path) if endswith(path, ".bats")
+
+shell_shebang(path) if {
+	first := input.tree.lines[path][0]
+	startswith(first, "#!")
+	some shell in ["sh", "bash", "zsh", "dash", "ksh"]
+	some word in split(replace(first, "/", " "), " ")
+	word == shell
+}
+
+# ---------------------------------------------------------------------------
+# `mise.toml`: task bodies, one-liners and array entries.
+# ---------------------------------------------------------------------------
+
+manifest := "mise.toml"
+
+quotes := [`"""`, `'''`]
+
+# An opener is `run = """` or `run = '''` whose string does not close on the
+# same line. Keyed index -> the quote that closes it.
+openers(lines) := {i: quote |
+	some i, line in lines
+	text := trim_space(line)
+	some quote in quotes
+	startswith(text, concat("", ["run = ", quote]))
+	not contains(substring(text, count("run = ") + 3, -1), quote)
+}
+
+# Every line index carrying a quote, per quote, computed once so a body's closer
+# is a lookup over a few hundred indices rather than a scan of the whole file.
+quoted(lines) := {quote: indices |
+	some quote in quotes
+	indices := {j | some j, line in lines; contains(line, quote)}
+}
+
+bodies(lines) := {j |
+	carrying := quoted(lines)
+	some i, quote in openers(lines)
+	closer := min({j | some j in carrying[quote]; j > i})
+	closer > i + 1
+	some j in numbers.range(i + 1, closer - 1)
+}
+
+# A single-line `run = "..."` / `run = '...'`, or `run = [...]` on one line.
+one_liner(line) := value if {
+	text := trim_space(line)
+	startswith(text, "run = ")
+	value := substring(text, count("run = "), -1)
+	not startswith(value, `"""`)
+	not startswith(value, `'''`)
+	value != "["
+}
+
+# The string entries of a multi-line `run = [` array.
+array_entries(lines) := {j |
+	some i, line in lines
+	trim_space(line) == "run = ["
+	closer := min({k | some k, other in lines; k > i; startswith(trim_space(other), "]")})
+	closer > i + 1
+	some j in numbers.range(i + 1, closer - 1)
+}
+
+single_liners(lines) := {j |
+	some j, line in lines
+	value := one_liner(line)
+	shell_syntax(value)
+}
+
+array_liners(lines) := {j |
+	some j in array_entries(lines)
+	value := trim_space(lines[j])
+	shell_syntax(value)
+}
+
+one_liners(lines) := single_liners(lines) | array_liners(lines)
+
+shell_lines(lines) := {j | some j in bodies(lines); code_line(lines[j])} | one_liners(lines)
+
+shell_count(lines) := count(shell_lines(lines))
+
+# Each task's span: its header's index to the next header's, over the headers in
+# file order. Computed once per side, so finding which task a shell line belongs
+# to is a range walk over one task rather than a scan of every header per line.
+headers(lines) := sort([h | some h, line in lines; startswith(trim_space(line), "[tasks.")])
+
+span_end(starts, k, total) := starts[k + 1] if k + 1 < count(starts)
+
+span_end(starts, k, total) := total if k + 1 >= count(starts)
+
+task_spans(lines) := {h: finish |
+	starts := headers(lines)
+	some k, h in starts
+	finish := span_end(starts, k, count(lines))
+}
+
+# The header index of every task carrying at least one shell line.
+shell_tasks(lines) := {h |
+	shell := shell_lines(lines)
+	some h, finish in task_spans(lines)
+	some j in numbers.range(h, finish - 1)
+	j in shell
+}
+
+tasks_with_shell(lines) := {trim_space(lines[h]) | some h in shell_tasks(lines)}
+
+# ---------------------------------------------------------------------------
+# Workflows: `run: |` blocks by indentation, and one-line `run:` steps.
+# ---------------------------------------------------------------------------
+
+is_workflow(path) if {
+	startswith(path, ".github/workflows/")
+	endswith(path, ".yml")
+}
+
+indent(line) := count(line) - count(trim_left(line, " "))
+
+run_key(line) := rest if {
+	text := trim_space(line)
+	some prefix in ["- run:", "run:"]
+	startswith(text, prefix)
+	rest := trim_space(substring(text, count(prefix), -1))
+}
+
+# The indentation a block's lines must exceed: the `run:` key's own column.
+key_column(line) := indent(line) + 2 if startswith(trim_space(line), "- ")
+
+key_column(line) := indent(line) if not startswith(trim_space(line), "- ")
+
+block_openers(lines) := {i |
+	some i, line in lines
+	rest := run_key(line)
+	some marker in ["|", ">"]
+	startswith(rest, marker)
+}
+
+workflow_blocks(lines) := {j |
+	some i in block_openers(lines)
+	column := key_column(lines[i])
+	ends := {k | some k, other in lines; k > i; trim_space(other) != ""; indent(other) <= column}
+	closer := min(ends | {count(lines)})
+	closer > i + 1
+	some j in numbers.range(i + 1, closer - 1)
+}
+
+workflow_one_liners(lines) := {j |
+	some j, line in lines
+	rest := run_key(line)
+	rest != ""
+	not startswith(rest, "|")
+	not startswith(rest, ">")
+	shell_syntax(rest)
+}
+
+workflow_count(lines) := count({j | some j in workflow_blocks(lines); code_line(lines[j])} | workflow_one_liners(lines))
+
+# ---------------------------------------------------------------------------
+# The refusals.
+# ---------------------------------------------------------------------------
+
+# Both sides of `mise.toml`, bound once as RULES so every arm below reads a
+# cached value: a function over the file would be re-derived at each call site.
+head_manifest := input.tree.lines[manifest] if manifest in delta.edited
+
+base_manifest := delta["base-lines"][manifest] if manifest in delta.edited
+
+head_count := shell_count(head_manifest)
+
+base_count := shell_count(base_manifest)
+
+base_tasks := tasks_with_shell(base_manifest)
+
+violation contains {
+	"rule": "shell write other",
+	"verdict": "task write refused",
+	"subjects": [{"path": manifest}, {"count": head_count - base_count}],
+} if {
+	head_count > base_count
+}
+
+violation contains {
+	"rule": "shell write other",
+	"verdict": "task add refused",
+	"subjects": [{"path": manifest, "line": h + 1}],
+} if {
+	some h in shell_tasks(head_manifest)
+	not trim_space(head_manifest[h]) in base_tasks
+}
+
+violation contains {
+	"rule": "shell write other",
+	"verdict": "step write refused",
+	"subjects": [{"path": path}, {"count": workflow_count(head) - workflow_count(base)}],
+} if {
+	some path in delta.edited
+	is_workflow(path)
+	head := input.tree.lines[path]
+	base := delta["base-lines"][path]
+	workflow_count(head) > workflow_count(base)
+}
+
+violation contains {
+	"rule": "shell write other",
+	"verdict": "shell place refused",
+	"subjects": [{"path": path}],
+} if {
+	some path in delta.added
+	not path in stays_bash
+	shell_file(path)
+}
+
+shell_file(path) if shell_path(path)
+
+shell_file(path) if shell_shebang(path)
+
+# --- the load-time tier ------------------------------------------------------
+#
+# These pin the PREDICATE over a fabricated input. That the ENGINE builds
+# `lines` and `base-lines` for these paths is `crates/batten/tests/it/
+# shell_banned.rs`'s to show, over the compiled binary (CLOUD-845).
+
+edited(path, base, head) := {"tree": {
+	"base-delta": {"added": [], "edited": [path], "deleted": [], "base-lines": {path: base}},
+	"lines": {path: head},
+}}
+
+added(path, head) := {"tree": {
+	"base-delta": {"added": [path], "edited": [], "deleted": [], "base-lines": {}},
+	"lines": {path: head},
+}}
+
+task(name, body) := array.concat(array.concat([concat("", ["[tasks.", name, "]"]), `run = '''`], body), [`'''`])
+
+verdicts(input_document) := {v.verdict | some v in violation with input as input_document}
+
+test_a_body_grown_by_one_line_is_refused if {
+	base := task("a", ["echo one"])
+	head := task("a", ["echo one", "echo two"])
+	"task write refused" in verdicts(edited("mise.toml", base, head))
+}
+
+test_an_edit_that_does_not_grow_a_body_is_admitted if {
+	base := task("a", ["echo one"])
+	head := task("a", ["echo uno"])
+	count(verdicts(edited("mise.toml", base, head))) == 0
+}
+
+test_a_deleted_body_is_admitted if {
+	base := array.concat(task("a", ["echo one"]), task("b", ["echo two"]))
+	head := task("a", ["echo one"])
+	count(verdicts(edited("mise.toml", base, head))) == 0
+}
+
+test_a_body_moved_into_a_new_task_is_refused_even_when_the_total_falls if {
+	base := task("a", ["echo 1", "echo 2", "echo 3"])
+	head := task("b", ["echo 1"])
+	"task add refused" in verdicts(edited("mise.toml", base, head))
+}
+
+test_comments_and_blank_lines_are_not_shell if {
+	base := task("a", ["echo one"])
+	head := task("a", ["# why", "", "echo one"])
+	count(verdicts(edited("mise.toml", base, head))) == 0
+}
+
+test_a_plain_argv_one_liner_is_not_shell if {
+	base := ["[tasks.a]", `run = "cargo build"`]
+	head := array.concat(base, ["[tasks.b]", `run = "cargo nextest run"`])
+	count(verdicts(edited("mise.toml", base, head))) == 0
+}
+
+test_a_shell_one_liner_added_to_a_task_is_refused if {
+	base := ["[tasks.a]", `run = "cargo build"`]
+	head := array.concat(base, ["[tasks.b]", `run = "cargo build && cargo test"`])
+	"task add refused" in verdicts(edited("mise.toml", base, head))
+}
+
+test_a_workflow_run_block_grown_is_refused if {
+	base := ["jobs:", "  a:", "    steps:", "      - run: |", "          echo one", "      - uses: x"]
+	head := ["jobs:", "  a:", "    steps:", "      - run: |", "          echo one", "          echo two", "      - uses: x"]
+	"step write refused" in verdicts(edited(".github/workflows/ci.yml", base, head))
+}
+
+test_a_plain_workflow_step_is_not_shell if {
+	base := ["jobs:", "  a:", "    steps:", "      - run: mise run verify"]
+	head := array.concat(base, ["      - run: mise run lint"])
+	count(verdicts(edited(".github/workflows/ci.yml", base, head))) == 0
+}
+
+test_an_added_shell_script_is_refused if {
+	"shell place refused" in verdicts(added("scripts/x.sh", ["echo"]))
+}
+
+test_an_added_shebang_program_is_refused if {
+	"shell place refused" in verdicts(added("tools/run", ["#!/usr/bin/env bash", "echo"]))
+}
+
+test_an_exempt_file_is_admitted if {
+	count(verdicts(added("install.sh", ["#!/bin/sh"]))) == 0
+}
+
+test_a_base_that_did_not_resolve_decides_nothing if {
+	count(violation) == 0 with input as {"tree": {"base-delta": null, "lines": {}}}
+}
