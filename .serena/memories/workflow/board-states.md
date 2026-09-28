@@ -466,9 +466,10 @@ Review`, exit 1. It is `landed-check`'s terminal twin — both name In Review
 
   The declaration is the one §6 already carries. `ready-lint` accepts `none` as an
   explicit answer — a tracker-only change lands no commit, and demanding a type
-  there would force a lie — so **`**Commit / bump (§6).\*\* **none**`is what makes a
-  row exempt from`in-review-no-pr`.** No new vocabulary, no fourth authority:
-  `ready-lint`emits what it parsed and`graph-check` reads that fact, because the
+  there would force a lie — so a §6 line reading `Commit / bump (§6). none` is
+  **what makes a row exempt from `in-review-no-pr`.** No new vocabulary, no
+  fourth authority: `ready-lint` emits what it parsed and `graph-check` reads
+  that fact, because the
   §6 grammar is subtle enough (CLOUD-290's whole-code-span anchoring, found by
   experiment) that a second reading of it would drift.
 

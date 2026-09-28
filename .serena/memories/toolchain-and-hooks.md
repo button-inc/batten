@@ -245,10 +245,10 @@ one question: **does the redirect name another WRITE ROUTE, or a PROCESS?**
 Only the first names a tool that performs the write. The other three name how the
 change must be REVIEWED — no tool edits rego or `batten.toml` for you — so
 writing the path directly is the only route left, which is the override's
-precondition verbatim. **`policy/**` is a live, maintained surface: 294 commits
-touch it, and `protected` (`batten.toml:87`) lists three globs that do not
-include it — a registered module is protected by DERIVATION from the rule table
-(CLOUD-1226).**
+precondition verbatim. The `policy/**` tree **is a live, maintained surface: 294
+commits touch it**, and `protected` (`batten.toml:87`) lists three globs that do
+not include it — **a registered module is protected by DERIVATION from the rule
+table** (CLOUD-1226).
 
 The route is `batten override request --rule <rule> --verdict "<verdict>"
 --subject <path>`, answering three questions on stdin as `<id>=<text>`

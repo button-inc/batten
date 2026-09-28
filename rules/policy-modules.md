@@ -21,8 +21,8 @@ table, not from a glob (CLOUD-1226). `protected` in `batten.toml` lists three
 entries and `policy/**` is not among them, so reading that list and concluding
 the tree is open is the first half of the trap; the second is meeting
 `path write refused` / `protected-mutation` on your first `Edit` and concluding
-it is closed. Neither is true. **`policy/**` is a live surface: 294 commits
-touch it.**
+it is closed. Neither is true. The `policy/**` tree **is a live surface: 294
+commits touch it.**
 
 **The discriminator is one question: does the class's redirect name another
 WRITE ROUTE, or a PROCESS?**
