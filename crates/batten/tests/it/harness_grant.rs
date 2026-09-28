@@ -1,36 +1,29 @@
-//! `grant carry missing` over the compiled binary (CLOUD-1247).
+//! `grant carry missing` over the compiled binary (CLOUD-1247, inverted by
+//! CLOUD-1379).
 //!
 //! **The question a `with input as` case cannot answer.** The module's own
 //! `test_` rules pin the predicate and nothing else: they hand it a fabricated
 //! `input.tree.documents[".claude/settings.json"]` and ask what it decides. What
 //! they cannot establish is whether the ENGINE builds that key at all for a path
 //! inside a DOTFILE DIRECTORY — and if it does not, the module is silent on every
-//! tree, a dead gate and a correctly-granted repository being byte-identical on
-//! the decision surface. That is the class `rules/policy-modules.md`
-//! records two live instances of, both found by adding this tier rather than by
-//! reading.
+//! tree, a dead gate and a clean repository being byte-identical on the decision
+//! surface. That is the class `rules/policy-modules.md` records two live
+//! instances of, both found by adding this tier rather than by reading.
 //!
 //! **The proof is structural rather than an extra assertion.** A refusal can only
-//! be raised if `grants` is defined, and `grants` is defined only if the engine
-//! parsed the dotfile. So `a_dropped_grant_is_refused` firing IS the evidence
-//! that the document was read; were the walker skipping `.claude/`, that case
-//! would exit `0` and fail. No separate reachability case is needed, and adding
-//! one would assert the same fact twice.
+//! be raised if `settings` is defined, and `settings` is defined only if the
+//! engine parsed the dotfile. So `a_committed_grant_is_refused` firing IS the
+//! evidence that the document was read.
 //!
-//! Five observations, per CLOUD-418, each here because dropping it lets another
-//! pass over a predicate that decides nothing:
+//! Three observations, each here because dropping it lets another pass over a
+//! predicate that decides nothing:
 //!
-//! * `the_landed_shape_is_clean` — the positive.
-//! * `a_dropped_grant_is_refused` — the class the row exists for, and the
+//! * `a_committed_grant_is_refused` — the class the row exists for, and the
 //!   reachability proof above.
-//! * `a_dropped_sentinel_is_refused` — the anti-vacuity mirror. Without it the
-//!   positive is satisfied by a predicate that only ever looks for `batten`, and
-//!   the sentinel guarantee ships as coverage having never been walked.
-//! * `a_dropped_read_clause_is_refused` — CLOUD-1946's clause, whose absence
-//!   puts a prompt back on every plan-mode read.
+//! * `settings_without_the_block_are_clean` — the anti-vacuity mirror. Without
+//!   it, a predicate refusing every settings file passes the case above.
 //! * `an_absent_settings_file_answers_nothing` — could-not-look is not a
-//!   refusal. Without it, a predicate that refused unconditionally passes the
-//!   two negative cases.
+//!   refusal.
 //!
 //! The module under test is `include_str!`d from `policy/` rather than copied,
 //! so this suite cannot drift from the predicate that ships.
@@ -48,7 +41,7 @@ use common::{batten, git_in, scratch, stderr, stdout, write};
 /// The shipped predicate, never a copy of it.
 const MODULE: &str = include_str!("../../../../policy/harness-grant.rego");
 
-/// Registers the shipped module over the dotfile, with the two classes it raises.
+/// Registers the shipped module over the dotfile, with the one class it raises.
 ///
 /// The `documents` row is the whole subject of this suite: it is what asks the
 /// engine to parse a path under `.claude/`, and every case below is an
@@ -64,28 +57,8 @@ module = "harness-grant.rego"
 severity = "deny"
 
 [[verdict]]
-id = "grant declare absent"
-gloss = "the committed settings no longer grant this repository's own binary"
-class = "A fixture copy of the shipped class; the registry's own row is in batten.toml."
-
-[[verdict.route]]
-id = "task run first"
-kind = "document"
-target = "harness-grant.rego"
-
-[[verdict]]
-id = "default carry dropped"
-gloss = "the grant is there and the built-in classifier rules were discarded with it"
-class = "A fixture copy of the shipped class; the registry's own row is in batten.toml."
-
-[[verdict.route]]
-id = "task run first"
-kind = "document"
-target = "harness-grant.rego"
-
-[[verdict]]
-id = "plan read dropped"
-gloss = "a read-only call stops for a human again in plan mode"
+id = "grant carry missing"
+gloss = "the committed settings carry an autoMode block, which the classifier never reads"
 class = "A fixture copy of the shipped class; the registry's own row is in batten.toml."
 
 [[verdict.route]]
@@ -94,25 +67,16 @@ kind = "document"
 target = "harness-grant.rego"
 "#;
 
-/// The read-only clause as the landed settings carry it, abbreviated to the two
-/// phrases the predicate reads (CLOUD-1946).
-const READS: &str =
-    "EVERY READ-ONLY CALL IS ALLOWED, ALWAYS, IN EVERY PERMISSION MODE, PLAN MODE INCLUDED.";
-
-/// A repository fixture, optionally carrying a settings file with `allow`.
+/// A repository fixture, optionally carrying a settings file with `body`.
 ///
 /// One per case: these run in parallel and `git init` races on a shared
 /// directory, which is a fact about the harness rather than about the predicate.
-fn fixture(name: &str, allow: Option<&str>) -> PathBuf {
+fn fixture(name: &str, body: Option<&str>) -> PathBuf {
     let repo = scratch(&format!("harness-grant-{name}"));
     write(&repo, "batten.toml", CONFIG);
     write(&repo, "harness-grant.rego", MODULE);
-    if let Some(entries) = allow {
-        write(
-            &repo,
-            ".claude/settings.json",
-            &format!("{{\n  \"autoMode\": {{\n    \"allow\": {entries}\n  }}\n}}\n"),
-        );
+    if let Some(body) = body {
+        write(&repo, ".claude/settings.json", body);
     }
     git_in(&repo, &["init", "-q", "-b", "main", "."]);
     // Tracked, because a consumer's settings file is committed and a suite that
@@ -129,85 +93,52 @@ fn check(repo: &Path) -> Output {
 }
 
 #[test]
-fn the_landed_shape_is_clean() {
-    // THE POSITIVE. The shape CLOUD-1247 landed: the mediator named, the
-    // sentinel kept — and, since CLOUD-1946, the read-only clause beside them.
-    let allow = format!(r#"["$defaults", "Allow every `batten` subcommand.", "{READS}"]"#);
-    let repo = fixture("clean", Some(&allow));
+fn a_committed_grant_is_refused() {
+    // THE CLASS THIS ROW EXISTS FOR, and the reachability proof: this refusal is
+    // only raisable if the engine parsed a path under `.claude/`. A walker that
+    // skipped dotfile directories would leave `settings` undefined, Rego would
+    // read that as *does not hold*, and this case would exit 0.
+    let repo = fixture(
+        "committed",
+        Some(r#"{"autoMode": {"allow": ["$defaults", "Allow every `batten` subcommand."]}}"#),
+    );
+    let outcome = check(&repo);
+    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
+    assert_eq!(
+        outcome.status.code(),
+        Some(2),
+        "a committed autoMode block must refuse\n{answer}{cause}"
+    );
+    assert!(answer.contains("grant carry missing"), "{answer}{cause}");
+}
+
+#[test]
+fn settings_without_the_block_are_clean() {
+    // THE ANTI-VACUITY MIRROR. A predicate that refused any settings file at all
+    // satisfies the case above and fails here.
+    let repo = fixture(
+        "clean",
+        Some(r#"{"permissions": {"allow": ["Bash(batten:*)"]}}"#),
+    );
     let outcome = check(&repo);
     let (answer, cause) = (stdout(&outcome), stderr(&outcome));
     assert_eq!(
         outcome.status.code(),
         Some(0),
-        "the landed grant must pass\n{answer}{cause}"
+        "settings with no autoMode block must pass\n{answer}{cause}"
     );
-}
-
-#[test]
-fn a_dropped_grant_is_refused() {
-    // THE CLASS THIS ROW EXISTS FOR, and the reachability proof: this refusal is
-    // only raisable if the engine parsed a path under `.claude/`. A walker that
-    // skipped dotfile directories would leave `grants` undefined, Rego would read
-    // that as *does not hold*, and this case would exit 0.
-    let allow = format!(r#"["$defaults", "{READS}"]"#);
-    let repo = fixture("dropped-grant", Some(&allow));
-    let outcome = check(&repo);
-    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
-    assert_eq!(
-        outcome.status.code(),
-        Some(2),
-        "a settings file naming no mediator must refuse\n{answer}{cause}"
-    );
-    assert!(answer.contains("grant carry missing"), "{answer}{cause}");
-}
-
-#[test]
-fn a_dropped_sentinel_is_refused() {
-    // THE ANTI-VACUITY MIRROR. A predicate that only ever looked for `batten`
-    // satisfies both cases above and is silent here, shipping the sentinel
-    // guarantee as coverage that was never walked.
-    let allow = format!(r#"["Allow every `batten` subcommand.", "{READS}"]"#);
-    let repo = fixture("dropped-sentinel", Some(&allow));
-    let outcome = check(&repo);
-    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
-    assert_eq!(
-        outcome.status.code(),
-        Some(2),
-        "dropping $defaults must refuse in its own right\n{answer}{cause}"
-    );
-    assert!(answer.contains("grant carry missing"), "{answer}{cause}");
-}
-
-#[test]
-fn a_dropped_read_clause_is_refused() {
-    // CLOUD-1946. The owner's rule that every read-only call is allowed in every
-    // mode, plan mode included, lives in this clause; dropping it puts the prompt
-    // back on every plan-mode read while the mediator grant still looks intact.
-    let repo = fixture(
-        "dropped-reads",
-        Some(r#"["$defaults", "Allow every `batten` subcommand."]"#),
-    );
-    let outcome = check(&repo);
-    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
-    assert_eq!(
-        outcome.status.code(),
-        Some(2),
-        "dropping the read-only clause must refuse\n{answer}{cause}"
-    );
-    assert!(answer.contains("grant carry missing"), "{answer}{cause}");
 }
 
 #[test]
 fn an_absent_settings_file_answers_nothing() {
-    // COULD NOT LOOK IS NOT A REFUSAL. Without this case, a predicate that
-    // refused unconditionally passes both negatives above — and a consumer with
-    // no settings file at all would be told its grant was deleted.
+    // COULD NOT LOOK IS NOT A REFUSAL. A consumer with no settings file at all
+    // has nothing committed in the wrong scope.
     let repo = fixture("absent", None);
     let outcome = check(&repo);
     let (answer, cause) = (stdout(&outcome), stderr(&outcome));
     assert_eq!(
         outcome.status.code(),
         Some(0),
-        "a tree with no settings file must not read as a deleted grant\n{answer}{cause}"
+        "a tree with no settings file must not refuse\n{answer}{cause}"
     );
 }

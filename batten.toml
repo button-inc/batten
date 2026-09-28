@@ -8937,7 +8937,7 @@ scope = "tree"
 documents = [".claude/settings.json"]
 module = "policy/harness-grant.rego"
 severity = "deny"
-reason = "`permissions.allow` is not the layer that decides: Claude Code's auto-mode classifier does not consult it and recognises well-known tools only. `batten` is built from this checkout, so without an `autoMode` grant the repository's own binary is refused - measured over most of a session (CLOUD-1247). Keep the `$defaults` sentinel with it; dropping that discards every built-in classifier safety rule while leaving the grant apparently intact."
+reason = "Claude Code's auto-mode classifier does not read `autoMode` from `.claude/settings.json` or `.claude/settings.local.json` - a checked-in repo could otherwise inject its own allow rules (https://code.claude.com/docs/en/auto-mode-config). A committed block grants nothing and reads to the next author as the place a grant goes, which is how this one grew to 22 clauses while the refusals continued (CLOUD-1379). The scopes it does read are `~/.claude/settings.json`, managed settings and `--settings`; the committed lever it does read is CLAUDE.md."
 
 # Closing the raw path, as a gate rather than as a convention (CLOUD-1260).
 #
@@ -13494,62 +13494,76 @@ id = "task run first"
 kind = "command"
 target = "remove the raw connector entry from `permissions.allow` in .claude/settings.json and reach the row through `batten mcp call`"
 
-# --- the committed half of the same grant (CLOUD-1247) -----------------------
+# --- the committed half of the same grant (CLOUD-1247, inverted by CLOUD-1379) -
 
 [[verdict]]
-id = "grant declare absent"
-gloss = "the committed settings no longer grant this repository's own binary"
+id = "grant carry missing"
+gloss = "the committed settings carry an autoMode block, which the classifier never reads"
 class = """
-`permissions.allow` is not the layer that decides. Claude Code's auto-mode \
-classifier is a second authority over Bash that does not consult the allowlist, \
-and it recognises well-known tools only - so `batten`, built from this checkout, \
-is refused by default however many allow rules name it. Measured 2026-08-31: \
-`Bash(batten:*)` had been committed since the file existed and granted nothing, \
-and every bare invocation including `batten --version` was refused for most of a \
-session, in the repository whose own product this is. The grant that works is an \
-`autoMode.allow` entry naming the mediator.
+Claude Code's auto-mode classifier reads `autoMode` from `~/.claude/settings.json`, \
+managed settings and `--settings`, and never from `.claude/settings.json` or \
+`.claude/settings.local.json`: both live in the repo directory, so a checked-in \
+repo could otherwise inject its own allow rules \
+(https://code.claude.com/docs/en/auto-mode-config). A committed block therefore \
+grants nothing, and it reads to the next author as the place a grant goes - \
+measured 2026-09-28, 22 clauses and ~13k characters had accumulated there while \
+the refusals they answered kept arriving. The committed lever the classifier does \
+read is CLAUDE.md; anything else belongs to the scope that owns it.
 """
 
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "add an `autoMode.allow` entry naming `batten` to .claude/settings.json"
+target = "delete the `autoMode` block from .claude/settings.json; put a grant you need in ~/.claude/settings.json, managed settings or the launcher's --settings"
+
+# THREE TOMBSTONES. `grant declare absent` has a successor: the same file, the
+# same key, judged the right way round. The other two policed the SHAPE of a
+# block that no longer belongs in the file at all, so nothing replaced them.
+[[verdict]]
+id = "grant declare absent"
+gloss = "the committed settings no longer grant this repository's own binary"
+class = """
+Raised while `policy/harness-grant.rego` required an `autoMode.allow` entry naming \
+the mediator in `.claude/settings.json` (CLOUD-1247). That file is one the \
+classifier is documented never to read, so the grant it demanded was inert for \
+its whole life (CLOUD-1379).
+"""
+successor = "grant carry missing"
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/harness-grant.rego"
 
 [[verdict]]
 id = "default carry dropped"
 gloss = "the grant is there and the built-in classifier rules were discarded with it"
 class = """
-`$defaults` inherits the built-in classifier rules at its position in the list. \
-A settings file that keeps the `batten` clause and drops the sentinel reads as \
-correct to a human and to any predicate that only looks for `batten`, while \
-having silently discarded every built-in safety rule - strictly worse than \
-having neither, because it looks like the landed shape. Hence its own class \
-rather than a second reason folded into the first.
+Raised while `policy/harness-grant.rego` required the `$defaults` sentinel in a \
+committed `autoMode.allow` list. The sentinel matters wherever a list is read; \
+the committed list is not read anywhere.
 """
+withdrawn = "CLOUD-1379: the classifier never reads `autoMode` from project settings, so the committed block this judged is itself refused as `grant carry missing`. A `$defaults` sentinel belongs to whichever user or managed list is actually read, and that file is not the repository's."
 
 [[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "restore the `$defaults` sentinel to .claude/settings.json's autoMode.allow"
+id = "module read first"
+kind = "document"
+target = "policy/harness-grant.rego"
 
 [[verdict]]
 id = "plan read dropped"
 gloss = "a read-only call stops for a human again in plan mode"
 class = """
-The repository owner's standing rule is that every read-only call is allowed in \
-every permission mode, plan mode included (CLOUD-1946). Plan mode consults the \
-auto-mode classifier while `useAutoModeDuringPlan` holds, so the rule lives in \
-one `autoMode.allow` clause naming READ-ONLY and PLAN MODE. A settings file that \
-drops the clause, or sets `useAutoModeDuringPlan` to false, puts an approval \
-prompt back on every plan-mode read while the mediator grant still reads intact. \
-A connector tool the claude.ai account sets to ask prompts regardless; that is \
-the account's Tool permissions, reported by `mcp-allow-check --session`.
+Raised while `policy/harness-grant.rego` required a READ-ONLY / PLAN MODE clause in \
+a committed `autoMode.allow` list (CLOUD-1946). The classifier never read that \
+list, so the clause never did what it said.
 """
+withdrawn = "CLOUD-1379: the classifier never reads `autoMode` from project settings. The owner's read-only rule has to live where it is read: CLAUDE.md, or a user or managed `autoMode` list, or a pre-approval (CLOUD-1949)."
 
 [[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "restore the read-only clause to .claude/settings.json's autoMode.allow and leave useAutoModeDuringPlan unset or true"
+id = "module read first"
+kind = "document"
+target = "policy/harness-grant.rego"
 
 [[verdict]]
 id = "shell add refused"

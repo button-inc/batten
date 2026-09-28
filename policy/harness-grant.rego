@@ -1,34 +1,37 @@
 # METADATA
 # description: |
-#   CLOUD-1247. The COMMITTED half of the harness grant, and deliberately a
-#   different subject from `harness-wiring`: that module reads
+#   CLOUD-1379, inverting CLOUD-1247. The committed half of the harness grant,
+#   and deliberately a different subject from `harness-wiring`: that module reads
 #   `input.tree.external["harness-settings"]`, the MERGED wiring assembled under
 #   the user's own home directory, and decides which mediator runs. This one
-#   reads the repository's own `.claude/settings.json` and decides whether the
-#   grant this repository ships is still there. Two authorities, two modules; a
-#   reader who conflates them will look for this predicate in the wrong file.
+#   reads the repository's own `.claude/settings.json`. Two authorities, two
+#   modules; a reader who conflates them will look for this predicate in the
+#   wrong file.
 #
-#   WHY A GATE AT ALL, rather than a comment in the settings file. Measured
-#   2026-08-31: `permissions.allow` had carried `Bash(batten:*)` since the file
-#   existed and it granted NOTHING, because the auto-mode classifier is a second
-#   layer that does not consult the allowlist. Every bare `batten` invocation was
-#   refused for most of a session -- `batten --version` included -- in the
-#   repository whose own product `batten` is. That is CLOUD-765's class: a
-#   committed allow rule that cannot take effect, and nothing saying so.
+#   WHAT IT REFUSES: an `autoMode` block in the COMMITTED settings file. The
+#   primary doc says so outright — "The classifier doesn't read `autoMode` from
+#   project settings in `.claude/settings.json` or `.claude/settings.local.json`.
+#   Both files live in the repo directory, so a checked-in repo or a build step
+#   could otherwise inject its own allow rules"
+#   (https://code.claude.com/docs/en/auto-mode-config). It reads
+#   `~/.claude/settings.json`, managed settings and `--settings`, and nothing
+#   else.
 #
-#   THE SENTINEL IS THE LOAD-BEARING CONJUNCT and is not decoration. `$defaults`
-#   inherits the built-in classifier rules at its position. A tree that keeps the
-#   batten clause and drops the sentinel looks correct to a reader and to any
-#   predicate that only greps for `batten`, while having silently discarded every
-#   built-in safety rule -- strictly worse than having neither. So it is refused
-#   in its own right, with its own class, rather than folded into the first.
+#   WHY THE INVERSION, measured rather than argued. This module used to REQUIRE
+#   that block — the mediator named, `$defaults` kept, a read-only clause — so
+#   every classifier refusal was answered by adding prose to a file the
+#   classifier never opens, and the gate held the answer in place. By
+#   2026-09-28 the block was 22 entries and ~13k characters, one clause added
+#   that day, with the identical refusals still arriving. That is CLOUD-765's
+#   class — a committed grant that cannot take effect, with nothing saying so —
+#   and the gate built to prevent it was the thing keeping it alive.
 #
-#   WHAT THIS DOES NOT DO: it does not assert the grant WORKS. Whether the host
-#   honours `autoMode` from project settings is the host's behaviour, unreadable
-#   from here, and a gate claiming otherwise would be the "authority it does not
-#   hold" defect one level up. It asserts only that the committed file still says
-#   what CLOUD-1247 landed. The working half is pinned by that row's acceptance,
-#   run against a real host.
+#   WHAT THIS DOES NOT DO: it does not assert that a grant exists where the
+#   classifier does read one. Those scopes are a developer's home, an
+#   organisation's managed settings, or a launcher's `--settings`; none is the
+#   repository's to write, and writing one from the repository is the injection
+#   the doc sentence above exists to prevent. The committed lever the classifier
+#   DOES read is CLAUDE.md, which it loads as Claude does.
 #
 #   THIS BLOCK IS YAML AND MUST STAY THE LAST COMMENT BLOCK BEFORE `package`.
 # schemas:
@@ -39,88 +42,25 @@ import rego.v1
 
 rules contains "grant carry missing"
 
-# The settings file's auto-mode allow list, or nothing.
+# The committed settings document, bound only when the engine parsed it.
 #
-# ABSENT IS NOT EMPTY. A tree whose `.claude/settings.json` will not parse, or
-# which carries no `autoMode` at all, leaves this undefined, every rule below
-# silent, and the could-not-look finding to `input.tree.missing`, which the
-# engine owns. A module that manufactured an empty list here would report the
-# grant missing on a tree it was never able to read.
-grants := entries if {
-	entries := input.tree.documents[".claude/settings.json"].autoMode.allow
-	is_array(entries)
+# ABSENT IS NOT CLEAN AND NOT A REFUSAL. A tree whose `.claude/settings.json`
+# will not parse leaves this undefined and every rule below silent; the
+# could-not-look finding is `input.tree.missing`'s, which the engine owns.
+settings := document if {
+	document := input.tree.documents[".claude/settings.json"]
+	is_object(document)
 }
 
-# The sentinel that inherits the built-in classifier rules at its position.
-sentinel := "$defaults"
-
-# The program the grant has to name for this repository to be usable at all.
-mediator := "batten"
-
-names_the_mediator if {
-	some entry in grants
-	contains(entry, mediator)
-}
-
-keeps_the_defaults if {
-	some entry in grants
-	entry == sentinel
-}
-
-# CLOUD-1946. The owner's standing rule, as the committed file must carry it:
-# every read-only call is allowed in every permission mode, plan mode included.
-# Plan mode consults this classifier only while `useAutoModeDuringPlan` holds,
-# and it defaults on, so ABSENT is the landed state and only an explicit `false`
-# withdraws the clause from plan mode.
-reads_everywhere if {
-	some entry in grants
-	contains(entry, "READ-ONLY")
-	contains(entry, "PLAN MODE")
-}
-
-plan_uses_the_classifier if {
-	not input.tree.documents[".claude/settings.json"].useAutoModeDuringPlan == false
-}
-
-# The grant is gone, so this repository's own binary is refused by the layer that
-# actually decides.
+# The inert block: any `autoMode` key at all, whatever it holds. An empty one is
+# refused too, because it reads to the next author as the place a grant goes.
 violation contains {
 	"rule": "grant carry missing",
-	"verdict": "grant declare absent",
+	"verdict": "grant carry missing",
 	"subjects": [{"path": ".claude/settings.json"}],
 } if {
-	grants
-	not names_the_mediator
-}
-
-# The grant is present and every built-in safety rule was discarded with it.
-violation contains {
-	"rule": "grant carry missing",
-	"verdict": "default carry dropped",
-	"subjects": [{"path": ".claude/settings.json"}],
-} if {
-	grants
-	not keeps_the_defaults
-}
-
-# The read-only clause is gone, or plan mode was told not to consult it: a
-# plan-mode read stops for a human again, which is the prompt the owner removed.
-violation contains {
-	"rule": "grant carry missing",
-	"verdict": "plan read dropped",
-	"subjects": [{"path": ".claude/settings.json"}],
-} if {
-	grants
-	not reads_everywhere
-}
-
-violation contains {
-	"rule": "grant carry missing",
-	"verdict": "plan read dropped",
-	"subjects": [{"path": ".claude/settings.json"}],
-} if {
-	grants
-	not plan_uses_the_classifier
+	settings
+	"autoMode" in object.keys(settings)
 }
 
 # --- the load-time tier ------------------------------------------------------
@@ -128,63 +68,30 @@ violation contains {
 # These pin the PREDICATE. They cannot pin that the ENGINE builds
 # `input.tree.documents` for a DOTFILE path at all -- a `with input as` case
 # fabricates the very shape the engine may be unable to produce -- which is why
-# `crates/batten/tests/harness_grant.rs` exists over the compiled binary. That is
-# the tier `rules/policy-modules.md` records both live instances of the
-# dead-gate class as having been found by adding.
+# `crates/batten/tests/it/harness_grant.rs` exists over the compiled binary.
 
-settings(entries) := {"tree": {"documents": {".claude/settings.json": {"autoMode": {"allow": entries}}}}}
+on_disk(document) := {"tree": {"documents": {".claude/settings.json": document}}}
 
-reads := "EVERY READ-ONLY CALL IS ALLOWED, ALWAYS, IN EVERY PERMISSION MODE, PLAN MODE INCLUDED."
-
-test_the_landed_shape_is_clean if {
-	count(violation) == 0 with input as settings(["$defaults", "Allow every `batten` subcommand.", reads])
+test_a_committed_grant_is_refused if {
+	some v in violation with input as on_disk({"autoMode": {"allow": ["$defaults", "batten"]}})
+	v.verdict == "grant carry missing"
 }
 
-test_a_dropped_read_clause_is_refused if {
-	some v in violation with input as settings(["$defaults", "Allow every `batten` subcommand."])
-	v.verdict == "plan read dropped"
+test_an_empty_committed_block_is_refused if {
+	some v in violation with input as on_disk({"autoMode": {}})
+	v.verdict == "grant carry missing"
 }
 
-# The clause kept and plan mode told not to run the classifier is the same
-# prompt by another route, so it is the same class.
-test_plan_mode_switched_off_is_refused if {
-	doc := {"autoMode": {"allow": ["$defaults", "batten", reads]}, "useAutoModeDuringPlan": false}
-	some v in violation with input as {"tree": {"documents": {".claude/settings.json": doc}}}
-	v.verdict == "plan read dropped"
+# The anti-vacuity mirror: without it, a predicate refusing every settings file
+# passes both cases above.
+test_settings_without_the_block_are_clean if {
+	count(violation) == 0 with input as on_disk({"permissions": {"allow": ["Bash(batten:*)"]}})
 }
 
-test_plan_mode_switched_on_is_clean if {
-	doc := {"autoMode": {"allow": ["$defaults", "batten", reads]}, "useAutoModeDuringPlan": true}
-	count(violation) == 0 with input as {"tree": {"documents": {".claude/settings.json": doc}}}
-}
-
-test_a_dropped_grant_is_refused if {
-	some v in violation with input as settings(["$defaults", reads])
-	v.verdict == "grant declare absent"
-}
-
-# The anti-vacuity mirror. Without it the clean case above is satisfied by a
-# predicate that only ever looks for `batten`, and the sentinel guarantee ships
-# as coverage having never been walked.
-test_a_dropped_sentinel_is_refused if {
-	some v in violation with input as settings(["Allow every `batten` subcommand.", reads])
-	v.verdict == "default carry dropped"
-}
-
-test_all_missing_raises_all_three if {
-	count(violation) == 3 with input as settings([])
-}
-
-# COULD NOT LOOK IS NOT A REFUSAL, and this is the case that keeps the module
-# from reading a tree it never parsed as a tree carrying no grant.
-test_no_automode_block_answers_nothing if {
-	count(violation) == 0 with input as {"tree": {"documents": {".claude/settings.json": {"permissions": {"allow": []}}}}}
-}
-
+# COULD NOT LOOK IS NOT A REFUSAL.
 test_no_settings_file_answers_nothing if {
 	count(violation) == 0 with input as {"tree": {"documents": {}}}
 }
 
 #MUTANT-SUITE crates/batten/tests/it/harness_grant.rs
-#MUTANT grant-unread|s@^\tgrants$@\tfalse@|a_dropped_grant_is_refused
-#MUTANT read-clause-unchecked|s@^\tnot reads_everywhere$@\tfalse@|a_dropped_read_clause_is_refused
+#MUTANT grant-unread|s@^\t"autoMode" in object.keys\(settings\)$@\tfalse@|a_committed_grant_is_refused

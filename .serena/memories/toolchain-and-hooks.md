@@ -161,13 +161,21 @@ higher authority decides and nothing says so.
 The classifier recognises well-known tools. Anything built from this checkout,
 this repo's task runner, and the MCP servers are not on that list.
 
-- **The deciding layer is `autoMode.allow` and `autoMode.environment`** in
-  `.claude/settings.json`. Free prose, not globs — argue what the tool is and
-  why refusing it blocks the work.
-- **Keep the `$defaults` sentinel in both.** Dropping it silently discards every
-  built-in classifier safety rule while leaving the grant apparently intact.
-- Project settings do carry `autoMode`; it is not restricted to user or managed
-  scope.
+- **The classifier NEVER reads `autoMode` from `.claude/settings.json` or
+  `.claude/settings.local.json`** — only `~/.claude/settings.json`, managed
+  settings and `--settings` (https://code.claude.com/docs/en/auto-mode-config:
+  "a checked-in repo or a build step could otherwise inject its own allow
+  rules"). This section said the opposite until CLOUD-1379, and the committed
+  block grew to 22 clauses answering refusals it could not affect.
+  `grant carry missing` now refuses a committed block.
+- **What the classifier does read from the repo is CLAUDE.md**, loaded as Claude
+  loads it. A user or managed `autoMode` list is the owner's to write, never the
+  repo's; keep `$defaults` in any list you do write.
+- **The deterministic grant is `permissions.allow`**, resolved before the
+  classifier — but only for a command whose every part prefix-matches. A `for`
+  loop or a variable expansion defeats the match and falls through to the
+  classifier, so issue one plain call per command. Batten's pre-approval for
+  its own lifecycle calls is CLOUD-1949.
 - Name MCP tools by their **suffix**, never a server prefix — CLOUD-178's trap
   applies here exactly as it does to `permissions.allow`.
 
@@ -182,7 +190,9 @@ Then `mcp__serena__edit_memory` — refused while writing THIS section, with
 `permissions.allow`. The message is "Blocked by classifier", which parses as a
 fact about the environment rather than a missing grant, so the reflex is to
 report it upward or hunt for a command shape that slips through. Both are wrong
-and both were done. Write the grant.
+and both were done. Reshape the call so `permissions.allow` matches it (one
+plain command, through the pin), and never answer a refusal with more
+`autoMode` prose in the committed file — the classifier does not read it.
 
 Its own remedy line — "the user can add a Bash permission rule to their
 settings" — is misleading here, because the rule it names is not the one in
@@ -272,9 +282,9 @@ so `~/.claude/launcher-settings.json` is launcher-generated per-session config t
 launcher rewrites next session: a change to it lasts one session and costs a
 person nothing. `batten wiring reclaim`'s own `-y` is the mechanism's
 confirmation, and its verdict class calls it a recurring REPAIR rather than a fix
-for exactly that reason. The `autoMode` grant carries this now so the classifier
-stops refusing it; the reason lives here so the next session does not re-derive it
-from a refusal.
+for exactly that reason. The reason lives here so the next session does not
+re-derive it from a refusal; a committed `autoMode` clause saying so was never
+read by the classifier (CLOUD-1379).
 
 **AND WHAT SENT IT THERE WAS A PROVISIONING FAILURE, WHICH IS THE THING TO CHECK
 FIRST.** `batten` was not on `PATH` when the session started, so the whole
