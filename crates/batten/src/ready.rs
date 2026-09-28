@@ -1092,9 +1092,18 @@ fn check_bump(
     // demanding one would break linting a payload from outside a checkout.
     let version = workspace_version(root)?;
 
+    // THE TYPE IS WHAT PRECEDES THE ANSWER. A type token after the bump token is
+    // the row's prose about it — CLOUD-1055 and CLOUD-368 answer `none` and then
+    // explain a correction "from `docs`", and reading that later token made a row
+    // that lands nothing read as one landing a `docs` commit.
+    let answer_at = grammar
+        .bump_token
+        .find(bump_line)
+        .map_or(bump_line.len(), |m| m.start());
     let type_token = grammar
         .commit_type
-        .find(bump_line)
+        .find_iter(bump_line)
+        .find(|m| m.start() < answer_at)
         .map(|m| m.as_str().to_owned())
         .unwrap_or_default();
     let scope = compiled(SCOPE_SUFFIX);

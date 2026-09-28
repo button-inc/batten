@@ -426,6 +426,27 @@ fn a_typed_row_releasing_nothing_is_not_refused_for_carrying_its_pr() {
     );
 }
 
+// A COMMIT TYPE NAMED AFTER THE ANSWER IS PROSE, not the declaration. The parity
+// run found two live rows (CLOUD-1055, CLOUD-368) whose §6 answers `none` and
+// then explains the correction "from `docs`" — the type pattern took that later
+// token, emitted `no-release`, and refused both `in-review-no-pr`, which the
+// retired program had exempted.
+#[test]
+fn a_type_named_after_a_none_answer_does_not_make_the_row_land_a_commit() {
+    let dir = repo("graph-none-then-prose");
+    let mut board = Board::default();
+    board.issue("CLOUD-1", "In Review", "someone", "", &[]);
+    let row = board.row("CLOUD-1");
+    let body = row["description"].as_str().unwrap().to_owned();
+    row["description"] = serde_json::json!(format!(
+        "{body}\n* **Commit / bump (§6).** `none` — **no bump**. No commit lands \
+         (corrected from `docs`: a type is a claim about a commit)."
+    ));
+    let out = check(&dir, &board);
+    assert_eq!(code(&out), COHERENT, "{}", all(&out));
+    assert!(!all(&out).contains("in-review-no-pr"), "{}", all(&out));
+}
+
 #[test]
 fn a_blockedby_cycle_is_reported_with_its_members() {
     let dir = repo("graph-cycle");
