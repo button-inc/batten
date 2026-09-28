@@ -197,6 +197,17 @@ declared_modules := {
 	# own instances, which is the drift that put four copies of a percentile
 	# function in this tree in the first place.
 	"arm",
+	# `asked` arrived with CLOUD-1078 and this rule named it before a reviewer did,
+	# once more. It is a LEDGER: it parses what a host reported a human answered,
+	# appends it, and compares two texts of it. It reaches only `git` for the base
+	# blob and HEAD, and `durable` for the append.
+	#
+	# The direction worth naming is upward. `lint` reads it to adjudicate an
+	# admission and `lib` reads it at the hook boundary; it reads neither. An edge
+	# back into `lint` would let the record of an answer know which weakening it
+	# is being asked to admit, and the whole guarantee is that the record says only
+	# what the host showed and what came back.
+	"asked",
 	# `suites` arrived with CLOUD-1753 and this rule named it once more — module
 	# written, its cases green, its tier green, and nobody had placed it.
 	#
@@ -852,6 +863,9 @@ forbidden[from] contains to if {
 		# here is what keeps `arm` consumable by CLOUD-1712's fetched-duration
 		# series without dragging a benchmark runner in behind it.
 		"arm": {"rules", "hook", "perf", "mutate"},
+		# `asked -> {lint, rules, hook}`: the ledger must not reach the deciders
+		# that read it. See its placement above.
+		"asked": {"lint", "rules", "hook"},
 	}
 	some to in targets
 }

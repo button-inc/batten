@@ -245,22 +245,20 @@ jobs:
           # tests/bats — the shell test runner. Without it `mise run test:bats`
           # has no bats to run.
           submodules: true
-          # CLOUD-789: THE TRAILER HALF NEEDS THIS BRANCH'S OWN COMMITS.
-          # `config-lint` admits a groomed weakening only when a `Weakens:`
-          # trailer on a commit in `origin/main..HEAD` names it, and the claim
-          # receipt carrying the other half never exists on a runner. At the
-          # default depth 1 that range holds exactly one commit — the PR merge
-          # ref — so every commit that could carry the trailer is outside the
-          # clone and the read comes back empty. Absence admits nothing, so the
-          # gate refuses: the refusal working correctly on evidence that was
-          # never fetched, and still a red run on a branch whose local `verify`
-          # already proved both halves agree.
+          # CLOUD-789, restated by CLOUD-1078: THE ADMISSION NEEDS THE FORK
+          # POINT. `config-lint` admits a weakening only on an asked-ledger line
+          # this branch ADDED, read against the merge base with `origin/main`.
+          # At the default depth 1 there is no merge base in the clone, the
+          # comparison falls back to the trunk's tip, and a trunk that gained
+          # ledger lines since the fork reads as this branch having rewritten
+          # the ledger — which admits nothing, so the gate refuses correctly on
+          # evidence that was never fetched.
           #
-          # A full history rather than a deeper bound, because the exclusion has
-          # to be EXACT: with either side still grafted, `origin/main..HEAD`
-          # stops at the shallow boundary and reports trunk commits as this
-          # branch's own — which would let a trailer inherited from `main` admit
-          # the same weakening on every branch cut after it. Measured at 10.8
+          # A full history rather than a deeper bound, because the fork point has
+          # to be EXACT: with either side still grafted, the merge base lands at
+          # the shallow boundary and trunk lines read as this branch's own —
+          # which would let an answer given on `main` admit the same weakening on
+          # every branch cut after it. Measured at 10.8
           # MiB packed, the price `commit-lint` and `perf` already pay to read a
           # history rather than a tree.
           fetch-depth: 0

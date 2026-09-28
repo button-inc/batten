@@ -13,6 +13,7 @@ pub mod admission;
 pub mod advisory;
 pub mod agent;
 pub mod arm;
+pub mod asked;
 pub mod attribution;
 pub mod baseline;
 /// The board's column vocabulary, resolved from config rather than held as
@@ -16270,6 +16271,10 @@ fn record_post_tool(
     // command, so it fires on exactly the calls the conjunct above excludes: an
     // MCP call carries no command and is the whole point here.
     record_mints(overrides, envelope);
+    // CLOUD-1078's: the host's question tool, and nothing configured. What it
+    // records is the only thing `config lint` accepts as admitting a weakening,
+    // so it is keyed to a HOST fact rather than to a row a branch could edit.
+    record_asked(envelope, harness);
     // CLOUD-1051's, on the same selector and after it. A mint renders a closed
     // template; a recorder may additionally run a declared program and record
     // what it decided, which is what a board write's refinement column IS.
@@ -17259,6 +17264,58 @@ fn mint_receipts(
         };
         let _ = written;
     }
+}
+
+/// Record the human's answer to a host question into the asked ledger
+/// (CLOUD-1078).
+///
+/// Selected by [`hook::Harness::question_tool`] and by nothing a config can
+/// name, so no branch can widen what counts as an answer. The record is read off
+/// the RESULT — the host's report of what was shown and chosen — and never off
+/// the input, which the agent wrote. Silent on every failure, as every recorder
+/// on this boundary is: the admission that reads the ledger refuses again.
+fn record_asked(envelope: &hook::Envelope, harness: hook::Harness) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since_epoch| since_epoch.as_secs());
+    record_asked_at(
+        harness,
+        &envelope.raw_tool,
+        &envelope.result,
+        hook_authority_root(),
+        now,
+    );
+}
+
+/// The one selector-and-write both [`record_asked`] and the integration tier
+/// reach, so the tier proves the boundary rather than a copy of it.
+fn record_asked_at(
+    harness: hook::Harness,
+    raw_tool: &str,
+    result: &serde_json::Value,
+    root: &Path,
+    now: u64,
+) -> usize {
+    if harness.question_tool() != Some(raw_tool) {
+        return 0;
+    }
+    facts::payload_in(result)
+        .and_then(|payload| asked::record(root, &payload, now).ok())
+        .unwrap_or(0)
+}
+
+/// [`record_asked`] reached from the integration tier, for
+/// [`mint_receipts_for_test`]'s reason: the half that writes the ledger and the
+/// half that reads it must be shown to agree through the real boundary.
+#[doc(hidden)]
+#[must_use]
+pub fn record_asked_for_test(
+    harness: hook::Harness,
+    raw_tool: &str,
+    result: &serde_json::Value,
+    root: &Path,
+) -> usize {
+    record_asked_at(harness, raw_tool, result, root, 0)
 }
 
 fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
@@ -20905,12 +20962,9 @@ fn run_config(
             // wins, exactly as before. Absent one, a CLAIMED branch is armed at its
             // fork point — see `claimed_fork_point` for why that base and not the
             // trunk's tip, and why only a claimed branch.
-            let (base, armed_by_claim) = match overrides.config_from.as_deref() {
-                Some(explicit) => (Some(explicit.to_owned()), false),
-                None => match claimed_fork_point(Path::new("."), overrides) {
-                    Some(fork) => (Some(fork), true),
-                    None => (None, false),
-                },
+            let base = match overrides.config_from.as_deref() {
+                Some(explicit) => Some(explicit.to_owned()),
+                None => claimed_fork_point(Path::new("."), overrides),
             };
             // The date the expiry smell is computed against, read once at this
             // boundary and threaded in as data (`waiver`'s module docs say why).
@@ -20953,26 +21007,13 @@ fn run_config(
             let Some(base) = base.as_deref() else {
                 return Ok(ExitCode::verdict(!smells.is_empty()));
             };
-            let groomed = lint::groom(
-                // `git_dir`, not `common_dir`: a claim is a per-worktree
-                // fact, and `claim::mint` writes it under the same one.
-                &git::git_dir(Path::new("."))?.join("batten-receipts"),
-                git::current_branch(Path::new("."))?.as_deref(),
-            );
-            let mut declared = lint::declared(Path::new("."), base)?;
-            // THE CLAIM-ARMED RUN ASKS ONE QUESTION, THE BOARD'S. It runs where no
-            // commit message exists yet — pre-commit, before the author writes the
-            // trailer the change will carry — so demanding the trailer here would
-            // refuse a correctly declared weakening. What this surface CAN decide
-            // is whether the groom admitted the smell before the work reached a
-            // commit, and that is the half that shapes a design: a weakening the
-            // board never saw is refused at the edit, not a lap later. The
-            // trailer's agreement with the groom stays with the explicit-base
-            // callers, `verify` and CI, where the message is a commit.
-            if armed_by_claim && let lint::Groom::Read(admitted) = &groomed {
-                declared.extend(admitted.iter().cloned());
-            }
-            let adjudicated = lint::admissions(&smells, &declared, &groomed);
+            // ONE SOURCE, THE SAME AT EVERY SURFACE (CLOUD-1078). The ledger is in
+            // the working tree, so the pre-commit run, `verify` and CI all read the
+            // answer the human gave — before any commit exists and after it lands
+            // on a runner alike. The claim-armed and explicit-base runs differ only
+            // in which base they compare against, which the arm above decided.
+            let ledger = asked::added_since(Path::new("."), base)?;
+            let adjudicated = lint::admissions(&smells, &ledger);
             let refused = adjudicated
                 .iter()
                 .filter(|(_, admission)| *admission == lint::Admission::Refused)

@@ -282,6 +282,31 @@ impl Harness {
         }
     }
 
+    /// The tool through which this host puts a question to its human, if it has
+    /// one (CLOUD-1078).
+    ///
+    /// A host fact for [`Harness::write_tools`]' reason: the consumer cannot be
+    /// asked to name a host's tool inventory. It is what [`crate::asked`] records
+    /// from, and so the ONLY route by which a weakening is admitted — a host that
+    /// answers `None` can admit no weakening at all, which is the safe direction.
+    ///
+    /// Only Claude Code's is surveyed. The neutral [`Harness::ExitCode`] contract
+    /// answers `None` on purpose: it is a caller composing an envelope by hand,
+    /// and a hand-composed answer is precisely the one this route must not
+    /// accept. Every other host answers `None` until its tool is measured, for
+    /// [`Harness::operation_of`]'s reason — a safe unknown over a confident guess.
+    #[must_use]
+    pub const fn question_tool(self) -> Option<&'static str> {
+        match self {
+            Harness::ClaudeCode => Some("AskUserQuestion"),
+            Harness::CodexCli
+            | Harness::GeminiCli
+            | Harness::Cursor
+            | Harness::CopilotCli
+            | Harness::ExitCode => None,
+        }
+    }
+
     /// Classify this host's tool name into the neutral [`Operation`] vocabulary.
     ///
     /// The write arm reuses [`Harness::write_tools`] rather than restating it:

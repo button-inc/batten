@@ -431,12 +431,18 @@ pub(crate) fn produce(dir: &Path, task: &str, stdin: &str) -> Output {
     child.wait_with_output().expect("run the producer")
 }
 
-/// Whether the committed authority declares its protected-path set.
+/// Whether the committed authority declares the OWNER'S protected-path set.
 ///
 /// The owner switched that gate off until admission statements are adjudicated.
 /// Cases asserting the COMMITTED gate refuses hold only while it is declared, and
 /// return to force the moment it is; an undeclared set must carry the owner's
 /// marker, so a set that silently vanished still reds.
+///
+/// "Declared" means the owner's classes are in it, not merely that a
+/// `protected` line exists: since CLOUD-1078 a narrower set guarding only the
+/// asked ledger is live, and reading that line as the owner's gate being on sent
+/// four cases to assert `rm .serena/memories/core.md` refuses against a set that
+/// does not name it.
 #[must_use]
 pub(crate) fn committed_protected_declared() -> bool {
     let authority = std::fs::read_to_string(
@@ -445,7 +451,7 @@ pub(crate) fn committed_protected_declared() -> bool {
     .expect("read the committed config");
     let declared = authority
         .lines()
-        .any(|line| line.starts_with("protected = ["));
+        .any(|line| line.starts_with("protected = [") && line.contains("\"batten.toml\""));
     assert!(
         declared || authority.contains("# DISABLED by the owner."),
         "the committed protected set vanished without the owner's marker"
@@ -462,8 +468,36 @@ pub(crate) fn committed_fixture_with_protected(name: &str) -> PathBuf {
     let committed = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let authority =
         std::fs::read_to_string(committed.join("batten.toml")).expect("read the committed config");
-    let config = if committed_protected_declared() {
-        authority
+    // The owner's three classes, UNIONED into whatever set is declared rather
+    // than injected only when none is. Since CLOUD-1078 a narrower set is live —
+    // just the asked ledger — and reading "a set is declared" as "the owner's
+    // set is on" left this fixture guarding the ledger alone, so every
+    // `.serena/memories` case here turned green-for-the-wrong-reason red.
+    let owners = [".serena/memories/**", "batten.toml", ".github/workflows/**"];
+    let config = if authority
+        .lines()
+        .any(|line| line.starts_with("protected = ["))
+    {
+        let line = authority
+            .lines()
+            .find(|line| line.starts_with("protected = ["))
+            .expect("the declared set's line")
+            .to_owned();
+        let declared: toml::Value =
+            toml::from_str(&line).expect("the declared set is one TOML key");
+        let mut entries: Vec<String> = declared["protected"]
+            .as_array()
+            .expect("an array")
+            .iter()
+            .filter_map(|entry| entry.as_str().map(str::to_owned))
+            .collect();
+        for owner in owners {
+            if !entries.iter().any(|entry| entry == owner) {
+                entries.push(owner.to_owned());
+            }
+        }
+        let quoted: Vec<String> = entries.iter().map(|entry| format!("\"{entry}\"")).collect();
+        authority.replacen(&line, &format!("protected = [{}]", quoted.join(", ")), 1)
     } else {
         authority.replacen(
             "must_land_on = \"origin/main\"\n",

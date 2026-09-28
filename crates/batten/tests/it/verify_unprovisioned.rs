@@ -328,10 +328,10 @@ fn the_extracted_verify_body_is_the_task_and_not_the_whole_file() {
 /// and judging that tree against trunk charges the holder's weakenings and the
 /// holder's commits to the BORROWER.
 ///
-/// It refuses rather than merely misreports, because `lint::groom` keys the claim
-/// receipt on the branch name: the borrower carries one of its own, minted for
-/// its own row and naming no weakening, which is `Groom::Read({})` — a refusal by
-/// design (CLOUD-841). The holder's `Weakens:` trailer cannot admit it.
+/// It refuses rather than merely misreports, because an admission reads only the
+/// asked-ledger lines added since the base (CLOUD-1078): against trunk, the
+/// holder's weakenings are charged to the borrower, whose ledger answered none of
+/// them.
 ///
 /// Both halves are asserted, because arming only one leaves the other charging
 /// the same borrowed commits: `commit-lint`'s instance is already in this
