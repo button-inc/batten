@@ -1,11 +1,12 @@
 # METADATA
 # description: |
-#   Every crate source module appears in the `mem:core` module map — CLOUD-194,
+#   Every crate source module appears in the `mem:engineering/module-map` map —
+#   CLOUD-194,
 #   ported from `mise-tasks/module-map-check.sh` under CLOUD-843.
 #
 #   `rules/rust.md` carries no module tree; it defers outright — "the full
-#   per-module map ... is `mem:core`, which is kept current instead of this
-#   tree." That makes `mem:core` the single authority on what each module owns,
+#   per-module map ... is `mem:engineering/module-map`, which is kept current instead of
+#   this tree." That makes it the single authority on what each module owns,
 #   and an authority nothing checks is prose (non-negotiable rule 2). A module
 #   added without its row leaves the map silently incomplete and the rule
 #   pointing at it untrue. Measured: `severity.rs` (CLOUD-168) landed with no
@@ -69,7 +70,7 @@ import rego.v1
 rules contains "memory cover partial"
 
 # Where this consumer keeps its map.
-map_path := ".serena/memories/core.md"
+map_path := ".serena/memories/engineering/module-map.md"
 
 # The map's text, bound only when it was actually read.
 #
@@ -132,7 +133,7 @@ violation contains {
 
 tree(tracked, lines) := {"tree": {"tracked": tracked, "lines": lines}}
 
-mapped := {".serena/memories/core.md": ["- `main.rs` — the binary boundary."]}
+mapped := {".serena/memories/engineering/module-map.md": ["- `main.rs` — the binary boundary."]}
 
 test_a_module_with_a_map_row_is_clean if {
 	count(violation) == 0 with input as tree({"crates/demo/src/main.rs"}, mapped)
@@ -146,7 +147,7 @@ test_a_module_with_no_map_row_is_refused if {
 test_a_bare_mention_does_not_satisfy_the_row if {
 	some v in violation with input as tree(
 		{"crates/demo/src/severity.rs"},
-		{".serena/memories/core.md": ["Note: severity.rs is described in another memory."]},
+		{".serena/memories/engineering/module-map.md": ["Note: severity.rs is described in another memory."]},
 	)
 	v.verdict == "module list missing"
 }

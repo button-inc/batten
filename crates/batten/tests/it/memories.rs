@@ -491,3 +491,59 @@ fn the_finding_carries_no_prose_from_the_referrer() {
         "the finding is a pointer, never the line it pointed at\n{said}"
     );
 }
+
+// --- the per-file read ceiling (CLOUD-1934) ----------------------------------
+//
+// A memory is read whole or not at all: past what one `read_memory` returns, the
+// host hands back a short preview and the session acts on rules it never saw. So
+// the ceiling is per FILE, declared as `[budget.<name>] max_bytes_per_file` and
+// enforced by `check`. These cases own the boundary: exactly at the ceiling
+// passes, one byte over refuses and names the file.
+
+/// The ceiling these fixtures declare. Small, so a fixture states its size
+/// exactly rather than approximately.
+const CEILING: usize = 64;
+
+/// A repository declaring only a memories budget, with one memory of `bytes`
+/// bytes and a small sibling that is always within the ceiling.
+fn ceiling_fixture(name: &str, bytes: usize) -> std::path::PathBuf {
+    let dir = scratch(name);
+    write(
+        &dir,
+        "batten.toml",
+        &format!(
+            "version = 1\n\n[budget.memories]\nfiles = [\".serena/memories/**/*.md\"]\nmax_tokens = 1000000\nmax_bytes_per_file = {CEILING}\n"
+        ),
+    );
+    write(&dir, ".serena/memories/sized.md", &"x".repeat(bytes));
+    write(&dir, ".serena/memories/small/note.md", "short\n");
+    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    git_in(&dir, &["add", "-A"]);
+    dir
+}
+
+#[test]
+fn a_memory_exactly_at_the_ceiling_passes() {
+    // THE BOUNDARY IS `<=`. `memory-ceiling-off-by-one` turns the comparison into
+    // `>=`, which refuses this file, so this case is what kills it.
+    let dir = ceiling_fixture("memories-ceiling-at", CEILING);
+    let out = run(&dir, &["check"]);
+    let said = stdout(&out);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "a memory exactly at the ceiling is readable whole\n{said}"
+    );
+}
+
+#[test]
+fn a_memory_one_byte_over_the_ceiling_is_refused_by_path() {
+    // One byte over refuses, and the finding points at the FILE — the thing to
+    // split — never at the set, and never at the small sibling that is fine.
+    let dir = ceiling_fixture("memories-ceiling-over", CEILING + 1);
+    let out = run(&dir, &["check"]);
+    let said = stdout(&out);
+    assert_eq!(out.status.code(), Some(2), "{said}");
+    assert!(said.contains(".serena/memories/sized.md"), "{said}");
+    assert!(!said.contains("small/note.md"), "{said}");
+}

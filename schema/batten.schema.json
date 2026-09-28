@@ -846,6 +846,15 @@
             "type": "string"
           }
         },
+        "max_bytes_per_file": {
+          "description": "The optional ceiling on ONE file's loaded bytes (CLOUD-1934).\n\n**A different question from `max_tokens`, not a finer one.** The total\nbounds what a set costs when all of it loads, which is the right question\nfor an always-loaded surface. A file that is read ON DEMAND, one call at a\ntime, costs nothing until it is read and then fails whole if it is larger\nthan one read can return — so its ceiling is per file, and a set total can\nbe comfortably under budget while every read of its largest member fails.\n\nBytes rather than estimated tokens because the ceiling it stands for is\nMEASURED in bytes: the largest file a host returned whole. Absent means\nunenforced, and the boundary is `<=` like every other one here.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
         "max_lines": {
           "description": "The optional ceiling on loaded lines, the second predicate the shell gate\nthis replaces carried. Absent means unenforced — a threshold nobody\ndeclared is not a threshold of zero.",
           "type": [

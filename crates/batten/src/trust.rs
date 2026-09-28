@@ -2929,6 +2929,12 @@ fn budget_weakenings(
             set.max_lines,
             other.max_lines,
         ));
+        found.extend(ceiling_raised(
+            WeakeningKind::BudgetLimitRaised,
+            &format!("budget[{name}].max_bytes_per_file"),
+            set.max_bytes_per_file,
+            other.max_bytes_per_file,
+        ));
     }
     found
 }

@@ -4903,7 +4903,7 @@ redirect = "restore it with `git checkout --`, or remove it through the surface 
 [[verb]]
 verb = "Write"
 effect = "write"
-redirect = "change the file through the surface that owns it — for a memory that is the Serena tool `write_memory`, which enforces the size ceiling and the `mem:` reference rewrite a direct write skips"
+redirect = "change the file through the surface that owns it — for a memory that is the Serena tool `write_memory` (and `rename_memory` for a move, which rewrites the `mem:` references a direct write skips); the size ceiling is `[budget.memories]`, which `check` enforces"
 
 [[verb]]
 verb = "Edit"
@@ -5388,6 +5388,28 @@ max_lines = 199
 [[budget.instructions.embedded]]
 path = ".serena/project.yml"
 key = "initial_prompt"
+
+# What ONE memory may weigh (CLOUD-1934).
+#
+# A memory is read on demand, one `read_memory` call at a time, and a read past
+# the host's answer ceiling does not fail: it hands back a ~2 KB preview and the
+# session goes on to act on rules it never saw. So the bound that matters is per
+# FILE, not per set, and `instructions` above cannot express it — it caps what
+# loads on every session, where this caps what one read can carry.
+#
+# THE CEILING IS MEASURED, not chosen. `read_memory` returned
+# `toolchain-and-hooks` whole at 41,288 B on 2026-09-28, and CLOUD-1934 measured
+# `prior-art-and-issue-hygiene` coming back as a preview at 73,283 B. The bound
+# sits below the largest size measured to load whole, at 40 KiB, so every
+# memory under it is one that a read has already been seen to return.
+# `max_tokens` bounds the whole corpus, which is what a session reading every
+# memory would pay: measured at ~89,906 estimated tokens after the CLOUD-1934
+# split (2026-09-28), with room for growth rather than none. Raising either
+# number is a visible diff here.
+[budget.memories]
+files = [".serena/memories/*.md", ".serena/memories/**/*.md"]
+max_bytes_per_file = 40960
+max_tokens = 110000
 
 # What ONE emitted mediated refusal line may cost (CLOUD-1286).
 #
@@ -8741,7 +8763,7 @@ severity = "deny"
 id = "memory cover partial"
 kind = "policy"
 scope = "tree"
-line_sources = [".serena/memories/core.md"]
+line_sources = [".serena/memories/engineering/module-map.md"]
 module = "policy/module-map.rego"
 severity = "deny"
 
@@ -16137,7 +16159,7 @@ through a re-export counts exactly as a direct one does.
 [[verdict.route]]
 id = "prose read first"
 kind = "document"
-target = ".serena/memories/core.md"
+target = ".serena/memories/engineering/module-map.md"
 
 [[verdict]]
 id = "step cover missing"

@@ -5880,7 +5880,7 @@ fn run_budget(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Result<
         ))
     })?;
     let reports = budget::measure_all(Path::new("."), Some(declared))?;
-    let over = reports.iter().any(budget::Report::over_budget);
+    let over = reports.iter().any(budget::Report::breached);
 
     if json {
         // Emitted unconditionally, including for a run within budget: JSON that
@@ -5891,7 +5891,7 @@ fn run_budget(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Result<
     } else {
         // Silence is the success signal on the human channel (§6), so a set's
         // per-file breakdown is written only when it explains a verdict.
-        for report in reports.iter().filter(|report| report.over_budget()) {
+        for report in reports.iter().filter(|report| report.breached()) {
             output::lines(out, &report.files)?;
             output::line(out, report)?;
         }
@@ -19954,10 +19954,10 @@ fn select_rules(
 ///
 /// Returns an error when a declared budget entry or the ledger cannot be read.
 fn engine_side_findings(root: &Path, config: &resolve::Resolved) -> Result<Vec<rules::Finding>> {
-    let mut found: Vec<rules::Finding> = budget::measure_all(root, config.budget.as_ref())?
-        .iter()
-        .filter_map(budget::Report::finding)
-        .collect();
+    let reports = budget::measure_all(root, config.budget.as_ref())?;
+    let mut found: Vec<rules::Finding> =
+        reports.iter().filter_map(budget::Report::finding).collect();
+    found.extend(reports.iter().flat_map(budget::Report::file_findings));
     found.extend(ledger_findings(root, config)?);
     Ok(found)
 }

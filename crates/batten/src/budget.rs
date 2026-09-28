@@ -115,6 +115,20 @@ pub struct BudgetSet {
     /// declared is not a threshold of zero.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_lines: Option<usize>,
+    /// The optional ceiling on ONE file's loaded bytes (CLOUD-1934).
+    ///
+    /// **A different question from `max_tokens`, not a finer one.** The total
+    /// bounds what a set costs when all of it loads, which is the right question
+    /// for an always-loaded surface. A file that is read ON DEMAND, one call at a
+    /// time, costs nothing until it is read and then fails whole if it is larger
+    /// than one read can return — so its ceiling is per file, and a set total can
+    /// be comfortably under budget while every read of its largest member fails.
+    ///
+    /// Bytes rather than estimated tokens because the ceiling it stands for is
+    /// MEASURED in bytes: the largest file a host returned whole. Absent means
+    /// unenforced, and the boundary is `<=` like every other one here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_bytes_per_file: Option<usize>,
     /// Always-loaded strings carried *inside* a config file rather than in a
     /// file of their own. Empty by default: a repository with no such surface
     /// declares nothing (CLOUD-298).
@@ -144,7 +158,7 @@ pub struct EmbeddedDecl {
     pub key: String,
 }
 
-/// One measured file. Pointer-only: a path and two counts, never a byte of the
+/// One measured file. Pointer-only: a path and its counts, never a byte of the
 /// content that produced them (non-negotiable rule 4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
@@ -155,6 +169,8 @@ pub struct FileCount {
     pub tokens: usize,
     /// Lines of loaded content.
     pub lines: usize,
+    /// Bytes of loaded content, which [`BudgetSet::max_bytes_per_file`] judges.
+    pub bytes: usize,
 }
 
 /// What [`measure`] found: the per-file counts, the totals, and the budgets they
@@ -181,6 +197,19 @@ pub struct Report {
     /// The line ceiling, when one is configured.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_lines: Option<usize>,
+    /// The per-file byte ceiling, when one is configured (CLOUD-1934).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_bytes_per_file: Option<usize>,
+}
+
+/// Whether one file's loaded bytes exceed a per-file ceiling.
+///
+/// Its own function so the boundary is stated once and a mutation of it has one
+/// place to land: `<=` passes, exactly as every other ceiling in this module.
+//MUTANT-SUITE crates/batten/tests/it/memories.rs
+//MUTANT memory-ceiling-off-by-one|s@    bytes > ceiling@    bytes >= ceiling@|a_memory_exactly_at_the_ceiling_passes
+const fn over_file_ceiling(bytes: usize, ceiling: usize) -> bool {
+    bytes > ceiling
 }
 
 impl Report {
@@ -192,6 +221,58 @@ impl Report {
     #[must_use]
     pub fn over_budget(&self) -> bool {
         self.tokens > self.max_tokens || self.max_lines.is_some_and(|max| self.lines > max)
+    }
+
+    /// Whether the set total OR any one file breaches (CLOUD-1934): the verdict
+    /// `policy budget` reports, so a per-file breach is never read as green.
+    #[must_use]
+    pub fn breached(&self) -> bool {
+        self.over_budget()
+            || self.max_bytes_per_file.is_some_and(|ceiling| {
+                self.files
+                    .iter()
+                    .any(|f| over_file_ceiling(f.bytes, ceiling))
+            })
+    }
+
+    /// One finding per file over the per-file byte ceiling (CLOUD-1934).
+    ///
+    /// Beside [`Report::finding`] rather than folded into it, because the two
+    /// point at different things: the set total is a property of the set, so
+    /// that finding points at the set's name, and a per-file breach is a
+    /// property of ONE file, so each points at that file. Its identity is
+    /// `(rule, path)`, stable across the edits that move the count.
+    ///
+    /// Pointer-only: the path, and the count and ceiling as numbers.
+    #[must_use]
+    pub fn file_findings(&self) -> Vec<Finding> {
+        let Some(ceiling) = self.max_bytes_per_file else {
+            return Vec::new();
+        };
+        let rule = self.rule_id();
+        self.files
+            .iter()
+            .filter(|file| over_file_ceiling(file.bytes, ceiling))
+            .map(|file| Finding {
+                owner: None,
+                rule: rule.clone(),
+                severity: RuleSeverity::Deny,
+                path: file.path.clone(),
+                line: None,
+                identity: StoredIdentity::new(
+                    FindingKind::Scope,
+                    identity::scope_fingerprint(&rule, &file.path),
+                ),
+                check: crate::findings::Check::Reevaluate,
+                // The count and the ceiling ride the remedy, as numbers: `reason`
+                // is a closed vocabulary of engine tokens, never a formatted value.
+                remediation: Some(crate::findings::Remediation::NoFix(format!(
+                    "{} bytes of {ceiling}: split the file along its headings",
+                    file.bytes
+                ))),
+                reason: None,
+            })
+            .collect()
     }
 
     /// The one-line summary: the totals and the budgets they were judged
@@ -556,6 +637,7 @@ pub fn measure(root: &Path, name: &str, budget: &BudgetSet) -> Result<Report> {
             path,
             tokens: estimate_tokens(&loaded),
             lines: count_lines(&loaded),
+            bytes: loaded.len(),
         };
         tokens += file.tokens;
         lines += file.lines;
@@ -580,6 +662,7 @@ pub fn measure(root: &Path, name: &str, budget: &BudgetSet) -> Result<Report> {
             path: format!("{}#{}", decl.path, decl.key),
             tokens: estimate_tokens(&loaded),
             lines: count_lines(&loaded),
+            bytes: loaded.len(),
         };
         tokens += file.tokens;
         lines += file.lines;
@@ -597,6 +680,7 @@ pub fn measure(root: &Path, name: &str, budget: &BudgetSet) -> Result<Report> {
         lines,
         max_tokens: budget.max_tokens,
         max_lines: budget.max_lines,
+        max_bytes_per_file: budget.max_bytes_per_file,
     })
 }
 
@@ -753,6 +837,7 @@ mod tests {
             lines: 10,
             max_tokens: 100,
             max_lines: Some(10),
+            max_bytes_per_file: None,
         };
         assert!(!at.over_budget(), "exactly at budget is within budget");
 
@@ -785,6 +870,7 @@ mod tests {
                     files: vec!["AGENTS.md".to_owned()],
                     max_tokens: 1,
                     max_lines: None,
+                    max_bytes_per_file: None,
                     embedded: Vec::new(),
                 },
             )]
@@ -825,6 +911,7 @@ mod tests {
             lines: 1,
             max_tokens: 100,
             max_lines: None,
+            max_bytes_per_file: None,
         };
         assert!(
             within.finding().is_none(),
@@ -862,6 +949,49 @@ mod tests {
             ..over
         };
         assert_ne!(other.finding().unwrap().identity, finding.identity);
+    }
+
+    #[test]
+    fn a_file_over_the_per_file_ceiling_is_its_own_finding() {
+        // The per-file ceiling judges each file on its own, points at that file,
+        // and is silent where no ceiling is declared.
+        let file = |path: &str, bytes: usize| FileCount {
+            path: path.to_owned(),
+            tokens: bytes / 4,
+            lines: 1,
+            bytes,
+        };
+        let report = Report {
+            name: "memories".to_owned(),
+            files: vec![file("a.md", 100), file("b.md", 101), file("c.md", 5_000)],
+            tokens: 1,
+            lines: 3,
+            max_tokens: 1_000_000,
+            max_lines: None,
+            max_bytes_per_file: Some(100),
+        };
+        let found = report.file_findings();
+        let paths: Vec<&str> = found.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["b.md", "c.md"], "exactly at the ceiling passes");
+        assert_eq!(found[0].rule, "budget.memories");
+        assert_eq!(found[0].severity, RuleSeverity::Deny);
+        assert_eq!(
+            found[0].remediation,
+            Some(crate::findings::Remediation::NoFix(
+                "101 bytes of 100: split the file along its headings".to_owned()
+            ))
+        );
+        assert_ne!(found[0].identity, found[1].identity);
+        assert!(
+            report.finding().is_none(),
+            "the set total is its own question"
+        );
+
+        let unenforced = Report {
+            max_bytes_per_file: None,
+            ..report
+        };
+        assert!(unenforced.file_findings().is_empty());
     }
 
     #[test]

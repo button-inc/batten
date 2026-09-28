@@ -65,6 +65,12 @@ permissions:
   contents: write
   pull-requests: write
 
+env:
+  # Restores locked installs, which `[settings] lockfile = false` turns off along
+  # with the install-time write it exists to deny (CLOUD-223). Every workflow
+  # using mise-action must set this; `lock-complete` refuses one that does not.
+  MISE_LOCKFILE: "true"
+
 jobs:
   fast-forward:
     # `startsWith`, NEVER `contains` (CLOUD-853). `contains` is unanchored, so

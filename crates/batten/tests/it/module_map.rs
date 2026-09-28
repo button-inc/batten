@@ -1,4 +1,5 @@
-//! Every crate source module has a `mem:core` row, over the compiled binary
+//! Every crate source module has a `mem:engineering/module-map` row, over the
+//! compiled binary
 //! (CLOUD-194, ported from `mise-tasks/module-map-check.sh` under CLOUD-843).
 //!
 //! **What is decidable only here.** `policy/module-map.rego` carries load-time
@@ -12,7 +13,7 @@
 //!
 //! The self-consumption case runs over this repository, which is what the
 //! retiring suite's last case did and what makes the gate's own claim about
-//! `mem:core` checkable rather than asserted.
+//! `mem:engineering/module-map` checkable rather than asserted.
 //
 // carried: mise-tasks/module-map-check.sh policy/module-map.rego crates/batten/tests/it/module_map.rs
 // carried: tests/module-map-check.bats policy/module-map.rego crates/batten/tests/it/module_map.rs
@@ -65,13 +66,13 @@ fn map_repo(name: &str, map: Option<&str>, modules: &[(&str, &str)]) -> PathBuf 
          id = \"memory cover partial\"\n\
          kind = \"policy\"\n\
          scope = \"tree\"\n\
-         line_sources = [\".serena/memories/core.md\"]\n\
+         line_sources = [\".serena/memories/engineering/module-map.md\"]\n\
          module = \"policy/module-map.rego\"\n\
          severity = \"deny\"\n",
     );
     fixture = fixture.file("AGENTS.md", "the consumer's own authority\n");
     if let Some(text) = map {
-        fixture = fixture.file(".serena/memories/core.md", text);
+        fixture = fixture.file(".serena/memories/engineering/module-map.md", text);
     }
     for (path, body) in modules {
         fixture = fixture.file(path, body);
@@ -196,7 +197,7 @@ fn output_is_pointer_only() {
 #[test]
 fn the_repositorys_own_map_is_complete() {
     // The self-consumption case the retiring suite ended on: the claim
-    // `rules/rust.md` makes about `mem:core` is checkable rather than asserted.
+    // `rules/rust.md` makes about the map is checkable rather than asserted.
     let output = common::run_at_real_root(
         &common::at_root(""),
         &["check", "--rule", "memory cover partial"],

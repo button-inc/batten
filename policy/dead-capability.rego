@@ -8,7 +8,7 @@
 # three shells, and NO CALL SITE. Every gate in the set read clean over it:
 # `module-layering` asks whether a module has a row, `spawn-adapters` which
 # modules spawn, `tests/it/surface.rs` that the man pages match the binary,
-# `module-map-check` that every module has a mem:core row. All membership
+# `module-map-check` that every module has a module-map row. All membership
 # questions; none is reachability. The tell was visible only by grepping for
 # callers, which no gate did.
 #

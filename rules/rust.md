@@ -253,5 +253,5 @@ two of the comments stating it were not.
 ## Layout
 
 The per-module map — every `src/*.rs` file, what it owns, and where its
-rationale doc comment lives — is `mem:core`, kept current instead of a tree
+rationale doc comment lives — is `mem:engineering/module-map`, kept current instead of a tree
 restated here.

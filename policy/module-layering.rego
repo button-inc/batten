@@ -303,7 +303,7 @@ declared_modules := {
 	"lease",
 	# `gitwrite` arrived with CLOUD-1274's D2, and it is placed by EFFECT rather
 	# than by subject. `git` is read-only over gix and says so in its own header
-	# and in `mem:core`; the only remote write in the crate is `lease::swap`. The
+	# and in `mem:engineering/module-map`; the only remote write in the crate is `lease::swap`. The
 	# local writes a fetch needs — a loose object, a remote-tracking ref — would
 	# have made that documented property false if they had landed in `git`, so
 	# they live in their own module and `git` keeps its character.
@@ -680,11 +680,11 @@ declared_modules := {
 #
 # `rules -> hook` is the sharpest instance and the row says so: `refusal.rs`
 # states that housing the refusal table in `hook` "would make `rules` import
-# `hook` and close a module cycle", and `mem:core` repeats it. rustc permits
+# `hook` and close a module cycle", and the module docs repeat it. rustc permits
 # mutual `use` inside one crate, so that reasoning is held today by whoever
 # remembers it.
 #
-# The three chains are the layerings `mem:core` and the module docs state, read
+# The three chains are the layerings the module docs state, read
 # as "a lower tier must not reach a higher one":
 #   surface (data) -> cli (typed values) -> lib (dispatch)
 #   config (load) -> resolve (precedence) -> trust (judging) -> lint -> epoch

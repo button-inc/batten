@@ -4,7 +4,7 @@
 //! # Why this is not `git.rs`
 //!
 //! `git.rs` is READ-ONLY over `gix` and says so in its own header and in
-//! `mem:core`; the only write to a remote anywhere in the crate is
+//! `mem:engineering/module-map`; the only write to a remote anywhere in the crate is
 //! [`crate::lease::swap`]. Adding writes there would have made a documented
 //! property false rather than changing it on purpose, so the writes live here and
 //! `git.rs` keeps its character. The split is by EFFECT, not by subject: reading
