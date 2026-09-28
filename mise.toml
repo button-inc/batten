@@ -6789,7 +6789,15 @@ jq -r --slurpfile full "$full" '
 	| "\($name) \($under // "absent")"
 ' <"$fast" | record hk-plan
 
-if [ "$dirty" = 0 ]; then mise run -q step-receipt record record-verdicts || true; fi
+# THE RECEIPT ATTESTS THE STORE, NOT THIS RUN (CLOUD-1891). hk spawns this task
+# from three steps at once, and a concurrent twin whose `pkl` fetch flaked can
+# write `status error` AFTER this run's clean record — measured on #1036's
+# second lap: `tool judge dirty` over a store both validators judge clean by
+# hand. A receipt keyed off this run's `dirty` alone then replays that error
+# until an input moves. So it is written only when the store itself reads clean.
+if [ "$dirty" = 0 ] && cargo run --quiet -p batten -- check --rule 'tool judge dirty' >/dev/null 2>&1; then
+	mise run -q step-receipt record record-verdicts || true
+fi
 fi
 unset BATTEN_STEP_SPECS BATTEN_STEP_TOOLS
 
