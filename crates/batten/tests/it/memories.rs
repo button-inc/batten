@@ -517,7 +517,7 @@ fn ceiling_fixture(name: &str, bytes: usize) -> std::path::PathBuf {
     );
     write(&dir, ".serena/memories/sized.md", &"x".repeat(bytes));
     write(&dir, ".serena/memories/small/note.md", "short\n");
-    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    common::init_repo(&dir);
     git_in(&dir, &["add", "-A"]);
     dir
 }

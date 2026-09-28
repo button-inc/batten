@@ -30,7 +30,7 @@ use crate::common;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{batten, git_in, scratch, stdout, write};
+use common::{batten, git_in, init_repo, scratch, stdout, write};
 
 /// A module that binds the whole input document as a helper rule, and raises
 /// one real violation when the document says `raise`.
@@ -90,7 +90,7 @@ fn fixture(name: &str, raise: bool) -> PathBuf {
     write(&repo, "batten.toml", CONFIG);
     write(&repo, "walk.rego", MODULE);
     write(&repo, "settings.json", &settings(raise));
-    git_in(&repo, &["init", "-q", "-b", "main", "."]);
+    init_repo(&repo);
     git_in(&repo, &["add", "-A"]);
     repo
 }

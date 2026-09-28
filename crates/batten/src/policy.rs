@@ -1494,7 +1494,7 @@ fn read_subjects(value: &regorus::Value) -> Option<Vec<crate::verdict::Subject>>
 /// whose value is an object "finds nothing". A rule bound to a parsed document
 /// is exactly such a helper, and a document is free to carry a `deny`,
 /// `violation`, `rules` or `preapprove` key of its own. Measured:
-/// `harness-grant.rego` bound `.claude/settings.json` as a rule, and that file's
+/// a consumer module bound its harness settings file as a rule, and that file's
 /// six-entry `permissions.deny` came back as six unattributed findings on a tree
 /// the module judged clean. On the `preapprove` channel the same shape would have
 /// been a GRANT authored by a data file. The `data` document does not say which
