@@ -49,6 +49,10 @@ use std::path::PathBuf;
 /// *before* it was collected.
 const COLLECTED: &str = "BATTEN_SCRATCH_COLLECTED";
 
+/// What the setup script publishes beside the count: the scratch parents it
+/// covered, `:`-separated, as `pwd -P` paths (CLOUD-1976).
+const ROOTS: &str = "BATTEN_SCRATCH_ROOTS";
+
 /// The scratch parent itself, as the harness resolves it.
 fn parent() -> PathBuf {
     PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
@@ -79,6 +83,27 @@ fn the_collector_ran_for_this_run() {
     reading.trim().parse::<u64>().unwrap_or_else(|_| {
         panic!("{COLLECTED} should be the entry count the collector found, got {reading:?}")
     });
+
+    // AND THE PARENT THIS RUN WRITES INTO IS ONE IT COVERED (CLOUD-1976). A count
+    // alone passed on the musl lane while the collector took `target/tmp` and the
+    // suite wrote into `target/<triple>/tmp`, which nothing ever collected.
+    //
+    // UNIX ONLY, and the reason is the spelling rather than the property: the
+    // windows lane runs the collector under Git Bash, whose `pwd -P` answers
+    // `/d/a/...` for a parent this process knows as `D:\a\...`, so the two could
+    // never compare equal there however correct the collection was.
+    #[cfg(unix)]
+    {
+        let roots = std::env::var(ROOTS).unwrap_or_default();
+        let parent = parent()
+            .canonicalize()
+            .expect("the scratch parent resolves");
+        assert!(
+            std::env::split_paths(&roots).any(|root| root == parent),
+            "{} is not among the roots the collector covered ({roots:?})",
+            parent.display()
+        );
+    }
 }
 
 /// The committed `clear-scratch` command, exactly as nextest runs it.
@@ -94,13 +119,35 @@ fn collector_command() -> String {
 
 /// Run the collector over a fixture target dir holding one sentinel entry, with
 /// a stub `pgrep` first on `PATH` that reports `others` as the live
-/// `cargo-nextest` pids. Returns whether the sentinel survived and the count the
-/// collector published.
+/// `cargo-nextest` pids. Returns whether the sentinel survived and the count line
+/// the collector published.
+fn collect_beside(name: &str, others: &str) -> (bool, String) {
+    let (survived, published) = collect_seeded(name, others, &["tmp"]);
+    (survived[0], line_of(&published, COLLECTED))
+}
+
+/// The `KEY=value` line the collector published for `key`, whole.
+///
+/// Line-wise since CLOUD-1976, because the collector now publishes a second line
+/// beside the count, and comparing the whole file would couple every case to the
+/// other line's bytes.
+fn line_of(published: &str, key: &str) -> String {
+    published
+        .lines()
+        .find(|line| line.starts_with(&format!("{key}=")))
+        .unwrap_or_default()
+        .trim()
+        .to_owned()
+}
+
+/// The collector, run over a fixture target dir holding one sentinel under each
+/// of `seeds` (paths relative to that target dir). Returns whether each sentinel
+/// survived, in order, and everything the collector published.
 #[expect(
     clippy::disallowed_types,
     reason = "stays, and test-only: the subject is the shell command nextest runs, so asserting it means running `sh`"
 )]
-fn collect_beside(name: &str, others: &str) -> (bool, String) {
+fn collect_seeded(name: &str, others: &str, seeds: &[&str]) -> (Vec<bool>, String) {
     let root = crate::common::scratch(name);
     let bin = root.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
@@ -111,9 +158,14 @@ fn collect_beside(name: &str, others: &str) -> (bool, String) {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    let sentinel = root.join("target/tmp/sentinel");
-    std::fs::create_dir_all(sentinel.parent().unwrap()).unwrap();
-    std::fs::write(&sentinel, "").unwrap();
+    let sentinels: Vec<PathBuf> = seeds
+        .iter()
+        .map(|seed| root.join("target").join(seed).join("sentinel"))
+        .collect();
+    for sentinel in &sentinels {
+        std::fs::create_dir_all(sentinel.parent().unwrap()).unwrap();
+        std::fs::write(sentinel, "").unwrap();
+    }
     let published = root.join("nextest-env");
     let path = std::env::join_paths(
         std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
@@ -129,7 +181,38 @@ fn collect_beside(name: &str, others: &str) -> (bool, String) {
         .expect("run the collector");
     assert!(status.success(), "the collector must exit 0");
     let reading = std::fs::read_to_string(&published).unwrap_or_default();
-    (sentinel.exists(), reading.trim().to_owned())
+    (
+        sentinels.iter().map(|path| path.exists()).collect(),
+        reading,
+    )
+}
+
+/// CLOUD-1976. A `--target <triple>` run's scratch parent is
+/// `target/<triple>/tmp`, and the collector used to take `target/tmp` alone, so
+/// the musl lane's parent grew across runs and rode the cache into the next job.
+/// Alone, the collector takes both — and publishes both as covered roots.
+///
+/// MUTANT collector-skips-triple-roots|s@ "$base"/\*/tmp; do@; do@|a_target_triples_scratch_is_collected_too
+/// — `.config/nextest.toml` has no `batten mutate` sweep route, so this row is
+/// inert under the sweep and its kill was shown by hand.
+#[test]
+fn a_target_triples_scratch_is_collected_too() {
+    let (survived, published) = collect_seeded(
+        "clear-scratch-triple",
+        "",
+        &["tmp", "x86_64-unknown-linux-musl/tmp"],
+    );
+    assert_eq!(
+        survived,
+        vec![false, false],
+        "a lone run takes the native parent and the triple's alike"
+    );
+    assert_eq!(line_of(&published, COLLECTED), format!("{COLLECTED}=2"));
+    let roots = line_of(&published, ROOTS);
+    assert!(
+        roots.contains("/target/tmp") && roots.contains("/target/x86_64-unknown-linux-musl/tmp"),
+        "both roots are published as covered: {roots}"
+    );
 }
 
 /// CLOUD-1912: `verify` runs several nextest invocations at once, and a later

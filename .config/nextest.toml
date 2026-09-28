@@ -59,7 +59,19 @@ experimental = ["setup-scripts"]
 # and collects only when there are none; a deferred run publishes 0 and leaves
 # its entries for the next run that is alone. Where `pgrep` does not exist the
 # runner is a fresh CI box running one nextest, and the collection proceeds.
-command = """sh -c 'd="${CARGO_TARGET_DIR:-target}/tmp"; case "$d" in */tmp) ;; *) echo "clear-scratch: refusing $d" >&2; exit 1 ;; esac; others=0; if command -v pgrep >/dev/null 2>&1; then others=$(pgrep -x cargo-nextest | grep -cvx "$PPID"); fi; n=0; if [ "$others" -eq 0 ]; then n=$(ls -1 "$d" 2>/dev/null | wc -l | tr -d "[:space:]"); rm -rf "$d"; fi; mkdir -p "$d" && echo "BATTEN_SCRATCH_COLLECTED=$n" >> "$NEXTEST_ENV"'"""
+#
+# EVERY `<triple>/tmp` TOO (CLOUD-1976). A `--target <triple>` run's
+# `CARGO_TARGET_TMPDIR` is `target/<triple>/tmp`, never `target/tmp`, so the musl
+# lane's scratch parent was collected by nothing, grew across runs, and rode the
+# `cache-warm-musl` cache into the next job. The glob matches only directories
+# that exist, and cargo creates a target's tmp when it builds the integration
+# targets, before any setup script runs. The unmatched glob's literal is skipped,
+# and so is `tmp/tmp`, which would be a fixture of the native run's own.
+#
+# `BATTEN_SCRATCH_ROOTS` is what this run COVERS, collected or deferred, as
+# `:`-separated `pwd -P` paths, so `scratch_hygiene.rs` can assert that the
+# parent the running suite writes into is one of them.
+command = """sh -c 'base="${CARGO_TARGET_DIR:-target}"; others=0; if command -v pgrep >/dev/null 2>&1; then others=$(pgrep -x cargo-nextest | grep -cvx "$PPID"); fi; n=0; roots=""; for d in "$base/tmp" "$base"/*/tmp; do case "$d" in "$base/*/tmp"|"$base/tmp/tmp") continue ;; */tmp) ;; *) echo "clear-scratch: refusing $d" >&2; exit 1 ;; esac; if [ "$others" -eq 0 ]; then c=$(ls -1 "$d" 2>/dev/null | wc -l | tr -d "[:space:]"); n=$((n + c)); rm -rf "$d"; fi; mkdir -p "$d" && r=$(cd "$d" && pwd -P) && roots="${roots:+$roots:}$r"; done; echo "BATTEN_SCRATCH_COLLECTED=$n" >> "$NEXTEST_ENV" && echo "BATTEN_SCRATCH_ROOTS=$roots" >> "$NEXTEST_ENV"'"""
 
 [[profile.default.scripts]]
 filter = "all()"
