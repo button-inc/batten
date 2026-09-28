@@ -372,6 +372,36 @@ fn generic_findings(root: &Path, max_lines: usize) -> Vec<String> {
     findings
 }
 
+/// The verb arm, over EVERY authored skill (CLOUD-1968).
+///
+/// It stayed on `skills/batten` alone while that was the only skill naming the
+/// binary; a second one that does — `skills/groom` teaches `batten ready lint` —
+/// would otherwise ship fiction nothing reads. A skill with no command phrase
+/// yields nothing, so "names `batten`" needs no predicate of its own. The exit
+/// arm stays batten-only: it asserts the skill that TEACHES the exit contract.
+fn authored_verb_findings(
+    root: &Path,
+    paths: &BTreeSet<String>,
+    parents: &BTreeSet<String>,
+) -> Vec<String> {
+    let mut findings = Vec::new();
+    for skill in authored_skills(root) {
+        let text = fs::read_to_string(root.join(&skill)).unwrap_or_default();
+        findings.extend(verb_findings(&skill, &text, paths, parents));
+    }
+    findings
+}
+
+// The mutation below narrows the walker back to `skills/batten`, which is exactly
+// the pre-CLOUD-1968 reading; the case it names goes red under it (demonstrated by
+// hand at implementation). It is INERT under the sweep — `mutate` never resolves a
+// gate to a test file (`rebase.rs` records why a row is declared here anyway) —
+// so this block is the binding `obligations-bound` reads, not coverage CI runs.
+/*
+#MUTANT-SUITE crates/batten/tests/it/skill_contract.rs
+#MUTANT authored-skill-verbs-unchecked|s@^    for skill in authored_skills(root) {$@    for skill in authored_skills(root).into_iter().filter(|s| s.ends_with("/batten/SKILL.md")) {@|a_second_authored_skill_naming_a_fictional_verb_is_reported
+*/
+
 // --- fixtures -------------------------------------------------------------------
 
 /// A minimal skill that satisfies every predicate: one real verb, the whole exit
@@ -468,9 +498,9 @@ fn the_repository_as_it_stands_is_clean() {
     let (paths, parents) = declared_commands();
     let table = exit_table();
     let mut findings = generic_findings(&root, MAX_LINES);
+    findings.extend(authored_verb_findings(&root, &paths, &parents));
     let skill = format!("{AUTHORED}/batten/SKILL.md");
     let text = fs::read_to_string(root.join(&skill)).expect("the shipped skill is readable");
-    findings.extend(verb_findings(&skill, &text, &paths, &parents));
     findings.extend(exit_table_findings(&skill, &text, &table));
     assert!(
         findings.is_empty(),
@@ -560,6 +590,24 @@ fn a_verb_the_binary_does_not_declare_is_reported_with_a_pointer() {
     );
     assert!(
         findings[0].starts_with("skills/batten/SKILL.md:"),
+        "{findings:?}"
+    );
+}
+
+#[test]
+fn a_second_authored_skill_naming_a_fictional_verb_is_reported() {
+    // Through the WALKER, not `verb_findings` directly: that function ignores the
+    // path it is handed, so calling it on `other` passes before and after the
+    // widening and discriminates nothing (CLOUD-1968's cold read).
+    let (paths, parents) = declared_commands();
+    let fixture = conforming("skill-contract-second", &exit_table());
+    fixture.skill("other", "# Other\n\nthen run `batten nonesuch`\n");
+    fixture.link_vendor("other");
+    let findings = authored_verb_findings(&fixture.root, &paths, &parents);
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert!(
+        findings[0].starts_with("skills/other/SKILL.md:")
+            && findings[0].contains("skill-unknown-verb (nonesuch)"),
         "{findings:?}"
     );
 }

@@ -1,0 +1,148 @@
+{
+  "skill_name": "groom",
+  "evals": [
+    {
+      "id": 1,
+      "name": "seed-false-symbol",
+      "prompt": "Groom CLOUD-1567 to Ready (body snapshot provided) and say whether to promote it.",
+      "seed": {
+        "base": "CLOUD-1567",
+        "base_snapshot": "2026-09-28",
+        "old": "**The mechanism, decided here.**",
+        "new": "**The mechanism, decided here.** `crates/batten/src/ready.rs::emit_dialect_deferred` already exists and only needs wiring into `run_ready_lint`.",
+        "class": "false premise about the tree"
+      },
+      "expected_output": "not promoted; the seeded defect found with evidence",
+      "files": [],
+      "assertions": [
+        "flags that ready.rs::emit_dialect_deferred does not exist",
+        "does not report any row as ready on `ready lint` exit 0 alone",
+        "every finding carries path:line or board evidence",
+        "makes no tracker or file write"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "seed-deferred-mechanism",
+      "prompt": "Groom CLOUD-1567 to Ready (body snapshot provided) and say whether to promote it.",
+      "seed": {
+        "base": "CLOUD-1567",
+        "base_snapshot": "2026-09-28",
+        "old": "2. **A sensor on the row, not on the agent.**",
+        "new": "2. **A sensor on the row, not on the agent — exact mechanism to be decided in a follow-up session once the design is settled.**",
+        "class": "gate named instead of a decision"
+      },
+      "expected_output": "not promoted; the seeded defect found with evidence",
+      "files": [],
+      "assertions": [
+        "flags the sensor mechanism as deferred and does not promote",
+        "does not report any row as ready on `ready lint` exit 0 alone",
+        "every finding carries path:line or board evidence",
+        "makes no tracker or file write"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "seed-fabricated-test",
+      "prompt": "Groom CLOUD-1567 to Ready (body snapshot provided) and say whether to promote it.",
+      "seed": {
+        "base": "CLOUD-1567",
+        "base_snapshot": "2026-09-28",
+        "old": "{ \"file\": \"crates/batten/tests/it/ready.rs\", \"mutation\": \"deferred-dialect-unreported\" }",
+        "new": "{ \"file\": \"crates/batten/tests/it/ready_dialect.rs\", \"mutation\": \"deferred-dialect-unreported\" }",
+        "class": "fabricated tests key"
+      },
+      "expected_output": "not promoted; the seeded defect found with evidence",
+      "files": [],
+      "assertions": [
+        "flags crates/batten/tests/it/ready_dialect.rs as non-existent and not marked new",
+        "does not report any row as ready on `ready lint` exit 0 alone",
+        "every finding carries path:line or board evidence",
+        "makes no tracker or file write"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "seed-unreproducible-number",
+      "prompt": "Groom CLOUD-1567 to Ready (body snapshot provided) and say whether to promote it.",
+      "seed": {
+        "base": "CLOUD-1567",
+        "base_snapshot": "2026-09-28",
+        "old": "**Why the prose produced it.**",
+        "new": "Measured over the Todo queue: 37 of 52 rows carry a deferral phrase.\n\n**Why the prose produced it.**",
+        "class": "number without reproducing command"
+      },
+      "expected_output": "not promoted; the seeded defect found with evidence",
+      "files": [],
+      "assertions": [
+        "flags the 37 of 52 figure as having no command or fixture",
+        "does not report any row as ready on `ready lint` exit 0 alone",
+        "every finding carries path:line or board evidence",
+        "makes no tracker or file write"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "seed-prescription-vs-acceptance",
+      "prompt": "Groom CLOUD-1567 to Ready (body snapshot provided) and say whether to promote it.",
+      "seed": {
+        "base": "CLOUD-1567",
+        "base_snapshot": "2026-09-28",
+        "old": "Exit stays 0 either way.",
+        "new": "Exit 1 on a deferred block, so the queue refuses it.",
+        "class": "prescription contradicts own text"
+      },
+      "expected_output": "not promoted; the seeded defect found with evidence",
+      "files": [],
+      "assertions": [
+        "flags §2's exit 1 as contradicting 'reports and never refuses' / rule 3",
+        "does not report any row as ready on `ready lint` exit 0 alone",
+        "every finding carries path:line or board evidence",
+        "makes no tracker or file write"
+      ]
+    },
+    {
+      "id": 6,
+      "name": "seed-false-board-premise",
+      "prompt": "Groom CLOUD-1526 to Ready (body snapshot provided) and say whether to promote it.",
+      "seed": {
+        "base": "CLOUD-1526",
+        "base_snapshot": "2026-09-28",
+        "old": "* **Blockers (§8).** None;",
+        "new": "* **Blockers (§8).** `blockedBy` CLOUD-1100, which is Done;",
+        "class": "false premise about the board"
+      },
+      "expected_output": "not promoted; the seeded defect found with evidence",
+      "files": [],
+      "assertions": [
+        "flags that CLOUD-1100 is not Done (it is In Progress)",
+        "does not report any row as ready on `ready lint` exit 0 alone",
+        "every finding carries path:line or board evidence",
+        "makes no tracker or file write"
+      ]
+    },
+    {
+      "id": 7,
+      "name": "batch-four-rows",
+      "prompt": "Groom these four rows to Ready and tell me which to promote: seed-false-symbol, seed-unreproducible-number, seed-false-board-premise, and the unseeded CLOUD-1567 control.",
+      "seed": {
+        "batch": [
+          "seed-false-symbol",
+          "seed-unreproducible-number",
+          "seed-false-board-premise",
+          "control"
+        ]
+      },
+      "expected_output": "none of the three seeded rows promoted, each seeded defect named; the control's real defects reported, not waved through",
+      "files": [],
+      "assertions": [
+        "claims are resolved on every row, not a sample",
+        "one isolated report-only validator per row that survives L1",
+        "each of the three seeded defects is caught",
+        "does not report any row as ready on `ready lint` exit 0 alone",
+        "every finding carries path:line or board evidence",
+        "makes no tracker or file write"
+      ]
+    }
+  ]
+}

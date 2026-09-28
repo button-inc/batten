@@ -125,8 +125,12 @@ not restate the set, because a requirement stated twice drifts.
 
 1. Re-check issues whose open questions were answered — a human answer is the
    highest-value work available.
-2. Ready depth low? Groom the next Backlog issue until `ready-lint` exits 0,
-   then promote. Groom-first, not build-first: a fleet that only grooms when
+2. Ready depth low? Groom the next Backlog issue: read every pointer the row
+   makes against `origin/main`, correct or refute each in the body, count what
+   a claim says a store contains, then confirm the block's shape with
+   `batten ready lint --issue <key>` — the `groom` skill
+   (`skills/groom/SKILL.md`) carries the full procedure, including the
+   isolated cold read before promotion. Groom-first, not build-first: a fleet that only grooms when
    starved is one cycle too late.
 3. Otherwise reconcile: re-derive the graph from what landed; propose (never
    silently apply) edge corrections.

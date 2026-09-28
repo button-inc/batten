@@ -60,6 +60,9 @@ Read on demand, never all of them.
   to change a setting that does not exist.
 - `mem:memory_maintenance` — writing, renaming or splitting a memory; the
   shipped convention template.
+- `skills/groom/SKILL.md` — grooming, refining or promoting any row toward
+  Todo. A procedure, not a memory: `ready lint` exit 0 is its floor, never its
+  verdict (CLOUD-1968).
 
 ## `crates/batten/src/` module map
 
