@@ -1278,6 +1278,7 @@ run = 'cargo nextest run --workspace --no-fail-fast "$@"'
 [tasks."test:cargo"]
 #MUTANT-SUITE crates/batten/tests/it/test_cargo_path.rs
 #MUTANT installed-batten-visible|s@\[ "[$][{]f##[*]/[}]" = batten \] [[:punct:]][[:punct:]] @@|the_mask_hides_every_batten_and_keeps_the_rest
+#MUTANT suite-tree-write-admitted|s@\[ "[$]tracked_before" != "[$]tracked_after" \]@false@|a_suite_that_rewrites_a_tracked_file_is_refused
 description = "Run the Rust workspace test suite"
 # Routed through the per-step receipt (CLOUD-424): same sources, same command,
 # same toolchain ⇒ same verdict, so a hit answers from the receipt instead of
@@ -1324,7 +1325,26 @@ done
 IFS=$old_ifs
 PATH="$masked"; export PATH
 # <<< no-batten-path
+#
+# THE SUITE LEAVES THE REAL CHECKOUT AS IT FOUND IT (CLOUD-1953). On #928
+# `bench_tokens` rewrote the committed `RESULTS.md` from a verb whose cwd was
+# this checkout, and nothing noticed until a later lap's diff. A line predicate
+# over test sources cannot see that -- the write is a verb's, at run time -- so
+# the check is the tree itself: tracked state before and after, compared, and a
+# difference is a refusal naming the paths. Untracked files are out of scope:
+# `target/` and the scratch parent are expected to move.
+# >>> tree-before
+tracked_before=$(git status --porcelain --untracked-files=no)
+# <<< tree-before
 if ! cargo nextest run --workspace; then exit 1; fi
+# >>> tree-after
+tracked_after=$(git status --porcelain --untracked-files=no)
+if [ "$tracked_before" != "$tracked_after" ]; then
+  echo "::error:: test:cargo: the suite changed tracked files in this checkout -- a case wrote outside its scratch directory:" >&2
+  printf '%s\n' "$tracked_after" | cut -c4- >&2
+  exit 1
+fi
+# <<< tree-after
 mise run -q step-receipt record test:cargo || true
 '''
 

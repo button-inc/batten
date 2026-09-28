@@ -14,18 +14,24 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const OPEN: &str = "# >>> no-batten-path";
-const CLOSE: &str = "# <<< no-batten-path";
-
-/// The committed block between the markers.
-fn mask() -> String {
+/// The committed block of `test:cargo` between `# >>> <name>` and `# <<< <name>`.
+fn block(name: &str) -> String {
     let text = fs::read_to_string(common::at_root("mise.toml")).expect("read mise.toml");
-    let start = text.find(OPEN).expect("the opening marker is in mise.toml") + OPEN.len();
+    let open = format!("# >>> {name}");
+    let close = format!("# <<< {name}");
+    let start = text
+        .find(&open)
+        .expect("the opening marker is in mise.toml")
+        + open.len();
     let end = text[start..]
-        .find(CLOSE)
+        .find(&close)
         .expect("the closing marker follows it")
         + start;
     text[start..end].to_owned()
+}
+
+fn mask() -> String {
+    block("no-batten-path")
 }
 
 fn stub(dir: &Path, name: &str) {
@@ -126,5 +132,70 @@ fn a_path_without_batten_is_untouched() {
     assert_eq!(
         found[0].as_deref(),
         Some(other.join("tool").to_str().expect("utf-8 path"))
+    );
+}
+
+/// Run the tree guard's two blocks around `between`, in `repo`.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the guard is shell the task runs under `sh`, so running it under `sh` is the only reading of the shipped bytes"
+)]
+fn guard(repo: &Path, between: &str) -> std::process::Output {
+    std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!(
+            "{}\n{between}\n{}",
+            block("tree-before"),
+            block("tree-after")
+        ))
+        .current_dir(repo)
+        .output()
+        .expect("run the guard under sh")
+}
+
+fn tracked_repo(name: &str) -> PathBuf {
+    let root = common::scratch(name);
+    common::init_repo(&root);
+    fs::write(root.join("RESULTS.md"), "committed\n").expect("seed a tracked file");
+    common::git_in(&root, &["add", "-A"]);
+    common::git_in(&root, &["commit", "--quiet", "-m", "base"]);
+    root
+}
+
+/// `#MUTANT suite-tree-write-admitted` reddens here. The shape is #928's:
+/// a case rewrote the committed `RESULTS.md` from a verb run in this checkout.
+#[test]
+fn a_suite_that_rewrites_a_tracked_file_is_refused() {
+    if !cfg!(unix) {
+        // The guard is a mise task body run under `sh`, as above.
+        return;
+    }
+    let repo = tracked_repo("test-cargo-tree-written");
+    let out = guard(&repo, "echo rewritten > RESULTS.md");
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "a changed tracked file is refused: {out:?}"
+    );
+    let stderr = String::from_utf8(out.stderr).expect("utf-8");
+    assert!(
+        stderr.contains("RESULTS.md"),
+        "the refusal names the path: {stderr}"
+    );
+}
+
+/// The pass side: without it the refusal above is satisfied by a guard that
+/// refuses every run.
+#[test]
+fn a_suite_that_leaves_the_tree_alone_passes() {
+    if !cfg!(unix) {
+        // As above.
+        return;
+    }
+    let repo = tracked_repo("test-cargo-tree-clean");
+    let out = guard(&repo, "mkdir -p target && echo scratch > target/x");
+    assert!(
+        out.status.success(),
+        "untracked output is not a tracked change: {out:?}"
     );
 }
