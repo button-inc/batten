@@ -287,6 +287,7 @@ mod pr_partition_restated;
 #[cfg(unix)]
 mod pr_unsubscribed;
 mod pr_watch;
+mod preapprove;
 mod prebuilt_lint;
 mod preset_manifest;
 mod preset_segments;

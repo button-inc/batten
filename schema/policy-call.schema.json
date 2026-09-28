@@ -16,6 +16,12 @@
         "operation": {
           "type": "string"
         },
+        "permission-mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "programs": {
           "description": "Each segment's effective program, resolved through environment assignments, wrapper programs and shell grammar. ANCHOR A PROGRAM HERE: `segments[_].words[0]` is the first WORD, which six one-keystroke shell constructs occupy in their own right (CLOUD-1382).",
           "items": {
@@ -27,6 +33,12 @@
                 },
                 "type": "array"
               },
+              "batten-effect": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "mediated": {
                 "type": "boolean"
               },
@@ -35,6 +47,9 @@
               },
               "program": {
                 "type": "string"
+              },
+              "reads-only": {
+                "type": "boolean"
               }
             },
             "type": "object"
@@ -68,6 +83,9 @@
                 ]
               },
               "input-redirect": {
+                "type": "boolean"
+              },
+              "output-redirect": {
                 "type": "boolean"
               },
               "raw": {

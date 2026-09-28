@@ -3988,6 +3988,7 @@
           ],
           "enum": [
             "ci-hygiene",
+            "claude-code-cloud",
             "commit-hygiene",
             "landing-loop",
             "mise",

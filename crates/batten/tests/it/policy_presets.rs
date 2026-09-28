@@ -142,6 +142,7 @@ const PRESET_SCOPES: &[(&str, bool)] = &[
     ("mise", false),
     ("ci-hygiene", true),
     ("landing-loop", true),
+    ("claude-code-cloud", false),
 ];
 
 /// A row enabling `name` at the scope it is really enabled with.

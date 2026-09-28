@@ -6388,6 +6388,17 @@ scope = "mediated_call"
 preset = "trunk-based"
 severity = "deny"
 
+# CLOUD-1949, consumer #1 first. The owner's ruling: the host never halts on a
+# prompt. In plan mode a call reads or is refused; a read is pre-approved in every
+# mode, and so is a `batten` verb whose declared effect is read or write. The deny
+# is composed first, so a call any other row refuses stays refused.
+[[rule]]
+id = "plan write refused"
+kind = "policy"
+scope = "mediated_call"
+preset = "claude-code-cloud"
+severity = "deny"
+
 # CLOUD-1028, and consumer #1 eating the same food again. The practice is that a
 # program this project's pin provides is reached through the pin; the incident
 # behind it is this repository's own, and the fact the preset reads is resolved

@@ -2862,6 +2862,9 @@ pub fn call_input_schema() -> Result<String> {
                                 "raw": {"type": "string"},
                                 "terminator": {"type": ["string", "null"]},
                                 "input-redirect": {"type": "boolean"},
+                                // CLOUD-1949: output sent into a file, which
+                                // makes any reader in the segment a writer.
+                                "output-redirect": {"type": "boolean"},
                                 // CLOUD-1381. `null` at the top level; a
                                 // `kind`/`role` pair inside a control-flow node,
                                 // so a module decides from the node rather than
@@ -2905,9 +2908,19 @@ pub fn call_input_schema() -> Result<String> {
                                 // whole reason this key exists.
                                 "arguments": {"type": "array", "items": {"type": "string"}},
                                 "mediated": {"type": "boolean"},
+                                // CLOUD-1949. Whether the program is one the
+                                // boundary knows leaves its operands alone.
+                                "reads-only": {"type": "boolean"},
+                                // The effect the surface declares for the
+                                // deepest `batten` subcommand this argv names;
+                                // `null` for any other program.
+                                "batten-effect": {"type": ["string", "null"]},
                             },
                         },
                     },
+                    // CLOUD-1949. The host's permission mode as it spelled it;
+                    // `null` when it sent none.
+                    "permission-mode": {"type": ["string", "null"]},
                 },
             },
             "facts": {

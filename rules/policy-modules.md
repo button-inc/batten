@@ -93,10 +93,19 @@ Those three names are the query root, so a module publishing `denies` instead of
 `deny` contributes nothing and fails nothing. `rules-drift` holds the names above
 to `policy.rs`'s own constants.
 
-**Deny-only, structurally — there is no allow spelling.** That is what preserves
-house-style §8's raise-only invariant: a module can only ever add refusals, so
-enabling a bundle cannot weaken policy and the contradiction class is removed by
-construction rather than by review.
+**Deny-first, structurally — a module can never allow what anything refuses.**
+That is what preserves house-style §8's raise-only invariant: a module adds
+refusals, so enabling a bundle cannot weaken policy and the contradiction class
+is removed by construction rather than by review.
+
+**The one other output is `data.batten.preapprove`** (CLOUD-1949): a set of ids
+from this module's own `rules`, saying the host need not ask the operator. It is
+not an allow. `compose` in `lib.rs` reads it only on `PreToolUse` and only after
+the engine's whole answer — every typed row and every module's deny — came back
+`Allow`, so it can turn a prompt into a grant and never a refusal into anything.
+An id outside `rules` is could-not-look, like a violation's. The measured reason:
+a session halted on host prompts for the very `batten` verbs the gates prescribe,
+and a raise-only engine had no way to say "this call is already decided".
 
 **A predicate id is a string literal INSIDE its `violation` rule**, never derived
 from the rule's name. `policy test`'s coverage binds on that literal, because a

@@ -431,6 +431,51 @@ value is what does the work, and it is a boolean rather than the string `true`."
         ],
         patterns: &[],
     },
+    // CLOUD-1949. The host never halts on a prompt: in plan mode a call reads or
+    // is refused, and a read — or a `batten` lifecycle verb outside plan mode —
+    // is pre-approved. Claude Code's tool names and plan-file path are the
+    // host's vocabulary, which a vendor preset may carry and the core may not.
+    Manifest {
+        name: "claude-code-cloud",
+        version: 1,
+        modules: &[
+            PresetModule {
+                scope: RuleScope::MediatedCall,
+                provider: None,
+                pointer: "<preset:claude-code-cloud>/allowed-call-is-preapproved.rego",
+                source: include_str!(
+                    "policy/presets/claude-code-cloud/allowed-call-is-preapproved.rego"
+                ),
+            },
+            PresetModule {
+                scope: RuleScope::MediatedCall,
+                provider: None,
+                pointer: "<preset:claude-code-cloud>/plan-mode-refuses-writes.rego",
+                source: include_str!(
+                    "policy/presets/claude-code-cloud/plan-mode-refuses-writes.rego"
+                ),
+            },
+            PresetModule {
+                scope: RuleScope::MediatedCall,
+                provider: None,
+                pointer: "<preset:claude-code-cloud>/read-only-is-preapproved.rego",
+                source: include_str!(
+                    "policy/presets/claude-code-cloud/read-only-is-preapproved.rego"
+                ),
+            },
+        ],
+        verdicts: &[VendoredVerdict {
+            id: "plan write refused",
+            gloss: "a call that is not a read was made while the host is in plan mode",
+            class: "Plan mode is a promise that nothing changes until the plan is approved. The \
+host enforces it by asking the operator, and a session halted on a prompt is the failure this \
+preset exists to remove — so the call is refused instead, and nobody has to answer anything. A \
+read, the plan file itself, and leaving plan mode are never refused.",
+            routes: &[run("plan run first", "ExitPlanMode, then make the call")],
+            applicability: crate::verdict::Applicability::Advice,
+        }],
+        patterns: &[],
+    },
     Manifest {
         name: "commit-hygiene",
         version: 1,

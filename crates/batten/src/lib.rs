@@ -14158,9 +14158,17 @@ fn run_hook(
     // longer happened.
     let decision = settle_repair(&policy, &envelope, decision);
     let ceiling = policy.advisory.as_ref();
+    // A PRE-APPROVAL TAKES THE ADVICE INTO ITS OWN DOCUMENT (CLOUD-1949): two
+    // documents on one stream is the collision above, with the grant as the
+    // discarded one.
+    //MUTANT-SUITE crates/batten/tests/it/preapprove.rs
+    //MUTANT advice-beside-the-grant|s@^    let context = matches!(decision, hook::Decision::Preapproved(_)) \&\& !advice.is_empty();$@    let context = false;@|a_preapproval_carries_the_calls_advice_in_one_document
+    let context = matches!(decision, hook::Decision::Preapproved(_)) && !advice.is_empty();
+    let context = context.then(|| advisory::admit(std::mem::take(&mut advice), ceiling).text);
     emit_channel(harness, &envelope, out, err, advice, ceiling, &decision)?;
     let rendering = Rendering {
         ceiling: policy.refusal.as_ref(),
+        context: context.as_deref(),
     };
     render(harness, &envelope, decision, &rendering, mode, out, err)
 }
@@ -14508,7 +14516,10 @@ fn deny_unadjudicable(
         // consumer's own command (non-negotiable rule 1).
         Fix::None,
     );
-    let rendering = Rendering { ceiling: None };
+    let rendering = Rendering {
+        ceiling: None,
+        context: None,
+    };
     // WHICH CHANNEL CARRIED THE REFUSAL IS `render`'S OWN ANSWER, and reading it
     // here is what lets the number say could-not-look without ever spending the
     // refusal to do it (CLOUD-1677's exit-code half).
@@ -14940,6 +14951,8 @@ fn compose(
         // DENY FIRST, THEN THE MODULE PRE-APPROVAL (CLOUD-1949). The engine's
         // answer — every typed row and every module's deny — is taken whole, and
         // a module's `preapprove` is asked only when that answer is `Allow`.
+        //MUTANT-SUITE crates/batten/tests/it/preapprove.rs
+        //MUTANT preapprove-before-refusal|s@^            decided => decided,$@            decided => hook::policy_preapproval(policy, envelope, facts).map_or(decided, hook::Decision::Preapproved),@|a_refused_call_is_never_preapproved
         None => match hook::adjudicate(policy, envelope, facts) {
             hook::Decision::Allow => hook::policy_preapproval(policy, envelope, facts)
                 .map_or(hook::Decision::Allow, hook::Decision::Preapproved),
@@ -17749,6 +17762,9 @@ fn load_exec_settings(
 struct Rendering<'a> {
     /// What one emitted mediated line may cost, or no declared bound.
     ceiling: Option<&'a refusal::Ceiling>,
+    /// The admitted advice a pre-approval carries in its own document
+    /// (CLOUD-1949). Printed, never branched on — the test above.
+    context: Option<&'a str>,
 }
 
 fn render(
@@ -17760,7 +17776,7 @@ fn render(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let Rendering { ceiling } = *rendering;
+    let Rendering { ceiling, context } = *rendering;
     // THE DECISION ARRIVES AS A VALUE, which is what makes this a renderer
     // rather than a second adjudicator (CLOUD-898). A handler's refusal and the
     // engine's own reach the host through the identical match below: a
@@ -17895,9 +17911,17 @@ fn render(
         // `Allow` and say why — so reaching this arm means a `[[hook.handler]]`
         // declaring `preapproves` returned an advisory AND the engine's own
         // decision was already an allow. The upgrade is bounded there, not here.
+        // THE CALL'S ADVICE RIDES IN THE SAME DOCUMENT (CLOUD-1949), and where the
+        // grant cannot be spoken it still goes out as the advisory it would have
+        // been on a plain allow — a nudge is never the price of a pre-approval.
         hook::Decision::Preapproved(reason) => {
-            if let Some(body) = hook::encode_preapproval(harness, &envelope.raw_event, &reason)? {
-                writeln!(out, "{body}")?;
+            match hook::encode_preapproval(harness, &envelope.raw_event, &reason, context)? {
+                Some(body) => writeln!(out, "{body}")?,
+                None => {
+                    if let Some(text) = context {
+                        emit_advisory(harness, envelope, out, err, text)?;
+                    }
+                }
             }
             Ok(ExitCode::Success)
         }

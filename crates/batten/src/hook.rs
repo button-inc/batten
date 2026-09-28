@@ -7204,6 +7204,12 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                         // HERE" — and a heredoc opener present in the command
                         // string says nothing about which element got it.
                         "input-redirect": segment.input_redirect,
+                        // AND WHETHER IT SENDS OUTPUT INTO A FILE (CLOUD-1949),
+                        // per segment for the same reason: `ls; > f` truncates
+                        // `f` in a segment that runs no program at all.
+                        "output-redirect": redirects_to_a_file(
+                            &segment.words.iter().map(String::as_str).collect::<Vec<_>>(),
+                        ),
                         // THE CONTROL-FLOW NODE THIS SEGMENT SITS INSIDE, and
                         // which half of it (CLOUD-1381). `null` at the top
                         // level, which Rego reads as undefined — so a predicate
@@ -7327,9 +7333,65 @@ fn program_reach(command: &str) -> Vec<serde_json::Value> {
                     crate::rules::RequireVia::Mise,
                     &tokens[..index],
                 ),
+                // WHAT THIS PROGRAM DOES TO THE TREE, as far as the boundary can
+                // say without running it (CLOUD-1949). Each is a table this
+                // engine already owns, so a module granting a call on them is
+                // not a second authority over what a program does:
+                // `READ_ONLY_PROGRAMS` for the floor and the surface's own
+                // declared effect for `batten`. The redirect that turns any
+                // reader into a writer is a SEGMENT key, because a bare `> f`
+                // runs no program and so has no entry here.
+                "reads-only": reads_its_operands(program_name(program)),
+                "batten-effect": batten_effect(program_name(program), &tokens[index + 1..]),
             }))
         })
         .collect()
+}
+
+/// Does this line send output into a file (CLOUD-1949)?
+///
+/// A descriptor duplication (`2>&1`) and `/dev/null` are not files anything
+/// reads back, so a reader writing its noise there stays a reader. Every other
+/// target counts, including one this function cannot resolve — the direction a
+/// pre-approval must err in is "not proven read-only".
+fn redirects_to_a_file(tokens: &[&str]) -> bool {
+    redirect_targets(tokens)
+        .iter()
+        .any(|(_, target)| !target.starts_with('&') && *target != "/dev/null")
+}
+
+/// The effect [`crate::surface`] declares for the deepest subcommand a `batten`
+/// argv names, or `None` for any other program (CLOUD-1949).
+///
+/// Walks the non-flag arguments while each extension is a declared path, so
+/// `batten override spend --rule x` resolves `override spend` and stops at the
+/// first word that is not a subcommand. A NOUN IS NEVER THE ANSWER WHEN A LEAF
+/// IS NAMED: the nouns are `unclassified` precisely so a write-bearing subtree
+/// cannot leak onto a read list (CLOUD-170), and the leaf carries the effect
+/// that actually runs. A bare noun resolves to the noun's own reading, which is
+/// never `read` or `write` for a write-bearing one — so nothing is granted on it.
+fn batten_effect(name: &str, arguments: &[&str]) -> Option<&'static str> {
+    if name.strip_suffix(".exe").unwrap_or(name) != "batten" {
+        return None;
+    }
+    let mut path = String::new();
+    let mut effect = crate::effect::Effect::Unclassified;
+    for argument in arguments {
+        if argument.starts_with('-') {
+            continue;
+        }
+        let candidate = if path.is_empty() {
+            (*argument).to_owned()
+        } else {
+            format!("{path} {argument}")
+        };
+        if crate::surface::id_for(&candidate).is_none() {
+            break;
+        }
+        effect = crate::surface::effect_for(&candidate);
+        path = candidate;
+    }
+    Some(effect.as_str())
 }
 
 /// Whether the work this call belongs to names a tracker key (CLOUD-446).
@@ -9687,6 +9749,15 @@ struct ClaudeVerdictInner<'a> {
     permission_decision: &'a str,
     #[serde(rename = "permissionDecisionReason")]
     permission_decision_reason: &'a str,
+    /// The call's advice, on a PRE-APPROVAL only (CLOUD-1949). Absent on every
+    /// other verdict, so a deny's and an ask's bytes are what they were.
+    ///
+    /// A pre-approval is an allow, and an allow is where advice rides — but the
+    /// channel is one document per call, and a second document beside the grant
+    /// is read first and the grant discarded (CLOUD-1175's collision, reached by
+    /// the new variant). So the two travel together, in this one object.
+    #[serde(rename = "additionalContext", skip_serializing_if = "Option::is_none")]
+    additional_context: Option<&'a str>,
 }
 
 /// Encode one Claude Code verdict body, whatever the verdict word.
@@ -9701,6 +9772,7 @@ fn encode_claude_verdict(event: &str, verdict: &str, reason: &str) -> serde_json
             hook_event_name: event,
             permission_decision: verdict,
             permission_decision_reason: reason,
+            additional_context: None,
         },
     })
 }
@@ -9974,6 +10046,7 @@ pub fn encode_preapproval(
     harness: Harness,
     event: &str,
     reason: &str,
+    context: Option<&str>,
 ) -> serde_json::Result<Option<String>> {
     // The table, consulted before the shape, and asked about this event.
     if !harness.capabilities().preapprove_reachable(event) {
@@ -9981,10 +10054,17 @@ pub fn encode_preapproval(
     }
     match harness {
         // The same envelope a deny and an ask travel in, with the third verdict
-        // word. Reusing `encode_claude_verdict` is what stops this arm becoming a
-        // second opinion about the host's shape — the object is one object, and
-        // the word is the caller's.
-        Harness::ClaudeCode => encode_claude_verdict(event, "allow", reason).map(Some),
+        // word, and the call's advice beside it (CLOUD-1949) — one document,
+        // because the channel reads one.
+        Harness::ClaudeCode => serde_json::to_string(&ClaudeVerdict {
+            hook_specific_output: ClaudeVerdictInner {
+                hook_event_name: event,
+                permission_decision: "allow",
+                permission_decision_reason: reason,
+                additional_context: context,
+            },
+        })
+        .map(Some),
         // No honoured surface, stated rather than wildcarded so a row that ever
         // gains an `honoured_on` entry has to come back here and answer for its
         // wire shape. Cursor's verdict vocabulary is surveyed and carries no
