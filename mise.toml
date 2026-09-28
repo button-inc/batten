@@ -5933,12 +5933,15 @@ if ! body=$(cat) || [[ -z "${body//[[:space:]]/}" ]]; then
   exit 2
 fi
 join() { sort -u | sort -t- -k2,2n | tr '\n' ' ' | sed 's/ *$//'; }
-named=$(grep -oiE '(^|[^0-9A-Za-z-])CLOUD-[0-9]+([^0-9]|$)' <<<"$body" | grep -oiE 'CLOUD-[0-9]+' | tr '[:lower:]' '[:upper:]' | join || true)
+named=$(grep -oiE '(^|[^0-9A-Za-z-])CLOUD-[0-9]+' <<<"$body" | grep -oiE 'CLOUD-[0-9]+' | tr '[:lower:]' '[:upper:]' | join || true)
 closing=$(printf '%s' "$body" | "${batten[@]}" claim keys --closing-only --branch "" --title "" --log "" 2>/dev/null | join || true)
 served=$("${batten[@]}" claim keys --refs-first-only 2>/dev/null </dev/null | join || true)
+# NO TRAILING BOUNDARY GROUP (#1036): `[0-9]+` is greedy, so it already stops
+# at the first non-digit, and a group consuming that character ate the next
+# key's leading boundary -- `grep -o` then dropped every second key of a list.
 hold=none
 if grep -qE '^[[:space:]]*DO-NOT-CLOSE' <<<"$body"; then
-  held=$(grep -E '^[[:space:]]*DO-NOT-CLOSE' <<<"$body" | grep -oiE '(^|[^0-9A-Za-z-])CLOUD-[0-9]+([^0-9]|$)' | grep -oiE 'CLOUD-[0-9]+' | tr '[:lower:]' '[:upper:]' | join || true)
+  held=$(grep -E '^[[:space:]]*DO-NOT-CLOSE' <<<"$body" | grep -oiE '(^|[^0-9A-Za-z-])CLOUD-[0-9]+' | grep -oiE 'CLOUD-[0-9]+' | tr '[:lower:]' '[:upper:]' | join || true)
   hold=${held:-global}
 fi
 printf 'named\t%s\nclosing\t%s\nserved\t%s\nhold\t%s\n' "${named:--}" "${closing:--}" "${served:--}" "$hold" |

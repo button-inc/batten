@@ -310,6 +310,36 @@ fn a_keyed_marker_does_not_excuse_a_key_it_never_named() {
     );
 }
 
+/// EVERY KEY OF A SPACE-SEPARATED MARKER IS HELD, not every other one. The
+/// extraction's trailing boundary group consumed the space after each key, which
+/// was the next key's leading boundary, so `grep -o` skipped it. Measured on
+/// #1036: `DO-NOT-CLOSE CLOUD-1891 CLOUD-1945 CLOUD-339` held 1891 and 339, and
+/// the landing lap refused for CLOUD-1945.
+#[test]
+fn every_key_of_a_space_separated_marker_is_held() {
+    let served = &[
+        "Refs: CLOUD-1",
+        "Refs: CLOUD-2",
+        "Refs: CLOUD-3",
+        "Refs: CLOUD-4",
+    ];
+    let (code, text) = verdict(
+        "marker-list",
+        served,
+        "Closes CLOUD-1\nDO-NOT-CLOSE CLOUD-2 CLOUD-3 CLOUD-4\n",
+    );
+    assert_eq!(code, Some(0), "the middle key is held too: {text}");
+}
+
+/// And the same extraction names every key of a list, so a body naming three
+/// keys on one line is judged on all three.
+#[test]
+fn every_key_of_a_list_on_one_line_is_named() {
+    let (code, text) = verdict("named-list", &[], "Refs CLOUD-1 CLOUD-2 CLOUD-3\n");
+    assert_eq!(code, Some(2), "{text}");
+    assert!(text.contains("CLOUD-2"), "the middle key is named: {text}");
+}
+
 #[test]
 fn a_record_missing_a_reading_is_torn_rather_than_clean() {
     let dir = repo("torn", &[]);
