@@ -1,0 +1,28 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-mcp-grant 1  batten 
+.SH NAME
+batten\-mcp\-grant \- Apply the committed MCP permissions to whichever server name the host exposed this session
+.SH SYNOPSIS
+\fBbatten mcp grant\fR [\fB\-\-guard\fR] [\fB\-\-aliases\fR] [\fB\-\-config\fR] [\fB\-\-settings\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fItool\fR] 
+.SH DESCRIPTION
+Apply the committed MCP permissions to whichever server name the host exposed this session
+.SH OPTIONS
+.TP
+\fB\-\-guard\fR
+Read a hook payload on stdin and refuse the call the committed settings deny
+.TP
+\fB\-\-aliases\fR
+List the portable alias each server in the injected config resolves to
+.TP
+\fB\-\-config\fR \fI<config>\fR
+The host\-injected MCP config to resolve server names through
+.TP
+\fB\-\-settings\fR \fI<settings>\fR
+The permission settings file to judge, instead of the declared one
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+[\fItool\fR]
+The tool name to resolve, as `mcp__<server>__<tool>`; absent under \-\-guard or \-\-aliases

@@ -681,6 +681,14 @@ declared_modules := {
 	# reaches the network, so its `hook`, `repair` and `check` edges are forbidden
 	# below for `rest`'s reason — one hop over `rest` is still the network.
 	"forge_query",
+	# `census` arrived with CLOUD-843 and is `ci`'s class: a report over the
+	# tracked tree that the `census shell` verb renders. It reaches `git` for the
+	# tracked paths, `rules` for the one glob semantics the crate has, `config`
+	# for the authority's file name, and `error`/`exit` for its answer. It decides
+	# nothing -- the shell ban is the gate and this is its measurement -- so it
+	# mints no `Finding` and reaches no decider, and it starts no program, which
+	# is what keeps the verb on the derived read-only allowlist.
+	"census",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.

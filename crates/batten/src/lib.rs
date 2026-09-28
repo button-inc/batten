@@ -28,6 +28,7 @@ pub mod capture;
 pub mod captured;
 pub mod cargo_graph;
 pub mod carry;
+pub mod census;
 pub mod checks_green;
 pub mod ci;
 pub mod claim;
@@ -440,7 +441,49 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(Command::Ci { command }) => run_ci(&command, &overrides, out, err),
         Some(Command::Release { command }) => run_release(&command, &overrides, out, err),
         Some(Command::Bench { command }) => run_bench(command, out, err),
+        // CLOUD-843's foundation surface: the arguments are final, and each body
+        // lands with the package that retires the shell it replaces. Until then
+        // the verb is could-not-look, never a pass.
+        Some(Command::Step { command }) => match command {
+            cli::StepCommand::Check { .. } => unimplemented("step check"),
+            cli::StepCommand::Record { .. } => unimplemented("step record"),
+            cli::StepCommand::Run { .. } => unimplemented("step run"),
+        },
+        Some(Command::Sbom(_)) => unimplemented("sbom"),
+        Some(Command::Dist(_)) => unimplemented("dist"),
+        Some(Command::Board { command }) => match command {
+            cli::BoardCommand::Check { .. } => unimplemented("board check"),
+        },
+        // The census is the one foundation verb that answers today: the §8 chain
+        // supplies the declaration, and the tree is the repository root's.
+        Some(Command::Census { command }) => match command {
+            cli::CensusCommand::Shell { json } => {
+                let resolved = resolve::resolve(Path::new("."), &overrides)?;
+                let root = git::repo_root(Path::new("."))?;
+                let declared = resolved
+                    .census
+                    .as_ref()
+                    .and_then(|census| census.shell.as_ref());
+                census::run_shell(declared, &root, json, out)
+            }
+        },
     }
+}
+
+/// A foundation verb whose package has not landed yet (CLOUD-843).
+///
+/// Its ARGUMENTS are final and its body is not. Exit 3 — could-not-look — naming
+/// the verb and nothing else, and never exit 0: a caller repointed at a verb that
+/// does nothing must fail rather than pass over work nobody did.
+///
+/// # Errors
+///
+/// Always, which is the whole of its contract.
+pub(crate) fn unimplemented(path: &str) -> Result<ExitCode> {
+    Err(anyhow::anyhow!(
+        "{path}: unimplemented — its arguments are final and its body lands with the retirement \
+         that replaces the shell it stands for (CLOUD-843)"
+    ))
 }
 /// A scratch directory that removes itself, however its owner leaves.
 ///
@@ -2237,15 +2280,23 @@ fn run_mcp(
         // Returns only on failure; success replaces this process.
         return exec::become_argv(command).map(|never| match never {});
     }
+    // CLOUD-843's two foundation arms: final arguments, bodies owed by the
+    // package retiring the connector and attach programs.
+    if let cli::McpCommand::Grant { .. } = command {
+        return unimplemented("mcp grant");
+    }
+    if let cli::McpCommand::Posture { .. } = command {
+        return unimplemented("mcp posture");
+    }
     let cli::McpCommand::Call {
         server,
         method,
         params,
     } = command
     else {
-        // Unreachable: the enum has two variants and the first is handled above.
-        // A refusal rather than a panic, on this module's own rule that an
-        // impossible parse is still answered rather than aborted.
+        // Unreachable: every other variant is handled above. A refusal rather
+        // than a panic, on this module's own rule that an impossible parse is
+        // still answered rather than aborted.
         return Err(UsageError::raise(
             "mcp: no sub-verb resolved from this invocation".to_owned(),
         ));

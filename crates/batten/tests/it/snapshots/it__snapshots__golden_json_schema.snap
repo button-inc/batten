@@ -284,6 +284,34 @@ expression: stdout_of(&output)
       ]
     },
     {
+      "path": "board",
+      "id": "board",
+      "about": "Whether the board's columns and graph tell the truth about the work",
+      "effect": "unclassified",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "board check",
+          "id": "board.check",
+          "about": "Refuse a board whose columns, graph or citations lie, and print the ready frontier",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "issue",
+              "short": null,
+              "long": "issue",
+              "takes_value": true,
+              "positional": false,
+              "help": "Read this issue's payload from the capture store rather than stdin (repeatable)"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "capture",
       "id": "capture",
       "about": "Captured command output: navigate what `exec` already ran, without running it again",
@@ -447,6 +475,34 @@ expression: stdout_of(&output)
               "takes_value": false,
               "positional": false,
               "help": "Write the selected bytes to stdout verbatim, with no decode and no added newline"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "census",
+      "id": "census",
+      "about": "Count what this repository declares it is retiring, as pointers",
+      "effect": "read",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "census shell",
+          "id": "census.shell",
+          "about": "Count every shell line in the declared manifests, workflows and shell files, as pointers",
+          "effect": "read",
+          "data_channel": true,
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "positional": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
             }
           ],
           "subcommands": []
@@ -1020,6 +1076,40 @@ expression: stdout_of(&output)
           "subcommands": []
         }
       ]
+    },
+    {
+      "path": "dist",
+      "id": "dist",
+      "about": "Build the release binary for a target and stage its archive, printing KEY=VALUE pointers to both",
+      "effect": "unclassified",
+      "data_channel": false,
+      "flags": [
+        {
+          "name": "build_tool",
+          "short": null,
+          "long": "build-tool",
+          "takes_value": true,
+          "positional": false,
+          "help": "How to build for the target: cargo, cross or zigbuild (default: cargo)"
+        },
+        {
+          "name": "stem",
+          "short": null,
+          "long": "stem",
+          "takes_value": false,
+          "positional": false,
+          "help": "Print the target's asset stem and exit, without building"
+        },
+        {
+          "name": "target",
+          "short": null,
+          "long": null,
+          "takes_value": true,
+          "positional": true,
+          "help": "The target triple to build, which must already be installed"
+        }
+      ],
+      "subcommands": []
     },
     {
       "path": "doctor",
@@ -1938,6 +2028,98 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "mcp grant",
+          "id": "mcp.grant",
+          "about": "Apply the committed MCP permissions to whichever server name the host exposed this session",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "aliases",
+              "short": null,
+              "long": "aliases",
+              "takes_value": false,
+              "positional": false,
+              "help": "List the portable alias each server in the injected config resolves to"
+            },
+            {
+              "name": "config",
+              "short": null,
+              "long": "config",
+              "takes_value": true,
+              "positional": false,
+              "help": "The host-injected MCP config to resolve server names through"
+            },
+            {
+              "name": "guard",
+              "short": null,
+              "long": "guard",
+              "takes_value": false,
+              "positional": false,
+              "help": "Read a hook payload on stdin and refuse the call the committed settings deny"
+            },
+            {
+              "name": "settings",
+              "short": null,
+              "long": "settings",
+              "takes_value": true,
+              "positional": false,
+              "help": "The permission settings file to judge, instead of the declared one"
+            },
+            {
+              "name": "tool",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The tool name to resolve, as `mcp__<server>__<tool>`; absent under --guard or --aliases"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "mcp posture",
+          "id": "mcp.posture",
+          "about": "Refuse an enabled MCP server this session did not attach, or a grant the connector would still prompt for",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "config",
+              "short": null,
+              "long": "config",
+              "takes_value": true,
+              "positional": false,
+              "help": "The host-injected MCP config to resolve server names through"
+            },
+            {
+              "name": "logs",
+              "short": null,
+              "long": "logs",
+              "takes_value": true,
+              "positional": false,
+              "help": "The host's MCP connection log tree, instead of the one it keeps for this project"
+            },
+            {
+              "name": "settings",
+              "short": null,
+              "long": "settings",
+              "takes_value": true,
+              "positional": false,
+              "help": "The permission settings file to judge, instead of the declared one"
+            },
+            {
+              "name": "spawns",
+              "short": null,
+              "long": "spawns",
+              "takes_value": true,
+              "positional": false,
+              "help": "The spawn ledger `mcp spawn` appends to, instead of this clone's"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "mcp spawn",
           "id": "mcp.spawn",
           "about": "Record that a client actually spawned this server, then exec the launch line unchanged",
@@ -2683,6 +2865,78 @@ expression: stdout_of(&output)
       "flags": [],
       "subcommands": [
         {
+          "path": "record census",
+          "id": "record.census",
+          "about": "Record whether a landing was in flight when a container was replaced, and read the verdict back",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": [
+            {
+              "path": "record census note",
+              "id": "record.census.note",
+              "about": "Append a landing's beat or its deliberate stop under this container's boot",
+              "effect": "write",
+              "data_channel": false,
+              "flags": [
+                {
+                  "name": "kind",
+                  "short": null,
+                  "long": null,
+                  "takes_value": true,
+                  "positional": true,
+                  "help": "h for a landing's beat, x for a deliberate stop"
+                },
+                {
+                  "name": "reason",
+                  "short": null,
+                  "long": null,
+                  "takes_value": true,
+                  "positional": true,
+                  "help": "Why the loop stopped, one word, recorded beside an x"
+                }
+              ],
+              "subcommands": []
+            },
+            {
+              "path": "record census record-boot",
+              "id": "record.census.record-boot",
+              "about": "Record this container's boot, once",
+              "effect": "write",
+              "data_channel": false,
+              "flags": [],
+              "subcommands": []
+            },
+            {
+              "path": "record census report",
+              "id": "record.census.report",
+              "about": "Say whether a landing was in flight when the previous container was replaced",
+              "effect": "write",
+              "data_channel": false,
+              "flags": [
+                {
+                  "name": "once",
+                  "short": null,
+                  "long": "once",
+                  "takes_value": false,
+                  "positional": false,
+                  "help": "Report once per boot: record that this boot's verdict was read, and stay silent after"
+                }
+              ],
+              "subcommands": []
+            },
+            {
+              "path": "record census tally",
+              "id": "record.census.tally",
+              "about": "Count every recorded replacement by what it interrupted",
+              "effect": "read",
+              "data_channel": false,
+              "flags": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
           "path": "record closes",
           "id": "record.closes",
           "about": "Record which rows this branch's pull request body closes, read on stdin",
@@ -2713,6 +2967,48 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": false,
               "help": "A `<key>=<value>` input this family needs beyond stdin (repeatable)"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "record divergence",
+          "id": "record.divergence",
+          "about": "Record how far the landing loop diverged from linear over a window of runs",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "ci_workflow",
+              "short": null,
+              "long": "ci-workflow",
+              "takes_value": true,
+              "positional": false,
+              "help": "The workflow file whose runs are the graded CI runs"
+            },
+            {
+              "name": "land_workflow",
+              "short": null,
+              "long": "land-workflow",
+              "takes_value": true,
+              "positional": false,
+              "help": "The workflow file whose runs are the landing bot's answers"
+            },
+            {
+              "name": "max_pages",
+              "short": null,
+              "long": "max-pages",
+              "takes_value": true,
+              "positional": false,
+              "help": "Pages of runs to read per workflow before the window reads as truncated (default: 10)"
+            },
+            {
+              "name": "since",
+              "short": null,
+              "long": "since",
+              "takes_value": true,
+              "positional": false,
+              "help": "The window's start, ISO-8601 (default: 24 hours before now)"
             }
           ],
           "subcommands": []
@@ -2932,6 +3228,48 @@ expression: stdout_of(&output)
           "subcommands": []
         }
       ]
+    },
+    {
+      "path": "sbom",
+      "id": "sbom",
+      "about": "Derive the SPDX and CycloneDX inventories of this tree, or of a built binary, under the names its release assets carry",
+      "effect": "write",
+      "data_channel": false,
+      "flags": [
+        {
+          "name": "binary",
+          "short": null,
+          "long": "binary",
+          "takes_value": true,
+          "positional": false,
+          "help": "Inventory this built binary from its own bytes instead of the tree"
+        },
+        {
+          "name": "names",
+          "short": null,
+          "long": "names",
+          "takes_value": false,
+          "positional": false,
+          "help": "Print the asset names as KEY=VALUE lines and exit, without scanning"
+        },
+        {
+          "name": "out_dir",
+          "short": null,
+          "long": "out-dir",
+          "takes_value": true,
+          "positional": false,
+          "help": "Write the documents under this directory instead of the declared one"
+        },
+        {
+          "name": "target",
+          "short": null,
+          "long": "target",
+          "takes_value": true,
+          "positional": false,
+          "help": "The target triple the binary was built for, which names its asset"
+        }
+      ],
+      "subcommands": []
     },
     {
       "path": "semver",
@@ -3195,6 +3533,102 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": true,
               "help": "The stored finding's identity, as `state list` prints it"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "step",
+      "id": "step",
+      "about": "Answer a step from its receipt when its exact inputs, arguments and tools already passed",
+      "effect": "unclassified",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "step check",
+          "id": "step.check",
+          "about": "Say hit or miss for a step's inputs, arguments and tools, and remember the key a record must match",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "arg",
+              "short": null,
+              "long": "arg",
+              "takes_value": true,
+              "positional": false,
+              "help": "A value the step's verdict depends on beyond its inputs, keyed in order (repeatable)"
+            },
+            {
+              "name": "step",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The step's name, as the consumer's step table declares it"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "step record",
+          "id": "step.record",
+          "about": "Record that a step passed, refusing when its inputs changed since the paired check",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "arg",
+              "short": null,
+              "long": "arg",
+              "takes_value": true,
+              "positional": false,
+              "help": "A value the step's verdict depends on beyond its inputs, keyed in order (repeatable)"
+            },
+            {
+              "name": "step",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The step's name, as the consumer's step table declares it"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "step run",
+          "id": "step.run",
+          "about": "Run a step's command only when its receipt misses, and record the receipt when it passes",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "arg",
+              "short": null,
+              "long": "arg",
+              "takes_value": true,
+              "positional": false,
+              "help": "A value the step's verdict depends on beyond its inputs, keyed in order (repeatable)"
+            },
+            {
+              "name": "command",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The step's command, after `--`: run only on a miss, recorded only when it exits 0"
+            },
+            {
+              "name": "step",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The step's name, as the consumer's step table declares it"
             }
           ],
           "subcommands": []
@@ -3530,6 +3964,10 @@ expression: stdout_of(&output)
       "path": "attribution tagger"
     },
     {
+      "id": "board.check",
+      "path": "board check"
+    },
+    {
       "id": "capture.find",
       "path": "capture find"
     },
@@ -3540,6 +3978,14 @@ expression: stdout_of(&output)
     {
       "id": "capture.show",
       "path": "capture show"
+    },
+    {
+      "id": "census",
+      "path": "census"
+    },
+    {
+      "id": "census.shell",
+      "path": "census shell"
     },
     {
       "id": "check",
@@ -3702,6 +4148,14 @@ expression: stdout_of(&output)
       "path": "lint brief"
     },
     {
+      "id": "mcp.grant",
+      "path": "mcp grant"
+    },
+    {
+      "id": "mcp.posture",
+      "path": "mcp posture"
+    },
+    {
       "id": "mutate.census",
       "path": "mutate census"
     },
@@ -3764,6 +4218,10 @@ expression: stdout_of(&output)
     {
       "id": "receipt.verified",
       "path": "receipt verified"
+    },
+    {
+      "id": "record.census.tally",
+      "path": "record census tally"
     },
     {
       "id": "record.fold",

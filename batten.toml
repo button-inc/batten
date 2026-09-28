@@ -5937,6 +5937,33 @@ line_sources = [
 module = "policy/shell-banned.rego"
 severity = "deny"
 
+# CLOUD-843. THE MEASUREMENT BESIDE THE BAN IT MEASURES FOR. `batten census shell`
+# counts every home shell lives in, with the ban's own detection: the manifest's
+# `run` bodies grouped per task, the workflows' `run:` steps, and every tracked
+# shell file — plus hk's command strings, which the ban does not read. Each wave's
+# before and after are two runs of it rather than two hand counts.
+#
+# `exempt` IS THE BAN'S `stays_bash`, EXACTLY, and `census_shell.rs` asserts the
+# two lists are one: a file exempt from the count and refused by the gate (or the
+# reverse) would make "the census reads 0" and "the ban passes" disagree.
+[census.shell]
+workflows = [".github/workflows/*.yml"]
+exempt = [
+  "install.sh",
+  "setup.sh",
+  ".claude/hooks/git-hook.sh",
+  "completions/batten.bash",
+]
+
+[[census.shell.manifest]]
+path = "mise.toml"
+keys = ["run"]
+unit = "[tasks."
+
+[[census.shell.manifest]]
+path = "hk.pkl"
+keys = ["check", "fix"]
+
 # CLOUD-1709. THE THIRD SURFACE, AND THE LARGEST. `bash-surface-not-growing`
 # globs `mise-tasks/**`; CLOUD-1137 closed the `mise.toml` and `.claude/**` holes
 # above. `.github/workflows/**` was left, and it is bigger than either: 28 files

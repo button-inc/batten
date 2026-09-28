@@ -740,6 +740,18 @@ pub struct Config {
     /// validator and the write are [`crate::wiring`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wiring: Option<crate::wiring::Wiring>,
+    /// The measurements this consumer declares over its own tree (CLOUD-843):
+    /// where it writes shell, and which files must stay shell. Absent means the
+    /// census has nothing declared to read, which `batten census shell` refuses
+    /// rather than reporting a zero it never measured.
+    ///
+    /// Consumer-specific by nature, for `wiring`'s reason: a manifest path, a
+    /// workflow glob and an exempt file are somebody's layout, and non-negotiable
+    /// rule 1 keeps those out of `crates/batten`. The grammar of "is this line
+    /// shell" is the engine's; where to look is this table's. The type and the
+    /// reading are [`crate::census`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub census: Option<crate::census::Census>,
 }
 
 /// The `[perf]` table: accepted invocation-latency regressions (CLOUD-1163
@@ -2127,6 +2139,16 @@ fn validate_sections(config: &Config) -> Result<()> {
     // write, where the mutation has already happened (CLOUD-1704).
     if let Some(wiring) = &config.wiring {
         wiring.validate().map_err(UsageError::raise)?;
+    }
+    // A census row that counts nothing while reading as covered — a manifest with
+    // no command key, an unparseable glob — is refused at load, where the key is
+    // named, rather than read as a tree with no shell in it (CLOUD-843).
+    if let Some(shell) = config
+        .census
+        .as_ref()
+        .and_then(|census| census.shell.as_ref())
+    {
+        shell.validate()?;
     }
     // `[transcript]` is a table too, so the census does not reach it either; the
     // guarded failure is a `path` key present and blank, which would resolve to
@@ -3762,6 +3784,9 @@ impl Config {
             // guessing a path would be exactly the consumer identifier rule 1
             // keeps out.
             wiring: None,
+            // An authority declaring no census declares nowhere shell lives; the
+            // verb says so rather than counting a tree it was told nothing about.
+            census: None,
         }
     }
 }

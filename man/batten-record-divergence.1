@@ -1,0 +1,25 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-record-divergence 1  batten 
+.SH NAME
+batten\-record\-divergence \- Record how far the landing loop diverged from linear over a window of runs
+.SH SYNOPSIS
+\fBbatten record divergence\fR [\fB\-\-since\fR] [\fB\-\-max\-pages\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-ci\-workflow\fR> <\fB\-\-land\-workflow\fR> 
+.SH DESCRIPTION
+Record how far the landing loop diverged from linear over a window of runs
+.SH OPTIONS
+.TP
+\fB\-\-ci\-workflow\fR \fI<ci_workflow>\fR
+The workflow file whose runs are the graded CI runs
+.TP
+\fB\-\-land\-workflow\fR \fI<land_workflow>\fR
+The workflow file whose runs are the landing bot\*(Aqs answers
+.TP
+\fB\-\-since\fR \fI<since>\fR
+The window\*(Aqs start, ISO\-8601 (default: 24 hours before now)
+.TP
+\fB\-\-max\-pages\fR \fI<max_pages>\fR
+Pages of runs to read per workflow before the window reads as truncated (default: 10)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-record-census-report 1  batten 
+.SH NAME
+batten\-record\-census\-report \- Say whether a landing was in flight when the previous container was replaced
+.SH SYNOPSIS
+\fBbatten record census report\fR [\fB\-\-once\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Say whether a landing was in flight when the previous container was replaced
+.SH OPTIONS
+.TP
+\fB\-\-once\fR
+Report once per boot: record that this boot\*(Aqs verdict was read, and stay silent after
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

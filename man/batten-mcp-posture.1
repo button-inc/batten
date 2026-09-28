@@ -1,0 +1,25 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-mcp-posture 1  batten 
+.SH NAME
+batten\-mcp\-posture \- Refuse an enabled MCP server this session did not attach, or a grant the connector would still prompt for
+.SH SYNOPSIS
+\fBbatten mcp posture\fR [\fB\-\-settings\fR] [\fB\-\-config\fR] [\fB\-\-logs\fR] [\fB\-\-spawns\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Refuse an enabled MCP server this session did not attach, or a grant the connector would still prompt for
+.SH OPTIONS
+.TP
+\fB\-\-settings\fR \fI<settings>\fR
+The permission settings file to judge, instead of the declared one
+.TP
+\fB\-\-config\fR \fI<config>\fR
+The host\-injected MCP config to resolve server names through
+.TP
+\fB\-\-logs\fR \fI<logs>\fR
+The host\*(Aqs MCP connection log tree, instead of the one it keeps for this project
+.TP
+\fB\-\-spawns\fR \fI<spawns>\fR
+The spawn ledger `mcp spawn` appends to, instead of this clone\*(Aqs
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

@@ -70,6 +70,17 @@
         }
       ]
     },
+    "census": {
+      "description": "The measurements this consumer declares over its own tree (CLOUD-843):\nwhere it writes shell, and which files must stay shell. Absent means the\ncensus has nothing declared to read, which `batten census shell` refuses\nrather than reporting a zero it never measured.\n\nConsumer-specific by nature, for `wiring`'s reason: a manifest path, a\nworkflow glob and an exempt file are somebody's layout, and non-negotiable\nrule 1 keeps those out of `crates/batten`. The grammar of \"is this line\nshell\" is the engine's; where to look is this table's. The type and the\nreading are [`crate::census`].",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Census"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "ci": {
       "description": "The merge contract this repository commits to (CLOUD-54), **derived**\nfrom the host ruleset. Absent means the contract is not projected here;\npresent, it is what `config lint --host-rules` compares against. The host\nis always the authority — this is a copy a gate polices, never a second\nplace the fact is decided.",
       "anyOf": [
@@ -992,6 +1003,24 @@
           "const": "tracked_artifacts"
         }
       ]
+    },
+    "Census": {
+      "description": "The `[census]` table: the measurements a consumer declares over its own tree.",
+      "type": "object",
+      "properties": {
+        "shell": {
+          "description": "Where this repository writes shell, for `batten census shell`. Absent\nmeans the census has nothing declared to read, which the verb refuses\nrather than reporting a zero it did not measure.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ShellCensus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "Channel": {
       "description": "The `[advisory]` table: what ONE emission of the whole channel may cost.\n\n**The channel, not the producer**, which is the whole of this row. Absent\nmeans unenforced, on `[budget]`'s reading — a threshold nobody declared is\nnot a threshold of zero — so a consumer that has not adopted it emits exactly\nwhat it emitted before.",
@@ -2396,6 +2425,35 @@
           "description": "A string.",
           "type": "string"
         }
+      ]
+    },
+    "Manifest": {
+      "description": "One manifest whose command strings are counted.",
+      "type": "object",
+      "properties": {
+        "keys": {
+          "description": "The keys whose values are commands, as they are spelled before ` = `.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "path": {
+          "description": "The manifest's repo-relative path.",
+          "type": "string"
+        },
+        "unit": {
+          "description": "The header prefix that opens one named unit — a task table, say. Every\nshell line between one such header and the next is that unit's. Absent,\neach shell line is reported on its own.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "keys"
       ]
     },
     "Marker": {
@@ -4503,6 +4561,34 @@
           "const": "deny"
         }
       ]
+    },
+    "ShellCensus": {
+      "description": "`[census.shell]`: the homes shell may live in, and the files that must stay\nshell.",
+      "type": "object",
+      "properties": {
+        "exempt": {
+          "description": "Paths that must stay shell because nothing else can run where they do, as\nglobs. Still measured, reported apart, and never totalled.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "manifest": {
+          "description": "Manifests whose command strings are counted, one row per file.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Manifest"
+          }
+        },
+        "workflows": {
+          "description": "Workflow files whose `run:` steps are counted, as globs over tracked paths.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
     },
     "Signature": {
       "description": "A declared signature: what makes a class exact.\n\n**Consumer config, and none of its content may be a literal in this crate**\n(non-negotiable rule 1). The engine holds the matcher; which codes and which\nprogram-specific patterns are recognised is the repository's own answer.",

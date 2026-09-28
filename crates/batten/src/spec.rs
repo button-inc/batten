@@ -416,6 +416,11 @@ mod tests {
                 // separate row rather than covered by the noun because
                 // `attribution identity` shares that noun and writes .git/config.
                 "attribution tagger".to_owned(),
+                // The board discipline (CLOUD-843). The verb only: the `board`
+                // noun is unclassified for `claim`'s reason, since the
+                // tracker-hygiene packages may hang recording arms under it. The
+                // verb reads payloads and tracked files and spawns nothing.
+                "board check".to_owned(),
                 // Both navigation verbs are on it, and the `capture` noun above
                 // them is not: the noun is unclassified because `capture prune`
                 // removes, which is the fail-safe reading a consumer treating an
@@ -423,6 +428,11 @@ mod tests {
                 "capture find".to_owned(),
                 "capture list".to_owned(),
                 "capture show".to_owned(),
+                // The shell census (CLOUD-843), noun AND verb, `commit`'s reading:
+                // its whole subtree reads — declared manifests and tracked files —
+                // and starts nothing, so the noun smuggles no write.
+                "census".to_owned(),
+                "census shell".to_owned(),
                 "check".to_owned(),
                 // The VERB only, and the `checks` noun above it is not here
                 // (CLOUD-1143). The noun is unclassified for `capture`'s reason
@@ -591,6 +601,12 @@ mod tests {
                 // read and the noun row smuggles no write (CLOUD-84).
                 "lint".to_owned(),
                 "lint brief".to_owned(),
+                // The two MCP readers (CLOUD-843), and never the `mcp` noun: `call`
+                // reaches the network and `spawn` execs. `grant` resolves names
+                // through two files and a payload; `posture` reads the settings, the
+                // host's logs and the spawn ledger. Neither starts a program.
+                "mcp grant".to_owned(),
+                "mcp posture".to_owned(),
                 // CLOUD-1267. Only the CENSUS is on the allowlist: it is one
                 // pass over the declarations, reading what each gate declares
                 // and answering whether every one is enforced or exempt. Both
@@ -648,6 +664,9 @@ mod tests {
                 // it belongs here beside `receipt status` rather than with
                 // `receipt record`.
                 "receipt verified".to_owned(),
+                // The reclaim census's fold (CLOUD-843): it reads the boot list and
+                // the log and writes nothing, where its three siblings record.
+                "record census tally".to_owned(),
                 // The read half of the out-of-tree verdict stores (CLOUD-1713).
                 // `record` itself is the write band and is absent here on
                 // purpose; these two leaves fold and print what is already

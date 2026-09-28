@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-step-record 1  batten 
+.SH NAME
+batten\-step\-record \- Record that a step passed, refusing when its inputs changed since the paired check
+.SH SYNOPSIS
+\fBbatten step record\fR [\fB\-\-arg\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIstep\fR> 
+.SH DESCRIPTION
+Record that a step passed, refusing when its inputs changed since the paired check
+.SH OPTIONS
+.TP
+\fB\-\-arg\fR \fI<arg>\fR
+A value the step\*(Aqs verdict depends on beyond its inputs, keyed in order (repeatable)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIstep\fR>
+The step\*(Aqs name, as the consumer\*(Aqs step table declares it

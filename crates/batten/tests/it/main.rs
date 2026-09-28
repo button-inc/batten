@@ -88,6 +88,7 @@ mod call_ceiling;
 mod cap_drift;
 mod capture_fidelity;
 mod captured_facts;
+mod census_shell;
 mod cfg_gated_test;
 mod checks_green;
 #[cfg(unix)]

@@ -161,6 +161,23 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   repos vouch for each other and the branch carries a licence nobody judged.
   Byte-identity of the upstream files is the workflow's half, stated as such —
   this bounds what the diff may say, not what upstream holds.
+- `census.rs` — `batten census shell`, the bash retirement's measurement
+  (CLOUD-843): every shell home counted in code lines, as pointers (a path, a
+  line, a unit's declared name, a count; never a body). **The detection is the
+  ban's, not its own**: manifest bodies, one-liners and array entries, and
+  workflow `run: |` blocks by indent are `policy/shell-banned.rego`'s grammar down
+  to its quirks (a one-liner's first word keeps its quote), and
+  `tests/it/census_shell.rs` pins the ban's count to the census's through the
+  gate's own growth predicate (a base of `c` must not fire, `c - 1` must). Where
+  to look is `[census.shell]` in `batten.toml` — manifests, keys, unit header,
+  workflow globs, exempt globs — so the engine names no consumer path (rule 1);
+  an exempt file is measured and set apart, never totalled, and this repo's
+  exempt list is asserted equal to the ban's `stays_bash`. Not layered (§8): a
+  local file able to add an exempt glob could make a wave read as progress. The
+  other CLOUD-843 foundation verbs (`step check|record|run`, `sbom`, `dist`,
+  `mcp grant|posture`, `board check`, `record divergence`, `record census …`)
+  carry final arguments and answer `unimplemented` at exit 3 until their package
+  lands; the serena launcher's home is the existing `mcp spawn`.
 - `claim.rs` — whether an issue is pullable, and the receipt that records the
   pull (CLOUD-272, CLOUD-431; ported off `mise-tasks/claim-check.sh` by
   CLOUD-1121). The tracker's automation fires on the PR event — the END of the
@@ -929,6 +946,19 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   repository's visibility and plan — so this note names the dependency instead
   of a rate that would go stale silently. CLOUD-737 owns re-deciding it, and
   `rust.yml`'s `macos` job is where a Darwin leg's cost is actually paid.
+  **The repository-STATE projections (CLOUD-843, a-git)** — `tag_facts`,
+  `config_facts`, `index_facts`, and `commit-meta` widened with
+  subject/dates/`signed`/`paths` — are the in-process successor to every task
+  body that spawned `git` only to READ: `git tag --list`,
+  `git config --get --type=bool`, `ls-files -s` / `diff --name-only` /
+  `ls-files --others --exclude-standard`, and the `cat-file commit` header
+  scan. Each is a declared
+  `Rule` column (`tags`, `git_config`, `index`, `commits`) projected at
+  `input.tree["git-tags"|"git-config"|"git-index"|"commit-meta"]`, tree-only,
+  `null` for could-not-look, an empty list or a null `effective` for a measured
+  none. A retirement reads these and puts the decision in a module, never a new
+  spawn. `git_state_facts.rs` asserts each against the git command over one
+  fixture, and `engine-git`'s 15 `#MUTANT` rows are swept against it.
 - `state.rs` — out-of-tree state dir (`<data-dir>/<app>/<segment>/`, CLOUD-23), via
   `etcetera`; the segment derived at runtime, never baked in (rule 1). Since
   CLOUD-296 the segment is `<dir-name>-<12 hex>`, not the bare directory name: the
