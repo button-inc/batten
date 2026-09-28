@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.187](https://github.com/button-inc/batten/compare/v0.0.186...v0.0.187) - 2026-09-28
+
+### Fixed
+
+- address the code review on #962
+- *(spawn)* bind every spawn's reason to its site, and gate the factory that launders it
+- *(ci)* record on a detached HEAD, portable task bodies, and the gates CI measured
+- *(engine)* [**breaking**] route every file write through a crash-only durable path
+- *(tasks)* meet main's new test, schema and budget after the replay
+
+### Other
+
+- port lint-deno.bats to a Rust tier over a scratch repository
+- *(tasks)* [**breaking**] retire step-receipt onto the keyed record store, 44 of 44
+- *(tasks)* [**breaking**] retire 43 wave-2 bash programs into inline mise tasks
+
 ## [0.0.186](https://github.com/button-inc/batten/compare/v0.0.185...v0.0.186) - 2026-09-26
 
 ### Fixed
