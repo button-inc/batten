@@ -474,6 +474,10 @@ mod tests {
                 // under it.
                 "design audit".to_owned(),
                 "doctor".to_owned(),
+                // Loads and resolves the committed config and reports whether a
+                // row was dropped (CLOUD-1973): the bare report's `config` check,
+                // asked alone. It reads files and spawns nothing.
+                "doctor config".to_owned(),
                 // WHETHER THE AGENT PROXY WOULD CARRY THIS CONTAINER'S REQUESTS
                 // (CLOUD-1399). `read`, and on the strictest reading of it: the
                 // whole verb resolves two strings against a comma list. Nothing
@@ -852,6 +856,7 @@ mod tests {
             "design".to_owned(),
             "design audit".to_owned(),
             "doctor".to_owned(),
+            "doctor config".to_owned(),
             "doctor egress".to_owned(),
             "doctor gate".to_owned(),
             "doctor hooks".to_owned(),

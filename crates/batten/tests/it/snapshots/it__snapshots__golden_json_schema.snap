@@ -1039,6 +1039,24 @@ expression: stdout_of(&output)
       ],
       "subcommands": [
         {
+          "path": "doctor config",
+          "id": "doctor.config",
+          "about": "Diagnose whether this build resolves every row of the config",
+          "effect": "read",
+          "data_channel": true,
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "positional": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "doctor egress",
           "id": "doctor.egress",
           "about": "Diagnose whether the agent proxy would carry this container's requests",
@@ -3590,6 +3608,10 @@ expression: stdout_of(&output)
     {
       "id": "doctor",
       "path": "doctor"
+    },
+    {
+      "id": "doctor.config",
+      "path": "doctor config"
     },
     {
       "id": "doctor.egress",

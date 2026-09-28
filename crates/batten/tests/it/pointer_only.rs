@@ -1284,6 +1284,14 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-1973. The bare report's `config` check asked alone: a check name and
+    // a reason id, both the engine's own tokens, never a byte of the config.
+    Verb {
+        path: "doctor config",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "doctor egress",
         args: &[],

@@ -3476,6 +3476,9 @@ pub const SURFACE: &[CommandDecl] = &[
     // below: a `[[startup]]` row decides on an exit status, and the one skew no
     // row could see — an installed engine older than the tree, dropping every
     // row whose key it does not know — exits `0` from `config show` by design.
+    // unreached: "doctor config" CLOUD-1973 the only caller is the
+    // `engine-resolves-every-row` `[[startup]]` row, and `batten.toml` is
+    // deliberately not a `verb reach other` line source (its prose reads as callers).
     CommandDecl {
         path: "doctor config",
         id: "doctor.config",
