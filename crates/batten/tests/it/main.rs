@@ -297,6 +297,7 @@ mod process_group;
 mod prose_only;
 mod prospective_facts;
 mod provision;
+mod prune_watch;
 mod publish_credential;
 mod punt_receipt;
 mod ratchet;

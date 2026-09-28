@@ -39,6 +39,7 @@ pub mod decision;
 pub mod defects;
 pub mod deferral;
 pub mod design;
+pub mod disk_watch;
 pub mod doctor;
 pub mod drain;
 pub mod durable;
@@ -9984,6 +9985,27 @@ fn run_land_replay(
 /// make the engine compose a shell line out of an environment variable, which is
 /// exactly the argv-composition `policy/spawn-adapters.rego` records refusing for
 /// `prune`'s deletes. A consumer needing that writes a script and names it.
+/// The lap's disk arm (CLOUD-1937), under the committed `[prune]` rules and
+/// nothing else.
+///
+/// A repository that declares no `[prune]` has no floor to watch, and a config
+/// that would not resolve reaches here as `None` too — the gate runs unwatched
+/// rather than refused, the fail-open direction every arm of the race takes.
+fn disk_watch<'a>(
+    root: &Path,
+    config: Option<&'a prune::Prune>,
+) -> Result<Option<land::DiskWatch<'a>>> {
+    let Some(config) = config else {
+        return Ok(None);
+    };
+    let tree = root.join(&config.root);
+    Ok(Some(land::DiskWatch {
+        free_mb: Box::new(prune::sampler(tree.clone())?),
+        tree,
+        config,
+    }))
+}
+
 fn run_land_verify(
     root: &Path,
     bet: &speculation::Bet,
@@ -10028,18 +10050,23 @@ fn run_land_verify(
     // engine cannot read has no forge to watch, so the honest answer is the gate
     // alone — the same reading `base_moved` takes for the same missing fact.
     let raced = repo_slug(root).map(|slug| trunk_watch(reference.unwrap_or("main"), "", &slug, 1));
-    let verified = match (raced, reference) {
-        (Some(trunk), Some(reference)) => land::verify_raced(
-            root,
-            branch,
-            &command,
-            &published,
-            &environment,
-            &trunk,
-            reference,
-        )?,
-        _ => land::verify(root, branch, &command, &published, &environment)?,
+    let trunk = match (raced.as_ref(), reference) {
+        (Some(trunk), Some(reference)) => Some((trunk, reference)),
+        _ => None,
     };
+    let prune_rules = resolve::resolve(root, &Overrides::default())
+        .ok()
+        .and_then(|resolved| resolved.prune);
+    let disk = disk_watch(root, prune_rules.as_ref())?;
+    let verified = land::verify_raced(
+        root,
+        branch,
+        &command,
+        &published,
+        &environment,
+        trunk,
+        disk,
+    )?;
     match verified {
         land::Verified::Clean(head) => {
             writeln!(out, "land: {head} passed the configured gate")?;

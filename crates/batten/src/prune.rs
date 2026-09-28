@@ -2485,6 +2485,19 @@ fn drop_regrowable(root: &Path, declared: &[Regrowable], basis_moving: bool) -> 
     (removed, freed, basis_moved)
 }
 
+/// Free space for a reader that samples again and again (CLOUD-1937): the volume,
+/// or the declared `TARGET_PRUNE_FREE_MB` sequence in order with the last
+/// repeating — so a fixture that pins free space for the prune pins it for the
+/// lap's disk arm too, rather than letting the arm read the machine's own disk.
+///
+/// # Errors
+///
+/// A `TARGET_PRUNE_FREE_MB` that is not a comma-separated list of numbers.
+pub fn sampler(path: PathBuf) -> Result<impl FnMut() -> Result<u64> + Send> {
+    let mut readings = Readings::declare()?;
+    Ok(move || readings.take(&path))
+}
+
 /// The variable naming the tree whose lap a `verify` run holds open.
 ///
 /// Set by the run that opened the lap, cleared for the call that closes it.
@@ -2534,6 +2547,8 @@ const BUILD_LOCK: &str = ".cargo-lock";
 /// same lock blocking, so a build starting mid-reclaim waits, then finds a tree
 /// that is simply colder. A lock that cannot be opened is no lock at all — a tree
 /// cargo never built into, which is exactly what the pass already handled.
+//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+//MUTANT reclaim-under-held-lock|s@^            Err(std::fs::TryLockError::WouldBlock) => return None,$@            Err(std::fs::TryLockError::WouldBlock) => {}@|a_tree_under_a_held_build_lock_survives_the_reclaim
 fn claim(root: &Path, path: &Path) -> Option<Vec<std::fs::File>> {
     let enclosing = path.ancestors().take_while(|dir| dir.starts_with(root));
     let nested = PROFILE_DIRS.iter().map(|profile| path.join(profile));
