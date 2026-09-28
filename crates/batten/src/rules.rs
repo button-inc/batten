@@ -2394,6 +2394,41 @@ pub struct Rule {
     /// nothing is present with an empty list, which is a real answer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<crate::facts::HistoryQuery>,
+    /// The tag GLOBS this policy row lists, **declared** (CLOUD-843).
+    ///
+    /// Each becomes an entry of `input.tree["git-tags"]` under the glob as
+    /// written, carrying every tag it matches — by `git tag --list`'s own match —
+    /// with the commit each peels to and when it was cut. A glob matching nothing
+    /// is present with an empty list, which is an answer; `null` is the
+    /// references that could not be read.
+    ///
+    /// Not [`Rule::history`]'s tag query: that family nulls on a shallow clone,
+    /// because a path query walks history, and a tag listing walks none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// The config KEYS this policy row reads, **declared** (CLOUD-843).
+    ///
+    /// Each becomes an entry of `input.tree["git-config"]` carrying the value in
+    /// force and the value each scope sets, with git's boolean reading of each.
+    /// Resolved across every scope git consults, because the question a signing
+    /// posture asks is a conflict BETWEEN scopes.
+    ///
+    /// **The declaration is the secrecy bound.** A config file can carry a
+    /// credential; a key no row names is never read. A key git could not address
+    /// (`section.name` at least) is refused at load.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub git_config: Vec<String>,
+    /// The PATHSPECS this policy row reads the index under, **declared**
+    /// (CLOUD-843).
+    ///
+    /// Each becomes an entry of `input.tree["git-index"]` under the spec as
+    /// written, carrying the index entries it selects (path, mode, oid, stage),
+    /// the selected tracked paths the working tree has diverged from, and the
+    /// untracked paths beneath it. git's pathspec rules without magic; a
+    /// `:`-magic spec is refused at load rather than read as a literal that
+    /// selects nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub index: Vec<String>,
     /// The refs this policy row reads the engine's own finding store for,
     /// **declared** (CLOUD-1203).
     ///
@@ -3659,6 +3694,20 @@ pub const COLUMN_CENSUS: &[ColumnCensus] = &[
         }),
     },
     ColumnCensus {
+        field: "tags",
+        declares: Declares::Fact(crate::facts::Fact::GitTags, |rule| !rule.tags.is_empty()),
+    },
+    ColumnCensus {
+        field: "git_config",
+        declares: Declares::Fact(crate::facts::Fact::GitConfig, |rule| {
+            !rule.git_config.is_empty()
+        }),
+    },
+    ColumnCensus {
+        field: "index",
+        declares: Declares::Fact(crate::facts::Fact::GitIndex, |rule| !rule.index.is_empty()),
+    },
+    ColumnCensus {
         field: "state",
         declares: Declares::Fact(crate::facts::Fact::State, |rule| !rule.state.is_empty()),
     },
@@ -4469,6 +4518,53 @@ impl Rule {
         Ok(())
     }
 
+    /// The load-time refusals the three repository-state columns owe
+    /// (CLOUD-843).
+    ///
+    /// Each refuses a declaration the acquisition could only answer wrongly: an
+    /// empty tag glob lists nothing, a config key git cannot address resolves to
+    /// a permanent `unset`, and a `:`-magic pathspec read as a literal selects
+    /// nothing. Every one would load, acquire, and hand its module an answer to a
+    /// question nobody asked — CLOUD-845's dead gate by way of a typo — so each is
+    /// named here with the column and the entry.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (→ exit `1`) naming the first offending entry.
+    fn validate_repository_state(&self) -> anyhow::Result<()> {
+        if self.tags.iter().any(String::is_empty) {
+            return Err(UsageError::raise(format!(
+                "rule {}: `tags` carries an empty glob, which lists no tag and would read as \
+                 a repository that has none",
+                self.id
+            )));
+        }
+        if let Some(key) = self
+            .git_config
+            .iter()
+            .find(|key| !crate::git::config_key_parses(key))
+        {
+            return Err(UsageError::raise(format!(
+                "rule {}: `git_config` key `{key}` is not one git can address — a key is \
+                 `section.name` or `section.subsection.name`, and this one would read as unset \
+                 forever",
+                self.id
+            )));
+        }
+        if let Some(spec) = self
+            .index
+            .iter()
+            .find(|spec| !crate::git::pathspec_is_supported(spec))
+        {
+            return Err(UsageError::raise(format!(
+                "rule {}: `index` pathspec `{spec}` is empty or uses pathspec magic, which this \
+                 build does not implement; read as a literal it would select nothing",
+                self.id
+            )));
+        }
+        Ok(())
+    }
+
     /// The three obligations a policy row carries that [`RuleKind::permits`]
     /// cannot express (CLOUD-833, CLOUD-836).
     ///
@@ -4578,6 +4674,10 @@ impl Rule {
                 ))
             })?;
         }
+        // CLOUD-843, for the reason the selector check above states: a
+        // declaration the acquisition could only ever answer wrongly is a config
+        // fault at load, never a gate that quietly decides over nothing.
+        self.validate_repository_state()?;
         // A DECLARED DOCUMENT THIS BUILD CAN NEVER PARSE IS A CONFIG FAULT, not
         // a verdict (CLOUD-845). It used to be neither: `tree_document` checked
         // the extension BEFORE any I/O and dropped the path into `missing`, so
@@ -8446,6 +8546,10 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
     let mut declared_staged: BTreeSet<String> = BTreeSet::new();
     let mut declared_history: Vec<crate::facts::HistoryQuery> = Vec::new();
     let mut declared_landings: BTreeSet<String> = BTreeSet::new();
+    // CLOUD-843's three members, acquired on their own declarations first and
+    // carried into whichever value this returns — including the early one below,
+    // which would otherwise drop them for a rule set declaring nothing else.
+    let state = repository_state_facts(rules, root);
     // The delta is ONE object, so the rows declaring it must agree on the rev it
     // is against. Collected as a set rather than taking the first: two rows
     // naming different bases is a question with two answers, and silently
@@ -8484,7 +8588,7 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
         && declared_landings.is_empty()
         && declared_deltas.is_empty()
     {
-        return crate::git::GitFacts::default();
+        return state;
     }
     let refs: Vec<String> = declared_refs.into_iter().collect();
     let ranges: Vec<String> = declared_ranges.into_iter().collect();
@@ -8565,6 +8669,48 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
                 .flatten(),
             _ => None,
         },
+        ..state
+    }
+}
+
+/// The repository-STATE members of [`git_facts`] — tags, config, index — each on
+/// its own declaration (CLOUD-843).
+///
+/// Its own function for `git_facts`' line ceiling, and returning a [`GitFacts`]
+/// with only those three set so the caller spreads it into whichever value it
+/// returns: a rule set declaring ONLY one of these must not lose it to the early
+/// return that answers "nothing else was declared".
+///
+/// Guarded like every other member, so a run naming no tag glob opens no
+/// reference, one naming no key reads no config, and one naming no pathspec
+/// hashes no file.
+///
+/// [`GitFacts`]: crate::git::GitFacts
+fn repository_state_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
+    // Sets, like every other declared read: two rows naming one glob, key or
+    // pathspec ask one question and read one answer.
+    let mut tags: BTreeSet<String> = BTreeSet::new();
+    let mut config: BTreeSet<String> = BTreeSet::new();
+    let mut index: BTreeSet<String> = BTreeSet::new();
+    for rule in rules {
+        tags.extend(rule.tags.iter().cloned());
+        config.extend(rule.git_config.iter().cloned());
+        index.extend(rule.index.iter().cloned());
+    }
+    let tags: Vec<String> = tags.into_iter().collect();
+    let config: Vec<String> = config.into_iter().collect();
+    let index: Vec<String> = index.into_iter().collect();
+    crate::git::GitFacts {
+        tags: (!tags.is_empty())
+            .then(|| crate::git::tag_facts(root, &tags).ok())
+            .flatten(),
+        config: (!config.is_empty())
+            .then(|| crate::git::config_facts(root, &config).ok())
+            .flatten(),
+        index: (!index.is_empty())
+            .then(|| crate::git::index_facts(root, &index).ok())
+            .flatten(),
+        ..crate::git::GitFacts::default()
     }
 }
 
@@ -9541,6 +9687,14 @@ pub(crate) fn tree_document(
             // CLOUD-1200. `null` for both could-not-look conditions — nobody
             // declared a pattern, and the clone is shallow.
             crate::facts::Fact::GitHistory => serde_json::json!(resolved.git.history),
+            // CLOUD-843. `null` for both could-not-look conditions — nobody
+            // declared one, and the read failed. One level down each keeps its
+            // own ANSWER apart from that: a glob that matched no tag is an empty
+            // list, a key no scope sets has a null `effective`, a pathspec that
+            // selects nothing has three empty lists.
+            crate::facts::Fact::GitTags => serde_json::json!(resolved.git.tags),
+            crate::facts::Fact::GitConfig => serde_json::json!(resolved.git.config),
+            crate::facts::Fact::GitIndex => serde_json::json!(resolved.git.index),
             // CLOUD-1203 unit A. The staged bytes, PARSED by each path's own
             // format — so a module reads a node exactly as it does for
             // `documents`, and the only difference is which side of the index
@@ -14165,6 +14319,15 @@ mod tests {
         }
     }
 
+    // One line per `Rule` column, and `Rule` has no `Default` on purpose — a
+    // fixture that spreads one would stop naming the columns it leaves empty,
+    // which is the census this literal is. CLOUD-843's three columns took it over
+    // the ceiling; `expect` rather than `allow`, so the annotation goes red the
+    // day the struct shrinks back under it.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "a field-per-column literal over a struct with no Default; its length is the column count"
+    )]
     fn blank(id: &str, kind: RuleKind) -> Rule {
         Rule {
             review: Vec::new(),
@@ -14241,6 +14404,9 @@ mod tests {
             commits: Vec::new(),
             staged: Vec::new(),
             history: Vec::new(),
+            tags: Vec::new(),
+            git_config: Vec::new(),
+            index: Vec::new(),
             state: Vec::new(),
             forge: Vec::new(),
             tools: Vec::new(),

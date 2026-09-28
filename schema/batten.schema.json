@@ -3858,6 +3858,13 @@
             "$ref": "#/$defs/GitRead"
           }
         },
+        "git_config": {
+          "description": "The config KEYS this policy row reads, **declared** (CLOUD-843).\n\nEach becomes an entry of `input.tree[\"git-config\"]` carrying the value in\nforce and the value each scope sets, with git's boolean reading of each.\nResolved across every scope git consults, because the question a signing\nposture asks is a conflict BETWEEN scopes.\n\n**The declaration is the secrecy bound.** A config file can carry a\ncredential; a key no row names is never read. A key git could not address\n(`section.name` at least) is refused at load.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "glob": {
           "description": "The glob selecting which files the rule inspects, matched against\nrepo-relative paths (`/`-separated). `**` matches any run of path\nsegments, `*` and `?` match within a single segment.\n\nOptional at the type level and required per-kind: a file kind cannot load\nwithout it, and [`RuleKind::Shape`] — which inspects no files — rejects it.",
           "type": [
@@ -3882,6 +3889,13 @@
             "string",
             "null"
           ]
+        },
+        "index": {
+          "description": "The PATHSPECS this policy row reads the index under, **declared**\n(CLOUD-843).\n\nEach becomes an entry of `input.tree[\"git-index\"]` under the spec as\nwritten, carrying the index entries it selects (path, mode, oid, stage),\nthe selected tracked paths the working tree has diverged from, and the\nuntracked paths beneath it. git's pathspec rules without magic; a\n`:`-magic spec is refused at load rather than read as a literal that\nselects nothing.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "invocation_sources": {
           "description": "The same, glob-selected (CLOUD-914).\n\nShips WITH its literal column rather than arriving a row later, which is\nthe asymmetry `line_sources` records having to fix: a gate over call\nsites is a gate over many files by construction, so the enumerated\nspelling would go stale the first time a module was added.",
@@ -4237,6 +4251,13 @@
         "symbols": {
           "description": "Whether this policy row reads the **resolved-symbol** fact (CLOUD-760).\n\nA bare flag rather than a path list, because the fact is one whole-crate\nvalue: a delegated analyser resolves names across the compilation, and\nasking it about one file would be asking a different, cheaper question\nthat [`Rule::invocations`] already answers.\n\n**Declared rather than ambient, and here the reason is the cost class.**\nThis is the first `Cost::Effect` fact — resolving it RUNS `cargo clippy`\nover the crate, which is seconds rather than the milliseconds every other\nfact costs. Every git fact is declared for a bill CLOUD-851 measured at\n2.103x; this one would be far worse, and a run that paid it without being\nasked would make `check` unusable.",
           "type": "boolean"
+        },
+        "tags": {
+          "description": "The tag GLOBS this policy row lists, **declared** (CLOUD-843).\n\nEach becomes an entry of `input.tree[\"git-tags\"]` under the glob as\nwritten, carrying every tag it matches — by `git tag --list`'s own match —\nwith the commit each peels to and when it was cut. A glob matching nothing\nis present with an empty list, which is an answer; `null` is the\nreferences that could not be read.\n\nNot [`Rule::history`]'s tag query: that family nulls on a shallow clone,\nbecause a path query walks history, and a tag listing walks none.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "tasks": {
           "description": "The task manifests this row reads, **declared** (CLOUD-856).\n\nParsed ONCE at session start and recorded; the mediated call reads the\nrecord. `Fact::Document` stays unresolvable on that path because a\ndocument is unbounded there, and this is how the one predicate that\ngenuinely needs a manifest gets it without putting a parse on the hot\npath.\n\nThe manifest's own bytes key the record, so a manifest that moves\ninvalidates it by construction.",

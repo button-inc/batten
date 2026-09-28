@@ -35,10 +35,10 @@ fn a_content_block_envelope_unwraps_to_the_payload_a_bare_one_carries() {
 
 use batten::facts::{
     AGENT_SOURCED, BASE_DELTA, CAPTURED, COMMIT_META, Class, Cost, DOCUMENT, EXTERNAL, EXTRACTED,
-    FORGE, Fact, GIT_HEAD, GIT_HISTORY, GIT_RANGE, GIT_REF, GIT_REMOTE, GIT_STATUS, GIT_WORKTREES,
-    INSTANT, INVOCATIONS, KEYS, LANDING, LINES, Look, MINTED, PINNED, PLAN, PRODUCED, PROSPECTIVE,
-    RECEIPTS, RECORDS, RECORDS_BLOCKED, REVIEW, STAGED, STATE, STOP, SYMBOLS, Surface, TASKS,
-    TOOL_VERDICT, TRACKED, USES, WAIVED,
+    FORGE, Fact, GIT_CONFIG, GIT_HEAD, GIT_HISTORY, GIT_INDEX, GIT_RANGE, GIT_REF, GIT_REMOTE,
+    GIT_STATUS, GIT_TAGS, GIT_WORKTREES, INSTANT, INVOCATIONS, KEYS, LANDING, LINES, Look, MINTED,
+    PINNED, PLAN, PRODUCED, PROSPECTIVE, RECEIPTS, RECORDS, RECORDS_BLOCKED, REVIEW, STAGED, STATE,
+    STOP, SYMBOLS, Surface, TASKS, TOOL_VERDICT, TRACKED, USES, WAIVED,
 };
 
 #[test]
@@ -131,6 +131,12 @@ fn every_fact_returns_its_stated_const() {
             Fact::CommitMeta => COMMIT_META,
             Fact::Landing => LANDING,
             Fact::GitHistory => GIT_HISTORY,
+            // CLOUD-843. Three members, three consts, for `Records`' reason
+            // below: the pairings are value-identical today (`Read` x `Check`),
+            // and stating each is what lets one move without the others.
+            Fact::GitTags => GIT_TAGS,
+            Fact::GitConfig => GIT_CONFIG,
+            Fact::GitIndex => GIT_INDEX,
             Fact::Staged => STAGED,
             Fact::State => STATE,
             Fact::Forge => FORGE,
@@ -161,7 +167,7 @@ fn every_fact_returns_its_stated_const() {
     // rather than quietly shrinking the census.
     assert_eq!(
         Fact::ALL.len(),
-        38,
+        41,
         "the census covers every fact; update this count deliberately when the \
          model gains or loses one"
     );

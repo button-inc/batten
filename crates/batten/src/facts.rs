@@ -510,6 +510,36 @@ pub enum Fact {
     /// Widens WHICH commits are visible, never WHAT one carries: the per-entry
     /// shape is a sha, a subject and (for a tag glob) the tag name.
     GitHistory,
+    /// Every tag a **declared** glob matches, with the commit it peels to and
+    /// when it was cut (CLOUD-843).
+    ///
+    /// **Not [`Fact::GitHistory`]'s tag query with a date added, and the
+    /// difference is the shallow clone.** That family resolves `null` on a
+    /// shallow repository because a PATH query walks history it cannot see; a tag
+    /// listing walks no history at all, so it answers on the clone CI actually
+    /// checks out. The glob is also git's own listing match (`git tag --list`),
+    /// where a history pattern goes through the path selector.
+    GitTags,
+    /// **Declared** config keys, as git resolves them and per scope
+    /// (CLOUD-843).
+    ///
+    /// **The one git fact whose subject is partly OUTSIDE the checkout**, and
+    /// that is the point rather than a leak: a signing posture is broken exactly
+    /// when a global or system scope turns signing on and nothing local answers
+    /// it, so the per-scope split is the fact. The declaration bounds it — a key
+    /// no row names is never read, which is what keeps a credential in a config
+    /// file off the policy input.
+    GitConfig,
+    /// The index entries a **declared** pathspec selects, which of them the
+    /// working tree has diverged from, and the untracked paths beneath it
+    /// (CLOUD-843).
+    ///
+    /// **The index, and the working tree measured against it** — the three reads
+    /// a content-keyed step cache makes before it trusts a key. [`Fact::Tracked`]
+    /// is a walk and [`Fact::GitStatus`] compares against HEAD; neither answers
+    /// "what does the index record under these paths, and does the checkout still
+    /// agree with it".
+    GitIndex,
     /// A **declared** path's STAGED bytes, parsed — `git show :<path>`, which
     /// [`Fact::Tracked`] explicitly is not (CLOUD-1203).
     ///
@@ -1199,6 +1229,32 @@ pub const GIT_RANGE: Class = Class::new(Cost::Read, Surface::Check);
 /// case is the one it refuses to half-answer.
 pub const GIT_HISTORY: Class = Class::new(Cost::Read, Surface::Check);
 
+/// [`Fact::GitTags`] — the declared globs' tags, with their dates (CLOUD-843).
+///
+/// `read` x `check`, beside [`GIT_HISTORY`]: a reference listing plus one object
+/// peel per tag, in process under the isolated open, no spawn. Unbounded in the
+/// number of tags a repository carries, which is a `check`-surface cost and not a
+/// mediated call's.
+pub const GIT_TAGS: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::GitConfig`] — the declared config keys, resolved and per scope
+/// (CLOUD-843).
+///
+/// `read` x `check`. By price this is [`GIT_REMOTE`]'s equal — config files
+/// read off disk, no network — and it sits on the tree surface for
+/// [`GIT_HEAD`]'s reason: no mediated row asks it, so a `Hook` class would put a
+/// key on `policy-call.schema.json` the mediated boundary never fills.
+pub const GIT_CONFIG: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::GitIndex`] — the declared pathspecs' index entries, divergence and
+/// untracked paths (CLOUD-843).
+///
+/// `read` x **`check`**, for [`GIT_STATUS`]'s reason: answering divergence hashes
+/// every selected file and the untracked half walks the working tree, so the cost
+/// grows with the checkout. The declaration bounds which files are HASHED; the
+/// walk happens either way.
+pub const GIT_INDEX: Class = Class::new(Cost::Read, Surface::Check);
+
 pub const STAGED: Class = Class::new(Cost::Read, Surface::Check);
 
 /// [`Fact::Forge`] — the forge's verdict for a declared SHA (CLOUD-1154).
@@ -1481,6 +1537,9 @@ impl Fact {
         Fact::CommitMeta,
         Fact::Landing,
         Fact::GitHistory,
+        Fact::GitTags,
+        Fact::GitConfig,
+        Fact::GitIndex,
         Fact::Staged,
         Fact::State,
         Fact::Forge,
@@ -1525,6 +1584,9 @@ impl Fact {
             Fact::CommitMeta => "commit-meta",
             Fact::Landing => "landing",
             Fact::GitHistory => "git-history",
+            Fact::GitTags => "git-tags",
+            Fact::GitConfig => "git-config",
+            Fact::GitIndex => "git-index",
             Fact::Staged => "staged",
             Fact::State => "state",
             Fact::Forge => "forge",
@@ -1577,6 +1639,9 @@ impl Fact {
             Fact::CommitMeta => COMMIT_META,
             Fact::Landing => LANDING,
             Fact::GitHistory => GIT_HISTORY,
+            Fact::GitTags => GIT_TAGS,
+            Fact::GitConfig => GIT_CONFIG,
+            Fact::GitIndex => GIT_INDEX,
             Fact::Staged => STAGED,
             Fact::State => STATE,
             Fact::Forge => FORGE,
@@ -1662,6 +1727,9 @@ impl Fact {
             | Fact::CommitMeta
             | Fact::Landing
             | Fact::GitHistory
+            | Fact::GitTags
+            | Fact::GitConfig
+            | Fact::GitIndex
             | Fact::Staged
             | Fact::State
             | Fact::Forge
@@ -1743,6 +1811,13 @@ impl Fact {
             // to want.
             // CLOUD-1200. Tree-only: a history walk is a `check`-surface cost.
             Fact::GitHistory => Some("git-history"),
+            // CLOUD-843. Tree-only, all three, and each for a family reason
+            // already stated: a tag listing grows with the repository, config
+            // has no mediated consumer (`GitHead`'s reason), and the index half
+            // hashes files and walks the checkout (`GitStatus`'s).
+            Fact::GitTags => Some("git-tags"),
+            Fact::GitConfig => Some("git-config"),
+            Fact::GitIndex => Some("git-index"),
             Fact::Staged => Some("staged"),
             Fact::State => Some("state"),
             // CLOUD-1154. Tree-only: a mediated call has no SHA to ask about
@@ -1945,50 +2020,7 @@ impl Fact {
             // arrived, and the ceiling is right: a match arm per fact is readable
             // and a match arm per fact for twenty facts is not. Split along the
             // seam that already exists rather than by line count.
-            Fact::BaseDelta => serde_json::json!({
-                "type": ["object", "null"],
-                "description": "Fact::BaseDelta (CLOUD-1059). How the declared globs' paths differ from the declared base rev: `added` present now and not at base, `edited` present in both with different content, `deleted` present at base and not now. Repo-relative paths only -- never a hunk and never a line, non-negotiable rule 4. NULL when the base rev does not resolve, never an empty delta: `this branch changed nothing` and `I could not read the base` are the two answers a migration gate must keep apart, and a fabricated empty set passes the gate on ignorance.",
-                "properties": {
-                    "added": {"type": "array", "items": {"type": "string"}},
-                    "edited": {"type": "array", "items": {"type": "string"}},
-                    "deleted": {"type": "array", "items": {"type": "string"}},
-                    // CLOUD-1051. A subset of the three above: the paths whose
-                    // non-comment remainder moved. Serialized as `code-changed`
-                    // rather than `code_changed` because every other key in this
-                    // document is hyphenated.
-                    "code-changed": {"type": "array", "items": {"type": "string"}},
-                    // CLOUD-1051. When the base rev was committed, strict
-                    // ISO-8601 UTC and fixed width, so a consumer orders it
-                    // lexicographically rather than parsing a date. `null` when
-                    // the rev resolves to no commit — the path lists are still
-                    // answered, because they were computable and this was not.
-                    "base-date": {"type": ["string", "null"]},
-                    // CLOUD-1051. What each EDITED path said at the base rev, so
-                    // a predicate can ask what an edit REMOVED — the one question
-                    // `input.tree.lines` cannot answer, because it is the head
-                    // side. Bounded to `edited`: an added path has no base side
-                    // and a deleted one has no head side. A path absent here is
-                    // could-not-look, never a measured nothing.
-                    "base-lines": {
-                        "type": "object",
-                        "additionalProperties": {"type": "array", "items": {"type": "string"}},
-                    },
-                    // CLOUD-1484. The identity of the branch's whole CHANGE
-                    // against the base, so a module can ask whether THIS change
-                    // was attested without re-deriving one from the path lists —
-                    // which would be a second notion of `the same change`, free
-                    // to disagree with `landing`'s about a rebase. A MERGE-BASE
-                    // diff over COMMITTED bytes, where the lists beside it are a
-                    // tip diff over the working tree: the two disagree on a stale
-                    // or dirty branch, deliberately, because an attestation must
-                    // not move when somebody saves a file. `null` is
-                    // could-not-look AND covers the empty diff — a branch that
-                    // changed nothing has no identity, so a predicate must not
-                    // read it as `unattested`.
-                    "patch-id": {"type": ["string", "null"]},
-                },
-                "additionalProperties": false,
-            }),
+            Fact::BaseDelta => Self::base_delta_schema_fragment(),
             Fact::GitHead
             | Fact::GitStatus
             | Fact::GitRemote
@@ -1998,7 +2030,64 @@ impl Fact {
             | Fact::CommitMeta
             | Fact::GitHistory
             | Fact::Landing => Self::git_schema_fragment(self),
+            // CLOUD-843. Their own delegate for `git_schema_fragment`'s own
+            // reason one iteration later, on the seam the retirement drew: these
+            // are the repository's STATE as the retiring bodies read it — its
+            // tags, its config, its index — where that family is its history.
+            Fact::GitTags | Fact::GitConfig | Fact::GitIndex => {
+                Self::repository_schema_fragment(self)
+            }
         }
+    }
+
+    /// [`Fact::BaseDelta`]'s fragment (CLOUD-1059), lifted out of
+    /// [`Fact::schema_fragment`] when CLOUD-843's three facts took that function
+    /// past its line ceiling. The shape is unchanged; only its address moved.
+    fn base_delta_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": ["object", "null"],
+            "description": "Fact::BaseDelta (CLOUD-1059). How the declared globs' paths differ from the declared base rev: `added` present now and not at base, `edited` present in both with different content, `deleted` present at base and not now. Repo-relative paths only -- never a hunk and never a line, non-negotiable rule 4. NULL when the base rev does not resolve, never an empty delta: `this branch changed nothing` and `I could not read the base` are the two answers a migration gate must keep apart, and a fabricated empty set passes the gate on ignorance.",
+            "properties": {
+                "added": {"type": "array", "items": {"type": "string"}},
+                "edited": {"type": "array", "items": {"type": "string"}},
+                "deleted": {"type": "array", "items": {"type": "string"}},
+                // CLOUD-1051. A subset of the three above: the paths whose
+                // non-comment remainder moved. Serialized as `code-changed`
+                // rather than `code_changed` because every other key in this
+                // document is hyphenated.
+                "code-changed": {"type": "array", "items": {"type": "string"}},
+                // CLOUD-1051. When the base rev was committed, strict
+                // ISO-8601 UTC and fixed width, so a consumer orders it
+                // lexicographically rather than parsing a date. `null` when
+                // the rev resolves to no commit — the path lists are still
+                // answered, because they were computable and this was not.
+                "base-date": {"type": ["string", "null"]},
+                // CLOUD-1051. What each EDITED path said at the base rev, so
+                // a predicate can ask what an edit REMOVED — the one question
+                // `input.tree.lines` cannot answer, because it is the head
+                // side. Bounded to `edited`: an added path has no base side
+                // and a deleted one has no head side. A path absent here is
+                // could-not-look, never a measured nothing.
+                "base-lines": {
+                    "type": "object",
+                    "additionalProperties": {"type": "array", "items": {"type": "string"}},
+                },
+                // CLOUD-1484. The identity of the branch's whole CHANGE
+                // against the base, so a module can ask whether THIS change
+                // was attested without re-deriving one from the path lists —
+                // which would be a second notion of `the same change`, free
+                // to disagree with `landing`'s about a rebase. A MERGE-BASE
+                // diff over COMMITTED bytes, where the lists beside it are a
+                // tip diff over the working tree: the two disagree on a stale
+                // or dirty branch, deliberately, because an attestation must
+                // not move when somebody saves a file. `null` is
+                // could-not-look AND covers the empty diff — a branch that
+                // changed nothing has no identity, so a predicate must not
+                // read it as `unattested`.
+                "patch-id": {"type": ["string", "null"]},
+            },
+            "additionalProperties": false,
+        })
     }
 
     /// The schema fragment for the `Cost::Effect` fact (CLOUD-760).
@@ -2196,6 +2285,9 @@ impl Fact {
             | Fact::CommitMeta
             | Fact::Landing
             | Fact::GitHistory
+            | Fact::GitTags
+            | Fact::GitConfig
+            | Fact::GitIndex
             | Fact::Staged
             | Fact::State
             | Fact::Forge
@@ -2290,6 +2382,9 @@ impl Fact {
             | Fact::GitRange
             | Fact::CommitMeta
             | Fact::GitHistory
+            | Fact::GitTags
+            | Fact::GitConfig
+            | Fact::GitIndex
             | Fact::Landing
             | Fact::Staged
             | Fact::State
@@ -2447,6 +2542,9 @@ impl Fact {
             | Fact::GitRange
             | Fact::CommitMeta
             | Fact::GitHistory
+            | Fact::GitTags
+            | Fact::GitConfig
+            | Fact::GitIndex
             | Fact::Tasks
             | Fact::Extracted
             | Fact::Landing
@@ -2466,15 +2564,20 @@ impl Fact {
     fn commit_meta_schema_fragment() -> serde_json::Value {
         serde_json::json!({
                 "type": ["object", "null"],
-                "description": "Fact::CommitMeta (CLOUD-1187). Declared range -> each commit's IDENTITY fields: `commit` the sha, `author` and `committer` as `Name <email>`, `trailers` as whole `Key: value` lines. THERE IS NO MESSAGE BODY AND NO DIFF, and none can be added by accident -- `git::CommitMeta` has no such field, so non-negotiable rule 4 is decided by the type rather than by this projection remembering to drop something. A range whose endpoints do not resolve is ABSENT rather than an empty list, matching `git-ranges`: `no commits in this range` and `I could not look` are the two answers a history gate must keep apart. Declared separately from `git-ranges` because this peels an object per commit, and a row wanting subjects must not pay for that.",
+                "description": "Fact::CommitMeta (CLOUD-1187, widened by CLOUD-843). Declared range -> each NON-MERGE commit's identity fields: `commit` the sha, `subject` git's `%s`, `author` and `committer` as `Name <email>`, `authored` and `committed` as fixed-width ISO-8601 UTC, `signed` whether the commit HEADER carries a signature (`gpgsig`/`gpgsig-sha256`; presence, never validity), `paths` the sorted repo-relative paths it changed against its first parent (`show --name-only`), and `trailers` as whole `Key: value` lines. THERE IS NO MESSAGE BODY AND NO HUNK, and none can be added by accident -- `git::CommitMeta` has no such field, so non-negotiable rule 4 is decided by the type rather than by this projection remembering to drop something. A range whose endpoints do not resolve is ABSENT rather than an empty list, matching `git-ranges`: `no commits in this range` and `I could not look` are the two answers a history gate must keep apart. Declared separately from `git-ranges` because this peels an object and diffs a tree per commit, and a row wanting subjects must not pay for that.",
                 "additionalProperties": {
                     "type": "array",
                     "items": {
                         "type": "object",
                         "properties": {
                             "commit": {"type": "string"},
+                            "subject": {"type": "string"},
                             "author": {"type": "string"},
                             "committer": {"type": "string"},
+                            "authored": {"type": "string"},
+                            "committed": {"type": "string"},
+                            "signed": {"type": "boolean"},
+                            "paths": {"type": "array", "items": {"type": "string"}},
                             "trailers": {"type": "array", "items": {"type": "string"}},
                         },
                         "additionalProperties": false,
@@ -2656,10 +2759,156 @@ impl Fact {
             | Fact::Tasks
             | Fact::Extracted
             | Fact::Pinned
+            | Fact::GitTags
+            | Fact::GitConfig
+            | Fact::GitIndex
             | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact git_schema_fragment does not own",
             }),
         }
+    }
+
+    /// The schema fragment for the repository-STATE family (CLOUD-843): its
+    /// tags, its config, its index.
+    ///
+    /// Its own function for [`Fact::git_schema_fragment`]'s reason — that
+    /// function is at its line ceiling — along the seam its doc already draws:
+    /// that family answers what the HISTORY holds, and these three what the
+    /// repository holds now, which is what the retiring bodies read git for.
+    ///
+    /// All three are NULLABLE at the top for the family's two could-not-look
+    /// conditions — nobody declared one, and the read failed — and each keys by
+    /// the declaration as written, so a module reads the answer to its own row.
+    fn repository_schema_fragment(self) -> serde_json::Value {
+        match self {
+            Fact::GitTags => Self::tags_schema_fragment(),
+            Fact::GitConfig => Self::config_schema_fragment(),
+            Fact::GitIndex => Self::index_schema_fragment(),
+            // NOT THIS FAMILY, AND NAMED RATHER THAN WILDCARDED, for
+            // `git_schema_fragment`'s tail's reason.
+            Fact::Receipts
+            | Fact::Keys
+            | Fact::Stop
+            | Fact::Waived
+            | Fact::Document
+            | Fact::Tracked
+            | Fact::Lines
+            | Fact::External
+            | Fact::AgentSourced
+            | Fact::Prospective
+            | Fact::Produced
+            | Fact::GitHead
+            | Fact::GitStatus
+            | Fact::GitRemote
+            | Fact::GitWorktrees
+            | Fact::GitRef
+            | Fact::GitRange
+            | Fact::CommitMeta
+            | Fact::Landing
+            | Fact::GitHistory
+            | Fact::Staged
+            | Fact::State
+            | Fact::Forge
+            | Fact::ToolVerdict
+            | Fact::Plan
+            | Fact::Minted
+            | Fact::Captured
+            | Fact::Tasks
+            | Fact::Extracted
+            | Fact::Invocations
+            | Fact::Uses
+            | Fact::Symbols
+            | Fact::Review
+            | Fact::BaseDelta
+            | Fact::Records
+            | Fact::RecordsBlocked
+            | Fact::Instant
+            | Fact::Pinned => serde_json::json!({
+                "description": "unrouted fact -- schema_fragment delegated a fact repository_schema_fragment does not own",
+            }),
+        }
+    }
+
+    /// [`Fact::GitTags`]' fragment (CLOUD-843).
+    fn tags_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": ["object", "null"],
+            "description": "Fact::GitTags (CLOUD-843). Declared glob -> every tag it matches, by `git tag --list`'s own wildmatch over the short name: `tag` the name, `commit` the commit it peels to, `annotated` whether a tag object exists, `created` when it was cut (the tagger's time for an annotated tag, the commit's committer time for a lightweight one -- git's `creatordate`) and `committed` the commit's committer date. Dates are fixed-width ISO-8601 UTC, so `<` orders them. `created` is NULL for an annotated tag whose header carries no tagger, never a fabricated instant. Sorted by tag name, byte order; version order is a decision and belongs to the module. A glob that matched nothing is PRESENT with an EMPTY list, which is an answer. No tag message ever -- prose, which rule 4 refuses. NULL when no row declared a glob or the references could not be read. Unlike `git-history` this does NOT null on a shallow clone: a listing walks no history.",
+            "additionalProperties": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "tag": {"type": "string"},
+                        "commit": {"type": "string"},
+                        "annotated": {"type": "boolean"},
+                        "created": {"type": ["string", "null"]},
+                        "committed": {"type": "string"},
+                    },
+                    "additionalProperties": false,
+                },
+            },
+        })
+    }
+
+    /// [`Fact::GitConfig`]'s fragment (CLOUD-843).
+    fn config_schema_fragment() -> serde_json::Value {
+        // One config value's shape, inlined at both uses rather than behind a
+        // `$ref`: a fragment is embedded under the document's `tree` key, so a
+        // `#/$defs/...` pointer would resolve against the WHOLE document's root
+        // and name nothing.
+        let value = serde_json::json!({
+            "type": ["object", "null"],
+            "properties": {
+                "value": {"type": ["string", "null"]},
+                "boolean": {"type": ["boolean", "null"]},
+            },
+            "additionalProperties": false,
+        });
+        serde_json::json!({
+            "type": ["object", "null"],
+            "description": "Fact::GitConfig (CLOUD-843). Declared key -> how git resolves it. `effective` is the value in force (git's last-one-wins across every scope), NULL when no scope sets the key -- an ANSWER, because the config was read. `scopes` is scope -> the value that scope sets, keyed by git's own names (`system`, `global`, `local`, `worktree`, `command`); a scope that does not set the key is ABSENT. Each value carries `value`, the raw text or NULL for an IMPLICIT key written with no `=`, and `boolean`, git's `--type=bool` reading or NULL when the text is not a boolean git accepts -- normalised by git's own parser, so `1`, `on` and `yes` read true and `0`, `off`, `no` and the empty string read false. Only DECLARED keys are ever read, which is what keeps a credential in a config file off this document. NULL for the whole fact when no row declared a key or the repository could not be opened.",
+            "additionalProperties": {
+                "type": "object",
+                "properties": {
+                    "effective": value.clone(),
+                    "scopes": {
+                        "type": "object",
+                        "additionalProperties": value,
+                    },
+                },
+                "additionalProperties": false,
+            },
+        })
+    }
+
+    /// [`Fact::GitIndex`]' fragment (CLOUD-843).
+    fn index_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": ["object", "null"],
+            "description": "Fact::GitIndex (CLOUD-843). Declared pathspec -> what the INDEX records under it and whether the working tree still agrees. `entries` is `git ls-files -s -- <spec>`: `path`, `mode` (six octal digits), `oid` and `stage` (0, or 1-3 for a conflict's sides), in index order. `diverged` is `git diff --name-only -- <spec>`: tracked paths edited, deleted, re-typed, with a flipped executable bit where core.fileMode is on, or unmerged -- compared by content hash, with clean/smudge filters NOT applied, so it can over-report and never under-report. `untracked` is `git ls-files --others --exclude-standard -- <spec>` on the crate's one tree walker. Pathspecs are git's without magic: a literal selects itself and everything beneath it, a wildcard is git's wildmatch with `*` crossing `/`, `.` is everything; a `:`-magic spec is refused at load. Paths only -- never a byte of any file. NULL when no row declared a pathspec or the index could not be read; an EMPTY list in any member is an answer.",
+            "additionalProperties": {
+                "type": "object",
+                "properties": {
+                    "entries": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "mode": {"type": "string"},
+                                "oid": {"type": "string"},
+                                "stage": {"type": "integer"},
+                            },
+                            "additionalProperties": false,
+                        },
+                    },
+                    "diverged": {"type": "array", "items": {"type": "string"}},
+                    "untracked": {"type": "array", "items": {"type": "string"}},
+                },
+                "additionalProperties": false,
+            },
+        })
     }
 }
 
