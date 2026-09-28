@@ -498,7 +498,7 @@ fn an_observed_floor_names_the_file_that_holds_it() {
     // assertion does not.
     std::fs::write(
         journal.join("laps.json"),
-        r#"{"taken_by":"2026-09-06.cleanup-is-not-cost","open":null,"ratchet":{"warm":{"mb":9000,"head":"abcd1234","measured":"2026-08-30","capped":false},"cold":null}}"#,
+        r#"{"taken_by":"2026-09-28.supersede-by-unit","open":null,"ratchet":{"warm":{"mb":9000,"head":"abcd1234","measured":"2026-08-30","capped":false},"cold":null}}"#,
     )
     .unwrap();
 
@@ -522,7 +522,7 @@ fn unreachable_floor(repo: &Path, refused: u32) {
     std::fs::write(
         journal.join("laps.json"),
         format!(
-            r#"{{"taken_by":"2026-09-06.cleanup-is-not-cost","open":{{"free_mb":8000,"basis":"warm","tree_basis":"warm","head":"abcd1234","measured":"2026-09-20"}},"ratchet":{{"warm":{{"mb":9000,"head":"abcd1234","measured":"2026-09-20","capped":false,"refused":{refused}}},"cold":null}}}}"#
+            r#"{{"taken_by":"2026-09-28.supersede-by-unit","open":{{"free_mb":8000,"basis":"warm","tree_basis":"warm","head":"abcd1234","measured":"2026-09-20"}},"ratchet":{{"warm":{{"mb":9000,"head":"abcd1234","measured":"2026-09-20","capped":false,"refused":{refused}}},"cold":null}}}}"#
         ),
     )
     .unwrap();
@@ -1756,6 +1756,89 @@ fn the_newest_k_copies_survive_and_the_rest_are_removed() {
         deps.join("cli-cccccccccccc").exists(),
         "the newest is what the next build reads"
     );
+}
+
+/// An executable artifact AND the fingerprint document cargo leaves beside it,
+/// carrying the unit-identity fields `superseded_in` keys on (CLOUD-1975).
+///
+/// `path` and `profile` are the two a case varies; the rest are the constant
+/// shape a real document has, so a case differing in one field is a case about
+/// that field. `local` embeds the hash, as cargo's does — the field every
+/// generation of one unit changes.
+fn unit(deps: &Path, stem: &str, hash: &str, age_seconds: u64, path: u64, profile: u64) {
+    artifact(deps, stem, hash, age_seconds);
+    let dir = deps
+        .parent()
+        .unwrap()
+        .join(".fingerprint")
+        .join(format!("{stem}-{hash}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(format!("dep-test-integration-test-{stem}")), b"").unwrap();
+    std::fs::write(
+        dir.join(format!("test-integration-test-{stem}.json")),
+        format!(
+            r#"{{"rustc":1,"features":"[]","declared_features":"[]","target":7,"profile":{profile},"path":{path},"deps":[],"local":[{{"CheckDepInfo":{{"dep_info":"debug/.fingerprint/{stem}-{hash}/dep-test-integration-test-{stem}","checksum":false}}}}],"rustflags":[],"config":3,"compile_kind":0}}"#
+        ),
+    )
+    .unwrap();
+}
+
+/// CLOUD-1975. Three versions of one crate share a stem and nothing else — the
+/// shape `Cargo.lock` has for `hashbrown` — and all three are live. Grouped by
+/// stem under `keep = 2`, the oldest was evicted every lap and rebuilt the next.
+#[test]
+fn three_versions_of_one_crate_all_survive() {
+    let repo = repo("target-prune-versions");
+    let deps = repo.join("target/debug/deps");
+    unit(&deps, "cli", "aaaaaaaaaaaa", 3600, 101, 5);
+    unit(&deps, "cli", "bbbbbbbbbbbb", 1800, 102, 5);
+    unit(&deps, "cli", "cccccccccccc", 60, 103, 5);
+
+    let output = prune(&repo, "99999", &["-y"]);
+    assert!(output.status.success(), "{}", said(&output));
+    assert_eq!(
+        survivors(&deps),
+        3,
+        "three versions are three units, not three generations of one"
+    );
+}
+
+/// CLOUD-1975. One crate under two profiles — a check unit beside a build unit —
+/// is two live units. Three copies across them under `keep = 2`: the two profiles
+/// each keep theirs, where stem grouping evicted the oldest outright.
+#[test]
+fn two_profiles_of_one_crate_both_survive() {
+    let repo = repo("target-prune-profiles");
+    let deps = repo.join("target/debug/deps");
+    unit(&deps, "cli", "aaaaaaaaaaaa", 3600, 101, 5);
+    unit(&deps, "cli", "bbbbbbbbbbbb", 1800, 101, 6);
+    unit(&deps, "cli", "cccccccccccc", 60, 101, 6);
+
+    let output = prune(&repo, "99999", &["-y"]);
+    assert!(output.status.success(), "{}", said(&output));
+    assert!(
+        deps.join("cli-aaaaaaaaaaaa").exists(),
+        "the only unit of its profile is never a rival of another profile's"
+    );
+    assert_eq!(survivors(&deps), 3);
+}
+
+/// CLOUD-1975's anti-vacuity half. Three generations of ONE unit — the same
+/// identity, only `local` differing — are still rivals, so `keep = 2` still
+/// reclaims the oldest. A key that made every artifact its own group would pass
+/// both cases above and reclaim nothing, which is CLOUD-766's full disk.
+#[test]
+fn generations_of_one_unit_still_supersede() {
+    let repo = repo("target-prune-generations");
+    let deps = repo.join("target/debug/deps");
+    unit(&deps, "cli", "aaaaaaaaaaaa", 3600, 101, 5);
+    unit(&deps, "cli", "bbbbbbbbbbbb", 1800, 101, 5);
+    unit(&deps, "cli", "cccccccccccc", 60, 101, 5);
+
+    let output = prune(&repo, "99999", &["-y"]);
+    assert!(output.status.success(), "{}", said(&output));
+    assert_eq!(survivors(&deps), 2, "keep = 2 of one unit's generations");
+    assert!(!deps.join("cli-aaaaaaaaaaaa").exists(), "the oldest goes");
 }
 
 // CLOUD-1913's declared mutation, in THIS file for the reason CLOUD-1885's block

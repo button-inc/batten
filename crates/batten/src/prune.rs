@@ -769,7 +769,14 @@ struct LapJournal {
 ///   bump is the repair for clones already wedged, exactly as the entry above is
 ///   — the number's KIND is unrecoverable from the journal, and discarding
 ///   returns them to the declared floors.
-const JOURNAL_GENERATION: &str = "2026-09-06.cleanup-is-not-cost";
+/// * `2026-09-28.supersede-by-unit` — CLOUD-1975. Before it, [`superseded_in`]
+///   grouped by stem alone, so every lap evicted live units that merely shared a
+///   name (four `hashbrown` versions, one crate under two profiles) and the next
+///   build recompiled them. A lap measured under that defect booked the rebuild
+///   of the cache it had just destroyed as its own cost, so its readings describe
+///   a cache being wrecked rather than one being used — measured, 182 artifacts
+///   "superseded" on a lap that built no new commit.
+const JOURNAL_GENERATION: &str = "2026-09-28.supersede-by-unit";
 
 /// What a journal read produced, and what it had to throw away to produce it.
 ///
@@ -2151,13 +2158,105 @@ fn forget_fingerprint(fingerprints: &Path, victim: &Path) {
 /// which is below the noise of everything this reclaims.
 const RECLAIMED_KINDS: &[&str] = &["rlib", "rmeta", "so"];
 
-/// Files grouped by `(stem, kind)`, each group holding only what is past `keep`.
+/// The fingerprint fields that say WHICH cargo unit an artifact is (CLOUD-1975).
+///
+/// A stem is not an identity. `hashbrown` resolves at four versions here, and
+/// one crate is built under several profiles at once (a check unit beside a
+/// build unit, dev-feature unification, host beside target), and every one of
+/// those is live — so grouping by stem alone evicted the third live unit of a
+/// name on every lap and cargo rebuilt it on the next.
+///
+/// `path` separates versions; `profile`, `features` and `compile_kind` separate
+/// units that coexist. `rustc`, `rustflags` and `config` are LEFT OUT: a
+/// toolchain or flag change is a real new generation of the same unit, and
+/// keying on it would leave the old toolchain's output unreclaimable. `local` and
+/// `deps` are left out because they are what changes between generations.
+//MUTANT-SUITE crates/batten/tests/it/target_prune.rs
+//MUTANT supersede-key-drops-path|s@"target", "path", "profile",@"target", "profile",@|three_versions_of_one_crate_all_survive
+//MUTANT supersede-key-drops-profile|s@"path", "profile", "features",@"path", "features",@|two_profiles_of_one_crate_both_survive
+const UNIT_IDENTITY: &[&str] = &["target", "path", "profile", "features", "compile_kind"];
+
+/// Every unit identity recorded under a profile's `.fingerprint`, by hash.
+///
+/// ONE WALK PER `deps` DIRECTORY, never one per artifact: a lookup per artifact
+/// would re-read the whole fingerprint tree for each of thousands of files.
+/// Keyed on the hash suffix for [`forget_fingerprint`]'s reason — the directory
+/// carries the package name and the artifact the crate name.
+///
+/// A directory whose document is absent or unparseable has no entry, and its
+/// artifacts keep the stem grouping: cargo cannot reuse an artifact whose
+/// fingerprint is unreadable, so it is dead weight, never a unit to protect.
+fn unit_identities(fingerprints: &Path) -> BTreeMap<String, String> {
+    let mut identities = BTreeMap::new();
+    let Ok(entries) = std::fs::read_dir(fingerprints) else {
+        return identities;
+    };
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Some((_, hash)) = name.rsplit_once('-') else {
+            continue;
+        };
+        if let Some(identity) = unit_identity(&entry.path()) {
+            identities.insert(hash.to_owned(), identity);
+        }
+    }
+    identities
+}
+
+/// The [`UNIT_IDENTITY`] fields of one fingerprint directory's document.
+///
+/// The document is the directory's `*.json` whose name is not `dep-*`; where
+/// there are several, the first by name, so the answer is a function of the
+/// directory rather than of `read_dir`'s order.
+fn unit_identity(dir: &Path) -> Option<String> {
+    let mut documents: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension().is_some_and(|ext| ext == "json")
+                && !path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("dep-"))
+        })
+        .collect();
+    documents.sort();
+    let text = std::fs::read_to_string(documents.first()?).ok()?;
+    let document: serde_json::Value = serde_json::from_str(&text).ok()?;
+    Some(
+        UNIT_IDENTITY
+            .iter()
+            .map(|field| {
+                document
+                    .get(field)
+                    .map_or_else(String::new, ToString::to_string)
+            })
+            .collect::<Vec<_>>()
+            .join("\u{1f}"),
+    )
+}
+
+/// Files grouped by `(stem, kind, unit identity)`, each group holding only what
+/// is past `keep`.
+///
+/// The identity is empty for an artifact with no readable fingerprint, which
+/// leaves it grouped by stem exactly as before CLOUD-1975.
 ///
 /// Sorted newest-first by mtime, so the tail is what the next build will not
 /// read.
-fn superseded_in(deps: &Path, keep: usize) -> BTreeMap<(String, String), Vec<PathBuf>> {
-    let mut by_key: BTreeMap<(String, String), Vec<(std::time::SystemTime, PathBuf)>> =
+fn superseded_in(deps: &Path, keep: usize) -> BTreeMap<(String, String, String), Vec<PathBuf>> {
+    let mut by_key: BTreeMap<(String, String, String), Vec<(std::time::SystemTime, PathBuf)>> =
         BTreeMap::new();
+    let identities = deps
+        .parent()
+        .map(|profile| unit_identities(&profile.join(".fingerprint")))
+        .unwrap_or_default();
     let Ok(entries) = std::fs::read_dir(deps) else {
         return BTreeMap::new();
     };
@@ -2184,8 +2283,12 @@ fn superseded_in(deps: &Path, keep: usize) -> BTreeMap<(String, String), Vec<Pat
         if kind.is_empty() && !is_executable(&meta) {
             continue;
         }
+        let identity = artifact_hash(name)
+            .and_then(|hash| identities.get(hash))
+            .cloned()
+            .unwrap_or_default();
         by_key
-            .entry((stem.to_owned(), kind.to_owned()))
+            .entry((stem.to_owned(), kind.to_owned(), identity))
             .or_default()
             .push((meta.modified().unwrap_or(std::time::UNIX_EPOCH), path));
     }
