@@ -453,6 +453,16 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   the table. Stability is checked BEFORE a byte count is reduced, so a run set
   that disagrees is reported `Unstable` with its distinct count rather than
   averaged into one plausible number.
+- `asked.rs` — the asked ledger (CLOUD-1078): the ONLY thing that admits a
+  weakening. At `PostToolUse` on the host's question tool
+  (`Harness::question_tool`, a host fact; `None` for the hand-composed contract)
+  the hook appends each question, every option exactly as presented and the
+  answer exactly as returned to `.batten/asked.jsonl`, in the working tree so it
+  is committed with the change and reaches CI. `config lint` admits a pair only
+  when a line ADDED since the fork point names it and its answer is a presented
+  option labelled `Admit …`; free text, an inherited line and a rewritten
+  ledger admit nothing. It replaced the `Weakens:` trailer, which in CI was the
+  author's own whole admission (#962 self-admitted sixteen).
 - `attribution.rs` — what produced commits may carry about the tooling that made
   them (CLOUD-274), the mechanism for the attribution decision record
   (CLOUD-268). Judges author/committer identity, every trailer and the message
