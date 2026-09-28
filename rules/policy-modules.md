@@ -345,7 +345,9 @@ reads `input.call.command`, `input.call.segments`, `input.call.programs`,
 `input.call.event`, `input.call.operation`, `input.call.tool`,
 `input.call.arguments`, `input.call.writes`,
 `input.call["run-in-background"]`, `input.call["final-message"]`,
-`input.call.transcript` and `input.call["stop-repeat"]`, plus the `facts` object.
+`input.call.transcript`, `input.call["stop-repeat"]` and
+`input.call["permission-mode"]` (the host's mode, `null` when it sent none —
+CLOUD-1949), plus the `facts` object.
 
 **A segment's `construct` is the one field that is about the command's SHAPE
 rather than its text** (CLOUD-1381), and it is worth its own sentence because it

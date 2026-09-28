@@ -2662,6 +2662,11 @@ metadata` lists every package the resolver CONSIDERED, so scanning it asks
   is CLOUD-778's seam widened to a SEQUENCE — the readings a run takes, in order,
   last repeating — because the discriminating case needs the second reading to
   differ from the first.
+- `disk_watch.rs` — the disk arm of `land`'s gate race (CLOUD-1937): samples
+  free space each tick on the race's existing watcher loop, projects the burn over
+  a horizon, and reclaims through `prune::prune` before the floor is crossed. A
+  volume the rules cannot clear stops the lap as the environment's failure; each
+  reclaim records `disk-unlink-ms`, the figure CLOUD-1945 decides the runtime on.
 - `startup.rs` — the `[[startup]]` table (CLOUD-1324): what a container must be
   and how it is repaired. Sibling to `provision.rs` and the split is the SUBJECT —
   that one answers _is this artifact the one we pinned_, this one _is this

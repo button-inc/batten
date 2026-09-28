@@ -8465,8 +8465,13 @@ check)
 		exit 0
 	fi
 	stored=$(stored_key steps)
+	# A HIT LEAVES THE PENDING SLOT ALONE. It is one slot per step, and `verify`
+	# runs some steps twice at once (`cargo-clippy` finished twice inside
+	# `[hooks]`, measured on #1036): blanking it here, or on `record` below, left
+	# the concurrent twin's `record` with nothing to match and failed a green step.
+	# A stale pending cannot mint a false receipt — `record` recomputes the key and
+	# refuses on any difference — so clearing it bought nothing.
 	if [[ "$stored" = "$key" ]]; then
-		printf '\n' | batten record keyed step-pending "$step" >/dev/null 2>&1 || true
 		echo "hit ${key:0:12} — $step: this receipt already covers these exact inputs, command and tools; not re-deriving"
 		exit 0
 	fi
@@ -8482,7 +8487,6 @@ record)
 		echo "step-receipt: $step — no pending key from a paired check; not recording" >&2
 		exit 1
 	fi
-	printf '\n' | batten record keyed step-pending "$step" >/dev/null 2>&1 || true
 	if ! key=$(compute_key); then
 		key=""
 	fi

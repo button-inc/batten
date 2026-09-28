@@ -507,7 +507,8 @@ model = "some-model-id"
 #
 # You do not have to write one to get value from them. Batten ships modules for
 # common practices, and enabling one is a rule row naming it. `batten config show`
-# lists what this binary carries; today that is `ci-hygiene`, `commit-hygiene`,
+# lists what this binary carries; today that is `ci-hygiene`, `claude-code-cloud`,
+# `commit-hygiene`,
 # `landing-loop`, `pinned-toolchain`, `shell-hygiene` and `trunk-based`.
 #
 # SCOPE IS THE FIELD TO GET RIGHT. A preset's modules read one surface's facts:

@@ -224,6 +224,11 @@ declared_modules := {
 	# artifacts and reads the volume — so it sits with the acquisition modules
 	# and its back-edges are forbidden for their reason.
 	"prune",
+	# `disk_watch` arrived with CLOUD-1937 and sits beside `prune` for its reason:
+	# an effect module below the engine. It reaches `prune` alone — the reclaim it
+	# runs is that module's, under the committed `[prune]` rules — and `land` reaches
+	# it, never the reverse, so the projection stays a pure function of samples.
+	"disk_watch",
 	# `wiring` arrived with CLOUD-893 and it worked a sixth time, on a rebase
 	# rather than on a fresh write: the module landed on a branch based before
 	# this table's last row and nothing said so until `main` moved under it.

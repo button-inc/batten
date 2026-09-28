@@ -292,6 +292,33 @@ fn a_record_with_no_paired_check_refuses() {
     assert!(err.contains("no pending key"), "{err}");
 }
 
+/// TWO RUNS OF ONE STEP AT ONCE BOTH RECORD. `verify` runs some steps twice
+/// concurrently — `cargo-clippy` finished twice inside `[hooks]` on #1036 — and
+/// they share the one pending slot. The first `record` used to blank it, so the
+/// second refused a green step with "no pending key".
+#[test]
+fn two_concurrent_runs_of_one_step_both_record() {
+    let repo = Repo::new("twins");
+    assert_eq!(repo.check("mystep"), "miss");
+    assert_eq!(repo.check("mystep"), "miss");
+    assert_eq!(repo.record("mystep"), Some(0));
+    assert_eq!(
+        repo.record("mystep"),
+        Some(0),
+        "the twin's record found its pending key"
+    );
+}
+
+/// And a hit beside a running twin does not strand it: the hit reads the same
+/// key, so it must not blank the slot the twin's `record` is about to match.
+#[test]
+fn a_hit_beside_a_running_twin_does_not_strand_its_record() {
+    let repo = Repo::new("hit-twin");
+    repo.pass_once();
+    assert_eq!(repo.check("mystep"), "hit");
+    assert_eq!(repo.record("mystep"), Some(0));
+}
+
 #[test]
 fn inputs_changing_while_the_step_ran_refuse_the_record() {
     // No receipt may attest bytes the run never judged.
