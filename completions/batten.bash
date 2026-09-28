@@ -853,6 +853,9 @@ _batten() {
             batten__subcmd__help__subcmd__provision,status)
                 cmd="batten__subcmd__help__subcmd__provision__subcmd__status"
                 ;;
+            batten__subcmd__help__subcmd__ready,graph)
+                cmd="batten__subcmd__help__subcmd__ready__subcmd__graph"
+                ;;
             batten__subcmd__help__subcmd__ready,lint)
                 cmd="batten__subcmd__help__subcmd__ready__subcmd__lint"
                 ;;
@@ -1339,11 +1342,17 @@ _batten() {
             batten__subcmd__provision__subcmd__help,status)
                 cmd="batten__subcmd__provision__subcmd__help__subcmd__status"
                 ;;
+            batten__subcmd__ready,graph)
+                cmd="batten__subcmd__ready__subcmd__graph"
+                ;;
             batten__subcmd__ready,help)
                 cmd="batten__subcmd__ready__subcmd__help"
                 ;;
             batten__subcmd__ready,lint)
                 cmd="batten__subcmd__ready__subcmd__lint"
+                ;;
+            batten__subcmd__ready__subcmd__help,graph)
+                cmd="batten__subcmd__ready__subcmd__help__subcmd__graph"
                 ;;
             batten__subcmd__ready__subcmd__help,help)
                 cmd="batten__subcmd__ready__subcmd__help__subcmd__help"
@@ -5974,8 +5983,22 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__ready)
-            opts="lint"
+            opts="lint graph"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__help__subcmd__ready__subcmd__graph)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -9792,7 +9815,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__ready)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help lint help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help lint graph help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -9821,9 +9844,53 @@ _batten() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        batten__subcmd__ready__subcmd__help)
-            opts="lint help"
+        batten__subcmd__ready__subcmd__graph)
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --strictness)
+                    COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-level)
+                    COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__ready__subcmd__help)
+            opts="lint graph help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__ready__subcmd__help__subcmd__graph)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

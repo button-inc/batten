@@ -4255,6 +4255,28 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[ISSUE, JSON],
     },
+    // The board graph (CLOUD-175), ported off `mise-tasks/graph-check.sh` with the
+    // second Ready grammar it spawned (CLOUD-1221). An ARM UNDER `ready` rather
+    // than a new top-level noun, for CLOUD-1182's reason: the frontier it emits
+    // is the ready queue, and a new noun widens the surface where an arm costs
+    // it nothing.
+    //
+    // WRITE, declared rather than smuggled into a read verb: on a coherent board
+    // it mints one `board-move.<KEY>` receipt per judged id, which is what the
+    // move guard reads. Nothing about the tree or the board is modified.
+    //
+    // NO DATA CHANNEL, for `landed check`'s reason: the payload IS stdin, so an
+    // unconditional document is unwritable without emitting a false green on
+    // the could-not-look arm.
+    CommandDecl {
+        path: "ready graph",
+        id: "ready.graph",
+        about: "Refuse a board whose columns signal falsely, and emit the ready frontier",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Write,
+        flags: &[],
+    },
     // The `checks` noun (CLOUD-1143), ported off `mise-tasks/checks-green.sh`.
     CommandDecl {
         path: "checks",

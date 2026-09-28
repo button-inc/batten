@@ -655,7 +655,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-config-edit,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,land-divergence,task-linear-check,macos-link,task-mcp-allow-check,nonverdict,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory,turn-ask"
+MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-config-edit,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-graph-check,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,land-divergence,task-linear-check,macos-link,task-mcp-allow-check,nonverdict,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory,turn-ask,graph-check,ready-lint"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -5491,7 +5491,14 @@ set -euo pipefail
 # The marker an issue puts in its own body to hold itself open, stated once here.
 HOLD_MARKER='DO-NOT-CLOSE'
 manifest="${MISE_CONFIG_FILE:-${MISE_PROJECT_ROOT:-$PWD}/mise.toml}"
-gate="$(dirname -- "$manifest")/mise-tasks/graph-check.sh"
+root="$(dirname -- "$manifest")"
+# The board gate is the compiled verb now (CLOUD-1221), told where this
+# consumer's grammar lives; see `[tasks.graph-check]` for why that directory.
+if [[ -n "${BATTEN_BIN:-}" ]]; then
+	batten=("$BATTEN_BIN")
+else
+	batten=(cargo run --quiet --manifest-path "$root/Cargo.toml" -p batten --)
+fi
 tag="${usage_tag:-${1:-}}"
 if [[ -z "$tag" ]]; then
 	echo "::error:: usage: mise run released <tag> [< get_issue payloads on stdin]" >&2
@@ -5546,12 +5553,28 @@ for key in description relations; do
 	echo "::error:: no \`$key\` on In Review issue(s): $missing. The board gate reads that key to decide $reads, so a payload without it cannot answer — $remedy." >&2
 	exit 2
 done
-if [[ ! -x "$gate" ]]; then
-	echo "::error:: cannot run $gate. A gate that cannot run is not a pass — the sweep needs it, so this is 'could not look'." >&2
+# A per-issue violation is the payload, not the status, so a verdict exit is not
+# fatal — but a gate that could not RUN is not a pass. `2` is the verdict and `1`
+# with board lines is could-not-look over the set, both of which are data; `1`
+# with no board line at all is the verb refusing the invocation itself (no
+# grammar, no board), and anything else it never answers. Either would leave
+# `refusal_for` nothing to find and every In Review row movable, so both are
+# could-not-look here.
+gate_rc=0
+gate_report=$("${batten[@]}" --config-in "$root" ready graph <<<"$issues" 2>&1 >/dev/null) || gate_rc=$?
+case "$gate_rc" in
+0 | 2) ;;
+1)
+	grep -qE '^[^ :]+ [a-z(]' <<<"$gate_report" || {
+		echo "::error:: the board gate refused the invocation, so no row could be judged. A gate that cannot run is not a pass — the sweep needs it, so this is 'could not look'." >&2
+		exit 2
+	}
+	;;
+*)
+	echo "::error:: the board gate could not run (exit $gate_rc). A gate that cannot run is not a pass — the sweep needs it, so this is 'could not look'." >&2
 	exit 2
-fi
-# A per-issue violation is the payload, not the status, so the exit is not fatal.
-gate_report=$("$gate" <<<"$issues" 2>&1 >/dev/null) || true
+	;;
+esac
 refusal_for() {
 	grep -oE "^$1 [a-z-]+" <<<"$gate_report" | awk '{print $2}' | grep -vx 'dangling-blocker' | head -n1 || true
 }
@@ -5612,6 +5635,46 @@ fi
 if [[ "$held" != 0 ]] || [[ "$refused" != 0 ]]; then
 	exit 1
 fi
+{% endraw %}
+'''
+
+# The board gate's SHELL CONTRACT, over the compiled `batten ready graph`
+# (CLOUD-1221). `mise-tasks/graph-check.sh` and the second Ready grammar it
+# spawned retired together; this is what `mise run graph-check` resolves to now,
+# so every remedy string naming the task stays true.
+#
+# THE TRANSLATION LIVES HERE, in one ungoverned place, as `checks-green`'s does:
+# the verb answers the crate's one table (`2` a violation, `1` could-not-look)
+# and this task's two shell readers — `board-sweep`'s `run_gate` and `released` —
+# read the program's (`1` a violation, `2` could-not-look). Anything else the verb
+# answers is `2`, fail-safe: a gate that could not run is not a pass.
+#
+# `--config-in` IS THE MANIFEST'S DIRECTORY, which is the authority the program
+# reached through `$(dirname "$0")`: a caller judging from a scratch clone is
+# judged by this consumer's grammar and reads this consumer's workspace version
+# (CLOUD-1228). Receipts land in the CALLER's clone — `dir = "{{cwd}}"` — which is
+# the clone whose moves they authorise.
+[tasks.graph-check]
+description = "Is the board coherent, and is every started row honestly labelled? (0 coherent / 1 a column signals falsely / 2 could not look) — reads get_issue payloads on stdin; emits the ready frontier"
+shell = "bash -c"
+dir = "{{cwd}}"
+run = '''
+{% raw %}
+set -uo pipefail
+manifest="${MISE_CONFIG_FILE:-${MISE_PROJECT_ROOT:-$PWD}/mise.toml}"
+root="$(dirname -- "$manifest")"
+if [[ -n "${BATTEN_BIN:-}" ]]; then
+	batten=("$BATTEN_BIN")
+else
+	batten=(cargo run --quiet --manifest-path "$root/Cargo.toml" -p batten --)
+fi
+"${batten[@]}" --config-in "$root" ready graph
+rc=$?
+case "$rc" in
+0) exit 0 ;;
+2) exit 1 ;;
+*) exit 2 ;;
+esac
 {% endraw %}
 '''
 

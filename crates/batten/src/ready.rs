@@ -533,8 +533,25 @@ impl Grammar {
     /// A pattern written against the RENDERED form never matches the stored one,
     /// and an exemption tested only on plain-text fixtures is dead code in
     /// production.
-    fn strip_mentions(&self, text: &str) -> String {
+    ///
+    /// `pub` since CLOUD-1221: the board graph's status-claim scan asks the same
+    /// question of a whole body, and a second markup expression would be the
+    /// second spelling the registry exists to remove.
+    #[must_use]
+    pub fn strip_mentions(&self, text: &str) -> String {
         self.mention_markup.replace_all(text, "").into_owned()
+    }
+
+    /// The consumer's issue-key expression, as written.
+    ///
+    /// For a caller that must COMPOSE it into a larger expression — the board
+    /// graph's status-claim scan anchors a claim on a key and reads the column
+    /// word after it in one match (CLOUD-1221). [`Self::keys_in`] and
+    /// [`Self::key_of`] answer every question about a key on its own; this is
+    /// only for embedding, so the key keeps one spelling.
+    #[must_use]
+    pub fn key_pattern(&self) -> &str {
+        self.key.as_str()
     }
 }
 

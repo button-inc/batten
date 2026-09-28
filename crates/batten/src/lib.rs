@@ -61,6 +61,7 @@ pub mod forge;
 pub mod git;
 pub mod gitwrite;
 pub mod graph;
+pub mod graph_check;
 pub mod handler;
 pub mod hk;
 pub mod hook;
@@ -3546,7 +3547,102 @@ fn run_ready(
             out,
             err,
         ),
+        ReadyCommand::Graph => run_ready_graph(mode, overrides, out, err),
     }
+}
+
+/// `batten ready graph`: is the board's graph coherent and every started row
+/// honestly labelled? (CLOUD-175, ported by CLOUD-1221.)
+///
+/// **The grammar's root is the config's directory**, not the cwd. Under
+/// `--config-in <dir>` that is the consumer that declared the grammar — the
+/// same authority the retired program reached through `$(dirname "$0")` — so a
+/// caller judging from a scratch clone is judged by the consumer's rules and
+/// reads the consumer's workspace version. Receipts go to the CWD's git dir,
+/// which is the clone whose moves they authorise.
+///
+/// # Errors
+///
+/// [`UsageError`] when stdin is not a payload set, when the consumer declares
+/// no grammar, board column or connective, or when any row could not be judged —
+/// could-not-look, which outranks a violation (CLOUD-251). Both report sets are
+/// written before it is raised, so one never hides the other.
+fn run_ready_graph(
+    mode: Mode,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    let grammar = board_grammar(overrides)?;
+    let columns = board::Columns::resolve(config.board.as_ref());
+    let connective = graph_check::connective(&config.patterns)?;
+    let root = overrides
+        .config_in
+        .as_ref()
+        .map_or_else(board_root, PathBuf::from);
+    let words = graph_check::Vocabulary::resolve(&grammar, &columns, &connective, &root)?;
+
+    let mut stdin = String::new();
+    std::io::stdin().read_to_string(&mut stdin)?;
+    let payloads = graph_check::parse(&stdin)?;
+    let outcome = graph_check::check(&payloads, &words);
+
+    // Pointer-only per rule 4: every line is ids, rule ids and column words.
+    //
+    // UNPREFIXED, and not through `output::message`: these lines are a DATA
+    // contract rather than chatter. `released` reads them as `^<id> <rule>` and
+    // turns a hit into a REFUSED verdict, so a `batten: ` prefix would silently
+    // make every In Review row movable. Nor do they honour `--silent`, for the
+    // same reason — suppressing the finding is not suppressing noise.
+    for line in &outcome.reports {
+        writeln!(err, "{line}")?;
+    }
+    writeln!(out, "wip {}", outcome.wip)?;
+    for id in &outcome.frontier {
+        writeln!(out, "frontier {id}")?;
+    }
+    if outcome.violations > 0 {
+        output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            &format!(
+                "ready graph: {} violation(s) — the board is signalling falsely",
+                outcome.violations
+            ),
+        )?;
+    }
+    if outcome.unjudgeable > 0 {
+        return Err(UsageError::raise(format!(
+            "ready graph: {} payload(s) could not be judged — re-fetch with \
+             get_issue(includeRelations: true)",
+            outcome.unjudgeable
+        )));
+    }
+    if outcome.violations > 0 {
+        return Ok(ExitCode::Violation);
+    }
+    // THE RECEIPT, MINTED ONLY HERE: a board carrying a violation must not
+    // authorise a move. Outside a checkout there is no store to mint into, and
+    // the verdict stands anyway.
+    if let Ok(git_dir) = git::git_dir(Path::new(".")) {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs());
+        graph_check::mint(
+            &git_dir.join("batten-receipts"),
+            &grammar,
+            &outcome.judged,
+            stamp,
+        );
+    }
+    writeln!(
+        out,
+        "graph-check: board coherent ({} issues)",
+        outcome.judged.len()
+    )?;
+    Ok(ExitCode::Success)
 }
 
 /// Split a comma-separated roster field, dropping the empties.

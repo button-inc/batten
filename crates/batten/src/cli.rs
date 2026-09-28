@@ -801,6 +801,9 @@ pub enum ReadyCommand {
         /// Emit the findings on the structured channel.
         json: bool,
     },
+    /// Judge a payload set: the board's graph is coherent, every started row is
+    /// honestly labelled, and the ready frontier is what it says (CLOUD-1221).
+    Graph,
 }
 
 /// Subcommands of `claim`.
@@ -2383,6 +2386,7 @@ fn ready_of(matches: &ArgMatches) -> Option<ReadyCommand> {
             issue: matches.get_one::<String>("issue").cloned(),
             json: flag(matches, "json"),
         }),
+        ("graph", _) => Some(ReadyCommand::Graph),
         _ => None,
     }
 }

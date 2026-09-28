@@ -2567,6 +2567,15 @@ expression: stdout_of(&output)
       "flags": [],
       "subcommands": [
         {
+          "path": "ready graph",
+          "id": "ready.graph",
+          "about": "Refuse a board whose columns signal falsely, and emit the ready frontier",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        },
+        {
           "path": "ready lint",
           "id": "ready.lint",
           "about": "Refuse an issue whose Ready block fails a checkable clause of the Definition of Ready",

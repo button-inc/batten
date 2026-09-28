@@ -2272,6 +2272,18 @@ regex = '(?i)(deferred?|deferring|defers) (it |that |this )?to|owned by|belongs 
 id = "ready-issue-key"
 regex = 'CLOUD-[0-9]+'
 
+# THE PRESENT-TENSE CONNECTIVE a status claim may carry between a key and a
+# column word (CLOUD-234, CLOUD-838), read by `batten ready graph`. An ALLOWLIST,
+# measured: a length-bounded span with a `was|were` blocklist fired three times
+# over this repository's own prose and all three were narration ("went In
+# Progress", "still read In Progress"), and a blocklist of past-tense verbs has no
+# end. It is the consumer's English, so it lives here rather than in the crate
+# (rule 1); the crate composes it with `ready-issue-key` and the set's occupied
+# columns. Ported verbatim off `mise-tasks/graph-check.sh` (CLOUD-1221).
+[[pattern]]
+id = "graph-status-claim-connective"
+regex = 'is|is now|now'
+
 # THE FORGE'S CLOSING VERBS, ANCHORED AT THE END, so the row decides the text
 # IMMEDIATELY before a key rather than anywhere earlier in the body. Without the
 # anchor a single `Closes` in a paragraph would make every key after it read as

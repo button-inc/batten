@@ -188,6 +188,7 @@ mod gh_preflight;
 mod git_facts;
 mod glob_containment;
 mod glob_exclusion;
+mod graph_check;
 mod guardrail_bypass;
 mod handler_dispatch;
 mod harness_grant;
