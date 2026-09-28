@@ -30,12 +30,18 @@
 //!
 //! # The real shape: two populations with a gap
 //!
-//! * **Plumbing**, 64 modules at closure ≤ 8 — `git` at 2, `capture` and
-//!   `gitwrite` at 4, `exec` and `land` at 7, `pipeline` at 8. Every one of
+//! * **Plumbing**, 73 modules at closure ≤ 8 — `git` at 2, `capture` and
+//!   `gitwrite` at 4, `land` at 7, `exec` and `pipeline` at 8. Every one of
 //!   these is extractable into its own crate today or nearly so.
 //! * **The decision core**, 55 modules at 24–27 — `rules`, `hook`, `config`,
 //!   `facts`, `policy`, `preset`, `cli`. One cluster, which is what a split
 //!   leaves in the top crate.
+//!
+//! **The core has not grown across three trunk measurements** — 119, 124 and now
+//! 128 modules — while the plumbing went 64 → 69 → 73. Every module the trunk
+//! added landed reaching nothing or nearly nothing, including all four of #962's
+//! (`cargo_graph`, `durable`, `probe_verdict`, `signer_posture`, all at closure
+//! 1). That is the split's direction holding without anyone steering for it.
 //! * **Nothing between 9 and 23**, which is a real cliff, unlike the one the
 //!   scanner reported in a different place.
 //!
@@ -88,16 +94,79 @@ const CORE_FLOOR: usize = 24;
 ///
 /// Recorded by running [`print_the_distribution`], never by hand.
 const PLUMBING: &[&str] = &[
-    "admission", "advisory", "arm", "board", "bot", "brief", "capture", "carry",
-    "checks_green", "ci", "claim", "commit", "deferral", "effect", "environment",
-    "error", "exec", "exit", "fast_forward", "fetch", "forge", "git", "gitwrite",
-    "graph", "identity", "install", "land", "landed", "lease", "lib", "main",
-    "main_watch", "mint", "mutate", "outcome", "output", "outputs", "patch",
-    "pattern", "pipeline", "pr_watch", "provision", "prune", "race", "ready",
-    "recorder", "refusal", "render", "repair", "rest", "ripcord", "scratch",
-    "secret", "semver", "severity", "source", "spec", "speculation", "startup",
-    "state", "store", "suites", "surface", "task", "tokens", "traversal",
-    "verbs", "verdict", "worktree",
+    "admission",
+    "advisory",
+    "arm",
+    "board",
+    "bot",
+    "brief",
+    "capture",
+    "cargo_graph",
+    "carry",
+    "checks_green",
+    "ci",
+    "claim",
+    "commit",
+    "deferral",
+    "durable",
+    "effect",
+    "environment",
+    "error",
+    "exec",
+    "exit",
+    "fast_forward",
+    "fetch",
+    "forge",
+    "git",
+    "gitwrite",
+    "graph",
+    "identity",
+    "install",
+    "land",
+    "landed",
+    "lease",
+    "lib",
+    "main",
+    "main_watch",
+    "mint",
+    "mutate",
+    "outcome",
+    "output",
+    "outputs",
+    "patch",
+    "pattern",
+    "pipeline",
+    "pr_watch",
+    "probe_verdict",
+    "provision",
+    "prune",
+    "race",
+    "ready",
+    "recorder",
+    "refusal",
+    "render",
+    "repair",
+    "rest",
+    "ripcord",
+    "scratch",
+    "secret",
+    "semver",
+    "severity",
+    "signer_posture",
+    "source",
+    "spec",
+    "speculation",
+    "startup",
+    "state",
+    "store",
+    "suites",
+    "surface",
+    "task",
+    "tokens",
+    "traversal",
+    "verbs",
+    "verdict",
+    "worktree",
 ];
 
 /// No module's closure may exceed this.
@@ -283,6 +352,9 @@ fn print_the_distribution() {
     }
     println!("total modules: {}", sizes.len());
     for (size, modules) in &by_size {
-        println!("  closure {size:3}: {:3} modules  {modules:?}", modules.len());
+        println!(
+            "  closure {size:3}: {:3} modules  {modules:?}",
+            modules.len()
+        );
     }
 }
