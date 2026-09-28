@@ -1306,6 +1306,9 @@ if [ "$(mise run -q step-receipt check test:cargo | cut -c1-3)" = hit ]; then ex
 # `test_cargo_path.rs` runs the block between the markers, verbatim.
 # >>> no-batten-path
 shadow="${CARGO_TARGET_DIR:-target}/no-batten-path"
+# ABSOLUTE, because cases run in scratch directories: a relative entry resolves
+# against each case's cwd, and the linked `mise` vanishes with it.
+case $shadow in /*) ;; *) shadow="$PWD/$shadow" ;; esac
 rm -rf "$shadow" && mkdir -p "$shadow"
 masked=""
 old_ifs=$IFS; IFS=:

@@ -12,7 +12,7 @@
 use crate::common;
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const OPEN: &str = "# >>> no-batten-path";
@@ -41,7 +41,7 @@ fn stub(dir: &Path, name: &str) {
 }
 
 /// What `command -v <name>` resolves to after the mask, one entry per name.
-fn resolved_after_mask(path: &str, target: &Path, names: &[&str]) -> Vec<Option<String>> {
+fn resolved_after_mask(dirs: &[PathBuf], target: &Path, names: &[&str]) -> Vec<Option<String>> {
     let probe: String = names
         .iter()
         .map(|name| format!("command -v {name} || echo MISSING\n"))
@@ -51,7 +51,15 @@ fn resolved_after_mask(path: &str, target: &Path, names: &[&str]) -> Vec<Option<
         .arg(format!("{}\n{probe}", mask()))
         // The system directories stay last, as on any real PATH: the mask itself
         // spawns `rm`, `mkdir` and `ln`.
-        .env("PATH", format!("{path}:/usr/bin:/bin"))
+        .env(
+            "PATH",
+            std::env::join_paths(
+                dirs.iter()
+                    .cloned()
+                    .chain([PathBuf::from("/usr/bin"), PathBuf::from("/bin")]),
+            )
+            .expect("join the fixture PATH"),
+        )
         .env("CARGO_TARGET_DIR", target)
         .output()
         .expect("run the mask under sh");
@@ -80,12 +88,7 @@ fn the_mask_hides_every_batten_and_keeps_the_rest() {
     stub(&local, "batten");
     stub(&local, "mise");
     stub(&other, "tool");
-    let path = format!(
-        "{}:{}:{}",
-        release.display(),
-        local.display(),
-        other.display()
-    );
+    let path = [release, local, other.clone()];
 
     let found = resolved_after_mask(&path, &root.join("target"), &["batten", "mise", "tool"]);
     assert_eq!(found[0], None, "no batten resolves by name under the mask");
@@ -110,11 +113,7 @@ fn a_path_without_batten_is_untouched() {
     let root = common::scratch("test-cargo-path-clean");
     let other = root.join("other");
     stub(&other, "tool");
-    let found = resolved_after_mask(
-        other.to_str().expect("utf-8 path"),
-        &root.join("target"),
-        &["tool"],
-    );
+    let found = resolved_after_mask(&[other.clone()], &root.join("target"), &["tool"]);
     assert_eq!(
         found[0].as_deref(),
         Some(other.join("tool").to_str().expect("utf-8 path"))
