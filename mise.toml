@@ -651,7 +651,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,land-divergence,task-linear-check,macos-link,task-mcp-allow-check,nonverdict,ntia,task-pr-unsubscribed,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory"
+MUTANT_GATES = "agentic-experiment-record,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,land-divergence,task-linear-check,macos-link,task-mcp-allow-check,nonverdict,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -1276,6 +1276,8 @@ description = "Run named Rust tests (nextest filter expression) — never a subs
 run = 'cargo nextest run --workspace --no-fail-fast "$@"'
 
 [tasks."test:cargo"]
+#MUTANT-SUITE crates/batten/tests/it/test_cargo_path.rs
+#MUTANT installed-batten-visible|s@\[ "[$][{]f##[*]/[}]" = batten \] || @@|the_mask_hides_every_batten_and_keeps_the_rest
 description = "Run the Rust workspace test suite"
 # Routed through the per-step receipt (CLOUD-424): same sources, same command,
 # same toolchain ⇒ same verdict, so a hit answers from the receipt instead of
@@ -1292,6 +1294,33 @@ if [ "$(mise run -q step-receipt check test:cargo | cut -c1-3)" = hit ]; then ex
 # the drift it exists to catch. The fail-fast posture rides on
 # `NEXTEST_PROFILE` in `[env]` instead, which nextest reads natively and which
 # every leg through mise inherits, foreign ones included.
+#
+# NO `batten` IS RESOLVABLE BY NAME WHILE THE SUITE RUNS, AS ON CI (CLOUD-1951).
+# `_.path` puts `target/release` first and `~/.local/bin` holds the installed
+# release; CI's test job has neither. So a case or hook that spawns a bare
+# `batten` passed here and failed there -- the retired `doctor` handler on #928
+# cost a matrix that way. Every PATH directory holding a `batten` is swapped for
+# a shadow carrying its other entries, because `mise` shares `~/.local/bin` with
+# the installed binary and dropping the directory would hide it too. Cases reach
+# the tree's own binary through `CARGO_BIN_EXE_batten`, which this leaves alone.
+# `test_cargo_path.rs` runs the block between the markers, verbatim.
+# >>> no-batten-path
+shadow="${CARGO_TARGET_DIR:-target}/no-batten-path"
+rm -rf "$shadow" && mkdir -p "$shadow"
+masked=""
+old_ifs=$IFS; IFS=:
+for d in $PATH; do
+  if [ -n "$d" ] && [ -e "$d/batten" ]; then
+    for f in "$d"/*; do
+      [ "${f##*/}" = batten ] || ln -s "$f" "$shadow/" 2>/dev/null
+    done
+    d="$shadow"
+  fi
+  masked="${masked:+$masked:}$d"
+done
+IFS=$old_ifs
+PATH="$masked"; export PATH
+# <<< no-batten-path
 if ! cargo nextest run --workspace; then exit 1; fi
 mise run -q step-receipt record test:cargo || true
 '''
