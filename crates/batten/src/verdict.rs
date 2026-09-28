@@ -1370,6 +1370,11 @@ pub enum Native {
     /// Position is API; the reading order is not, and `Native::ALL` below is where
     /// the grouping belongs.
     RecordTableRefused,
+    /// A structured READ of a path whose `[[redirect]]` row declares its own
+    /// read route (CLOUD-1929). Not [`Native::ToolSubstituted`]: no shell
+    /// utility was involved, and that class's route pointed a memory reader at
+    /// `rules/scanning.md` instead of the tool the row names.
+    ReadRedirected,
 }
 
 impl Native {
@@ -1425,6 +1430,7 @@ impl Native {
         Native::PlanReadStale,
         Native::OutcomeTableRefused,
         Native::ProgramUnknown,
+        Native::ReadRedirected,
     ];
 
     /// The classes the CONFIG LOADER raises, in `parse_ungated` order.
@@ -1483,6 +1489,7 @@ impl Native {
             Native::ReceiptSuperseded => "receipt read other",
             Native::ReceiptOffTrunk => "receipt read stale",
             Native::ToolSubstituted => "tool run loose",
+            Native::ReadRedirected => "path read routed",
             Native::VerdictPiped => "verdict read dropped",
             Native::VerdictTrailing => "verdict carry other",
             Native::RunOrphaned => "turn watch dropped",
@@ -1958,6 +1965,24 @@ a `git ls-files` per mediated call is a spawn `RuleKind::scopes` forbids on this
 `perf-assert` prices out. This text said 'tracks' for its whole life and nothing ever \
 checked it -- a class a reader believes is worse than one they cannot look up.",
         routes: &[read("rule read first", "rules/scanning.md")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "path read routed",
+        gloss: "this path declares its own read route, named after it",
+        class: "A structured READ of a path whose `[[redirect]]` row declares a `read` \
+remedy (CLOUD-1258). The row exists because a path read couples the caller to the tree \
+layout, and the named tool survives a move of that tree where a hardcoded path does not. \
+The refusal names the path and then the declared route, so the way out is on the line \
+itself; the tool that read it is the envelope's own and is not repeated, which keeps the \
+longest committed memory name within `[refusal] max_tokens`. A row declaring no `read` refuses nothing, \
+which is how a consumer whose session does not carry the tool says so. Not `tool run \
+loose` (CLOUD-1929): no shell utility was involved, and that class's route sent a memory \
+reader to the scanning rules instead of to the tool its own row names.",
+        routes: &[run(
+            "rule explain first",
+            "batten policy explain protected-mutation",
+        )],
         applicability: Applicability::Advice,
     },
     VendoredVerdict {
@@ -2638,6 +2663,7 @@ mod tests {
                 | Native::ReceiptSuperseded
                 | Native::ReceiptOffTrunk
                 | Native::ToolSubstituted
+                | Native::ReadRedirected
                 | Native::VerdictPiped
                 | Native::VerdictTrailing
                 | Native::RunOrphaned

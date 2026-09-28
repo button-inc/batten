@@ -7790,15 +7790,25 @@ fn redirected_read(policy: &Policy, envelope: &Envelope) -> Decision {
     let Some(remedy) = crate::redirect::resolve_read(&policy.redirects, normalise(path)) else {
         return Decision::Allow;
     };
+    // ITS OWN CLASS, AND THE ROUTE ON THE LINE (CLOUD-1929). This refused under
+    // `tool run loose`, whose gloss says a shell utility stood in and whose route
+    // is `rules/scanning.md` — so the one-line refusal a memory reader saw named
+    // neither the tool nor the row, and the declared `read_memory` travelled only
+    // in `Fix`, which the hot path does not render (CLOUD-1286). The remedy is
+    // the row's own pointer, so it takes the tool's subject slot: the tool is the
+    // envelope's own, and carrying both put the repeat line for the longest
+    // memory name over `[refusal] max_tokens` (101 bytes against 96).
+    //MUTANT-SUITE crates/batten/tests/it/mediated_verbs.rs
+    //MUTANT read-refused-as-substitution|s@Native::ReadRedirected,@Native::ToolSubstituted,@|a_generic_read_of_a_memory_is_refused_and_names_the_tool_that_answers
     Decision::Deny(Refusal::declared(
         PROTECTED_MUTATION,
-        crate::verdict::Native::ToolSubstituted,
+        crate::verdict::Native::ReadRedirected,
         &[
             crate::verdict::Subject::Path {
                 path: path.to_owned(),
             },
             crate::verdict::Subject::Artifact {
-                artifact: envelope.raw_tool.clone(),
+                artifact: remedy.to_owned(),
             },
         ],
         Fix::Run(remedy.to_owned()),

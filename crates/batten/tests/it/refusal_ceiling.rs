@@ -73,17 +73,19 @@ fn payload(command: &str) -> String {
 /// the tree it is measuring. Two firings need no such reach — whatever the store
 /// held on entry, the second is a repeat by construction.
 fn refusal(command: &str) -> Option<String> {
-    let _first_sighting = refusal_once(command);
-    refusal_once(command)
+    repeat_refusal(&payload(command))
+}
+
+/// [`refusal`] over any hook payload, not only a Bash command line.
+fn repeat_refusal(payload: &str) -> Option<String> {
+    let _first_sighting = refusal_once(payload);
+    refusal_once(payload)
 }
 
 /// One firing, whatever the store says.
-fn refusal_once(command: &str) -> Option<String> {
-    let run = run_with_stdin_at_real_root(
-        &root(),
-        &["adjudicate", "--harness", "exit-code"],
-        &payload(command),
-    );
+fn refusal_once(payload: &str) -> Option<String> {
+    let run =
+        run_with_stdin_at_real_root(&root(), &["adjudicate", "--harness", "exit-code"], payload);
     if run.status.code() == Some(2) {
         Some(stderr(&run).trim().to_owned())
     } else {
@@ -150,6 +152,41 @@ fn every_mediated_refusal_this_tree_emits_is_within_the_declared_ceiling() {
     assert!(
         over.is_empty(),
         "every emitted line must be within the declared ceiling of {ceiling}: {over:?}"
+    );
+}
+
+#[test]
+fn a_routed_read_of_every_committed_memory_is_within_the_declared_ceiling() {
+    // THE CORPUS ABOVE IS BASH ONLY, and `path read routed` fires on a `Read`
+    // (CLOUD-1929): its line carries the path AND the row's `read` remedy, so its
+    // cost grows with the name. Every memory is enumerated rather than one named,
+    // because the longest name is the one that breaches — measured at 101 bytes
+    // against a 96-byte ceiling while the tool rode as a third subject.
+    let ceiling = declared_ceiling();
+    let memories = root().join(".serena/memories");
+    let mut measured = 0_usize;
+    let mut over: Vec<(usize, String)> = Vec::new();
+    for entry in std::fs::read_dir(&memories).expect("the committed memories are listable") {
+        let name = entry.expect("a memory entry").file_name();
+        let path = format!(".serena/memories/{}", name.to_string_lossy());
+        let encoded = serde_json::to_string(&path).expect("a path is encodable");
+        let read = format!(
+            "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Read\",\
+             \"tool_input\":{{\"file_path\":{encoded}}}}}"
+        );
+        let Some(line) = repeat_refusal(&read) else {
+            panic!("a generic read of a memory must refuse, or this measures nothing: {path}");
+        };
+        measured += 1;
+        let cost = estimated_tokens(&line);
+        if cost > ceiling {
+            over.push((cost, line));
+        }
+    }
+    assert!(measured > 0, "the memory store is not empty");
+    assert!(
+        over.is_empty(),
+        "every routed-read line must be within the declared ceiling of {ceiling}: {over:?}"
     );
 }
 

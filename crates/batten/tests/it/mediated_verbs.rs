@@ -1073,6 +1073,22 @@ fn a_generic_read_of_a_memory_is_refused_and_names_the_tool_that_answers() {
     ));
     // Pointer-only: the path and the class, never a byte of the memory.
     assert!(refusal.contains(GUARDED), "names the path: {refusal}");
+    // ITS OWN CLASS, WITH THE ROUTE ON THE LINE (CLOUD-1929). It refused under
+    // `tool run loose` — a shell-utility class whose route is the scanning rules
+    // — so a memory reader was told to read `rules/scanning.md`, and the tool the
+    // row names appeared nowhere on the line.
+    assert!(
+        refusal.contains("path read routed"),
+        "a structured read is refused under its own class: {refusal}"
+    );
+    assert!(
+        !refusal.contains("tool run loose"),
+        "not the shell-substitution class: {refusal}"
+    );
+    assert!(
+        refusal.contains(&format!("{GUARDED} read_memory ")),
+        "the declared read route is the subject after the path: {refusal}"
+    );
     // The remedy is one hop away since CLOUD-1286, and it must reach the READ
     // tool rather than the mutation tools — the whole content of this row.
     let explained = run(&root(), &["policy", "explain", "protected-mutation"]);
