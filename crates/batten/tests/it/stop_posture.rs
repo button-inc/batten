@@ -189,11 +189,34 @@ id = "write it down"
 kind = "issue"
 target = "put it in the row that already owns it, or file one"
 
+[[pattern]]
+id = "deferral-offered"
+regex = "Your call, |(?i:waiting on your call|both your call|a checkpoint with you)"
+
+[[verdict]]
+id = "turn ask early"
+gloss = "the turn ended by offering back a decision the agent's own evidence settles"
+class = """
+A decision the evidence already settles, offered back as the human's.
+"""
+
+[[verdict.route]]
+id = "do it"
+kind = "issue"
+target = "take the authorized action, or ask one yes/no on an override"
+
 [[rule]]
 id = "prose report duplicate"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/stop-posture.rego"
+severity = "deny"
+
+[[rule]]
+id = "turn ask early"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/turn-ask.rego"
 severity = "deny"
 "#;
 
@@ -201,11 +224,20 @@ fn repo(name: &str) -> PathBuf {
     let dir = scratch(name);
     fs::write(dir.join("batten.toml"), CONFIG).expect("write config");
     fs::create_dir_all(dir.join("policy")).expect("policy dir");
-    let source = common::at_root("policy/stop-posture.rego")
-        .canonicalize()
-        .expect("the committed module is where the row says it is");
-    fs::copy(source, dir.join("policy/stop-posture.rego")).expect("install committed module");
+    install_modules(&dir);
     dir
+}
+
+/// Both committed end-of-turn modules, copied rather than re-typed: `CONFIG`
+/// registers a row for each (CLOUD-1954), and a fixture carrying one would fail to
+/// load at the other's row rather than judge anything.
+fn install_modules(dir: &Path) {
+    for module in ["policy/stop-posture.rego", "policy/turn-ask.rego"] {
+        let source = common::at_root(module)
+            .canonicalize()
+            .expect("the committed module is where its row says it is");
+        fs::copy(source, dir.join(module)).expect("install committed module");
+    }
 }
 
 /// A Claude `Stop` payload, as the host sends one.
@@ -317,10 +349,7 @@ fn completion_fixture(name: &str, diverge: bool) -> (PathBuf, PathBuf) {
     )
     .expect("write config");
     fs::create_dir_all(repo.join("policy")).expect("policy dir");
-    let source = common::at_root("policy/stop-posture.rego")
-        .canonicalize()
-        .expect("the committed module is where the row says it is");
-    fs::copy(source, repo.join("policy/stop-posture.rego")).expect("install committed module");
+    install_modules(&repo);
     common::write(&repo, ".gitignore", "session.jsonl\n");
     common::write(&repo, "src/a.rs", "fn main() {}\n");
     common::git_in(&repo, &["init", "-q", "-b", "main", "."]);
@@ -459,6 +488,30 @@ fn a_hedged_final_message_reaches_the_host_advisory_channel() {
     assert!(
         stdout.contains("prose report duplicate"),
         "and it names the predicate: {stdout}"
+    );
+}
+
+/// THE PUNT, over the engine (CLOUD-1954): a decision offered back as the
+/// human's reaches the advisory channel under its own verdict. The sentence is
+/// the witnessed one from the #928 landing session.
+///
+/// `#MUTANT deferral-unread` reddens here.
+#[test]
+fn a_decision_offered_back_reaches_the_host_advisory_channel() {
+    let dir = repo("stop-posture-punt");
+    let output = hook(
+        &dir,
+        &stop_payload("Your call, three ways: grant it, move it, or wait.", false),
+    );
+    let stdout = stdout_of(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "an advisory never changes the exit code: {stdout}"
+    );
+    assert!(
+        stdout.contains("turn ask early"),
+        "the nudge names the punt, not the hedge: {stdout}"
     );
 }
 

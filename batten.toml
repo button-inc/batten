@@ -1998,6 +1998,21 @@ regex = '(?m)^[[:space:]]*>[^\n]*'
 id = "hedged-flag-framing"
 regex = "(?i)worth (noting|flagging|mentioning|naming)|one thing (I would|I['’]?d|to) (flag|note)|I['’]?d (flag|note) (that|one)|I would (flag|note) that|I should (note|flag)|(it|that)['’]?s worth (noting|flagging|mentioning|naming)|bears (noting|flagging|mentioning|naming)"
 
+# CLOUD-1954: a decision the agent's own evidence settles, offered back as the
+# human's. MEASURED, NOT CHOSEN, over the #928 landing session's 2577 final
+# messages: `your call` alone fired 6 times and 3 were reports of a decision
+# already made ("Hence your call to…", "Per your call,…", "Your call on the
+# config was right"), so the bare phrase is out. The four shapes below are the
+# forward-looking ones, 4 of 4 real punts there. THIN EVIDENCE, stated as such:
+# one transcript, the only corpus this container held; re-measure as it grows,
+# as `deferral-check` does for its one-firing shape. `want me to`, `shall I`
+# and `would you like me to` fired 0 times and stay OUT — an unwitnessed
+# literal is the invention CLOUD-323 forbids. CASE-SENSITIVE `Your call,` on
+# purpose: sentence-initial is the offer; mid-sentence was the report.
+[[pattern]]
+id = "deferral-offered"
+regex = "Your call, |(?i:waiting on your call|both your call|a checkpoint with you)"
+
 # The §1 span, narrowed before the paths are read (CLOUD-854).
 #
 # The fifth column holds every path the BODY names, and a path-name intersection
@@ -7435,6 +7450,19 @@ id = "prose report duplicate"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/stop-posture.rego"
+severity = "deny"
+
+# CLOUD-1954: the punt, the second end-of-turn tell. ITS OWN ROW AND MODULE, not
+# a second verdict on the hedge's: a row spelled as its verdict must be that
+# verdict's sole raiser, and renaming the hedge row reads to `config-lint` as
+# `rule-removed`. The module carries a copy of the hedge module's four-step scrub
+# (an import does not resolve: `policy test` loads each module as its own bundle),
+# so the two tells judge the same text.
+[[rule]]
+id = "turn ask early"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/turn-ask.rego"
 severity = "deny"
 
 # CLOUD-1131's write-time signal, and it is a `warn` by design rather than by
@@ -13490,6 +13518,22 @@ target = "batten.toml"
 # CLOUD-219 each ruled a deny out at this moment independently — pausing mid-task
 # is legitimate and blocking "done" punishes correct behaviour — and the demotion
 # is what makes that structural instead of careful.
+[[verdict]]
+id = "turn ask early"
+gloss = "the turn ended by offering back a decision the agent's own evidence settles"
+class = """
+AGENTS.md's punt, in chat: a block reported as a decision, or "that's your call" on \
+what the evidence already settles. Offering an authorized action back stops the \
+human for nothing and leaves the work undone. Do it, or — when a gate genuinely \
+needs a human — ask ONE yes/no on the override (CLOUD-680). Reporting a decision \
+already made is not this; the pattern is forward-looking by measurement (CLOUD-1954).
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/turn-ask.rego"
+
 [[verdict]]
 id = "prose report duplicate"
 gloss = "a finding was written as editorial rather than to a durable home"
