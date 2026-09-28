@@ -11283,15 +11283,6 @@ wiring = [".claude/settings.json"]
 # `BATTEN_ENVIRONMENT=disposable` states the fact instead: the session-start
 # repair removes them where the environment says it may, and reports them where it
 # does not. `harness-wiring` refuses them like any other second decider now.
-[[hook.handler]]
-id = "mcp-attach-check"
-on = "user-prompt-submit"
-run = ["mise", "run", "-q", "mcp-attach-check"]
-# `mise run` costs ~750ms in this checkout before the task starts.
-timeout_ms = 5000
-owner = "CLOUD-312"
-expires = "2027-02-28"
-
 # CLOUD-312 row 5: `connector-allow-guard` retires THROUGH THE DOOR rather than
 # into a row, and the destination is a correction to CLOUD-312's own table.
 #
@@ -11759,6 +11750,19 @@ run = ["mise", "run", "gh-preflight"]
 # ITS TIMEOUT IS THE PAIR'S LARGE HALF: this one opens the network and walks
 # several endpoints, which is what the retired script's 120s was actually for.
 timeout_ms = 120000
+owner = "CLOUD-312"
+expires = "2027-02-28"
+
+# `mcp-attach-check`, AT SESSION START for its sibling's reason (CLOUD-1946): it
+# reads which configured servers this session attached, a fact the launcher fixes
+# when the session starts, and on `user-prompt-submit` its report reached nobody,
+# because Claude Code delivers no advisory there.
+[[hook.handler]]
+id = "mcp-attach-check"
+on = "session-start"
+run = ["mise", "run", "-q", "mcp-attach-check"]
+# `mise run` costs ~750ms in this checkout before the task starts.
+timeout_ms = 5000
 owner = "CLOUD-312"
 expires = "2027-02-28"
 

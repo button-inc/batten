@@ -125,7 +125,7 @@ use common::{at_root, git_in, scratch, stderr, stdout, write};
 ///
 /// A LIST RATHER THAN A COUNT, because a count cannot tell an added row from a
 /// renamed one, and the ordering claim below needs the names anyway.
-const DECLARED: [&str; 13] = [
+const DECLARED: [&str; 14] = [
     "session-stamp",
     "session-install",
     "session-submodules",
@@ -161,6 +161,7 @@ const DECLARED: [&str; 13] = [
     // Claude Code delivers no advisory, so its finding was dropped every turn.
     // After the provisioning rows because its could-not-look arm is a missing
     // `jq`, which `session-install` provides.
+    "mcp-attach-check",
     "mcp-allow-check",
     "session-census",
 ];
@@ -764,11 +765,7 @@ fn every_handler_row_is_read() {
 /// has probed, stated so the census below can be exact rather than lenient.
 /// CLOUD-1961 owns emptying it; a row leaving this list is what closing the gap
 /// looks like, in `ADVISORY_GAPS`' shape one table over.
-const UNHEARD: [&str; 3] = [
-    "mcp-attach-check",
-    "turn-cross-check",
-    "head-move-mediator-check",
-];
+const UNHEARD: [&str; 2] = ["turn-cross-check", "head-move-mediator-check"];
 
 /// Whether Claude Code carries an advisory emitted on the event a row names.
 ///
