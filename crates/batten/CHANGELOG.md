@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.188](https://github.com/button-inc/batten/compare/v0.0.187...v0.0.188) - 2026-09-28
+
+### Added
+
+- *(skills)* a groom skill that forces what `ready lint` cannot decide
+- *(land)* [**breaking**] the lap watches its volume while the gate runs, and reclaims before the floor
+- *(policy)* [**breaking**] plan mode reads or refuses, and a read is never put to the operator
+- *(policy)* [**breaking**] a module can pre-approve a call the engine already allowed
+- *(policy)* refuse a tool call while the operator's message has no answer
+- *(policy)* one open pull request per branch, refused rather than asked
+- *(policy)* name a decision offered back to the human at turn end
+
+### Fixed
+
+- *(mcp)* retract the Claude Code Remote tool-permissions remedy
+- *(harness)* read the settings document inline so its deny list is not collected
+- *(harness)* refuse the committed autoMode grant the classifier never reads
+- *(land)* closing-key-record reads every key of a list, not every other one
+- *(land)* the disk arm judges a running lap by its reserve, and never overrides a verdict
+- *(verify)* two runs of one step both record, and the new surfaces are placed
+- *(perf)* define the pair profile on the command line for the base arm
+- *(verify)* repair the five reds this branch's own gates found
+- *(tasks)* refuse a suite run that changes a tracked file in the checkout
+- *(land)* a replay whose base deletes a directory removes it and everything after it
+- *(hook)* report the attach check at session start too
+- *(hook)* surface the connector-ask finding at session start and gate plan-mode reads
+- *(tasks)* make test:cargo's PATH shadow absolute
+- *(tasks)* run test:cargo with no batten resolvable by name, as on CI
+
+### Other
+
+- *(tasks)* a task body runs with mise's timings off, so byte-stable cases compare output, not clocks
+- *(land)* a head the gate already proved is not proved again
+- *(perf)* stage the pair's base arm under its own profile
+- *(gate)* build both pair arms under perf-arm, key the base on crate content
+- *(tasks)* annotate test_cargo_path's sh spawn and meet clippy
+
 ## [0.0.187](https://github.com/button-inc/batten/compare/v0.0.186...v0.0.187) - 2026-09-28
 
 ### Fixed
