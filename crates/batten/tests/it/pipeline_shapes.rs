@@ -459,6 +459,41 @@ fn a_target_outside_the_repository_is_not_a_substitution() {
     assert_allowed("cat ~/.config/some.conf");
 }
 
+/// **A LEADING `cd` MOVES WHERE THE NEXT STAGE'S OPERAND IS RESOLVED** (CLOUD-1690).
+///
+/// Measured in a live session: `cd <scratchpad>/research && wc -c phase1/…tsv`
+/// was refused `tool run loose` over agent-written files outside the repository,
+/// because the operand was resolved against the call's own directory rather than
+/// the one `wc` actually ran in. Both halves are asserted: out of the repository
+/// allows, and a `cd` that stays INSIDE it still refuses — so the fix follows the
+/// directory rather than exempting anything behind a `cd`.
+#[test]
+fn a_leading_cd_out_of_the_repository_moves_the_containment_check() {
+    assert_allowed("cd /tmp/batten-scratch && wc -c phase1/corpus.tsv");
+    assert_allowed("cd /tmp/batten-scratch; head -5 notes/a.md");
+    let inside = root().canonicalize().expect("the repository root resolves");
+    assert_denied(&format!("cd {} && wc -l AGENTS.md", inside.display()));
+    // Back out and in again: the LAST `cd` decides.
+    assert_denied(&format!(
+        "cd /tmp/batten-scratch && cd {} && head -5 AGENTS.md",
+        inside.display()
+    ));
+}
+
+/// The forms a static reading cannot follow leave the directory where it was, so
+/// they judge exactly as they did before CLOUD-1690 — never more permissively.
+#[test]
+fn a_cd_this_reading_cannot_follow_changes_nothing() {
+    // A subshell's `cd` does not outlive its parentheses.
+    assert_denied("(cd /tmp/batten-scratch; wc -l AGENTS.md) && wc -l AGENTS.md");
+    // An expansion names a directory no static reading knows.
+    assert_denied("cd \"$HOME\" && wc -l AGENTS.md");
+    assert_denied("cd - && wc -l AGENTS.md");
+    // `$(cd …)` runs in a subshell as well, so the stage after it is judged
+    // from the directory the call started in.
+    assert_denied("echo $(cd /tmp/batten-scratch) && wc -l AGENTS.md");
+}
+
 #[test]
 fn an_operand_that_is_not_a_path_is_not_a_substitution() {
     // A bare pattern, and stdin. `grep CLOUD` with no file is reading its input

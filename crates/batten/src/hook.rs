@@ -5799,7 +5799,22 @@ fn substitution_decision(
     // here resolves the FIRST line's program and judges every later line's
     // operands as that program's. Hand-rolling the split beside [`per_line`]
     // would be a second reading of one fact, and the two can drift.
-    for (index, _segment, line) in per_line(parsed) {
+    // THE DIRECTORY A LATER STAGE RUNS IN, followed across a leading `cd`
+    // (CLOUD-1690). The envelope's `cwd` is where the CALL started, and a compound
+    // `cd /tmp/scratch && wc phase1/x.tsv` runs `wc` somewhere else — so resolving
+    // its operand against the call's cwd judged a scratch file as if it sat in the
+    // repository, the one case the containment rule (CLOUD-1109) exists to leave
+    // alone. Only the unambiguous form moves it: a TOP-LEVEL `cd <dir>` that the
+    // next stage runs after (`&&` or `;`). Every other form — `cd -`, a bare `cd`,
+    // `cd "$x"`, `pushd`, a `cd` inside `( … )` — leaves it where it was, which is
+    // today's reading and can only ever refuse what it refused before.
+    let mut effective: Option<std::path::PathBuf> = cwd.map(Path::to_path_buf);
+    for (index, segment, line) in per_line(parsed) {
+        if let Some(moved) = followed_cd(segment, line, effective.as_deref()) {
+            effective = Some(moved);
+            continue;
+        }
+        let cwd = effective.as_deref();
         // Clause 2, and it is the SEGMENT's rather than the line's: the PRECEDING
         // segment's terminator is what says whether this stage was fed by a pipe
         // — the existing discard predicate reads the FOLLOWING one, which is why
@@ -5856,6 +5871,54 @@ fn substitution_decision(
         return Some(substitution_refusal(rule, program, target));
     }
     None
+}
+
+/// The directory a top-level `cd <dir>` moves the NEXT stage into, or `None`
+/// when this line is not one this reading can follow (CLOUD-1690).
+///
+/// Followed only when all of these hold, because each excluded form either runs
+/// in a subshell or names a directory no static reading can know:
+///
+/// * the program token is exactly `cd`, and the segment is neither inside a
+///   `( … )` subshell (whose directory does not outlive the parentheses) nor
+///   nested in a word (`$(cd …)` runs in a subshell too);
+/// * exactly one operand, and not an option, `-`, a `~` or a `$` expansion;
+/// * the segment hands on with `&&` or `;`, so the next stage runs after it.
+///
+/// A relative operand joins the directory already in effect; with none known it
+/// cannot be placed, and that is `None` too.
+//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
+//MUTANT cd-not-followed|s@^    if tokens.first().copied() != Some("cd") {$@    if true {@|a_leading_cd_out_of_the_repository_moves_the_containment_check
+fn followed_cd(
+    segment: &Segment,
+    line: &SegmentLine,
+    current: Option<&Path>,
+) -> Option<std::path::PathBuf> {
+    let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
+    if tokens.first().copied() != Some("cd") {
+        return None;
+    }
+    if segment.grouped || segment.nested {
+        return None;
+    }
+    if !matches!(segment.terminator, Some(Separator::And | Separator::Semi)) {
+        return None;
+    }
+    let [_, target] = tokens.as_slice() else {
+        return None;
+    };
+    if target.is_empty()
+        || target.starts_with('-')
+        || target.starts_with('~')
+        || target.contains('$')
+    {
+        return None;
+    }
+    let target = Path::new(target);
+    if target.is_absolute() {
+        return Some(target.to_path_buf());
+    }
+    current.map(|here| here.join(target))
 }
 
 /// Does this `substitutes` entry select this invocation?
@@ -8469,6 +8532,13 @@ struct Segment {
     /// not a LINE of the one containing it, so it is excluded from both sides of
     /// that walk rather than merely tolerated.
     nested: bool,
+    /// Did this segment come from inside a `( … )` subshell (CLOUD-1690)?
+    ///
+    /// Private and unprojected, like [`Segment::nested`]. The walk flattens a
+    /// subshell's body into ordinary segments, which is right for every predicate
+    /// about WHAT runs — but a `cd` inside one does not outlive the parentheses,
+    /// so the one reader that follows a `cd` has to be able to tell.
+    grouped: bool,
 }
 
 /// One constituent command of a segment: its own words, and its own span.
@@ -8959,6 +9029,7 @@ fn flatten_command(
         input_redirect: redirects.iter().any(binds_stdin),
         construct,
         nested: false,
+        grouped: false,
     };
     let mut nested = nested_commands(words, redirects, source);
     if segment.words.iter().any(String::is_empty) {
@@ -9028,7 +9099,16 @@ fn flatten_in(
             }
         }
         // A GROUPING runs its body in this call's own right, so it is walked.
-        rable::NodeKind::Subshell { body, .. } | rable::NodeKind::BraceGroup { body, .. } => {
+        // A SUBSHELL's body is also marked, because its `cd` dies with it; a
+        // brace group runs in this shell, so its `cd` does not.
+        rable::NodeKind::Subshell { body, .. } => {
+            let first = out.len();
+            flatten_in(body, source, after, construct, out);
+            for segment in &mut out[first..] {
+                segment.grouped = true;
+            }
+        }
+        rable::NodeKind::BraceGroup { body, .. } => {
             flatten_in(body, source, after, construct, out);
         }
         // **A CONTROL-FLOW BODY IS WALKED AND TAGGED**, which is what makes a
