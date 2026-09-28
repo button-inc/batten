@@ -645,6 +645,63 @@ fn an_empty_value_is_an_omission_wearing_a_declarations_shape() {
     );
 }
 
+/// **A `docs` row may declare no tests** (CLOUD-1938).
+///
+/// A change to prose alone has no behaviour a mutation could kill, so the
+/// required non-empty `tests` list could only be met with a fabricated entry or a
+/// `--bypass-sequence`. Measured on CLOUD-1931: two memory files and one
+/// sentence, whose own gate is `#MUTANT-EXEMPT`. The row still names a gate.
+#[test]
+fn a_docs_row_may_declare_no_tests() {
+    let dir = with_tasks("ready-claims-docs-no-tests");
+    // `none` lands nothing at all, so it has nothing to test either.
+    for commit_type in ["docs", "DOCS", "none"] {
+        let mut row = complete_claims();
+        row["commit_type"] = serde_json::json!(commit_type);
+        row["tests"] = serde_json::json!([]);
+        let output = lint(&dir, &claims_payload(&row, &[]));
+        assert_eq!(code(&output), 0, "{commit_type}\n{}", stderr(&output));
+    }
+
+    // The exemption is from TESTS, never from the gate: a docs row still names
+    // the check that covers what it edits.
+    let mut ungated = complete_claims();
+    ungated["commit_type"] = serde_json::json!("docs");
+    ungated["tests"] = serde_json::json!([]);
+    ungated
+        .as_object_mut()
+        .expect("the fixture is an object")
+        .remove("gate");
+    let refused = lint(&dir, &claims_payload(&ungated, &[]));
+    assert_eq!(code(&refused), 2, "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("claim-missing (gate)"),
+        "{}",
+        stderr(&refused)
+    );
+}
+
+/// The narrowing that keeps CLOUD-1938 from becoming a hole: `refactor` releases
+/// nothing either, but it changes code, so an empty list there is still an
+/// omission — as it is for every other type but `docs`.
+#[test]
+fn a_refactor_row_still_owes_its_tests() {
+    let dir = with_tasks("ready-claims-refactor-no-tests");
+    // `docs!` claims a breaking change, so it owes tests like any other change.
+    for commit_type in ["refactor", "perf", "chore", "fix", "docs!"] {
+        let mut row = complete_claims();
+        row["commit_type"] = serde_json::json!(commit_type);
+        row["tests"] = serde_json::json!([]);
+        let output = lint(&dir, &claims_payload(&row, &[]));
+        assert_eq!(code(&output), 2, "{commit_type}\n{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("claim-missing (tests)"),
+            "{commit_type}\n{}",
+            stderr(&output)
+        );
+    }
+}
+
 /// CLOUD-472. `mutation` landed under CLOUD-418 as PROSE describing the change
 /// that would kill the case — a better claim than nothing, and still joinable to
 /// nothing. A slug is joinable: `batten mutate` resolves it, applies the

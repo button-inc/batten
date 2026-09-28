@@ -1263,16 +1263,35 @@ fn check_claims(
         return Ok(true);
     };
 
+    // A `docs` OR COMMITLESS ROW MAY DECLARE NO TESTS (CLOUD-1938), and only
+    // those. A change to prose alone has no behaviour a mutation could kill —
+    // measured on CLOUD-1931, two memory files and one sentence, where the memory
+    // graph's own gate is `#MUTANT-EXEMPT` — and `none` lands nothing at all, so
+    // demanding an entry bought a fabricated one or `--bypass-sequence`, and
+    // neither is a claim. Narrow on purpose: `refactor`, `perf`, `test` and the
+    // other non-releasing types change code, so an empty list there is still an
+    // omission, and so is `docs!`, which claims a breaking change. Read the way
+    // `check_claimed_type` reads the field: trimmed, case-insensitive. The row
+    // still has to name its `gate`.
+    let prose_only = claims
+        .get("commit_type")
+        .and_then(serde_json::Value::as_str)
+        .map(|declared| declared.trim().to_ascii_lowercase())
+        .is_some_and(|declared| declared.eq_ignore_ascii_case("docs") || declared == "none");
+    //MUTANT-SUITE crates/batten/tests/it/ready.rs
+    //MUTANT empty-tests-admitted-beyond-docs|s@declared.eq_ignore_ascii_case("docs")@!declared.is_empty()@|a_refactor_row_still_owes_its_tests
     for key in REQUIRED_CLAIMS {
         // PRESENT AND NON-EMPTY, because an empty string, array or object is an
         // omission wearing a declaration's shape. `blockers: []` is the one
         // deliberate exception and is handled below — a row with no blockers
         // must be able to SAY so, which is the absence this row exists to make
-        // writable.
+        // writable. `tests: []` joins it for a `docs` row alone, above.
         let filled = match claims.get(key) {
             None | Some(serde_json::Value::Null) => false,
             Some(serde_json::Value::String(text)) => !text.trim().is_empty(),
-            Some(serde_json::Value::Array(items)) => key == "blockers" || !items.is_empty(),
+            Some(serde_json::Value::Array(items)) => {
+                key == "blockers" || (key == "tests" && prose_only) || !items.is_empty()
+            }
             Some(serde_json::Value::Object(fields)) => !fields.is_empty(),
             Some(_) => true,
         };
