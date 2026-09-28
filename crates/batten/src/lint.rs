@@ -34,38 +34,25 @@
 //! caught, but by the base-ref comparison, where it is a weakening rather than a
 //! smell.
 
-//! # A deliberate weakening is ADMITTED, and only on two sources that agree
+//! # A deliberate weakening is ADMITTED, and only by a human's recorded answer
 //!
 //! House style §8 loads policy out of band precisely so a branch cannot lower the
 //! bar it is judged by, so there is no flag, environment variable or config key
 //! that waives a base-ref smell — anything an author can set at PR time is a
-//! self-issued permit. What admits one instead is evidence from two places
-//! written at different moments, decided by [`admissions`]:
+//! self-issued permit. What admits one is a question the host put to its human,
+//! with the text presented and the option chosen recorded by the hook in
+//! [`crate::asked::LEDGER`] and committed with the change (CLOUD-1078).
 //!
-//! * a `Weakens: <smell> <key>` **commit trailer** on this branch, which travels
-//!   with the change and is what CI can read; and
-//! * the **groomed body** that named the same pair before the work started,
-//!   copied into the branch's claim receipt by [`crate::claim::mint`].
+//! # Why the trailer and the groom no longer admit
 //!
-//! The receipt lives under `$GIT_DIR` and dies with the container, so CI has none
-//! — which is why its absence falls back to the trailer rather than refusing.
-//!
-//! # Absent, empty and matching are THREE states, and collapsing two is CLOUD-841
-//!
-//! A receipt that does not exist is *could not look*. A receipt that exists and
-//! names no weakening is *the groom looked and admitted nothing* — evidence of
-//! absence rather than absence of evidence, and it must REFUSE. Reading the second
-//! as the first is what let a trailer minted inside the change that performs a
-//! weakening admit it, which is exactly the shape §8 exists to refuse; measured
-//! 2026-08-21, and again on this campaign's own branch.
-//!
-//! That defect had a layer underneath it that its own row assumed away: the port
-//! onto `batten claim` stopped writing the `weakens` line at all, so every receipt
-//! in every clone read as *empty* and the lenient arm was the only one reachable.
-//! Both halves are fixed together, because either alone still ships a gate that
-//! decides nothing.
+//! Both were written by the author of the weakening. The groom receipt lived under
+//! `$GIT_DIR` and never reached a runner, so in CI a `Weakens:` commit trailer was
+//! the WHOLE admission — measured: #962's squash self-admitted sixteen, including
+//! `protected-removed protected[batten.toml]`. CLOUD-841 had already found the
+//! local half of the same shape. The owner's decision was that a weakening occurs
+//! only through a clearly explained question whose presented text and selected
+//! answer are recorded, which is what [`admissions`] now decides over.
 
-use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
 
@@ -805,40 +792,17 @@ fn workspace_rust_version(source: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// The trailer key that declares a deliberate weakening.
-///
-/// Batten's own vocabulary rather than a consumer's, which is what keeps this
-/// constant on the right side of non-negotiable rule 1: it names a
-/// [`trust::WeakeningKind`], a concept the core already owns, and no tracker,
-/// branch convention or repository is spelled anywhere near it.
-const ADMISSION_TRAILER: &str = "Weakens";
-
-/// What the groom recorded, or that there was no groom to read.
-///
-/// **Three states, and the third exists because two of them were one** — see this
-/// module's header. [`Groom::Silent`] is a receipt that EXISTS and admits nothing,
-/// which refuses; [`Groom::Unreadable`] is no receipt at all, which falls back.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Groom {
-    /// No receipt could be read — CI, a detached HEAD, a branch never claimed.
-    /// Could-not-look, so the trailer alone decides.
-    Unreadable,
-    /// A receipt was read. The set is what it admits, and it may be empty.
-    Read(BTreeSet<String>),
-}
-
 /// Why one smell was admitted, or that it was not.
 ///
-/// **Pointer-only** (rule 4): a verdict word. The clause's prose lives in the
-/// groomed body and never travels into a report.
+/// **Pointer-only** (rule 4): a verdict word. The question and answer live in the
+/// ledger, where a reviewer reads them in the diff that carries them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Admission {
-    /// No trailer names it, or a groom that looked did not.
+    /// No answer on this branch admits it.
     Refused,
-    /// A trailer names it and there is no groom to check it against.
-    TrailerAlone,
-    /// A trailer names it and the groom named it too.
-    Groomed,
+    /// A question naming it was answered with an admitting option, and the line
+    /// recording that was added on this branch (CLOUD-1078).
+    Asked,
 }
 
 impl Admission {
@@ -847,105 +811,25 @@ impl Admission {
     pub fn as_str(self) -> &'static str {
         match self {
             Admission::Refused => "refused",
-            Admission::TrailerAlone => "trailer-alone",
-            Admission::Groomed => "groomed",
+            Admission::Asked => "asked",
         }
     }
 }
 
-/// Read what the groom admitted for `branch`, from the claim receipt store.
+/// Adjudicate each smell against what this branch added to the asked ledger.
 ///
-/// The distinguishing fact is **the receipt's existence**, never whether it
-/// carries a `weakens` line — a receipt is minted whenever a claim is made,
-/// including one that admitted nothing, so an empty set is a real answer.
-#[must_use]
-pub fn groom(receipts: &Path, branch: Option<&str>) -> Groom {
-    let Some(branch) = branch else {
-        // A detached HEAD has no branch to key on, which a rebase produces
-        // routinely. That is could-not-look and not a refusal.
-        return Groom::Unreadable;
-    };
-    let path = receipts.join(crate::claim::receipt_name(branch));
-    let Ok(body) = std::fs::read_to_string(path) else {
-        return Groom::Unreadable;
-    };
-    Groom::Read(
-        body.lines()
-            .filter_map(|line| line.strip_prefix("weakens "))
-            // The issue key is PROVENANCE for a human reading a refusal, not part
-            // of the pair being matched: which story groomed a weakening does not
-            // change whether this one was groomed.
-            .filter_map(|rest| rest.split_once(' ').map(|(_key, pair)| pair.to_owned()))
-            .collect(),
-    )
-}
-
-/// The `Weakens:` pairs this branch's commits declare, over `base..HEAD`.
-///
-/// `base..HEAD` rather than the whole history: a trailer inherited from the trunk
-/// would admit the same weakening on every branch cut afterwards.
-///
-/// Read through git's own trailer parse ([`crate::git::commit_record`]), never a
-/// scan of the message body, so a line quoted mid-message cannot pose as one and
-/// this cannot disagree with what `attribution` reports about the same commit.
-///
-/// # Errors
-///
-/// Returns whatever [`crate::git::commits_in_range`] raises when the range will
-/// not resolve — a base ref this binary cannot read is exit `1`, never "no
-/// trailers".
-pub fn declared(dir: &Path, base: &str) -> Result<BTreeSet<String>> {
-    let mut found = BTreeSet::new();
-    for sha in crate::git::commits_in_range(dir, base, "HEAD")? {
-        let Ok(record) = crate::git::commit_record(dir, &sha) else {
-            // One unreadable commit is not evidence about the others, and the
-            // range resolved — so this is a gap in the scan rather than a
-            // could-not-look about the branch.
-            continue;
-        };
-        for trailer in record.trailers {
-            if let Some(pair) = trailer
-                .strip_prefix(ADMISSION_TRAILER)
-                .and_then(|rest| rest.strip_prefix(": "))
-                .map(str::trim)
-                // An EMPTY trailer declares nothing while reading as a
-                // declaration — `config weakens unnamed`'s class. Dropping it
-                // here means it can never admit anything.
-                .filter(|pair| !pair.is_empty())
-            {
-                found.insert(pair.to_owned());
-            }
-        }
-    }
-    Ok(found)
-}
-
-/// Adjudicate each smell against the two sources.
-///
-/// The pair a clause must name is exactly what a reader already sees in the
+/// The pair a question must name is exactly what a reader already sees in the
 /// pointer line — `<smell-id> <key>` — so there is nothing to look up and no
-/// second spelling to keep in step.
+/// second spelling to keep in step. Each smell stands on its own evidence: one
+/// admitted weakening says nothing about the next.
 #[must_use]
-pub fn admissions(
-    smells: &[Smell],
-    trailers: &BTreeSet<String>,
-    groomed: &Groom,
-) -> Vec<(Smell, Admission)> {
+pub fn admissions(smells: &[Smell], ledger: &crate::asked::Ledger) -> Vec<(Smell, Admission)> {
     smells
         .iter()
         .map(|smell| {
             let pair = format!("{} {}", smell.id, smell.at);
-            let admission = if trailers.contains(&pair) {
-                match groomed {
-                    // CI's half: no receipt to consult, and refusing on its
-                    // absence would fail every branch whose local run already
-                    // proved it.
-                    Groom::Unreadable => Admission::TrailerAlone,
-                    Groom::Read(admitted) if admitted.contains(&pair) => Admission::Groomed,
-                    // THE ONE CLOUD-841 CHANGED. A groom that looked and did not
-                    // name this pair refuses it, whatever the trailer says.
-                    Groom::Read(_) => Admission::Refused,
-                }
+            let admission = if ledger.admitting().iter().any(|entry| entry.admits(&pair)) {
+                Admission::Asked
             } else {
                 Admission::Refused
             };
@@ -981,112 +865,76 @@ mod tests {
         }
     }
 
-    fn pairs(of: &[&str]) -> BTreeSet<String> {
-        of.iter().map(|s| (*s).to_owned()).collect()
+    /// A ledger holding one answer to a question naming `pair`.
+    fn answered(pair: &str, answer: &str) -> crate::asked::Ledger {
+        crate::asked::Ledger::Added(vec![crate::asked::Entry {
+            question: format!("Admit `{pair}`?"),
+            options: vec![
+                crate::asked::Choice {
+                    label: "Admit".to_owned(),
+                    description: "the replacement gate covers it".to_owned(),
+                },
+                crate::asked::Choice {
+                    label: "Refuse".to_owned(),
+                    description: "keep the row".to_owned(),
+                },
+            ],
+            answer: answer.to_owned(),
+            at: 0,
+            head: None,
+        }])
     }
 
     #[test]
-    fn a_groom_that_looked_and_named_nothing_refuses_the_trailer() {
-        // THE CASE THAT IS GREEN TODAY AND MUST GO RED (CLOUD-841). A receipt
-        // that exists and admits nothing is evidence of absence; reading it as
-        // absence of evidence is what let a trailer minted inside the change
-        // that performs the weakening admit it.
+    fn nothing_asked_refuses_whatever_a_commit_says() {
+        // THE #962 SHAPE. A trailer is no longer an input at all, so the only
+        // way to state this case is a branch that asked nothing.
         let found = [smell("waiver-added", "waiver[x]")];
-        let admitted = admissions(
-            &found,
-            &pairs(&["waiver-added waiver[x]"]),
-            &Groom::Read(BTreeSet::new()),
-        );
+        let admitted = admissions(&found, &crate::asked::Ledger::Added(Vec::new()));
         assert_eq!(admitted[0].1, Admission::Refused);
     }
 
     #[test]
-    fn no_receipt_at_all_lets_the_trailer_admit_because_that_is_ci() {
-        // The anti-vacuity mirror for the case above, and the one that keeps the
-        // fix from being "refuse everything": the receipt store lives under
-        // `$GIT_DIR` and never reaches a runner, so refusing on its absence
-        // would fail every CI run over work a local `verify` already proved.
+    fn an_admitting_answer_naming_the_pair_admits_it() {
         let found = [smell("waiver-added", "waiver[x]")];
-        let admitted = admissions(
-            &found,
-            &pairs(&["waiver-added waiver[x]"]),
-            &Groom::Unreadable,
-        );
-        assert_eq!(admitted[0].1, Admission::TrailerAlone);
+        let admitted = admissions(&found, &answered("waiver-added waiver[x]", "Admit"));
+        assert_eq!(admitted[0].1, Admission::Asked);
     }
 
     #[test]
-    fn a_groom_naming_the_pair_admits_it() {
+    fn a_refusing_answer_admits_nothing() {
         let found = [smell("waiver-added", "waiver[x]")];
-        let admitted = admissions(
-            &found,
-            &pairs(&["waiver-added waiver[x]"]),
-            &Groom::Read(pairs(&["waiver-added waiver[x]"])),
-        );
-        assert_eq!(admitted[0].1, Admission::Groomed);
-    }
-
-    #[test]
-    fn a_groom_naming_a_different_pair_refuses_this_one() {
-        // The admission is keyed to the smell AND the key, not to either alone —
-        // otherwise grooming one weakening would licence every other of its kind.
-        let found = [smell("waiver-added", "waiver[x]")];
-        let admitted = admissions(
-            &found,
-            &pairs(&["waiver-added waiver[x]"]),
-            &Groom::Read(pairs(&["waiver-added waiver[y]"])),
-        );
+        let admitted = admissions(&found, &answered("waiver-added waiver[x]", "Refuse"));
         assert_eq!(admitted[0].1, Admission::Refused);
     }
 
     #[test]
-    fn a_groom_alone_admits_nothing_without_a_trailer() {
-        // The other direction of "they AGREE": a groomed clause that no commit
-        // names is a plan, not a declaration, and the trailer is the half that
-        // travels to CI.
+    fn an_answer_is_keyed_to_the_smell_and_the_key_together() {
+        // Answering one weakening must not licence another of its kind.
         let found = [smell("waiver-added", "waiver[x]")];
-        let admitted = admissions(
-            &found,
-            &BTreeSet::new(),
-            &Groom::Read(pairs(&["waiver-added waiver[x]"])),
-        );
+        let admitted = admissions(&found, &answered("waiver-added waiver[y]", "Admit"));
+        assert_eq!(admitted[0].1, Admission::Refused);
+    }
+
+    #[test]
+    fn a_rewritten_ledger_admits_nothing() {
+        let found = [smell("waiver-added", "waiver[x]")];
+        let admitted = admissions(&found, &crate::asked::Ledger::Rewritten);
         assert_eq!(admitted[0].1, Admission::Refused);
     }
 
     #[test]
     fn one_unadmitted_smell_leaves_the_others_admitted() {
         // Each smell is adjudicated on its own evidence; the caller decides the
-        // verdict over the set. Collapsing them here would make one ungroomed
-        // weakening hide which of the others were fine.
+        // verdict over the set. Collapsing them here would make one unasked
+        // weakening hide which of the others were answered.
         let found = [
             smell("waiver-added", "waiver[x]"),
             smell("rule-predicate-changed", "rule[r].tools"),
         ];
-        let admitted = admissions(
-            &found,
-            &pairs(&["waiver-added waiver[x]"]),
-            &Groom::Read(pairs(&["waiver-added waiver[x]"])),
-        );
-        assert_eq!(admitted[0].1, Admission::Groomed);
+        let admitted = admissions(&found, &answered("waiver-added waiver[x]", "Admit"));
+        assert_eq!(admitted[0].1, Admission::Asked);
         assert_eq!(admitted[1].1, Admission::Refused);
-    }
-
-    #[test]
-    fn the_receipts_issue_key_is_provenance_and_not_part_of_the_pair() {
-        let dir = std::env::temp_dir().join("batten-lint-groom");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join(crate::claim::receipt_name("user/x")),
-            "CLOUD-1\nready-lint pass\nweakens CLOUD-1 waiver-added waiver[x]\n",
-        )
-        .unwrap();
-        assert_eq!(
-            groom(&dir, Some("user/x")),
-            Groom::Read(pairs(&["waiver-added waiver[x]"])),
-        );
-        // And the two could-not-look arms, which no receipt content can produce.
-        assert_eq!(groom(&dir, Some("user/absent")), Groom::Unreadable);
-        assert_eq!(groom(&dir, None), Groom::Unreadable);
     }
 
     #[test]

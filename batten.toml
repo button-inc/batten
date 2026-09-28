@@ -94,6 +94,16 @@ must_land_on = "origin/main"
 #   "batten.toml",
 #   ".github/workflows/**",
 # ]
+#
+# THE ONE PATH THAT IS PROTECTED, and it is the condition above being met rather
+# than the set being restored (CLOUD-1078). `.batten/asked.jsonl` is the record of
+# a human's answer to a weakening question, appended by the hook at `PostToolUse`
+# on the host's question tool — nothing adjudicates an author's STATEMENT here,
+# because the author makes none: the host reports what was shown and chosen. A
+# weakening is admitted only by a line in it, so a host write tool that could
+# author one would re-open the self-admission #962 used. The hook's own append is
+# not a mediated call and is unaffected.
+protected = [".batten/asked.jsonl"]
 
 # Programs that only READ their operands, so naming a protected path above is not
 # a mutation (CLOUD-1141).
@@ -179,6 +189,10 @@ mutation = "change it in a pull request — these files are CI's definition of g
 [[redirect]]
 glob = "batten.toml"
 mutation = "change it in a pull request — this file is the policy authority every gate reads, and `mise run config-lint` is what checks the edit before it lands"
+
+[[redirect]]
+glob = ".batten/asked.jsonl"
+mutation = "never write it by hand — it records a human's answers, so put the weakening to them with the host's question tool (options labelled `Admit …` and otherwise, naming the exact `<smell> <key>` pair) and the hook appends their answer; then commit the ledger with the change"
 
 # THE DERIVED CLASS, which had no row and inherited a remedy about MEMORIES
 # (CLOUD-1226).
