@@ -400,6 +400,13 @@ pub(crate) fn task_command(dir: &Path, task: &str) -> std::process::Command {
     )
     .expect("a PATH entry carries no separator");
     command.env("PATH", path);
+    // NO WALL CLOCK IN A TASK BODY'S OUTPUT. `mise.toml` sets `task.timings` so
+    // a human reading a gate sees each step's cost (CLOUD-1891), and a body that
+    // runs a nested `mise run` then prints `Finished in 96.2ms` — which made a
+    // byte-stability case compare two clocks and fail on #1036's macOS leg. The
+    // environment setting outranks the file, and the report is the human's, never
+    // part of the task's output contract.
+    command.env("MISE_TASK_TIMINGS", "0");
     command
 }
 
