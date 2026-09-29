@@ -618,7 +618,8 @@ fn rows_in(lines: &[String], source: &str) -> Vec<std::result::Result<Row, (Stri
 
 /// The sources a gate name resolves to, in the order the predecessor resolved
 /// them: a shell task first, then a module of the same name, then a preset
-/// directory.
+/// directory — and after the engine and inline-task arms, a name that IS a
+/// repo-relative file path.
 ///
 /// The preset arm is CLOUD-1267's addition and it is not decoration: a preset
 /// ships to every consumer and its predicates are the ones a `[[pattern]]` row
@@ -677,7 +678,27 @@ pub fn sources_for(root: &Path, name: &str) -> Vec<String> {
     {
         return vec![manifest];
     }
+    // THE FILE ARM (CLOUD-1991), after every other for the same additive reason: a
+    // predicate evaluated by a tool the engine does not host — a Pkl module beside
+    // the hook config it reads, say — lives in a file no arm above can name. The
+    // gate name IS that file's repo-relative path, so a row declared in it mutates
+    // the predicate itself rather than a caller's spelling of it. A kebab gate name
+    // carries no extension, so no landed name can start resolving here.
+    if is_source_path(name) && root.join(name).is_file() {
+        return vec![name.to_owned()];
+    }
     Vec::new()
+}
+
+/// Whether a gate name is a repo-relative file path the file arm may resolve: it
+/// carries an extension, and every component is a plain name — so it can neither
+/// be absolute nor climb out of the root with `..`.
+fn is_source_path(name: &str) -> bool {
+    let path = Path::new(name);
+    path.extension().is_some()
+        && path
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
 }
 
 /// Resolve one gate name against the tree.
@@ -2086,6 +2107,27 @@ mod tests {
             2,
             "the old and new code line"
         );
+    }
+
+    /// The file arm resolves a path-shaped name to that file and nothing else.
+    ///
+    /// Fails by: dropping the component check, which lets a name climb out of the
+    /// root; or dropping the extension check, which lets a kebab gate name that
+    /// happens to match a root file start resolving somewhere new.
+    #[test]
+    fn a_path_shaped_gate_name_resolves_to_that_file_and_stays_inside_the_root() {
+        assert!(is_source_path("predicate.pkl"));
+        assert!(is_source_path("nested/dir/predicate.pkl"));
+        assert!(!is_source_path("fix-selection"));
+        assert!(!is_source_path("../outside.pkl"));
+        assert!(!is_source_path("/abs/predicate.pkl"));
+        assert!(!is_source_path("nested/../predicate.pkl"));
+        let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        assert_eq!(
+            sources_for(crate_root, "Cargo.toml"),
+            vec![String::from("Cargo.toml")]
+        );
+        assert!(sources_for(crate_root, "absent-file.toml").is_empty());
     }
 
     #[test]

@@ -1203,7 +1203,7 @@ fn on_path(program: &str) -> bool {
 /// check release-plz's semver bump depends on, so leaving it out would assert the
 /// expensive half and not the deciding one. Both are git's own names, which is
 /// what keeps this list generic: every consumer's commit path runs these two.
-const COMMIT_HOOKS: [&str; 2] = ["pre-commit", "commit-msg"];
+pub(crate) const COMMIT_HOOKS: [&str; 2] = ["pre-commit", "commit-msg"];
 
 /// The stable reason id for a commit path that does not run the gate.
 const COMMIT_HOOK_MISSING: &str = "commit-hook-missing";
@@ -1227,7 +1227,7 @@ const COMMIT_HOOK_MISSING: &str = "commit-hook-missing";
 /// `None` is could-not-look and never an empty answer: a directory that is not a
 /// repository has already been reported by [`GIT_REPO`], and manufacturing a
 /// second failure from it would double-count one fault.
-fn hooks_dir(dir: &Path) -> Option<std::path::PathBuf> {
+pub(crate) fn hooks_dir(dir: &Path) -> Option<std::path::PathBuf> {
     if let Ok(Some(configured)) = crate::git::config_value(dir, "core.hooksPath")
         && !configured.trim().is_empty()
     {

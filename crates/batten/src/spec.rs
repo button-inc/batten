@@ -791,6 +791,12 @@ mod tests {
             // stable id stays `hook` — a rename moves the spelling, never the
             // identity.
             "adjudicate".to_owned(),
+            // The committed derivations' writer (CLOUD-1991), retiring the
+            // redirects four task bodies carried in shell. Absent from the
+            // read-only allowlist by construction: the leaf is `write` and the
+            // noun is unclassified, so `generate` stays the one read emitter.
+            "artifacts".to_owned(),
+            "artifacts write".to_owned(),
             "attribution".to_owned(),
             "attribution check".to_owned(),
             "attribution identity".to_owned(),
@@ -952,6 +958,10 @@ mod tests {
             // it inherits the widest effect of the steps it sequences.
             "land fast-forward".to_owned(),
             "land lap".to_owned(),
+            // CLOUD-1991: the `linear-check` task body's question, through the
+            // fetch the lap already makes. `write` for that fetch, and so absent
+            // from the read-only allowlist.
+            "land linear".to_owned(),
             "land push".to_owned(),
             "land replay".to_owned(),
             "land verify".to_owned(),
@@ -1139,7 +1149,8 @@ mod tests {
             // CLOUD-1717's READING door, and the write band is where it belongs:
             // it applies a reading the engine owns and WRITES the result, so it
             // is absent from the read-only allowlist above for `record named`'s
-            // reason. The spawn its input comes from stays in the task.
+            // reason. The spawn its input comes from stays in the task, except the
+            // `cargo metadata` a graph family may `resolve` itself (CLOUD-1991).
             "record derive".to_owned(),
             // The land-divergence producer (CLOUD-843), a forge-window write.
             "record divergence".to_owned(),
@@ -1204,6 +1215,9 @@ mod tests {
             "show agent".to_owned(),
             "singleton".to_owned(),
             "singleton acquire".to_owned(),
+            // The per-turn background run (CLOUD-1991, retiring `cross-turn`):
+            // unclassified, since it runs the command it is handed.
+            "singleton detach".to_owned(),
             "singleton release".to_owned(),
             "spec".to_owned(),
             // The container's declared preconditions (CLOUD-1324) — §9's
@@ -1267,6 +1281,11 @@ mod tests {
             // `Destructive` because its subject is a file shared by every
             // checkout on the box.
             "wiring".to_owned(),
+            // The clone's own commit hooks, linked to a checked-in body
+            // (CLOUD-1991, retiring `[tasks."session:git-hooks"]`). `write`, not
+            // `destructive`: its subject is this clone's hooks directory, which
+            // the repository's `[[startup]]` row already authorises it to repair.
+            "wiring gate".to_owned(),
             "wiring reclaim".to_owned(),
             "worktree".to_owned(),
             "worktree status".to_owned(),

@@ -744,6 +744,9 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // which is the honest could-not-look and not a verb that emitted nothing
     // because it had nothing to emit.
     "land lap",
+    // `land linear` (CLOUD-1991) resolves the same remote before its fetch, so
+    // on a corpus naming none it stops at that preamble with the same answer.
+    "land linear",
     // THE FIVE PORTS WHOSE SUBJECT IS OUTSIDE THE CORPUS (CLOUD-1716,
     // CLOUD-1753), each here on the bar the paragraph above states: no lighter
     // fixture produces a verdict, and the reason is the corpus rather than the
@@ -938,6 +941,13 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "land lap",
         args: &["refs/heads/main"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `land linear` reports a tracking ref and a sha, or a refusal naming them.
+    Verb {
+        path: "land linear",
+        args: &["main"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
@@ -1800,6 +1810,16 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The derivations' writer (CLOUD-1991). Driven with `--schema` alone, into a
+    // directory of the corpus's own: the verb writes files and says where, one
+    // `<kind>=<path>` line, and reads nothing of the caller's tree to do it — the
+    // schemas are derived from the config TYPES, as `generate schema`'s row says.
+    Verb {
+        path: "artifacts write",
+        args: &["--schema", "artifacts-out"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // CLOUD-1718's fold, and the EASIEST row in this census to justify: the verb
     // emits nothing at all. Its whole answer is the exit code, so there is no
     // content it could republish and no subject it could echo — two integers on
@@ -1826,6 +1846,16 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "wiring reclaim",
         args: &["-n"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // The clone's commit hooks (CLOUD-1991). Driven with a body the corpus does
+    // not carry, which is the invocation that writes nothing: linking one would
+    // rewrite the fixture's own hooks. The refusal names the caller's operand
+    // and nothing read from the tree.
+    Verb {
+        path: "wiring gate",
+        args: &["no-such-hook-body"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
@@ -2288,6 +2318,25 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "singleton release",
         args: &["land"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // The per-turn background run (CLOUD-1991). Driven with a pattern no row
+    // declares, which refuses before anything is announced or started — a
+    // corpus run must not leave a detached copy behind.
+    Verb {
+        path: "singleton detach",
+        args: &[
+            "census-detach",
+            "--marker",
+            "detach.marker",
+            "--log",
+            "detach.log",
+            "--pattern",
+            "no-such-pattern-row",
+            "--",
+            "true",
+        ],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },

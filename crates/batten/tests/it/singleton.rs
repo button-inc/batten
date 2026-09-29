@@ -369,9 +369,10 @@ fn the_lock_is_a_directory_rather_than_a_flock_file() {
 // **THE CALL SITES ARE UNTOUCHED, and that is this retirement's whole reach.**
 // `mise-tasks/land.sh` calls `mise run singleton acquire|release` by TASK NAME
 // rather than by path, so keeping the mise task name means `land.sh` and
-// `tests/land.bats` are not edited at all. The wrapper translates the engine's
-// `2`/`3` back to the shell's `1`/`2`, so a caller branching on the code reads
-// the same answers it always did.
+// `tests/land.bats` are not edited at all. The wrapper translated the engine's
+// `2`/`3` back to the shell's `1`/`2` for as long as `land.sh` branched on them;
+// that caller retired onto `batten land lap`, and CLOUD-1991 retired the
+// translation with it, so the task name now answers on the engine's own table.
 //
 // **THE SUCCESSOR IS `task.rs` RATHER THAN A MODULE OF ITS OWN**, and the reason
 // is the retiring program's own text: it read the task registry by hand to name
@@ -400,7 +401,7 @@ fn the_lock_is_a_directory_rather_than_a_flock_file() {
 // changed: "the lock is taken with mkdir, not flock — util-linux is absent on macOS" crates/batten/tests/it/singleton.rs the shell could only scan its own text for `mkdir`, because a bats suite cannot see inside its subject any other way. `the_lock_is_a_directory_rather_than_a_flock_file` asserts the property a second caller actually contends on — what the acquire LEAVES is a directory — which a source scan can only approximate and which survives the implementation being rewritten
 // changed: "singleton.bats::an unknown verb is exit 2, never a silent success" crates/batten/tests/it/singleton.rs exit 1: an unknown subcommand is a statement about the invocation. Carried into `a_missing_argument_is_usage_and_takes_no_lock`, which asserts the code over the unknown verb and over both missing positionals at once, because they are one class and the shell had spelled them as two
 // changed: "acquire without a pid is exit 2, and takes no lock" crates/batten/tests/it/singleton.rs exit 1, same class and same case; the "takes no lock" half is carried unchanged as an assertion that the state directory was never created
-// changed: "outside a git repository it exits 2 — could not look is not 'nothing is running'" crates/batten/tests/it/singleton.rs exit 3: could-not-look is `Internal` in the one contract, and `2` here already means "somebody holds it". The PREDICATE — that could-not-look is never read as free — is carried whole, and the wrapper maps it back to `2` so `land.sh` sees what it always saw
+// changed: "outside a git repository it exits 2 — could not look is not 'nothing is running'" crates/batten/tests/it/singleton.rs exit 3: could-not-look is `Internal` in the one contract, and `2` here already means "somebody holds it". The PREDICATE — that could-not-look is never read as free — is carried whole. The wrapper mapped it back to `2` while `land.sh` read it; CLOUD-1991 retired that translation with its last caller
 //
 // WITHDRAWN — one case the port cannot express, and it is the environment's.
 //

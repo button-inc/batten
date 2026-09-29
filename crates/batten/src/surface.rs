@@ -1424,6 +1424,58 @@ const SINGLETON_TASK: FlagDecl = FlagDecl::positional(
     "The task's name, which is what the lock is keyed by",
 );
 
+/// `--marker <path>` on `singleton detach`: where a failed run's pointers wait.
+const DETACH_MARKER: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued(
+        "marker",
+        "marker",
+        "Where a failed run's pointers wait, announced and cleared by the next invocation",
+    )
+};
+
+/// `--log <path>` on `singleton detach`: where the run's whole output goes.
+const DETACH_LOG: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued(
+        "log",
+        "log",
+        "Where the background run's whole output is written",
+    )
+};
+
+/// `--pattern <id>` on `singleton detach`: which output lines are pointers.
+///
+/// A `[[pattern]]` ID rather than a regex on argv: what a failure line looks
+/// like is the consumer's fact, declared once in its authority.
+const DETACH_PATTERN: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued(
+        "pattern",
+        "pattern",
+        "The `[[pattern]]` row whose matching output lines are the failure's pointers",
+    )
+};
+
+/// `--attached` on `singleton detach`: this invocation is the background copy.
+///
+/// HIDDEN, because no caller types it: the announcing invocation starts the
+/// copy with it, and it is the copy's whole difference.
+const DETACH_ATTACHED: FlagDecl = FlagDecl {
+    hidden: true,
+    ..FlagDecl::switch(
+        "attached",
+        "attached",
+        "Run as the background copy: take the lock, run the command, record a failure",
+    )
+};
+
+/// The command `singleton detach` runs in the background, after `--`.
+const DETACH_COMMAND: FlagDecl = FlagDecl::trailing(
+    "command",
+    "The command to run in the background, after `--`",
+);
+
 /// `--recheck-ms <n>` on `singleton acquire`: the pause between the two
 /// sightings a reclaim requires.
 ///
@@ -1467,6 +1519,27 @@ const TASK_PROGRAM_ROOT: FlagDecl = FlagDecl {
     global: false,
     positional: false,
     required: true,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `record tool --pick <name>=<token>` (CLOUD-1991): reduce `key=value`
+/// measurement lines to `<name> <token>` in the writer.
+///
+/// ONE VALUE CARRYING BOTH KEYS rather than two flags, because the pair is one
+/// decision — which field names a line and which one scores it — and two flags
+/// could be half-given. Optional: absent, stdin is already record lines, which
+/// is every caller this leaf had before it.
+const TOOL_PICK: FlagDecl = FlagDecl {
+    id: "pick",
+    long: Some("pick"),
+    short: None,
+    help: "Reduce `key=value` lines: `<name-key>=<token-key>` names the field that labels a record line and the one that scores it",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
     hidden: false,
     rung: Rung::None,
     value: ValueDecl::Str,
@@ -2079,6 +2152,27 @@ const SLOW_BASE: FlagDecl = FlagDecl {
     global: false,
     positional: false,
     required: true,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--head <rev>` on `ci slow-needed` (CLOUD-1991).
+///
+/// The diff is always taken against the CHECKOUT, which in a `pull_request` job
+/// is the merge commit and elsewhere is `HEAD`. A caller naming a head asserts
+/// the two carry one tree, and a head that does not is refused as a usage error
+/// rather than silently answered about the checkout instead. This was the retired
+/// task body's shell guard; it is the verb's own argument now.
+const SLOW_HEAD: FlagDecl = FlagDecl {
+    id: "head",
+    long: Some("head"),
+    short: None,
+    help: "The revision whose tree the checkout must carry; refused when it does not",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
     hidden: false,
     rung: Rung::None,
     value: ValueDecl::Str,
@@ -3149,6 +3243,8 @@ pub const SURFACE: &[CommandDecl] = &[
             LOCK_PATH,
             LOCK_ATTEMPTS,
             LOCK_LABEL,
+            EXEC_TRACKED,
+            EXEC_EXCEPT,
             FlagDecl::defaulted_enum(
                 "format",
                 "format",
@@ -3464,7 +3560,7 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_VERDICT,
         effect: Effect::Read,
-        flags: &[SLOW_BASE],
+        flags: &[SLOW_BASE, SLOW_HEAD],
     },
     // WHICH suites a diff can move (CLOUD-886), ported out of
     // `mise-tasks/suite-select.sh` under CLOUD-1716.
@@ -4062,7 +4158,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Measure this binary's invocation cost on every path and print one record per path",
         // **NO DATA CHANNEL**, for `ci suites`' reason and stated in this row's
         // own `about`: it prints ONE RECORD PER PATH — `path=… p50=… p95=…
-        // mean=… runs=…` — which `batten record tool perf-p95` parses. That line
+        // mean=… runs=…` — which `batten record tool perf-p95 --pick path=p95` reduces. That line
         // format IS the contract with the frozen caller, so a JSON rendering
         // would be a second output nothing reads, and declaring a channel the
         // verb does not implement is what the two `cli` surface cases caught.
@@ -4854,6 +4950,30 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[SINGLETON_TASK],
+    },
+    // A BACKGROUND RUN UNDER THE TASK'S LOCK (CLOUD-1731's per-turn check,
+    // retiring `[tasks.cross-turn]` under CLOUD-1991). `unclassified`, for
+    // `exec`'s reason: it runs the command it is handed, so its reach is that
+    // command's. It announces the previous run's failure on stdout — the handler
+    // contract's advisory channel — clears it, starts an attached copy and
+    // returns, so a turn never waits on the command. The attached copy takes the
+    // lock for its own pid: a second copy is refused by the lock, never by a
+    // process probe, and a turn whose copy is still running starts none.
+    CommandDecl {
+        path: "singleton detach",
+        id: "singleton.detach",
+        about: "Run a command in the background under a task's lock, and report the previous run's failure",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Unclassified,
+        flags: &[
+            SINGLETON_TASK,
+            DETACH_MARKER,
+            DETACH_LOG,
+            DETACH_PATTERN,
+            DETACH_ATTACHED,
+            DETACH_COMMAND,
+        ],
     },
     // The `claim` noun (CLOUD-1121), ported off `mise-tasks/claim-check.sh` on the
     // same terms.
@@ -5730,10 +5850,13 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Write,
-        flags: &[FlagDecl::positional(
-            "id",
-            "The `[[rule.tools]]` id whose verdict is being recorded",
-        )],
+        flags: &[
+            FlagDecl::positional(
+                "id",
+                "The `[[rule.tools]]` id whose verdict is being recorded",
+            ),
+            TOOL_PICK,
+        ],
     },
     // The sibling half, and what keeps this noun from being the thirteenth singleton
     // CLOUD-1184 counts. The two stores differ in their KEY and in nothing else
@@ -5981,6 +6104,29 @@ pub const SURFACE: &[CommandDecl] = &[
         // must not learn that a destructive verb is sometimes safe.
         effect: Effect::Destructive,
         flags: &[DRY_RUN, CHECK],
+    },
+    // THE CLONE'S OWN COMMIT HOOKS (CLOUD-476), retiring the `mkdir -p` and two
+    // `ln -sfn` that were `[tasks."session:git-hooks"]` (CLOUD-1991). Under
+    // `wiring` because it is the same act one surface over — pointing a runner's
+    // hook registration at what should run — and `doctor gate` is its diagnosis,
+    // as `doctor hooks` is `reclaim`'s.
+    //
+    // `write`, not `destructive`: the subject is this clone's hooks directory,
+    // not a file shared by every checkout on the box, and what it replaces is
+    // the link it would write — a committed `[[startup]]` row names it as that
+    // directory's repair, which is the authorisation `reclaim` has to ask `-y`
+    // for. The body is an OPERAND: which file is the gate is the consumer's fact.
+    CommandDecl {
+        path: "wiring gate",
+        id: "wiring.gate",
+        about: "Link this clone's two commit hooks to a hook body the repository checks in",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[FlagDecl::positional(
+            "body",
+            "The hook body to link, relative to the repository root",
+        )],
     },
     // CLOUD-1274. THE LANDING LEASE, and the noun is `unclassified` for
     // `provision`'s reason rather than `policy`'s: the subtree writes — a
@@ -6332,6 +6478,19 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_VERDICT,
         flags: &[LAND_REFERENCE],
     },
+    // `write`, for `land replay`'s first half: it fetches the reference into the
+    // odb and moves its remote-tracking ref, which is the lap's own fetch reused
+    // so the trunk has one reading. The ANSWER is a verdict — `2` for a head that
+    // is not built on the current tip — and it leaves no record (CLOUD-1991).
+    CommandDecl {
+        path: "land linear",
+        id: "land.linear",
+        about: "Whether this head is built on the reference's current tip, so it can fast-forward",
+        data_channel: false,
+        effect: Effect::Write,
+        exits: EXITS_VERDICT,
+        flags: &[LAND_REFERENCE],
+    },
     // --- CLOUD-843's foundation surface (the bash retirement) -----------------
     //
     // Every row below carries its FINAL arguments and its §5 effect. A row whose
@@ -6574,7 +6733,137 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[JSON],
     },
+    // The committed derivations' WRITER (CLOUD-1991), retiring the redirects the
+    // `completions`, `man`, `schema` and `render:cli` task bodies carried in
+    // shell. UNCLASSIFIED noun for `hk`'s reason: it dispatches, and a noun on the
+    // read-only allowlist would carry its writer with it for any consumer that
+    // reads an entry as a prefix.
+    CommandDecl {
+        path: "artifacts",
+        id: "artifacts",
+        about: "Write the committed derivations of the command surface",
+        data_channel: false,
+        exits: EXITS_DISPATCHES,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // `write`, declared rather than smuggled into `generate`: `generate` stays
+    // stdout-only, and this writes the same bytes it emits into the paths the
+    // caller names. The pointer is one `<kind>=<path>` line per derivation.
+    CommandDecl {
+        path: "artifacts write",
+        id: "artifacts.write",
+        about: "Write completions, man pages, schemas or the CLI reference where the caller names",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[
+            ARTIFACT_COMPLETIONS,
+            ARTIFACT_MAN,
+            ARTIFACT_SCHEMA,
+            ARTIFACT_REFERENCE,
+        ],
+    },
 ];
+
+/// `--tracked <pathspec>` on `exec` (CLOUD-1991): append every TRACKED path the
+/// pathspec selects to the child's argv, and run nothing when none is selected.
+///
+/// The shell spelling it retires is `git ls-files -z <spec> | xargs -0 -r
+/// <tool>`, carried by five lint and format task bodies so a formatter never
+/// reaches a deliberately corrupt fixture a suite wrote under an ignored
+/// directory. REPEATABLE, for [`ValueDecl::StrMany`]'s reason: a second spec
+/// widens the selection rather than silently replacing the first.
+const EXEC_TRACKED: FlagDecl = FlagDecl {
+    id: "tracked",
+    long: Some("tracked"),
+    short: None,
+    help: "Append the tracked paths this pathspec selects to the command; run nothing if none",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::StrMany,
+};
+
+/// `--except <glob>` on `exec` (CLOUD-1991): drop the `--tracked` paths a glob
+/// matches — the `:!:` exclusions a magic pathspec would carry, which `--tracked`
+/// refuses rather than reading as a literal.
+const EXEC_EXCEPT: FlagDecl = FlagDecl {
+    id: "except",
+    long: Some("except"),
+    short: None,
+    help: "Drop the tracked paths this glob matches from what --tracked selected",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::StrMany,
+};
+
+/// `--completions <dir>` on `artifacts write` (CLOUD-1991).
+const ARTIFACT_COMPLETIONS: FlagDecl = FlagDecl {
+    id: "completions",
+    long: Some("completions"),
+    short: None,
+    help: "Write the bash, zsh and fish completion scripts into this directory",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--man <dir>` on `artifacts write` (CLOUD-1991).
+const ARTIFACT_MAN: FlagDecl = FlagDecl {
+    id: "man",
+    long: Some("man"),
+    short: None,
+    help: "Write one man page per command into this directory, removing stale pages",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--schema <dir>` on `artifacts write` (CLOUD-1991).
+const ARTIFACT_SCHEMA: FlagDecl = FlagDecl {
+    id: "schema",
+    long: Some("schema"),
+    short: None,
+    help: "Write the config and policy-input JSON Schemas into this directory",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--reference <path>` on `artifacts write` (CLOUD-1991).
+const ARTIFACT_REFERENCE: FlagDecl = FlagDecl {
+    id: "reference",
+    long: Some("reference"),
+    short: None,
+    help: "Write the markdown CLI reference to this file",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
 
 /// The declared command path `arguments` names, and how many of them it spends.
 ///

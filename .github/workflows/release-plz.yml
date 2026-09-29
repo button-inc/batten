@@ -645,10 +645,11 @@ jobs:
       # releases from `v0.0.78` to `v0.0.110`.
       #
       # AFTER `release-pr`, NOT BEFORE IT, and that is load-bearing rather than
-      # arbitrary: `[tasks.release-pr]` picks its `--registry-manifest-path`
-      # baseline with `git describe --tags --abbrev=0`, so fetching earlier would
-      # silently move that baseline from the previous tag to the one just pushed.
-      # That is a different change and does not belong in this one.
+      # arbitrary: `release-pr` takes its baseline from the latest release tag
+      # this checkout carries (`release-plz.toml`'s `git_only`, CLOUD-1991), so
+      # fetching earlier would silently move that baseline from the previous tag
+      # to the one just pushed. That is a different change and does not belong
+      # in this one.
       #
       # No `shell:` key, so the default `bash -e {0}` applies and a failed fetch
       # FAILS the step. That is the point: the alternative is a resolver guessing

@@ -10,9 +10,12 @@
 //!
 //! **Both renderers return a `String` and write nothing.** That is what keeps
 //! `generate` an [`Effect::Read`](crate::effect::Effect::Read) verb (§5,
-//! CLOUD-244): the redirect that refreshes a committed artifact belongs to the
-//! caller (`mise run man`), never to the binary. A renderer that took a path
-//! would make `read` a promise about behaviour instead of a structural fact.
+//! CLOUD-244): the write that refreshes a committed artifact never happens
+//! inside `generate`. A renderer that took a path would make `read` a promise
+//! about behaviour instead of a structural fact. Since CLOUD-1991 that write is
+//! `artifacts write`, a separate verb declared `write`, which calls these same
+//! renderers and hands their strings to `durable` — the redirect a shell task
+//! body used to carry, moved to a verb whose effect says so.
 //!
 //! Output is byte-stable (§6). The markdown walks [`crate::spec::CommandSpec`],
 //! whose flags and subcommands are already sorted for exactly this reason, and

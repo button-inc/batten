@@ -334,7 +334,7 @@ impl std::fmt::Display for Record {
 impl Record {
     /// The record line WITHOUT the `arm=` field, which is `perf`'s own shape.
     ///
-    /// **The reader is `record tool perf-p95`, and it is a contract.** An
+    /// **The reader is `record tool perf-p95 --pick path=p95`, and it is a contract.** An
     /// absolute measurement has one arm, so an `arm=` field on it would name a
     /// distinction that does not exist — and `perf-assert` budgets by `path`.
     /// Same units, same rounding and the same field order as the paired form, so

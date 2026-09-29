@@ -34,6 +34,10 @@ local gate = new Mapping<String, Step> {
   // `amends` URL. Fires on any change to either file — which includes every
   // hk version bump, the moment to re-check this config (see AGENTS.md).
   ["hk-version"] {
+    // `slow` tier since CLOUD-1991: the task is `batten check` over a module
+    // now, so it builds the engine and a commit would pay a compile
+    // (CLOUD-1397). It runs at `verify` and in CI, before merge.
+    profiles = List("slow")
     glob = List("hk.pkl", "mise.toml")
     check = "mise run hk-version"
   }
@@ -63,6 +67,10 @@ local gate = new Mapping<String, Step> {
     check = "cargo run --quiet -p batten -- check --rule 'bound guard missing'"
   }
   ["no-docs-tree"] {
+    // `slow` tier since CLOUD-1991: the task is `batten check` over a module
+    // now, so it builds the engine and a commit would pay a compile
+    // (CLOUD-1397). It runs at `verify` and in CI, before merge.
+    profiles = List("slow")
     check = "mise run no-docs-tree"
   }
   // The shipping half of CLOUD-1847's break-glass. `.batten-ripcord` admits the
@@ -75,6 +83,10 @@ local gate = new Mapping<String, Step> {
   // index, and a glob would let a tracked sentinel persist unreported for every
   // commit that did not touch it.
   ["no-armed-ripcord"] {
+    // `slow` tier since CLOUD-1991: the task is `batten check` over a module
+    // now, so it builds the engine and a commit would pay a compile
+    // (CLOUD-1397). It runs at `verify` and in CI, before merge.
+    profiles = List("slow")
     check = "mise run no-armed-ripcord"
   }
   ["hook-profile-check"] {
@@ -454,13 +466,15 @@ local gate = new Mapping<String, Step> {
   // `cargo metadata`, so the producer resolves the graph and the engine
   // adjudicates what it recorded. The step name and the rule id are one object,
   // which is why the second command names the rule rather than running a bare
-  // `batten check` under a name that promises the link gate.
+  // `batten check` under a name that promises the link gate. The pair is the
+  // `macos-link-check` task since CLOUD-1991, whose `depends` orders them — this
+  // step's `&&` was the last shell line in this file.
   ["macos-link-check"] {
     // `slow` tier: it builds the engine, so a commit would pay a compile
     // (CLOUD-1397). It runs at `verify` and in CI, before merge.
     profiles = List("slow")
     glob = List("Cargo.toml", "Cargo.lock", "crates/**/Cargo.toml")
-    check = "mise run macos-link-record && mise run batten -- check --rule 'workspace carry unsafe'"
+    check = "mise run macos-link-check"
   }
 
   // The SBOM's NTIA conformance (CLOUD-580). Two `command` rows in batten.toml ran
@@ -546,9 +560,12 @@ local gate = new Mapping<String, Step> {
     //
     // `{{files}}` IS DROPPED DELIBERATELY. The declared row names `hk.pkl`, and a
     // record is keyed to the digest of the input its row names — so a producer
-    // handed some other path has no key to write under. `hk.pkl` is the only
-    // tracked `.pkl`, so today the two selections are the same set; a second one
-    // would owe a second `[[rule.tools]]` row rather than an argument here.
+    // handed some other path has no key to write under. `hk.pkl` was the only
+    // tracked `.pkl` when this was written; `hk-fix-selection.pkl` (CLOUD-1991)
+    // is the second, and it needs no row here because `gate fix missing`
+    // EVALUATES it — a module that will not evaluate fails that row. A third
+    // that nothing evaluates would owe a `[[rule.tools]]` row rather than an
+    // argument here.
     check = "mise run record-verdicts"
   }
   ["pkl-format"] = (Builtins.pkl_format) {
@@ -608,6 +625,11 @@ local gate = new Mapping<String, Step> {
   // promised was the one `mise run fmt` could not perform. It routes through the
   // task for the same single-definition reason the check does.
   ["deno-fmt"] {
+    // `slow` tier since CLOUD-1991: the task selects its files through
+    // `batten exec --tracked`, which a PATH release does not carry yet, so it
+    // builds the engine and a commit would pay a compile (CLOUD-1397). It runs
+    // at `verify` and in CI, before merge.
+    profiles = List("slow")
     glob = List("**/*.json", "**/*.jsonc", "**/*.yaml", "**/*.yml")
     check = "mise run lint:deno"
     fix = "mise run fmt:deno"
@@ -626,6 +648,11 @@ local gate = new Mapping<String, Step> {
   // than taking `{{files}}`, because the check must never reach a deliberately
   // malformed fixture a suite writes under `target/`.
   ["rego"] {
+    // `slow` tier since CLOUD-1991: the task selects its files through
+    // `batten exec --tracked`, which a PATH release does not carry yet, so it
+    // builds the engine and a commit would pay a compile (CLOUD-1397). It runs
+    // at `verify` and in CI, before merge.
+    profiles = List("slow")
     glob = List("**/*.rego")
     check = "mise run lint:rego"
     fix = "mise run fmt:rego"
@@ -924,16 +951,22 @@ local fixers = new Mapping<String, Step> {
   ["cargo-fmt"] = gate["cargo-fmt"]
 }
 
-// The steps above marked `profiles = List("slow")` are the nine that dominate
-// the gate: 111.1s total, 100.3s of it `test:bats` at nproc=4. Counted from the
-// mapping rather than recalled — `coderabbit-config-check`, `hk-contract-check`,
-// `token-bench-check`, `sbom-check`, `test:bats`, `cargo-clippy`, `test`,
-// `batten-check`, `policy-test`. It said "six" from the tier's first shape and
-// three steps joined it afterwards without the count following, which is the
-// same drift `suite-bench-check` exists to keep out of the bats table: a number
-// in prose has no gate behind it and ages silently. They are not cheaper
-// than they look and they are not optional — they simply do not belong on the
-// path a developer pays on every `git commit`, because `hk check --all` (which
+// The steps above marked `profiles = List("slow")` are the ones that build the
+// engine or scan the whole tree: 111.1s total when the tier was cut, 100.3s of
+// it `test:bats` at nproc=4. THE MAPPING IS THE LIST, AND THIS COMMENT CARRIES
+// NO COUNT. It said "six" from the tier's first shape, then "nine", and every
+// step that joined afterwards left the number behind — the same drift
+// `suite-bench-check` exists to keep out of the bats table: a number in prose
+// has no gate behind it and ages silently. CLOUD-1991 moved five CHEAP checks
+// into the tier, not because they are slow but because their tasks now reach
+// the engine — `hk-version`, `no-docs-tree` and `no-armed-ripcord` are `batten
+// check` over a module, `deno-fmt` and `rego` select through `batten exec
+// --tracked`. That is a real loss at pre-commit, not a reclassification: a
+// commit no longer checks the pin agreement, the docs tree, the ripcord, JSON
+// and YAML formatting or rego lint, and learns of them at `verify`.
+//
+// None of the tier is optional — its steps simply do not belong on the path a
+// developer pays on every `git commit`, because `hk check --all` (which
 // `mise run ci`, and therefore `verify` and CI, drive over this same mapping)
 // runs them regardless of glob, and `ready-guard` refuses to ready a PR with no
 // `verify` receipt for that exact HEAD. The split moves WHEN the cost is paid,
@@ -948,7 +981,7 @@ local fixers = new Mapping<String, Step> {
 //     `hk` a human types — is slow-enabled by default, including one added in
 //     future by someone who never reads this comment;
 //   * `.claude/hooks/git-hook.sh` passes `--profile '!slow'`, whose CLI value wholly
-//     supplants this list for that one process, so the six skip at pre-commit.
+//     supplants this list for that one process, so the tier skips at pre-commit.
 //
 // Inverted — steps opting IN and the call sites enabling — a forgotten flag on
 // any new hk call site would silently drop clippy, the test suite and

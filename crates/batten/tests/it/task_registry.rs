@@ -891,7 +891,7 @@ fn outside_a_repository_a_write_is_could_not_look_rather_than_a_silent_success()
 //
 // CHANGED — one exit code, deliberately.
 //
-// changed: "an unreadable registry directory is exit 2" crates/batten/tests/it/task_registry.rs the exit code is 3, not 2: could-not-look is `Internal` in the one contract and `2` is the policy verdict everywhere, with no per-verb exception. The `mise.toml` wrapper translates it back so the retiring program's callers see what they always saw, which is where a consumer's compatibility with its own history belongs. The PREDICATE is carried unchanged, in `a_registry_that_cannot_be_read_is_could_not_look_and_never_nothing_runs` — and over a registry that is present but not a directory, which is also the only way to drive the branch as root
+// changed: "an unreadable registry directory is exit 2" crates/batten/tests/it/task_registry.rs the exit code is 3, not 2: could-not-look is `Internal` in the one contract and `2` is the policy verdict everywhere, with no per-verb exception. The `mise.toml` wrapper translated it back while the retiring program's callers read it; CLOUD-1991 retired the translation once `land-lock.sh` and `step-receipt` were gone. The PREDICATE is carried unchanged, in `a_registry_that_cannot_be_read_is_could_not_look_and_never_nothing_runs` — and over a registry that is present but not a directory, which is also the only way to drive the branch as root
 
 // --- `task-registry`, retired onto the six writer verbs (CLOUD-843/CLOUD-425)-
 //
@@ -900,9 +900,9 @@ fn outside_a_repository_a_write_is_could_not_look_rather_than_a_silent_success()
 // the arms below is `batten task`, so each spend's derived span is exactly
 // `"$reg"` and `shell retire partial`'s `repoints_at_the_declared_invocation` admits
 // the substitution. `mise.toml`'s `task-registry` task is the same repointing at
-// the other end — one line, translating the engine's `2`/`3` back to the shell's
-// `1`/`2` so a caller written against the retiring program's codes still reads
-// the same answers.
+// the other end — one line. It translated the engine's `2`/`3` back to the
+// shell's `1`/`2` until CLOUD-1991, when the last caller written against the
+// retiring program's codes was gone and the translation retired with it.
 //
 // **THE USAGE CODE MOVED, and it is the one break the wrapper does not hide.**
 // The shell spelled every bad invocation `2`; the one contract spells it `1`.
@@ -929,7 +929,7 @@ fn outside_a_repository_a_write_is_could_not_look_rather_than_a_silent_success()
 // CHANGED — the atomic-write case, and every exit code the one contract respells.
 //
 // changed: "an entry is never observed half-written" crates/batten/tests/it/task_registry.rs the shell could only scan its own text for a redirect onto the live path, because a bats suite cannot see inside its subject any other way. `a_write_leaves_no_temporary_file_beside_the_record` asserts the same rewrite-and-rename property where a CONSUMER can observe it — the directory a write left behind holds the record and nothing else — and `write_entry`'s own unit tier pins the failure path
-// changed: "read prints one field, and says nothing about a pid that never registered" crates/batten/tests/it/task_registry.rs the no-such-record code is 2, not 1: a record that is not there is the policy verdict, and `1` is `Usage`. The predicate is carried whole in `read_prints_one_field_and_a_pid_that_never_registered_is_a_reading`, including the silence, and the `mise.toml` wrapper maps it back to `1` so `land-lock.sh`'s three spends read "no verdict" exactly as they did
+// changed: "read prints one field, and says nothing about a pid that never registered" crates/batten/tests/it/task_registry.rs the no-such-record code is 2, not 1: a record that is not there is the policy verdict, and `1` is `Usage`. The predicate is carried whole in `read_prints_one_field_and_a_pid_that_never_registered_is_a_reading`, including the silence, and the `mise.toml` wrapper mapped it back to `1` for `land-lock.sh`'s three spends until CLOUD-1991 retired it with them
 // changed: "task-registry.bats::an unknown verb is exit 2, never a silent success" crates/batten/tests/it/task_registry.rs exit 1: an unknown subcommand is a statement about the invocation. Carried into `a_missing_positional_is_usage_and_leaves_no_partial_record`, which asserts the code over the unknown verb and over all four missing positionals at once, because they are one class and the shell had spelled them as four
 // changed: "register without a pid is exit 2, never a partial record" crates/batten/tests/it/task_registry.rs exit 1, same class and same case; the "no partial record" half is carried unchanged as an assertion that the registry directory was never created
 // changed: "phase without a phase word is exit 2" crates/batten/tests/it/task_registry.rs exit 1, same class and same case

@@ -470,6 +470,40 @@ pub enum Command {
         /// The sub-verb selected.
         command: CensusCommand,
     },
+    /// Write the committed derivations of the command surface (CLOUD-1991).
+    ///
+    /// APPENDED LAST, for the reason above.
+    Artifacts {
+        /// The sub-verb selected.
+        command: ArtifactsCommand,
+    },
+}
+
+/// Subcommands of `artifacts` (CLOUD-1991).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ArtifactsCommand {
+    /// Write each derivation the caller names, into the path it names.
+    Write(ArtifactsWrite),
+}
+
+/// Where `artifacts write` puts each derivation.
+///
+/// Every field is optional and `None` writes none of that kind; a request naming
+/// none is a usage error rather than a quiet success. The PATHS are the caller's,
+/// never the engine's: where a consumer commits its completions, pages and
+/// schemas is that consumer's fact (non-negotiable rule 1).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct ArtifactsWrite {
+    /// The directory the three completion scripts are written into.
+    pub completions: Option<String>,
+    /// The directory the man pages are written into, cleared of stale pages.
+    pub man: Option<String>,
+    /// The directory the four JSON Schemas are written into.
+    pub schema: Option<String>,
+    /// The file the markdown CLI reference is written to.
+    pub reference: Option<String>,
 }
 
 /// Subcommands of `step` (CLOUD-424, CLOUD-843).
@@ -605,10 +639,11 @@ pub enum HkCommand {
 
 /// Subcommands of `singleton`.
 ///
-/// Two verbs and no `hold`: this process cannot hold anything, because it exits
-/// immediately. It acts on the CALLER's behalf and the caller's exit trap owns
-/// the release, exactly as `land-lock`'s verbs act for the `land` that invoked
-/// them.
+/// No `hold`: this process cannot hold anything, because it exits immediately.
+/// `acquire` and `release` act on the CALLER's behalf and the caller's exit trap
+/// owns the release, exactly as `land-lock`'s verbs act for the `land` that
+/// invoked them. `detach` is the one exception, and it holds through the copy
+/// it starts rather than through itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SingletonCommand {
@@ -625,6 +660,26 @@ pub enum SingletonCommand {
     Release {
         /// The task's name.
         task: String,
+    },
+    /// Run a command in the background as this task, and report the previous
+    /// run's failure (CLOUD-1991, retiring `[tasks.cross-turn]`).
+    ///
+    /// The one verb here that HOLDS: not this process, which announces, clears
+    /// and returns, but the attached copy it starts, which takes the lock for
+    /// its own pid, runs the command, and releases.
+    Detach {
+        /// The task's name, which is what the lock is keyed by.
+        task: String,
+        /// Where a failed run's pointers wait for the next invocation.
+        marker: String,
+        /// Where the run's whole output is written.
+        log: String,
+        /// The `[[pattern]]` row selecting a pointer line from the output.
+        pattern: String,
+        /// This invocation IS the background copy: take the lock and run.
+        attached: bool,
+        /// The command, after `--`.
+        command: Vec<String>,
     },
 }
 
@@ -697,6 +752,16 @@ pub enum LandCommand {
     /// advanced 27 commits during one hand-run `verify`.
     Lap {
         /// The remote reference this lap lands onto, e.g. `refs/heads/main`.
+        reference: String,
+    },
+    /// Is this head built on the CURRENT tip of the reference, so its pull
+    /// request can fast-forward-land (CLOUD-1991)?
+    ///
+    /// APPENDED LAST, for the reason every enum here records. The question the
+    /// `linear-check` task body asked in shell — fetch the trunk, compare the
+    /// merge base — asked through the fetch a lap already makes.
+    Linear {
+        /// The remote reference the head must be built on, e.g. `main`.
         reference: String,
     },
 }
@@ -1108,6 +1173,13 @@ pub struct ExecRequest {
     /// file; "the toolchain lock (aarch64-apple-darwin)" is a pointer to the
     /// thing a reader has to reason about.
     pub lock_label: Option<String>,
+    /// Pathspecs whose TRACKED paths are appended to the child's argv
+    /// (CLOUD-1991) — `git ls-files -z <spec> | xargs -0 -r`, without the shell.
+    /// Empty is the ordinary run.
+    pub tracked: Vec<String>,
+    /// Globs removing paths from what `tracked` selected — the `:!:` exclusions a
+    /// magic pathspec would carry, which `tracked` refuses rather than misreads.
+    pub except: Vec<String>,
 }
 
 /// Subcommands of `lint` — one arm per *kind* of artifact, which is what the
@@ -1299,6 +1371,12 @@ pub enum WiringCommand {
         dry_run: bool,
         /// Decide whether a repair is owed, and remove nothing.
         check: bool,
+    },
+    /// Link this clone's two commit hooks to a hook body the repository checks
+    /// in (CLOUD-1991, retiring `[tasks."session:git-hooks"]`).
+    Gate {
+        /// The hook body, relative to the repository root.
+        body: String,
     },
 }
 
@@ -1626,8 +1704,10 @@ pub enum RecordCommand {
     /// the reading is whatever wrote to the pipe; this takes the producer's raw
     /// input and applies a reading the engine owns and tests.
     ///
-    /// The effects stay in the task: the document arrives on stdin and this
-    /// spawns nothing (house-style §5).
+    /// The effects stay in the task: the document arrives on stdin (house-style
+    /// §5). The one exception is a graph-reading family handed
+    /// `--input resolve=<triple|any>`, which resolves its own `cargo metadata`
+    /// document through the placed `exec` adapter (CLOUD-1991).
     Derive {
         /// The record family, which selects the reading and is the key a module
         /// reads the result under.
@@ -1722,6 +1802,19 @@ pub enum RecordCommand {
     Census {
         /// The sub-verb selected.
         command: RecordCensusCommand,
+    },
+    /// [`RecordCommand::Tool`] over `key=value` measurement lines, reduced by the
+    /// writer (CLOUD-1991, retiring `[tasks.record-perf]`'s `awk` reduction).
+    ///
+    /// `record tool <id> --pick <name>=<token>` parses to this. A VARIANT rather
+    /// than a field on `Tool`, and APPENDED, so the public enum gains no field
+    /// and no existing discriminant moves.
+    ToolPicked {
+        /// The `[[rule.tools]]` id whose verdict is being recorded.
+        id: String,
+        /// `<name-key>=<token-key>`: which field of a measurement line names the
+        /// record line and which carries its token.
+        pick: String,
     },
 }
 
@@ -1835,6 +1928,19 @@ pub enum CiCommand {
     Suites {
         /// The revision this checkout is diffed against.
         base: String,
+    },
+    /// [`CiCommand::SlowNeeded`], asked by a caller naming the head it believes
+    /// the checkout carries (CLOUD-1991).
+    ///
+    /// A VARIANT RATHER THAN A FIELD on `SlowNeeded`, for the reason every enum
+    /// here records: a field added to an existing variant is a break
+    /// `mise run semver` makes the crate declare, and an appended variant is not.
+    /// The parse selects this one exactly when `--head` is given.
+    SlowNeededAt {
+        /// The revision this checkout is diffed against.
+        base: String,
+        /// The revision whose tree must equal the checkout's.
+        head: String,
     },
 }
 
@@ -2241,6 +2347,9 @@ fn wiring_of(matches: &ArgMatches) -> Option<WiringCommand> {
             dry_run: flag(matches, "dry_run"),
             check: flag(matches, "check"),
         }),
+        ("gate", matches) => Some(WiringCommand::Gate {
+            body: matches.get_one::<String>("body")?.clone(),
+        }),
         _ => None,
     }
 }
@@ -2337,9 +2446,15 @@ fn release_of(matches: &ArgMatches) -> Option<ReleaseCommand> {
 /// The `ci` sub-verb a parse resolved to.
 fn ci_of(matches: &ArgMatches) -> Option<CiCommand> {
     match matches.subcommand()? {
-        ("slow-needed", matches) => Some(CiCommand::SlowNeeded {
-            base: matches.get_one::<String>("base").cloned()?,
-        }),
+        ("slow-needed", matches) => {
+            let base = matches.get_one::<String>("base").cloned()?;
+            // `--head` is optional, so its absence selects the plain question
+            // rather than failing the parse.
+            Some(match matches.get_one::<String>("head").cloned() {
+                Some(head) => CiCommand::SlowNeededAt { base, head },
+                None => CiCommand::SlowNeeded { base },
+            })
+        }
         ("suites", matches) => Some(CiCommand::Suites {
             base: matches.get_one::<String>("base").cloned()?,
         }),
@@ -2387,6 +2502,9 @@ fn land_of(matches: &ArgMatches) -> Option<LandCommand> {
         ("verify", _) => Some(LandCommand::Verify),
         ("fast-forward", _) => Some(LandCommand::FastForward),
         ("lap", matches) => Some(LandCommand::Lap {
+            reference: reference_of(matches),
+        }),
+        ("linear", matches) => Some(LandCommand::Linear {
             reference: reference_of(matches),
         }),
         _ => None,
@@ -2710,6 +2828,17 @@ fn singleton_of(matches: &ArgMatches) -> Option<SingletonCommand> {
         ("release", matches) => Some(SingletonCommand::Release {
             task: matches.get_one::<String>("task").cloned()?,
         }),
+        ("detach", matches) => Some(SingletonCommand::Detach {
+            task: matches.get_one::<String>("task").cloned()?,
+            marker: matches.get_one::<String>("marker").cloned()?,
+            log: matches.get_one::<String>("log").cloned()?,
+            pattern: matches.get_one::<String>("pattern").cloned()?,
+            attached: flag(matches, "attached"),
+            command: matches
+                .get_many::<String>("command")?
+                .cloned()
+                .collect::<Vec<_>>(),
+        }),
         _ => None,
     }
 }
@@ -2784,6 +2913,16 @@ fn exec_of(matches: &ArgMatches) -> Option<Command> {
         lock_path: matches.get_one::<String>("lock_path").cloned(),
         lock_attempts: matches.get_one::<String>("lock_attempts").cloned(),
         lock_label: matches.get_one::<String>("lock_label").cloned(),
+        // `unwrap_or_default` for `record derive`'s reason: an absent repeatable
+        // flag is an empty selection rather than a parse failure.
+        tracked: matches
+            .get_many::<String>("tracked")
+            .map(|values| values.cloned().collect())
+            .unwrap_or_default(),
+        except: matches
+            .get_many::<String>("except")
+            .map(|values| values.cloned().collect())
+            .unwrap_or_default(),
     }))
 }
 
@@ -2967,6 +3106,19 @@ fn board_of(matches: &ArgMatches) -> Option<BoardCommand> {
 }
 
 /// The `census` sub-verb a parse resolved to (CLOUD-843).
+/// The `artifacts` sub-verb a parse resolved to (CLOUD-1991).
+fn artifacts_of(matches: &ArgMatches) -> Option<ArtifactsCommand> {
+    match matches.subcommand()? {
+        ("write", matches) => Some(ArtifactsCommand::Write(ArtifactsWrite {
+            completions: matches.get_one::<String>("completions").cloned(),
+            man: matches.get_one::<String>("man").cloned(),
+            schema: matches.get_one::<String>("schema").cloned(),
+            reference: matches.get_one::<String>("reference").cloned(),
+        })),
+        _ => None,
+    }
+}
+
 fn census_of(matches: &ArgMatches) -> Option<CensusCommand> {
     match matches.subcommand()? {
         ("shell", matches) => Some(CensusCommand::Shell {
@@ -3031,9 +3183,18 @@ fn record_of(matches: &ArgMatches) -> Option<RecordCommand> {
         ("suites", matches) => Some(RecordCommand::Suites {
             write: flag(matches, "write"),
         }),
-        ("tool", matches) => Some(RecordCommand::Tool {
-            id: matches.get_one::<String>("id")?.clone(),
-        }),
+        ("tool", matches) => {
+            let id = matches.get_one::<String>("id")?.clone();
+            // `--pick` selects the reducing writer; absent, the lines are
+            // already `<name> <token>` and are recorded as they came.
+            Some(match matches.get_one::<String>("pick") {
+                Some(pick) => RecordCommand::ToolPicked {
+                    id,
+                    pick: pick.clone(),
+                },
+                None => RecordCommand::Tool { id },
+            })
+        }
         ("forge", matches) => Some(RecordCommand::Forge {
             reference: matches.get_one::<String>("ref")?.clone(),
         }),
@@ -3216,6 +3377,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "dist" => dist_of(matches).map(Command::Dist),
         "board" => board_of(matches).map(|command| Command::Board { command }),
         "census" => census_of(matches).map(|command| Command::Census { command }),
+        "artifacts" => artifacts_of(matches).map(|command| Command::Artifacts { command }),
         _ => None,
     }
 }

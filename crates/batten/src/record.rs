@@ -17,8 +17,10 @@
 //! the validator stays a command on PATH — §9's prior-art disposition. What moves
 //! in here is not the run but the RECORDING of what it said: a `mise` task or a CI
 //! step runs the tool, reduces its answer to `<name> <token>` lines, and pipes
-//! them here. Nothing in this module spawns anything, and
-//! `evaluator-io-check` stays the gate on that.
+//! them here. Nothing in this module spawns a VALIDATOR, and
+//! `evaluator-io-check` stays the gate on that. The one child it can start is
+//! `cargo metadata`, for a graph-reading family asked to `resolve` its own graph
+//! (CLOUD-1991), and that goes through the placed `exec` adapter.
 //!
 //! # The caller cannot supply a digest, because there is no argument for one
 //!
@@ -142,6 +144,87 @@ fn declared(overrides: &Overrides) -> Result<Vec<ToolQuery>> {
 /// line carries no token. An internal error when the store cannot be written.
 pub fn run_tool(id: &str, overrides: &Overrides) -> Result<ExitCode> {
     let text = verdict_lines()?;
+    store_tool(id, &text, overrides)
+}
+
+/// Record a declared tool row's verdict out of `key=value` measurement lines
+/// (CLOUD-1991, retiring `[tasks.record-perf]`'s `awk` reduction).
+///
+/// `pick` is `<name-key>=<token-key>`: every stdin line that OPENS with
+/// `<name-key>=` and carries both fields becomes the record line
+/// `<name> <token>`, and every other line is skipped — a measurement's own
+/// output shape, reduced by the writer rather than by a pipeline in front of
+/// it. The keys are the caller's, so no producer's field names reach the core.
+///
+/// # Errors
+///
+/// A [`UsageError`] for a `pick` that is not two non-empty keys, and every
+/// refusal [`run_tool`] makes. An internal error (could-not-look, exit `3`) when
+/// no line reduces: an empty record would be a PRESENT record carrying no name,
+/// which a module reads as a finding whose cause is the producer.
+pub fn run_tool_picked(id: &str, pick: &str, overrides: &Overrides) -> Result<ExitCode> {
+    let Some((name, token)) = pick
+        .split_once('=')
+        .filter(|(name, token)| !name.is_empty() && !token.is_empty())
+    else {
+        return Err(UsageError::raise(format!(
+            "record tool {id}: `--pick {pick}` is not `<name-key>=<token-key>`"
+        )));
+    };
+    let text = picked(&verdict_lines()?, name, token);
+    if text.is_empty() {
+        return Err(anyhow::anyhow!(
+            "record tool {id}: could not look: no line on stdin opens with `{name}=` and carries `{token}=`; nothing recorded"
+        ));
+    }
+    store_tool(id, &text, overrides)
+}
+
+/// The `<name> <token>` lines `pick` reduces `raw` to, in order.
+///
+/// A line counts only when it OPENS with `<name>=` — so a paired record
+/// (`arm=… path=…`) is not taken for an absolute one — and carries a non-empty
+/// value for both keys. A key given twice on one line reads its LAST value, the
+/// reading the retired `awk` program made.
+fn picked(raw: &str, name: &str, token: &str) -> String {
+    let opener = format!("{name}=");
+    let mut reduced = String::new();
+    for line in raw.lines().filter(|line| line.starts_with(&opener)) {
+        let mut named = None;
+        let mut value = None;
+        for (key, field) in line
+            .split_whitespace()
+            .filter_map(|field| field.split_once('='))
+        {
+            if key == name {
+                named = Some(field);
+            }
+            if key == token {
+                value = Some(field);
+            }
+        }
+        if let (Some(named), Some(value)) = (named, value)
+            && !named.is_empty()
+            && !value.is_empty()
+        {
+            reduced.push_str(named);
+            reduced.push(' ');
+            reduced.push_str(value);
+            reduced.push('\n');
+        }
+    }
+    reduced
+}
+
+// The reduction's mutation rows, each caught by the compiled case it names in
+// the perf tier, which drives the real writer and reads the record back.
+//MUTANT-SUITE crates/batten/tests/it/perf_assert.rs
+//MUTANT pick-any-line|s@^    for line in raw.lines().filter(|line| line.starts_with(&opener)) {$@    for line in raw.lines() {@|a_picked_measurement_skips_a_line_that_does_not_open_with_the_name
+//MUTANT pick-empty-recorded|s@^    if text.is_empty() {$@    if false {@|a_picked_measurement_with_no_record_line_is_could_not_look
+
+/// Store one reduced verdict under `id`'s key: [`run_tool`]'s tail, shared with
+/// [`run_tool_picked`] so the two cannot compose different keys.
+fn store_tool(id: &str, text: &str, overrides: &Overrides) -> Result<ExitCode> {
     let rows = declared(overrides)?;
     let Some(row) = rows.into_iter().find(|row| row.id == id) else {
         return Err(UsageError::raise(format!(
@@ -164,7 +247,7 @@ pub fn run_tool(id: &str, overrides: &Overrides) -> Result<ExitCode> {
 
     let key = tools::record_key(&row, &tools::digest(&bytes));
     let git_dir = git::git_dir(Path::new("."))?;
-    store(&tools::record_path(&git_dir, &key), validated(&text)?)?;
+    store(&tools::record_path(&git_dir, &key), validated(text)?)?;
     Ok(ExitCode::Success)
 }
 
@@ -256,6 +339,9 @@ pub fn run(
     match command {
         crate::cli::RecordCommand::Suites { write } => run_suites(write, out, err),
         crate::cli::RecordCommand::Tool { id } => run_tool(&id, overrides),
+        crate::cli::RecordCommand::ToolPicked { id, pick } => {
+            run_tool_picked(&id, &pick, overrides)
+        }
         crate::cli::RecordCommand::Forge { reference } => run_forge(&reference, overrides),
         crate::cli::RecordCommand::Plan => run_plan(),
         crate::cli::RecordCommand::Closes => run_closes(overrides),
@@ -748,17 +834,82 @@ fn graph_on_stdin(family: &str) -> Result<crate::cargo_graph::Graph> {
     Ok(crate::cargo_graph::Graph::from_metadata(&meta))
 }
 
+/// The `cargo metadata` document a graph-reading family reads: on stdin, or
+/// resolved here when the caller names `resolve` (CLOUD-1991).
+///
+/// # Why the resolution moved in
+///
+/// The two producer tasks were a `cargo metadata` spawn piped into this verb,
+/// behind a fixture switch — shell whose only job was to connect one argv's
+/// stdout to another's stdin. `resolve=<triple>` resolves the graph for that
+/// platform (`--filter-platform`), and `resolve=any` for every platform, which
+/// are the two questions the two families ask. Omitting it keeps the stdin
+/// route, which is how a recorded graph still reaches the walk.
+///
+/// ALWAYS `--locked`: the question is about the COMMITTED resolution, and a
+/// producer allowed to update the lockfile answers "what would upstream give me
+/// today". The spawn is `crate::exec::piped_argv`'s, the placed adapter, so
+/// the inventory does not grow; `cargo` is the toolchain's own name and names no
+/// consumer.
+///
+/// COULD-NOT-LOOK IS AN INTERNAL ERROR (exit `3`), never an empty graph: a
+/// resolution that failed or answered something unparseable writes nothing, so
+/// the module reads an absent record as "the producer did not run".
+fn graph_for(inputs: &BTreeMap<String, String>, family: &str) -> Result<crate::cargo_graph::Graph> {
+    let Some(platform) = inputs.get("resolve") else {
+        return graph_on_stdin(family);
+    };
+    if platform.trim().is_empty() {
+        return Err(UsageError::raise(format!(
+            "record derive {family}: `--input resolve=` names no platform; a target triple, or `any`"
+        )));
+    }
+    let mut argv: Vec<String> = ["cargo", "metadata", "--locked", "--format-version", "1"]
+        .iter()
+        .map(|word| (*word).to_owned())
+        .collect();
+    if platform != "any" {
+        argv.push("--filter-platform".to_owned());
+        argv.push(platform.clone());
+    }
+    let Some((0, raw)) = crate::exec::piped_argv(
+        Path::new("."),
+        &argv,
+        "",
+        crate::exec::Diagnostics::Drop,
+        &[],
+    ) else {
+        return Err(anyhow::anyhow!(
+            "record derive {family}: could not look: `cargo metadata` did not resolve the graph; nothing recorded"
+        ));
+    };
+    let meta: serde_json::Value = serde_json::from_str(&raw).map_err(|_| {
+        anyhow::anyhow!(
+            "record derive {family}: could not look: `cargo metadata` answered no document; nothing recorded"
+        )
+    })?;
+    Ok(crate::cargo_graph::Graph::from_metadata(&meta))
+}
+
+// The resolution's mutation rows. Each is caught by the compiled case it names,
+// which drives a scratch crate through the real `cargo`.
+//MUTANT-SUITE crates/batten/tests/it/evaluator_closure.rs
+//MUTANT resolve-unlocked|s@\["cargo", "metadata", "--locked", "--format-version", "1"\]@["cargo", "metadata", "--format-version", "1"]@|a_resolution_that_would_rewrite_the_lockfile_is_could_not_look
+//MUTANT resolve-ignored|s@^    let Some(platform) = inputs.get("resolve") else {$@    let Some(platform) = inputs.get("no-such-input") else {@|the_engine_resolves_a_locked_crate_itself
+
 /// Derive one family's record from its input and write it.
 ///
 /// The engine applies the READING; the effects that produced the input stay in
-/// the producer task (house-style §5), so nothing here spawns.
+/// the producer task (house-style §5), with one exception a family opts into:
+/// `--input resolve=` asks a graph-reading family to resolve its own
+/// `cargo metadata` document (CLOUD-1991).
 ///
 /// # Errors
 ///
 /// A [`UsageError`] for an unknown family, a malformed or missing input, a
 /// family that is not a single path component, a repository with no branch to
 /// key on, or a tree that is not a repository; an internal error when the store
-/// cannot be written.
+/// cannot be written, or when a requested resolution could not look.
 pub fn run_derive(
     family: &str,
     inputs: &[String],
@@ -776,8 +927,9 @@ pub fn run_derive(
 ///
 /// Split out of [`run_derive`] because the two halves grow at different rates:
 /// this one gains an arm per producer, and the store-and-emit tail below it is
-/// fixed. Nothing here spawns — house-style §5 keeps a producer's effects in the
-/// task, and what arrives is already a reading's worth of input.
+/// fixed. Nothing here spawns except the one resolution `graph_for` owns —
+/// house-style §5 keeps a producer's effects in the task, and what arrives is
+/// otherwise already a reading's worth of input.
 ///
 /// # Errors
 ///
@@ -875,13 +1027,14 @@ fn derive_reading(
 /// # Errors
 ///
 /// A [`UsageError`] for a missing or unaccepted input, an undeclared
-/// `[[pattern]]` row, or stdin that is not a `cargo metadata` document.
+/// `[[pattern]]` row, or stdin that is not a `cargo metadata` document; an
+/// internal error when a `resolve` the engine ran could not look.
 fn evaluator_closure_reading(
     inputs: &BTreeMap<String, String>,
     family: &str,
     overrides: &Overrides,
 ) -> Result<String> {
-    only_these_inputs(inputs, family, &["roots", "bears"])?;
+    only_these_inputs(inputs, family, &["roots", "bears", "resolve"])?;
     let config = resolve::resolve(Path::new("."), overrides)?;
     let evaluator = declared_pattern(
         &config.patterns,
@@ -893,7 +1046,7 @@ fn evaluator_closure_reading(
         family,
         required_input(inputs, family, "bears")?,
     )?;
-    let graph = graph_on_stdin(family)?;
+    let graph = graph_for(inputs, family)?;
 
     // THE SCOPE IS THE EVALUATOR'S SUB-CLOSURE, NOT THE WORKSPACE'S, and
     // that was measured before it was written because the obvious
@@ -938,13 +1091,14 @@ fn evaluator_closure_reading(
 /// # Errors
 ///
 /// A [`UsageError`] for an unaccepted input, an undeclared `[[pattern]]` row, or
-/// stdin that is not a `cargo metadata` document.
+/// stdin that is not a `cargo metadata` document; an internal error when a
+/// `resolve` the engine ran could not look.
 fn macos_link_reading(
     inputs: &BTreeMap<String, String>,
     family: &str,
     overrides: &Overrides,
 ) -> Result<String> {
-    only_these_inputs(inputs, family, &["framework", "vendored"])?;
+    only_these_inputs(inputs, family, &["framework", "vendored", "resolve"])?;
     let config = resolve::resolve(Path::new("."), overrides)?;
     let framework = declared_pattern(
         &config.patterns,
@@ -956,7 +1110,7 @@ fn macos_link_reading(
         family,
         required_input(inputs, family, "vendored")?,
     )?;
-    let graph = graph_on_stdin(family)?;
+    let graph = graph_for(inputs, family)?;
 
     // THE WALK STARTS AT THE WORKSPACE MEMBERS, because the question is
     // about everything this tree builds — unlike `evaluator-closure`,

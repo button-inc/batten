@@ -26,6 +26,8 @@
 //! fix-selection-check`. It is not answerable from lines: it needs the config
 //! evaluated, and evaluation is where the surprise was — the derived spelling
 //! evaluates correctly under `pkl` while hk's own evaluator reads it as EMPTY.
+//! That predicate is `hk-fix-selection.pkl` since CLOUD-1991, and its compiled
+//! tier is the `the_pkl_predicate_*` cases below, which its `#MUTANT` rows name.
 //!
 //! # The measurement behind the row
 //!
@@ -321,6 +323,170 @@ fn a_tree_with_no_hook_config_is_not_judged() {
         findings(&root).is_empty(),
         "a tree with no hk config is answering for nothing: {:?}",
         findings(&root)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The CONFIG half, `gate fix missing`: the committed `hk-fix-selection.pkl`
+// (CLOUD-1991), evaluated by the pinned `pkl` exactly as its task does.
+//
+// The predicate was a `pkl eval -x` string inside a shell body; it is a module
+// now, and these cases are its compiled tier. They copy the COMMITTED module
+// beside a fixture config, for `install_module`'s reason: an inline copy would
+// drift from the shipped one and pass while the real gate was broken.
+//
+// THE FIXTURE AMENDS NOTHING. The real `hk.pkl` amends hk's package over HTTPS,
+// which a TLS-intercepting sandbox cannot resolve without a CA flag — a
+// could-not-look that is the task's business, not the predicate's. So `Step` and
+// `Hook` are declared locally with the only fields the predicate reads, and every
+// case runs offline.
+// ---------------------------------------------------------------------------
+
+/// A hook config whose `fix` hook selects exactly the gate's fixer-bearing steps,
+/// with `cargo-clippy` carrying a fixer outside the subset — the one exception
+/// the predicate writes down.
+const PKL_SOUND: &str = r#"class Step {
+  check: String?
+  fix: String?
+}
+class Hook {
+  steps: Mapping<String, Step>
+}
+local gate = new Mapping<String, Step> {
+  ["deno-fmt"] {
+    check = "mise run lint:deno"
+    fix = "mise run fmt:deno"
+  }
+  ["cargo-clippy"] {
+    check = "cargo clippy"
+    fix = "cargo clippy --fix"
+  }
+  ["test"] {
+    check = "cargo test"
+  }
+}
+local fixers = new Mapping<String, Step> {
+  ["deno-fmt"] = gate["deno-fmt"]
+}
+hooks: Mapping<String, Hook> = new {
+  ["pre-commit"] {
+    steps = gate
+  }
+  ["fix"] {
+    steps = fixers
+  }
+}
+"#;
+
+/// The line of [`PKL_SOUND`] that routes the one fixer.
+const PKL_ROUTE: &str = "  [\"deno-fmt\"] = gate[\"deno-fmt\"]\n";
+
+/// The pinned `pkl`, or `None` where it is not installed — `hk_binary`'s shape.
+fn pkl_binary() -> Option<PathBuf> {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays — CLOUD-1991: the subject IS a Pkl module, so exercising it means running the pinned `pkl`; resolving it is what `mise exec pkl` does in the task"
+    )]
+    let output = std::process::Command::new("mise")
+        .args(["which", "pkl"])
+        .current_dir(common::at_root("."))
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = PathBuf::from(String::from_utf8(output.stdout).ok()?.trim());
+    path.is_file().then_some(path)
+}
+
+/// Evaluate the committed predicate beside `config`: whether it passed, and
+/// everything it printed.
+fn fix_selection(name: &str, config: &str) -> Option<(bool, String)> {
+    let pkl = pkl_binary()?;
+    let root = common::scratch(&format!("hk-fix-selection-pkl-{name}"));
+    common::write(&root, "hk.pkl", config);
+    fs::copy(
+        common::at_root("hk-fix-selection.pkl"),
+        root.join("hk-fix-selection.pkl"),
+    )
+    .expect("install the committed predicate");
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays — CLOUD-1991: the predicate is evaluated by `pkl`, which the engine does not host; this is the task's own spawn"
+    )]
+    let output = std::process::Command::new(pkl)
+        .arg("eval")
+        .arg(root.join("hk-fix-selection.pkl"))
+        .current_dir(&root)
+        .output()
+        .expect("pkl runs the predicate");
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    Some((output.status.success(), text))
+}
+
+/// The control: without it, both refusals below could come from a module that
+/// refuses everything. It also carries the `cargo-clippy` exception — a fixer
+/// deliberately outside the subset must not read as unrouted.
+#[test]
+fn the_pkl_predicate_passes_a_fix_hook_selecting_exactly_the_fixers() {
+    let Some((passed, text)) = fix_selection("sound", PKL_SOUND) else {
+        return;
+    };
+    assert!(passed, "the sound config should pass: {text}");
+    assert!(
+        text.contains("selects exactly the gate's fixer-bearing steps"),
+        "the pass line: {text}"
+    );
+    assert!(
+        !text.contains("cargo-clippy"),
+        "the exception should be silent: {text}"
+    );
+}
+
+/// `unrouted`: a fixer the list forgot never runs under `mise run fmt`.
+#[test]
+fn the_pkl_predicate_refuses_a_fixer_the_fix_hook_does_not_route() {
+    assert!(
+        PKL_SOUND.contains(PKL_ROUTE),
+        "the fixture carries the route"
+    );
+    let config = PKL_SOUND.replace(PKL_ROUTE, "");
+    let Some((passed, text)) = fix_selection("unrouted", &config) else {
+        return;
+    };
+    assert!(
+        !passed,
+        "an unrouted fixer should fail the evaluation: {text}"
+    );
+    assert!(
+        text.contains("unrouted: [deno-fmt]"),
+        "the unrouted step should be named: {text}"
+    );
+}
+
+/// `not-a-fixer`: a check-only step in the list runs its check under a task two
+/// authorities call the formatters-only subset.
+#[test]
+fn the_pkl_predicate_refuses_a_check_only_step_in_the_fix_hook() {
+    assert!(
+        PKL_SOUND.contains(PKL_ROUTE),
+        "the fixture carries the route"
+    );
+    let config = PKL_SOUND.replace(
+        PKL_ROUTE,
+        &format!("{PKL_ROUTE}  [\"test\"] = gate[\"test\"]\n"),
+    );
+    let Some((passed, text)) = fix_selection("not-a-fixer", &config) else {
+        return;
+    };
+    assert!(
+        !passed,
+        "a check-only step should fail the evaluation: {text}"
+    );
+    assert!(
+        text.contains("not-a-fixer: [test]"),
+        "the check-only step should be named: {text}"
     );
 }
 

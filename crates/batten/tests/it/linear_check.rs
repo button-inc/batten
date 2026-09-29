@@ -1,26 +1,29 @@
 //! `[tasks."linear-check"]` — is HEAD linear on the current `origin/main`?
-//! Over the task's own body (CLOUD-1717).
+//! Over `batten land linear` since CLOUD-1991, and over the task's own
+//! declaration for the receipt it records.
 //!
-//! Two halves, as the retired suite had them. A stub `git` makes the fetch fail
-//! on demand, which is the only way to reach the fail-closed arm without
-//! unplugging a network; and real repositories in the shapes CI produces —
-//! single-branch and shallow single-branch clones — prove the refspec fetch
-//! resolves `origin/main` where a naive one exits 0 and resolves nothing. The
-//! receipt writer is a stub recording its calls, so "no receipt" is "never
-//! invoked".
+//! The body the task carried in shell (CLOUD-1717) fetched with an explicit
+//! refspec, deepened a shallow clone, and compared the merge base in `bash`; a
+//! stub `git` was how this tier reached its fail-closed arm. The question is the
+//! engine's now, through the same in-process fetch a landing lap makes, so the
+//! arms are driven over the compiled binary: a clone with no landing remote, a
+//! remote the fetch cannot reach, and a shallow clone. The two arms that need a
+//! smart-HTTP remote to answer — linear and behind — are the lap's own fetch and
+//! `gitwrite::carries`, each pinned where it lives, and the integrator's replay
+//! of the retired body against the verb over this repository's own remote.
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
 // ported: mise-tasks/linear-check.sh subject:mise.toml crates/batten/tests/it/linear_check.rs
 // ported: tests/linear-check.bats subject:mise.toml crates/batten/tests/it/linear_check.rs
-// carried: "a failed fetch exits 1 instead of trusting the stale ref" mise.toml kind:mechanism
+// changed: "a failed fetch exits 1 instead of trusting the stale ref" crates/batten/src/lib.rs kind:verb the fetch that cannot complete is could-not-look on the engine's table (`3`), never a pass; `verify` branches on `2` alone, so a non-`2` failure still stops it rather than lapping
 // carried: "a failed fetch writes no receipt" mise.toml kind:mechanism
 // carried: "a successful fetch on a linear HEAD passes and records the receipt" mise.toml kind:mechanism
-// carried: "a HEAD behind main is exit 2 — the input moved, not a broken branch" mise.toml kind:mechanism
+// carried: "a HEAD behind main is exit 2 — the input moved, not a broken branch" crates/batten/src/lib.rs kind:verb
 // carried: "a failed receipt write fails the gate — set -e is what carries it" mise.toml kind:mechanism
-// carried: "the naive fetch exits 0 while resolving nothing in a single-branch clone" mise.toml kind:mechanism
-// carried: "the gate resolves main in a single-branch clone" mise.toml kind:mechanism
-// carried: "the gate resolves main in a shallow single-branch clone" mise.toml kind:mechanism
+// carried: "the naive fetch exits 0 while resolving nothing in a single-branch clone" crates/batten/tests/it/linear_check.rs
+// changed: "the gate resolves main in a single-branch clone" crates/batten/src/land.rs the verb fetches the named reference into its tracking ref directly, so a single-branch clone's configured refspec is never consulted; the naive-fetch case above keeps the trap it avoids documented
+// changed: "the gate resolves main in a shallow single-branch clone" crates/batten/src/lib.rs a shallow clone is REFUSED as could-not-look naming `git fetch --unshallow`, where the body deepened it in place: the in-process fetch cannot deepen, and ancestry over truncated history answers wrong in one direction
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -28,51 +31,14 @@
 use crate::common;
 
 use std::path::{Path, PathBuf};
-use std::process::{Output, Stdio};
+use std::process::Output;
 
-fn executable(dir: &Path, name: &str, body: &str) -> PathBuf {
-    common::write(dir, name, body);
-    let path = dir.join(name);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        let mut permissions = std::fs::metadata(&path).expect("stat").permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&path, permissions).expect("chmod");
-    }
-    path
-}
-
-/// A receipt writer that records each call to `calls`, or fails when `fails`.
-fn writer(dir: &Path, fails: bool) -> PathBuf {
-    let calls = dir.join("batten-calls");
-    let body = if fails {
-        "#!/usr/bin/env bash\nexit 1\n".to_owned()
-    } else {
-        format!("#!/usr/bin/env bash\necho \"$@\" >>'{}'\n", calls.display())
-    };
-    executable(dir, "batten-stub", &body)
-}
-
-/// A `bin/git` whose fetch exits `fetch`, `origin/main` is `main` and the merge
-/// base is `base`: a fetch failure or a moved main is the only variable.
-fn stub_git(dir: &Path, fetch: i32, main: &str, base: &str) {
-    executable(
-        dir,
-        "bin/git",
-        &format!(
-            "#!/usr/bin/env bash\ncase \"$1\" in\n  fetch) exit {fetch} ;;\n  rev-parse)\n    case \"$2\" in\n      origin/main) echo {main} ;;\n      HEAD) echo headsha ;;\n    esac ;;\n  merge-base) echo {base} ;;\nesac\n"
-        ),
-    );
-}
-
-fn gate(dir: &Path, writer: &Path) -> Output {
-    let mut command = common::task_bash(dir, &common::task_body("linear-check"));
-    command
-        .env("BATTEN_BIN", writer)
-        .stdin(Stdio::null())
+fn linear(dir: &Path) -> Output {
+    common::batten()
+        .args(["land", "linear", "main"])
+        .current_dir(dir)
         .output()
-        .expect("run the task body")
+        .expect("run batten land linear")
 }
 
 fn said(out: &Output) -> String {
@@ -81,63 +47,6 @@ fn said(out: &Output) -> String {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     )
-}
-
-#[test]
-fn a_failed_fetch_exits_1_and_writes_no_receipt() {
-    let dir = common::scratch("linear-check-fetch-fails");
-    stub_git(&dir, 1, "aaaa111", "aaaa111");
-    let out = gate(&dir, &writer(&dir, false));
-    // Exit 1, not 2: a caller laps on "behind" and must never lap on "offline".
-    assert_eq!(out.status.code(), Some(1), "{}", said(&out));
-    assert!(
-        said(&out).contains("could not fetch origin/main"),
-        "{}",
-        said(&out)
-    );
-    assert!(!dir.join("batten-calls").exists(), "a receipt was minted");
-}
-
-#[test]
-fn a_linear_head_passes_and_records_the_receipt() {
-    let dir = common::scratch("linear-check-linear");
-    stub_git(&dir, 0, "aaaa111", "aaaa111");
-    let out = gate(&dir, &writer(&dir, false));
-    assert_eq!(out.status.code(), Some(0), "{}", said(&out));
-    assert!(
-        said(&out).contains("linear on origin/main"),
-        "{}",
-        said(&out)
-    );
-    let calls = std::fs::read_to_string(dir.join("batten-calls")).expect("the receipt call");
-    assert!(calls.contains("receipt record linear-check"), "{calls}");
-}
-
-#[test]
-fn a_head_behind_main_is_exit_2_and_writes_no_receipt() {
-    let dir = common::scratch("linear-check-behind");
-    stub_git(&dir, 0, "aaaa111", "bbbb222");
-    let out = gate(&dir, &writer(&dir, false));
-    assert_eq!(out.status.code(), Some(2), "{}", said(&out));
-    assert!(
-        said(&out).contains("not rebased on latest main"),
-        "{}",
-        said(&out)
-    );
-    assert!(!dir.join("batten-calls").exists(), "a receipt was minted");
-}
-
-#[test]
-fn a_failed_receipt_write_fails_the_gate() {
-    let dir = common::scratch("linear-check-writer-fails");
-    stub_git(&dir, 0, "aaaa111", "aaaa111");
-    let out = gate(&dir, &writer(&dir, true));
-    assert_ne!(out.status.code(), Some(0), "{}", said(&out));
-    assert!(
-        !said(&out).contains("linear on origin/main"),
-        "{}",
-        said(&out)
-    );
 }
 
 /// An origin with `main` and a `feature` one commit ahead of it.
@@ -180,7 +89,8 @@ fn clone(dir: &Path, origin: &Path, name: &str, shallow: bool) -> PathBuf {
     into
 }
 
-/// The trap the explicit refspec exists for, stated as a property of git.
+/// The trap the retired body's explicit refspec existed for, stated as a
+/// property of git — and the reason the verb fetches the reference by name.
 #[test]
 fn the_naive_fetch_exits_0_while_resolving_nothing_in_a_single_branch_clone() {
     let dir = common::scratch("linear-check-naive");
@@ -196,18 +106,86 @@ fn the_naive_fetch_exits_0_while_resolving_nothing_in_a_single_branch_clone() {
     );
 }
 
+/// `#MUTANT linear-shallow-trusted` reddens here: a shallow clone's truncated
+/// history is refused as could-not-look, never read as an ancestry answer.
 #[test]
-fn the_gate_resolves_main_in_single_branch_and_shallow_clones() {
-    let dir = common::scratch("linear-check-clones");
+fn a_shallow_clone_is_could_not_look_and_names_the_remedy() {
+    let dir = common::scratch("linear-check-shallow");
     let origin = origin(&dir);
-    for (name, shallow) in [("single", false), ("shallow", true)] {
-        let clone = clone(&dir, &origin, name, shallow);
-        let out = gate(&clone, &writer(&dir, false));
-        assert_eq!(out.status.code(), Some(0), "{name}: {}", said(&out));
-        assert!(
-            said(&out).contains("linear on origin/main"),
-            "{name}: {}",
-            said(&out)
-        );
-    }
+    let clone = clone(&dir, &origin, "shallow", true);
+    let out = linear(&clone);
+    assert_eq!(
+        out.status.code(),
+        Some(batten::exit::ExitCode::Internal.code()),
+        "{}",
+        said(&out)
+    );
+    assert!(said(&out).contains("--unshallow"), "{}", said(&out));
+}
+
+/// `#MUTANT linear-fetch-failure-trusted` reddens here. The remote is an address
+/// nothing listens on, so the fetch cannot complete without touching a network,
+/// and the verb must not fall back to whatever tracking ref the clone holds —
+/// the stale-main false green the retired body's `set -e` history records.
+#[test]
+fn a_fetch_that_cannot_complete_is_could_not_look_and_never_a_pass() {
+    let dir = common::scratch("linear-check-unreachable");
+    let origin = origin(&dir);
+    let clone = clone(&dir, &origin, "unreachable", false);
+    common::git_in(
+        &clone,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "http://127.0.0.1:9/nothing.git",
+        ],
+    );
+    let out = linear(&clone);
+    assert_eq!(
+        out.status.code(),
+        Some(batten::exit::ExitCode::Internal.code()),
+        "{}",
+        said(&out)
+    );
+    assert!(
+        said(&out).contains("could not fetch main"),
+        "{}",
+        said(&out)
+    );
+}
+
+#[test]
+fn a_clone_with_no_landing_remote_is_could_not_look() {
+    let dir = common::scratch("linear-check-no-remote");
+    common::init_repo(&dir);
+    common::git_in(&dir, &["config", "user.email", "t@example.com"]);
+    common::git_in(&dir, &["config", "user.name", "t"]);
+    common::git_in(&dir, &["config", "commit.gpgsign", "false"]);
+    common::git_in(&dir, &["commit", "-q", "--allow-empty", "-m", "one"]);
+    let out = linear(&dir);
+    assert_eq!(
+        out.status.code(),
+        Some(batten::exit::ExitCode::Internal.code()),
+        "{}",
+        said(&out)
+    );
+}
+
+/// The receipt half, which stays the task's: minted only after the verb answered
+/// `0`, and a receipt that will not write fails the task. Both are what an argv
+/// sequence does — it stops at the first failing entry, with that entry's code —
+/// so the property is the ORDER of the two entries.
+#[test]
+fn the_receipt_is_recorded_only_after_the_verb_answers() {
+    let block = common::task_block("linear-check").expect("linear-check is a declared task");
+    let run = common::task_value(&block, "run");
+    let asked = run.find("land linear").expect("the task asks the verb");
+    let recorded = run
+        .find("receipt record linear-check")
+        .expect("the task records the receipt");
+    assert!(
+        asked < recorded,
+        "the receipt follows the verdict it attests: {run}"
+    );
 }

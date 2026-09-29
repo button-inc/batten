@@ -475,7 +475,144 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
                 census::run_shell(declared, &root, json, out)
             }
         },
+        Some(Command::Artifacts { command }) => run_artifacts(&command, out),
     }
+}
+
+/// `batten artifacts write` (CLOUD-1991): the committed derivations of the
+/// command surface, each written where the caller names.
+///
+/// # A WRITE verb beside `generate`, never a flag on it
+///
+/// `generate` is `read` STRUCTURALLY — every renderer returns bytes and the
+/// redirect that refreshes a committed artifact was the caller's, in a `mise`
+/// task body. That redirect was shell, and the retirement of shell is what
+/// moves it here. A `--out` flag on `generate` would make its effect an argument,
+/// which house-style §5 refuses (an effect is per command, never per invocation),
+/// and would put a writer under a noun on the read-only allowlist. So the writer
+/// is its own noun, declared `write`, and `generate` keeps its promise.
+///
+/// # The same bytes, by construction
+///
+/// Each derivation is the SAME call `generate` makes — `clap_complete::generate`,
+/// [`render::man`], the four schema functions, [`render::markdown`] — so the
+/// committed artifact and the drift gates that diff it against `generate` cannot
+/// disagree. Every file goes through [`crate::durable::replace`], so a failed
+/// write leaves the previous artifact whole rather than truncated.
+///
+/// # Errors
+///
+/// A usage error when nothing is named; otherwise whatever a render, a directory
+/// or a write reports.
+fn run_artifacts(command: &cli::ArtifactsCommand, out: &mut dyn Write) -> Result<ExitCode> {
+    match command {
+        cli::ArtifactsCommand::Write(request) => run_artifacts_write(request, out),
+    }
+}
+
+/// Every command path under `commands`, depth first — the pages `man` owes.
+fn spec_paths(commands: &[spec::CommandSpec], into: &mut Vec<String>) {
+    for command in commands {
+        into.push(command.path.clone());
+        spec_paths(&command.subcommands, into);
+    }
+}
+
+/// The writer behind [`run_artifacts`]; one arm per derivation, in a fixed order
+/// so the pointer lines are byte-stable.
+///
+/// # Errors
+///
+/// As [`run_artifacts`].
+fn run_artifacts_write(request: &cli::ArtifactsWrite, out: &mut dyn Write) -> Result<ExitCode> {
+    if request.completions.is_none()
+        && request.man.is_none()
+        && request.schema.is_none()
+        && request.reference.is_none()
+    {
+        return Err(UsageError::raise(
+            "artifacts write: name at least one of --completions, --man, --schema or \
+             --reference",
+        ));
+    }
+    let root = surface::command();
+
+    if let Some(dir) = request.completions.as_deref() {
+        let dir = Path::new(dir);
+        std::fs::create_dir_all(dir)?;
+        for (shell, name) in [
+            (clap_complete::Shell::Bash, "bash"),
+            (clap_complete::Shell::Zsh, "zsh"),
+            (clap_complete::Shell::Fish, "fish"),
+        ] {
+            let mut script: Vec<u8> = Vec::new();
+            clap_complete::generate(shell, &mut surface::command(), "batten", &mut script);
+            crate::durable::replace(dir.join(format!("batten.{name}")), script)?;
+        }
+        writeln!(out, "completions={}", dir.display())?;
+    }
+
+    if let Some(dir) = request.man.as_deref() {
+        let dir = Path::new(dir);
+        std::fs::create_dir_all(dir)?;
+        // CLEARED FIRST, because the page set SHRINKS when a verb is removed, and
+        // an overwrite-only refresh would leave the removed verb's page installable
+        // and documenting a command that no longer parses. Only `*.1` is removed:
+        // the directory is the caller's, and what else lives there is not ours.
+        for entry in std::fs::read_dir(dir)? {
+            let path = entry?.path();
+            if path.extension().is_some_and(|ext| ext == "1") {
+                std::fs::remove_file(&path)?;
+            }
+        }
+        let program = root.get_name().to_owned();
+        let mut paths: Vec<String> = vec![String::new()];
+        spec_paths(&spec::describe(&root).subcommands, &mut paths);
+        for path in &paths {
+            let selected = (!path.is_empty()).then_some(path.as_str());
+            let page = render::man(&root, selected)?;
+            let name = format!("{}.1", render::page_name(&program, path));
+            crate::durable::replace(dir.join(name), page)?;
+        }
+        writeln!(out, "man={} pages={}", dir.display(), paths.len())?;
+    }
+
+    if let Some(dir) = request.schema.as_deref() {
+        let dir = Path::new(dir);
+        std::fs::create_dir_all(dir)?;
+        for (name, body) in [
+            ("batten.schema.json", config::schema()?),
+            ("batten.local.schema.json", config::override_schema()?),
+            ("policy-input.schema.json", policy::tree_input_schema()?),
+            ("policy-call.schema.json", policy::call_input_schema()?),
+        ] {
+            crate::durable::replace(dir.join(name), format!("{body}\n"))?;
+        }
+        writeln!(out, "schema={}", dir.display())?;
+    }
+
+    if let Some(path) = request.reference.as_deref() {
+        let text = render::markdown(&spec::describe(&root));
+        // AN EMPTY FILE UPLOADS EXACTLY AS WELL AS A FULL ONE, so an empty render
+        // is refused rather than published. Unreachable over a declared surface,
+        // and kept because the publish step downstream cannot tell the difference.
+        if text.trim().is_empty() {
+            return Err(UsageError::raise(
+                "artifacts write: the reference rendered empty; refusing to write a file \
+                 that says nothing",
+            ));
+        }
+        let path = Path::new(path);
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+        crate::durable::replace(path, text)?;
+        writeln!(out, "reference={}", path.display())?;
+    }
+    Ok(ExitCode::Success)
 }
 
 /// A foundation verb whose package has not landed yet (CLOUD-843).
@@ -3884,6 +4021,27 @@ fn run_singleton(
             task::singleton_release(&git_dir, &task);
             Ok(ExitCode::Success)
         }
+        SingletonCommand::Detach {
+            task,
+            marker,
+            log,
+            pattern,
+            attached,
+            command,
+        } => {
+            let detach = Detach {
+                task: &task,
+                marker: Path::new(&marker),
+                log: Path::new(&log),
+                pattern: &pattern,
+                command: &command,
+            };
+            if attached {
+                run_detached_copy(&git_dir, &detach)
+            } else {
+                run_detach(&detach, out)
+            }
+        }
         SingletonCommand::Acquire {
             task,
             pid,
@@ -3903,6 +4061,146 @@ fn run_singleton(
         }
     }
 }
+
+/// One `singleton detach` request, borrowed from the parsed command.
+struct Detach<'a> {
+    task: &'a str,
+    marker: &'a Path,
+    log: &'a Path,
+    pattern: &'a str,
+    command: &'a [String],
+}
+
+/// How many pointer lines a failure carries into the next turn.
+///
+/// The window cost of a failing run is bounded here, and nowhere downstream:
+/// `hookcost::judge` REPORTS an over-budget hook rather than truncating it, so a
+/// compiler's whole output would otherwise reach the agent's context.
+const DETACH_POINTERS: usize = 3;
+
+/// The `[[pattern]]` row `singleton detach` selects pointer lines with.
+fn detach_pattern(id: &str) -> Result<regex::Regex> {
+    let config = resolve::resolve(Path::new("."), &Overrides::default())?;
+    let row = config
+        .patterns
+        .iter()
+        .find(|row| row.id == id)
+        .ok_or_else(|| {
+            UsageError::raise(format!(
+                "singleton detach: no `[[pattern]]` row declares `{id}`"
+            ))
+        })?;
+    regex::Regex::new(&row.regex).map_err(|_| {
+        UsageError::raise(format!(
+            "singleton detach: `[[pattern]]` row `{id}` will not compile"
+        ))
+    })
+}
+
+/// `singleton detach`: announce and clear the previous run's failure, start the
+/// attached copy, and return without waiting (CLOUD-1731, CLOUD-1991).
+///
+/// STDOUT, because a handler's advisory is its stdout and stderr goes to a log
+/// nobody opens. CLEARED once announced, so one failure is said once rather than
+/// every turn until it is fixed. The pattern is resolved HERE, before anything
+/// starts, so a misdeclared row is this invocation's usage error rather than a
+/// background copy failing where no one reads it. Starting the copy is silent on
+/// failure: a turn's own check must never be the reason the turn stops.
+///
+/// # Errors
+///
+/// A [`UsageError`] for a `[[pattern]]` id that resolves to no compiling row;
+/// an internal error when the announcement cannot be written.
+fn run_detach(request: &Detach<'_>, out: &mut dyn Write) -> Result<ExitCode> {
+    detach_pattern(request.pattern)?;
+    if let Ok(said) = std::fs::read_to_string(request.marker) {
+        write!(out, "{said}")?;
+        let _ = std::fs::remove_file(request.marker);
+    }
+    let Ok(program) = std::env::current_exe() else {
+        return Ok(ExitCode::Success);
+    };
+    let mut args: Vec<String> = vec![
+        "singleton".to_owned(),
+        "detach".to_owned(),
+        request.task.to_owned(),
+        "--marker".to_owned(),
+        request.marker.to_string_lossy().into_owned(),
+        "--log".to_owned(),
+        request.log.to_string_lossy().into_owned(),
+        "--pattern".to_owned(),
+        request.pattern.to_owned(),
+        "--attached".to_owned(),
+        "--".to_owned(),
+    ];
+    args.extend(request.command.iter().cloned());
+    exec::detached(&program, &args, &[]);
+    Ok(ExitCode::Success)
+}
+
+/// The attached copy: take the lock for THIS pid, run the command, write its
+/// whole output to the log, and on a failure leave the capped pointers for the
+/// next invocation to announce.
+///
+/// A lock another copy holds is not an error: that copy's run is this turn's
+/// check, and a second one would only race it. Every exit is `0` — nobody waits
+/// on this process, so a code would reach no one; what it has to say is the
+/// marker.
+///
+/// # Errors
+///
+/// A [`UsageError`] for a `[[pattern]]` id that resolves to no compiling row.
+fn run_detached_copy(git_dir: &Path, request: &Detach<'_>) -> Result<ExitCode> {
+    let pattern = detach_pattern(request.pattern)?;
+    let own = std::process::id().to_string();
+    match task::singleton_acquire(
+        git_dir,
+        request.task,
+        &own,
+        std::time::Duration::from_millis(100),
+    ) {
+        task::Claim::Taken | task::Claim::Reclaimed(_) => {}
+        _ => return Ok(ExitCode::Success),
+    }
+    let ran = exec::piped_argv(
+        Path::new("."),
+        request.command,
+        "",
+        exec::Diagnostics::Keep,
+        &[],
+    );
+    let (code, said) = ran.unwrap_or((-1, String::new()));
+    let _ = durable::replace(request.log, &said);
+    if code != 0 {
+        let mut marker = format!(
+            "::error:: {}: `{}` did not pass\n",
+            request.task,
+            request.command.join(" ")
+        );
+        for line in said
+            .lines()
+            .filter(|line| pattern.is_match(line))
+            .take(DETACH_POINTERS)
+        {
+            marker.push_str("  ");
+            marker.push_str(line);
+            marker.push('\n');
+        }
+        marker.push_str("  (full output: ");
+        marker.push_str(&request.log.to_string_lossy());
+        marker.push_str(")\n");
+        let _ = durable::replace(request.marker, marker);
+    }
+    task::singleton_release(git_dir, request.task);
+    Ok(ExitCode::Success)
+}
+
+// The per-turn run's mutation rows, each caught by the compiled case it names
+// in the tier that drives both halves over a scratch repository.
+//MUTANT-SUITE crates/batten/tests/it/turn_cross_check.rs
+//MUTANT marker-not-cleared|s@^        let _ = std::fs::remove_file(request.marker);$@        let _ = request.marker;@|the_failure_is_announced_on_stdout_and_then_cleared
+//MUTANT pointers-uncapped|s@^            .take(DETACH_POINTERS)$@            .take(usize::MAX)@|the_pointers_are_capped_and_name_the_full_log
+//MUTANT lock-not-consulted|s@^        _ => return Ok(ExitCode::Success),$@        _ => {}@|a_copy_already_holding_the_lock_leaves_the_run_to_it
 
 /// The boundary's own clock, as whole seconds since the epoch.
 ///
@@ -5590,6 +5888,16 @@ fn run_wiring(
             dry_run,
             check,
         } => run_wiring_reclaim(*yes, *dry_run, *check, mode, overrides, err),
+        cli::WiringCommand::Gate { body } => {
+            let linked = wiring::link_commit_gate(Path::new("."), body)?;
+            output::message(
+                mode,
+                output::Verbosity::Normal,
+                err,
+                &format!("wiring gate: {linked} commit hook(s) linked to {body}"),
+            )?;
+            Ok(ExitCode::Success)
+        }
     }
 }
 
@@ -7874,6 +8182,81 @@ fn run_land(
             };
             run_land_lap(root, &url, reference, &branch, out, err)
         }
+        cli::LandCommand::Linear { reference } => {
+            let Some(url) = land_remote(root, err)? else {
+                return Ok(ExitCode::Internal);
+            };
+            run_land_linear(root, &url, reference, out, err)
+        }
+    }
+}
+
+/// `batten land linear <reference>` (CLOUD-1991): is HEAD built on the reference's
+/// CURRENT tip, so its pull request can fast-forward-land?
+///
+/// # The retired shell, clause by clause
+///
+/// The `linear-check` task body fetched `+refs/heads/main:refs/remotes/origin/main`
+/// after deepening a shallow clone, refused on a fetch that failed or a ref that
+/// still would not resolve, and compared `git merge-base origin/main HEAD` against
+/// the fetched tip. Each clause is here, through [`land::advance`] — the fetch a
+/// lap already makes, so "the trunk as the landing loop sees it" has one reading:
+///
+/// * **THE FETCH FAILS CLOSED.** A fetch that does not complete is could-not-look
+///   (`3`), never a comparison against a stale tracking ref — the false green that
+///   once minted a receipt the ready guard accepted.
+/// * **A SHALLOW CLONE IS REFUSED, NOT DEEPENED.** The body unshallowed first; the
+///   in-process fetch sends `have` lines from local history and cannot deepen, and
+///   ancestry over a truncated history answers wrong in exactly one direction. So a
+///   shallow clone is could-not-look, naming the remedy, rather than a verdict.
+/// * **BEHIND IS THE VERDICT (`2`)**, which is what the body's `exit 2` was and what
+///   a caller branching on "rebase needed" reads. Linear is `0`.
+///
+/// The receipt the body minted is NOT minted here: which receipt names this
+/// question is the consumer's vocabulary, so the task records it after a `0`.
+///
+/// # Errors
+///
+/// Only a write failure on either channel; every failure to look is an exit code.
+fn run_land_linear(
+    root: &Path,
+    url: &str,
+    reference: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    //MUTANT-SUITE crates/batten/tests/it/linear_check.rs
+    //MUTANT linear-shallow-trusted|s@^    if git::is_shallow(root).unwrap_or(true) {$@    if false {@|a_shallow_clone_is_could_not_look_and_names_the_remedy
+    //MUTANT linear-fetch-failure-trusted|s@return Ok(ExitCode::Internal); // the fetch did not complete$@return Ok(ExitCode::Success);@|a_fetch_that_cannot_complete_is_could_not_look_and_never_a_pass
+    if git::is_shallow(root).unwrap_or(true) {
+        writeln!(
+            err,
+            "::error:: land linear: this clone is shallow (or unreadable), so ancestry against \
+             {reference} is unanswerable; deepen it with `git fetch --unshallow` and ask again"
+        )?;
+        return Ok(ExitCode::Internal);
+    }
+    let tracking = land::tracking_ref(reference);
+    let tip = match land::advance(root, url, reference, &tracking) {
+        Ok(tip) => tip,
+        Err(error) => {
+            writeln!(
+                err,
+                "::error:: land linear: could not fetch {reference}, so linearity is \
+                 unverifiable; not reading a stale {tracking}: {error:#}"
+            )?;
+            return Ok(ExitCode::Internal); // the fetch did not complete
+        }
+    };
+    if gitwrite::carries(root, &tip, "HEAD") {
+        writeln!(out, "land linear: HEAD is built on {tracking} ({tip})")?;
+        Ok(ExitCode::Success)
+    } else {
+        writeln!(
+            err,
+            "::error:: land linear: HEAD is not rebased on the current {tracking} ({tip})"
+        )?;
+        Ok(ExitCode::Violation)
     }
 }
 
@@ -15074,6 +15457,9 @@ fn collect_batch_advice(
     err: &mut dyn Write,
     advice: &mut Vec<advisory::Advice>,
 ) -> Result<()> {
+    // FIRST, AND THE ORDER IS THE PREDICATE (CLOUD-1991): the stamp dates the
+    // session, so it is written before any declared handler provisions anything.
+    stamp_session(envelope);
     if Some(envelope.event) == harness.capabilities().degrade(hook::Event::PostToolBatch) {
         drain_advisories(envelope, overrides, mode, err, advice)?;
     }
@@ -15090,6 +15476,30 @@ fn collect_batch_advice(
     repair_startup_rows(envelope, overrides);
     report_container_health(envelope, overrides, advice);
     Ok(())
+}
+
+/// Write the session boundary `claim check` dates refinement against (CLOUD-1991).
+///
+/// **The engine reads it, so the engine writes it.** It was a consumer `mise`
+/// task (`session:stamp`) dispatched by one declared handler row — a shell line
+/// whose only job was to resolve the per-worktree git directory and truncate one
+/// file, and a precondition of an engine gate that a repository had to know to
+/// declare. Written here, before [`dispatch_handlers`] runs a single row, every
+/// session start through `batten hook` dates itself, in any repository.
+///
+/// Fails open and silently, like every other side effect at this boundary: a
+/// session start is not a call being adjudicated, and a clone with no readable
+/// git directory is one where `claim check` reports the missing stamp itself.
+fn stamp_session(envelope: &hook::Envelope) {
+    if envelope.event != hook::Event::SessionStart {
+        return;
+    }
+    let Ok(git_dir) = git::git_dir(hook_authority_root()) else {
+        return;
+    };
+    // `RECEIPT_DIR` under the PER-WORKTREE directory, which is where
+    // `run_claim_check` reads it: a linked worktree dates its own session.
+    let _stamped = claim::stamp_session(&git_dir.join(RECEIPT_DIR));
 }
 
 /// Record what the pin provides, once per session (CLOUD-1028).
@@ -17791,6 +18201,12 @@ fn run_exec(
             })?;
     }
     settings.continue_on_error = settings.continue_on_error || request.continue_on_error;
+    // `--tracked` NARROWS TO NOTHING BY RUNNING NOTHING (CLOUD-1991), the `-r` of
+    // the `xargs -0 -r` it retires: a formatter handed no path would walk the
+    // whole tree instead, which is the reach the flag exists to bound.
+    let Some(command) = exec_tracked_command(request)? else {
+        return Ok(ExitCode::Success);
+    };
     // THE LOCK IS HELD ACROSS THE CHILD, AND THE GUARD IS WHAT MAKES THAT TRUE
     // ON EVERY RETURN (CLOUD-1710). A wrapped command that fails comes back as
     // `Err(Passthrough)`, so releasing after the call would leak the lock on
@@ -17804,7 +18220,95 @@ fn run_exec(
     // The report goes to the ERROR channel, never `out`: stdout belongs to the
     // wrapped command (CLOUD-285), so a pointer line there would corrupt a
     // document the caller may be parsing.
-    exec::run_with(&request.command, &patterns, &settings, err)
+    exec::run_with(&command, &patterns, &settings, err)
+}
+
+/// The child's argv with `--tracked`'s paths appended, or `None` when the
+/// pathspecs selected nothing (CLOUD-1991).
+///
+/// # The retired shell, and what each clause of it becomes
+///
+/// Five task bodies spelled `git ls-files -z <spec> | xargs -0 -r <tool>`, so a
+/// formatter never reached a deliberately corrupt fixture a suite wrote under an
+/// ignored `target/`. The INDEX is the selection — [`git::index_facts`], the same
+/// projection a policy row's `index` column reads, so "tracked" means one thing
+/// in this crate — and `-r` is the `None` arm. `--except` is the `:!:` exclusions
+/// those bodies carried: a magic pathspec is refused here exactly as
+/// [`git::pathspec_is_supported`] refuses it for a row, rather than read as a
+/// literal that selects nothing and reports a clean run.
+///
+/// # Root-relative, so it runs from the root
+///
+/// Index paths are relative to the repository root, and `git ls-files` printed
+/// them relative to the caller's directory. The two agree only at the root, so a
+/// caller anywhere else is refused rather than handed paths that name different
+/// files — the silent wrong answer the refusal exists to prevent.
+///
+/// # Errors
+///
+/// [`UsageError`] for an `--except` with no `--tracked`, a `:::` bundle, a magic
+/// pathspec, a malformed glob, or a caller outside the root; otherwise whatever
+/// reading the index reports.
+fn exec_tracked_command(request: &cli::ExecRequest) -> Result<Option<Vec<String>>> {
+    if request.tracked.is_empty() {
+        if !request.except.is_empty() {
+            return Err(UsageError::raise(
+                "exec: --except narrows what --tracked selected; name the selection with --tracked",
+            ));
+        }
+        return Ok(Some(request.command.clone()));
+    }
+    if request
+        .command
+        .iter()
+        .any(|word| word == exec::BUNDLE_SEPARATOR)
+    {
+        return Err(UsageError::raise(
+            "exec: --tracked appends to one command, and a `:::` bundle carries several",
+        ));
+    }
+    if let Some(spec) = request
+        .tracked
+        .iter()
+        .find(|spec| !git::pathspec_is_supported(spec))
+    {
+        return Err(UsageError::raise(format!(
+            "exec: --tracked `{spec}` is not a plain pathspec; exclude with --except instead"
+        )));
+    }
+    let mut builder = globset::GlobSetBuilder::new();
+    for glob in &request.except {
+        let parsed = globset::Glob::new(glob).map_err(|error| {
+            UsageError::raise(format!("exec: --except `{glob}` is not a glob: {error}"))
+        })?;
+        builder.add(parsed);
+    }
+    let except = builder
+        .build()
+        .map_err(|error| UsageError::raise(format!("exec: --except: {error}")))?;
+
+    // THIS CHECKOUT'S root, never `repo_root`, which answers with the common
+    // dir's parent: in a linked worktree that is the MAIN checkout, whose paths
+    // would name another tree's files — `index_facts` reads its own workdir for
+    // the same reason.
+    let root = git::worktree_root(Path::new("."))?;
+    let here = std::env::current_dir()?;
+    if here.canonicalize()? != root.canonicalize()? {
+        return Err(UsageError::raise(
+            "exec: --tracked appends root-relative paths, so it runs from the repository root",
+        ));
+    }
+    let paths: std::collections::BTreeSet<String> = git::index_facts(&root, &request.tracked)?
+        .into_values()
+        .flat_map(|fact| fact.entries.into_iter().map(|entry| entry.path))
+        .filter(|path| !except.is_match(path))
+        .collect();
+    if paths.is_empty() {
+        return Ok(None);
+    }
+    let mut command = request.command.clone();
+    command.extend(paths);
+    Ok(Some(command))
 }
 
 /// What `--lock` asked for, as the value [`exec::hold`] takes.
@@ -21191,7 +21695,49 @@ fn run_ci(
     match *command {
         cli::CiCommand::SlowNeeded { ref base } => run_ci_slow_needed(base, overrides, out, err),
         cli::CiCommand::Suites { ref base } => run_ci_suites(base, overrides, out, err),
+        cli::CiCommand::SlowNeededAt { ref base, ref head } => {
+            run_ci_slow_needed_at(base, head, overrides, out, err)
+        }
     }
+}
+
+/// `ci slow-needed --head <rev>` (CLOUD-1991): the plain question, asked by a
+/// caller that names the head it believes the checkout carries.
+///
+/// # The diff is the checkout's, so the head is ASSERTED, never ignored
+///
+/// A `pull_request` job checks out GitHub's merge commit, never the PR head, so
+/// the diff is taken against the checkout. Where the named head carries the
+/// checkout's tree the two questions are one — landing is fast-forward, so a
+/// landable head is already on its base. Where they differ the caller is asking
+/// about a head it is not standing on, which this cannot answer, and answering
+/// about the checkout instead would be a verdict on a different change. So it is
+/// refused as a statement about the invocation, the same reading the retired task
+/// body gave it in shell.
+///
+/// # Errors
+///
+/// Propagates a failure to open the repository, or a write failure on either
+/// channel.
+fn run_ci_slow_needed_at(
+    base: &str,
+    head: &str,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let root = git::repo_root(Path::new("."))?;
+    let named = git::resolve_ref(Path::new(&root), &format!("{head}^{{tree}}"))?;
+    let checkout = git::resolve_ref(Path::new(&root), "HEAD^{tree}")?;
+    if named.is_none() || named != checkout {
+        writeln!(
+            err,
+            "::error:: ci slow-needed: {head} does not carry this checkout's tree, and the \
+             diff is taken against the checkout."
+        )?;
+        return Ok(ExitCode::Usage);
+    }
+    run_ci_slow_needed(base, overrides, out, err)
 }
 
 /// Which bats suites a diff can move (CLOUD-886), ported off

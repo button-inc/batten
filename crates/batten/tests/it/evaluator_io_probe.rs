@@ -38,6 +38,10 @@
 // carried: "a probe build that failed to COMPILE is could-not-look, not the pass" crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
 // carried: "a probe build where the named test never ran is could-not-look" crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
 // carried: "the probe build's own output never reaches the gate's output" crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
+// carried: tests/fixtures/evaluator-io/failing-probe crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
+// carried: tests/fixtures/evaluator-io/broken-build crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
+// carried: tests/fixtures/evaluator-io/other-test-failed crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
+// carried: tests/fixtures/evaluator-io/noisy-probe crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
 // changed: "the refusal names the test to fix" batten.toml the retired program printed `<file> <test-name>`; the engine renders `<file> <rule-id>`, because `rules/policy-modules.md` makes the first path-bearing subject the finding's pointer whatever order the subjects are declared in. That is non-negotiable rule 5 — one output contract, no per-verb exception — so the test name moved to the `[[verdict]]` row's gloss and to the JSON channel, where a reader still meets it
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
