@@ -178,6 +178,17 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   `mcp grant|posture`, `board check`, `record divergence`, `record census …`)
   carry final arguments and answer `unimplemented` at exit 3 until their package
   lands; the serena launcher's home is the existing `mcp spawn`.
+- The small-body retirement's mechanisms (CLOUD-1991, p13): `record derive
+<graph family> --input resolve=<triple|any>` resolves its own `cargo metadata
+--locked` through the placed exec adapter (else stdin, as tiers feed it);
+  `record tool <id> --pick <name>=<token>` reduces `key=value` measurement lines
+  in the writer (`record-perf`); `wiring gate <body>` links a clone's
+  `pre-commit`/`commit-msg` to a checked-in body where `doctor gate` looks;
+  `singleton detach <task> --marker --log --pattern -- cmd` announces and clears
+  a previous failure on stdout, then runs the command in an attached background
+  copy under the task's lock (`cross-turn`). Two bodies left the engine instead:
+  `toolchain-check` is `mise install --dry-run-code`, and fix-selection is
+  `hk-fix-selection.pkl`, a `throw`ing module beside `hk.pkl`.
 - `claim.rs` — whether an issue is pullable, and the receipt that records the
   pull (CLOUD-272, CLOUD-431; ported off `mise-tasks/claim-check.sh` by
   CLOUD-1121). The tracker's automation fires on the PR event — the END of the

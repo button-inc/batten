@@ -1836,6 +1836,16 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The clone's commit hooks (CLOUD-1991). Driven with a body the corpus does
+    // not carry, which is the invocation that writes nothing: linking one would
+    // rewrite the fixture's own hooks. The refusal names the caller's operand
+    // and nothing read from the tree.
+    Verb {
+        path: "wiring gate",
+        args: &["no-such-hook-body"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The container's declared preconditions (CLOUD-1324). Pointer-only by
     // construction rather than by care: a row renders as its own `id` and a
     // verdict token, and the command it ran is spawned with both streams
@@ -2295,6 +2305,25 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "singleton release",
         args: &["land"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // The per-turn background run (CLOUD-1991). Driven with a pattern no row
+    // declares, which refuses before anything is announced or started — a
+    // corpus run must not leave a detached copy behind.
+    Verb {
+        path: "singleton detach",
+        args: &[
+            "census-detach",
+            "--marker",
+            "detach.marker",
+            "--log",
+            "detach.log",
+            "--pattern",
+            "no-such-pattern-row",
+            "--",
+            "true",
+        ],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
