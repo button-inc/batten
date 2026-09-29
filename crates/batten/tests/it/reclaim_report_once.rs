@@ -144,11 +144,13 @@ fn a_new_boot_is_reported_though_an_older_one_was_already_marked() {
 }
 
 #[test]
-fn report_once_records_this_boot_before_it_reads() {
-    // RECORD BEFORE READ, and the order is load-bearing: recording after reading
-    // would make this boot part of the evidence it is compared against. What is
-    // observable from outside is that the session start RECORDED it — the next
-    // container's census has this boundary to judge.
+fn report_once_records_this_boot_for_the_next_container() {
+    // THAT it records, never WHEN: `previous` excludes this boot, so recording
+    // before or after the read judges the same predecessor
+    // (`recording_this_boot_does_not_move_the_boot_it_replaced`), and an order
+    // claim here would be decoration no mutant could refute. What is observable
+    // is that the session start RECORDED it — the next container's census has
+    // this boundary to judge.
     let repo = seeded("records", "h");
     let _ = session_start(&repo);
     let (code, out, err) = census(&repo, NOW, &["tally"]);

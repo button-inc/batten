@@ -8337,6 +8337,96 @@ fn run_land_lap(
         return Ok(ExitCode::Violation);
     };
 
+    // THE RECLAIM CENSUS'S WINDOW, opened and closed HERE and nowhere inside the
+    // laps (CLOUD-843, round-2 review). See `land_census_window`. After the
+    // singleton, because the census store is this worktree's and the singleton is
+    // what makes this the one landing in it: a second land refused above wrote
+    // nothing, so it cannot mask a live one.
+    let beat_note = std::env::var("LEASE_BEAT_NOTE").unwrap_or_default();
+    let stop_note = std::env::var("LEASE_STOP_NOTE").unwrap_or_default();
+    let run = Laps {
+        root,
+        url,
+        reference,
+        branch,
+        laps,
+        pipeline,
+        guard: &guard,
+    };
+    land_census_window(root, &beat_note, &stop_note, || {
+        run_land_laps(run, out, err)
+    })
+}
+
+//MUTANT landing-start-unnoted|s@^    note_declared(root, begin_note);$@@|a_landing_notes_its_start_and_every_chosen_end
+//MUTANT landing-end-unnoted|s@^    note_declared(root, stop_note);$@@|a_landing_notes_its_start_and_every_chosen_end
+/// Run `laps` inside the reclaim census's window: a beat before, a stop after.
+///
+/// **THE STOP IS WRITTEN WHERE THE LANDING ENDS, never where a lap does**
+/// (CLOUD-843, round-2 review). It used to ride on `lease_hand_back`, and every
+/// lap that reached `Step::Lease` and then lapped hands its lease back through
+/// `unwind_lap` — so the census read `x` in the middle of a landing still running,
+/// and a container killed in the next lap's replay or verify, which take
+/// minutes, read as *stopped on purpose*. The false-idle reading the census exists
+/// to rule out. Here the landing has returned — landed, stopped, refused, stood
+/// down or out of laps — so nothing this process does follows the stop.
+///
+/// **THE BEAT OPENS THE WINDOW**, because the lap's heartbeat beats only inside
+/// `Step::Wait`: a landing that followed an earlier landing's `x` under the same
+/// boot would otherwise read as idle through its whole replay, verify, lease,
+/// push and ready. The beat says a landing is in flight; the heartbeat's later
+/// beats say it still is.
+///
+/// Never on an exit path (CLOUD-491): a kill never returns from `laps`, so it
+/// reaches neither note after the first, and the last record stays a beat. An
+/// `Err` is a return like any other — the process chose to stop — so it is
+/// noted too. Both argvs are the consumer's, for [`note_release`]'s reason.
+///
+/// # Errors
+///
+/// Whatever `laps` returned; the notes are best-effort and never an error.
+fn land_census_window(
+    root: &Path,
+    begin_note: &str,
+    stop_note: &str,
+    laps: impl FnOnce() -> Result<ExitCode>,
+) -> Result<ExitCode> {
+    note_declared(root, begin_note);
+    let ended = laps();
+    note_declared(root, stop_note);
+    ended
+}
+
+/// The landing the lap loop runs, gathered for `clippy::too_many_arguments` —
+/// [`Asked`]'s reason, one level up: these are the landing's identity, fixed
+/// before the first lap.
+struct Laps<'run> {
+    root: &'run Path,
+    url: &'run str,
+    reference: &'run str,
+    branch: &'run str,
+    laps: u32,
+    pipeline: pipeline::Pipeline,
+    /// Held by the caller for the whole landing; each step publishes its phase.
+    guard: &'run LandSingleton,
+}
+
+/// The lap loop, split from [`run_land_lap`] so the census window can close
+/// around every way it returns (see [`land_census_window`]).
+///
+/// # Errors
+///
+/// Only for a stream that will not accept output.
+fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+    let Laps {
+        root,
+        url,
+        reference,
+        branch,
+        laps,
+        pipeline,
+        guard,
+    } = run;
     // ONE POLL FOR THE WHOLE LANDING, held outside the lap loop so lap 2 onward
     // send the validator lap 1 was given. Rebuilt per lap it was a fresh
     // unconditional ask every time — see `land::stale`'s own header, which
@@ -11434,6 +11524,20 @@ impl<'clone> Heartbeat<'clone> {
     /// close. The tick answers *is the loop going round*; the lease is asking *is
     /// the world moving*.
     fn beat(&self, observed: u64) {
+        self.beat_with(observed, lease::beat);
+    }
+
+    /// [`Heartbeat::beat`] with the renewal passed in — the seam that lets the
+    /// census beat's CALL be pinned offline (CLOUD-843, round-2 review). The
+    /// renewal needs a live lease remote, which no offline seam exists for
+    /// (`tests/it/lease_health.rs`), so while the note sat after an inline
+    /// `lease::beat` its deletion survived every tier. Everything a beat does
+    /// after the renewal answers is here, and only the renewal is swapped.
+    fn beat_with(
+        &self,
+        observed: u64,
+        renew: impl FnOnce(&Path, &lease::Terms, Option<&str>, i64) -> lease::Beat,
+    ) {
         let Some(terms) = self.terms.as_ref() else {
             return;
         };
@@ -11456,7 +11560,7 @@ impl<'clone> Heartbeat<'clone> {
         // that looks at the lease every few seconds. Latched here and honoured at
         // the lap boundary — never here, where a release would drop the lease
         // inside this holder's own matrix and let a second lander start.
-        let beat = lease::beat(self.root, terms, progress.as_deref(), now);
+        let beat = renew(self.root, terms, progress.as_deref(), now);
         // THE CENSUS BEAT, on THIS path because it is the one a landing runs
         // (CLOUD-843): `lease hold` is unreached, so a beat written only there
         // left every reclaim under a landing UNOBSERVED.
@@ -12284,8 +12388,10 @@ fn run_lease_hold(
         .and_then(|pid| pid.parse::<u32>().ok());
     let marker =
         std::env::var("LAND_LOCK_HOLDER_MARKER").unwrap_or_else(|_| String::from("batten land"));
-    // The consumer's reclaim-census beat, read once: see `lease_renewed`.
+    // The consumer's reclaim-census beat and stop, read once: see
+    // `lease_renewed` and `lease_hold_bail`.
     let beat_note = std::env::var("LEASE_BEAT_NOTE").unwrap_or_default();
+    let stop_note = std::env::var("LEASE_STOP_NOTE").unwrap_or_default();
     let mut misses = 0_u32;
     loop {
         // The interval is the lease's own `beat`, and the loop's exit condition is
@@ -12313,7 +12419,7 @@ fn run_lease_hold(
                 "lease: the land holding this lease (pid {pid}) is gone; releasing rather than \
                  renewing for nobody"
             )?;
-            lease_hand_back(root, terms, &holder, now);
+            lease_hold_bail(root, terms, &holder, now, HoldEnd::HolderGone, &stop_note);
             return Ok(ExitCode::Violation);
         }
         // The complementary case, and the one liveness cannot see: the land is
@@ -12337,7 +12443,7 @@ fn run_lease_hold(
                 "lease: the land holding this lease {why}; releasing and stopping it rather than \
                  holding the fleet"
             )?;
-            lease_hand_back(root, terms, &holder, now);
+            lease_hold_bail(root, terms, &holder, now, HoldEnd::Stalled, &stop_note);
             lease_bail_reason(&git_dir, &why);
             // Re-corroborated immediately before the signal, never inferred from
             // the probe at the top of this beat: pids recycle inside twenty
@@ -12406,38 +12512,15 @@ fn run_lease_hold(
 /// ending; a clone that cannot reach the remote here has a problem, but the caller
 /// is stopping anyway and reporting it would replace the reason it is stopping.
 ///
-/// **Every caller CHOSE to stop, so every call writes the census stop**
-/// (CLOUD-843): the lap on its landed and its undo paths, `lease hold` on its two
-/// bails. The lap never reaches `lease release`, so a stop written only by
-/// [`note_release`] left each finished landing's last record a beat — the false
-/// "in flight" that record exists to prevent. See [`lease_hand_back_noting`].
+/// **It writes NO census note, and that is the round-2 correction** (CLOUD-843).
+/// Its callers do not all choose to stop: the lap hands its lease back on every
+/// lap that reached `Step::Lease` and then laps, in the middle of a landing still
+/// running, and `lease hold`'s first bail fires because the land it served is
+/// GONE. A stop written here read both as *stopped on purpose*. The landing's stop
+/// is [`land_census_window`]'s, where the landing returns; `lease hold`'s is
+/// [`lease_hold_bail`]'s, on the one bail it chose; `lease release`'s is
+/// [`note_release`]'s.
 fn lease_hand_back(root: &Path, terms: &lease::Terms, holder: &str, now: i64) {
-    let stop_note = std::env::var("LEASE_STOP_NOTE").unwrap_or_default();
-    lease_hand_back_noting(root, terms, holder, now, &stop_note);
-}
-
-//MUTANT chosen-stop-unnoted|s@^    note_declared(root, stop_note);$@@|a_chosen_stop_writes_the_stop_note_even_when_the_lease_is_unreadable
-/// [`lease_hand_back`] with the stop note passed in.
-///
-/// **The note is written whatever the tombstone did, and after it.** The stop
-/// was chosen either way: a lease that already lapsed, was taken, or could not be
-/// read still ends a landing on purpose, and gating the note on the swap would
-/// leave that landing's last beat reading as a container death. After it, so
-/// nothing this process writes follows the stop. Never on an exit path
-/// (CLOUD-491): a kill reaches none of this function's callers.
-fn lease_hand_back_noting(
-    root: &Path,
-    terms: &lease::Terms,
-    holder: &str,
-    now: i64,
-    stop_note: &str,
-) {
-    lease_tombstone_if_held(root, terms, holder, now);
-    note_declared(root, stop_note);
-}
-
-/// The tombstone half of [`lease_hand_back`]: only a lease this clone holds.
-fn lease_tombstone_if_held(root: &Path, terms: &lease::Terms, holder: &str, now: i64) {
     let Ok(observed) = lease::observe(terms) else {
         return;
     };
@@ -12449,6 +12532,40 @@ fn lease_tombstone_if_held(root: &Path, terms: &lease::Terms, holder: &str, now:
     }
     if lease::cas(terms, &observed, &lease::tombstone(body), now).is_ok() {
         lease_receipt_clear(root, &body.branch);
+    }
+}
+
+/// Why `lease hold` is letting go, which decides whether the census hears a stop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HoldEnd {
+    /// The land it served is gone — killed, OOM'd, reaped. NOT a chosen stop: it
+    /// is the one path that detects a dead lander, and CLOUD-491 forbids reading
+    /// that as deliberate.
+    HolderGone,
+    /// The land is alive and stalled, and this holder stops it. A chosen stop:
+    /// the landing ends because the heartbeat decided so.
+    Stalled,
+}
+
+//MUTANT hold-gone-noted-as-stop|s@^    if end == HoldEnd::Stalled {$@    if true {@|a_hold_notes_a_stop_only_where_it_chose_one
+//MUTANT hold-stall-unnoted|s@^    if end == HoldEnd::Stalled {$@    if false {@|a_hold_notes_a_stop_only_where_it_chose_one
+/// `lease hold`'s bail: hand the lease back, then note the stop iff it was CHOSEN.
+///
+/// After the hand-back, so nothing this process writes follows the stop. The
+/// note is written whatever the tombstone did: a stall bail stops its land either
+/// way, and gating the note on the swap would leave that landing's last beat
+/// reading as a container death.
+fn lease_hold_bail(
+    root: &Path,
+    terms: &lease::Terms,
+    holder: &str,
+    now: i64,
+    end: HoldEnd,
+    stop_note: &str,
+) {
+    lease_hand_back(root, terms, holder, now);
+    if end == HoldEnd::Stalled {
+        note_declared(root, stop_note);
     }
 }
 
@@ -12509,14 +12626,16 @@ fn note_declared(root: &Path, declared: &str) {
     let _ = exec::piped_argv(root, &argv, "", exec::Diagnostics::Keep, &[]);
 }
 
+//MUTANT heartbeat-beat-unnoted|s@^        note_beat(self.root, &beat, &self.beat_note);$@@|a_heartbeat_notes_the_beat_it_took_and_latches_a_stand_down
 //MUTANT beat-unnoted|s@^    if !matches!(beat, lease::Beat::Quiet) {$@    if false {@|a_beat_is_noted_only_when_the_renewal_was_taken
 //MUTANT quiet-beat-noted|s@^    if !matches!(beat, lease::Beat::Quiet) {$@    if true {@|a_beat_is_noted_only_when_the_renewal_was_taken
 /// The census beat for one heartbeat: `beat_note` iff the renewal was TAKEN.
 ///
 /// [`lease::Beat::Renewed`] and [`lease::Beat::StandDown`] both renewed; only
 /// [`lease::Beat::Quiet`] did not, and a beat after a refused swap would claim a
-/// hold this clone may no longer have. The lap's [`Heartbeat::beat`] calls it
-/// on every beat; its one argv is the consumer's, for [`note_release`]'s reason.
+/// hold this clone may no longer have. The lap's [`Heartbeat::beat_with`] calls
+/// it on every beat; its one argv is the consumer's, for [`note_release`]'s
+/// reason.
 fn note_beat(root: &Path, beat: &lease::Beat, beat_note: &str) {
     if !matches!(beat, lease::Beat::Quiet) {
         note_declared(root, beat_note);
@@ -12530,14 +12649,15 @@ fn note_beat(root: &Path, beat: &lease::Beat, beat_note: &str) {
 /// remote refused.
 ///
 /// **This is the UNREACHED holder's half** — nothing in the tree runs `lease
-/// hold` today. The landing's own heartbeat is [`Heartbeat::beat`], whose beat is
+/// hold` today. The landing's own heartbeat is [`Heartbeat::beat_with`], whose beat is
 /// [`note_beat`]; that is the path that makes the census's positive reading, *a
 /// landing was in flight when the container went*, reachable (CLOUD-843). Both
 /// are kept so the verb and the lap cannot disagree about what a beat records.
 ///
 /// The argv is the consumer's for [`note_release`]'s reason: the beat and the
-/// stop are one census, and only the consumer knows it keeps one. The stop stays
-/// in [`note_release`] alone, never on an exit path (CLOUD-491).
+/// stop are one census, and only the consumer knows it keeps one. The hold's stop
+/// is [`lease_hold_bail`]'s, and only on the bail it chose — never on an exit
+/// path (CLOUD-491).
 fn lease_renewed(root: &Path, branch: &str, expires: i64, beat_note: &str) {
     lease_receipt(root, branch, expires);
     note_declared(root, beat_note);
@@ -22029,25 +22149,103 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// THE PRODUCTION STOP (CLOUD-843, round-1 review): the lap hands its lease
-    /// back through `lease_hand_back`, never `lease release`, so the stop note is
-    /// written there — and whatever the tombstone did, because the stop was
-    /// chosen either way. The remote here does not even parse as a URL, so the
-    /// observe fails before any network and the note must still be written.
+    /// THE PRODUCTION STOP (CLOUD-843, round-2 review): the landing writes its
+    /// stop where it RETURNS, never where a lap hands its lease back — a lap that
+    /// laps is a landing still running, and a stop written there read as *stopped
+    /// on purpose* through the next lap's replay and verify. The window's opening
+    /// beat is pinned in the same case: without it, a landing following an
+    /// earlier `x` under one boot read as idle until its first wait.
+    ///
+    /// `Err` is asserted as well as `Ok`: an error is the process choosing to
+    /// stop, and a stop left unwritten there reads as a container death.
     #[cfg(unix)]
     #[test]
-    fn a_chosen_stop_writes_the_stop_note_even_when_the_lease_is_unreadable() {
-        let (root, marker) = census_scratch("stop");
+    fn a_landing_notes_its_start_and_every_chosen_end() {
+        let (root, started) = census_scratch("window");
+        let stopped = root.join("stopped");
+        let begin = format!("touch {}", started.display());
+        let stop = format!("touch {}", stopped.display());
+        let ended = land_census_window(&root, &begin, &stop, || {
+            assert!(
+                started.exists(),
+                "the beat opens the window, before any lap"
+            );
+            assert!(!stopped.exists(), "no stop while the laps still run");
+            Ok(ExitCode::Violation)
+        });
+        assert_eq!(
+            ended.unwrap(),
+            ExitCode::Violation,
+            "the laps' answer, unchanged"
+        );
+        assert!(stopped.exists(), "the landing's return is its chosen stop");
+        std::fs::remove_file(&started).unwrap();
+        std::fs::remove_file(&stopped).unwrap();
+        let failed = land_census_window(&root, &begin, &stop, || Err(anyhow::anyhow!("stdout")));
+        assert!(failed.is_err(), "the laps' error, unchanged");
+        assert!(
+            stopped.exists(),
+            "an error is a return, and a return is a stop"
+        );
+        // And a consumer that declares neither gets nothing spawned.
+        std::fs::remove_file(&started).unwrap();
+        std::fs::remove_file(&stopped).unwrap();
+        let _ = land_census_window(&root, "", "", || Ok(ExitCode::Success));
+        assert!(!started.exists() && !stopped.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `lease hold`'s bails (CLOUD-843, round-2 review): the stall bail CHOSE to
+    /// stop its land and notes it; the holder-gone bail detected a DEAD land, and
+    /// a stop there is the false "on purpose" CLOUD-491 forbids. The remote does
+    /// not parse as a URL, so the hand-back fails before any network and the
+    /// note is still decided by the bail alone.
+    #[cfg(unix)]
+    #[test]
+    fn a_hold_notes_a_stop_only_where_it_chose_one() {
+        let (root, marker) = census_scratch("hold-bail");
         let terms = lease::Terms {
             remote: String::from("not a remote"),
             ..lease::Terms::default()
         };
         let note = format!("touch {}", marker.display());
-        lease_hand_back_noting(&root, &terms, "someone", 42, &note);
-        assert!(marker.exists(), "the chosen stop was noted");
+        lease_hold_bail(&root, &terms, "someone", 42, HoldEnd::HolderGone, &note);
+        assert!(!marker.exists(), "a dead lander is not a chosen stop");
+        lease_hold_bail(&root, &terms, "someone", 42, HoldEnd::Stalled, &note);
+        assert!(marker.exists(), "stopping a stalled lander is");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// THE CALL, not only the decision (CLOUD-843, round-2 review): the lap's
+    /// heartbeat notes the beat its renewal took and latches a stand-down, with
+    /// the renewal swapped for one that answers offline. Deleting the
+    /// `note_beat` call used to survive every tier, because the only route to it
+    /// ran through a live lease remote.
+    #[cfg(unix)]
+    #[test]
+    fn a_heartbeat_notes_the_beat_it_took_and_latches_a_stand_down() {
+        let (root, marker) = census_scratch("heartbeat");
+        let heart = Heartbeat {
+            root: &root,
+            terms: Some(lease::Terms::default()),
+            git_dir: None,
+            pid: std::process::id(),
+            last: std::sync::atomic::AtomicI64::new(0),
+            stood_down: std::sync::Mutex::new(None),
+            beat_note: format!("touch {}", marker.display()),
+        };
+        heart.beat_with(1, |_, _, _, _| lease::Beat::StandDown(String::from("peer")));
+        assert!(
+            marker.exists(),
+            "a renewal the remote took is a census beat"
+        );
+        assert_eq!(heart.was_asked_to_stand_down().as_deref(), Some("peer"));
         std::fs::remove_file(&marker).unwrap();
-        lease_hand_back_noting(&root, &terms, "someone", 42, "");
-        assert!(!marker.exists(), "no declared stop, nothing spawned");
+        // A quiet renewal took nothing, so it notes nothing. `last` is reset so
+        // the interval does not answer for it.
+        heart.last.store(0, std::sync::atomic::Ordering::Relaxed);
+        heart.beat_with(2, |_, _, _, _| lease::Beat::Quiet);
+        assert!(!marker.exists(), "a quiet beat is not a census beat");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

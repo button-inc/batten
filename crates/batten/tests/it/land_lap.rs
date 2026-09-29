@@ -370,11 +370,11 @@ fn the_shipped_lap_validates_and_ends_at_the_commit_point() {
 /// `tests/reclaim-census.bats` carried this as *"land records the stop it causes
 /// itself"*, reading `mise-tasks/land.sh` for the note. The note moved rather
 /// than died: the lander used to spawn it inline, and the engine spawns what
-/// `$LEASE_STOP_NOTE` names wherever a holder CHOSE to stop — the lap's own
-/// `lease_hand_back` on its landed and undo paths, and `lease release` — since
-/// CLOUD-843 the argv of `batten record census note x`, the census having retired
-/// off its task. So the case is PORTED here rather than withdrawn; the engine's
-/// spawn is `a_chosen_stop_writes_the_stop_note_even_when_the_lease_is_unreadable`.
+/// `$LEASE_STOP_NOTE` names wherever a holder CHOSE to stop — the landing where
+/// it returns (never where a lap hands its lease back and laps), and `lease
+/// release` — since CLOUD-843 the argv of `batten record census note x`, the
+/// census having retired off its task. So the case is PORTED here rather than
+/// withdrawn; the engine's spawn is `a_landing_notes_its_start_and_every_chosen_end`.
 ///
 /// **The declaration is the subject, not the spawn.** The note's text is this
 /// consumer's — a census program's argv — so `crates/batten` may not carry it

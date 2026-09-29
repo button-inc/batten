@@ -7,23 +7,27 @@
 //! # Structural, not temporal (CLOUD-491)
 //!
 //! The last seconds of writes do not survive a measured replacement, so no clock
-//! is in the predicate. An `h` per heartbeat, an `x` only where something CHOSE
-//! to stop, and the verdict is the kind of the last record written UNDER THE
+//! is in the predicate. An `h` when a landing starts and per heartbeat, an `x`
+//! only where it CHOSE to stop — where the landing returns, never where one lap
+//! hands its lease back and laps — and the verdict is the kind of the last record
+//! written UNDER THE
 //! BOOT BEING JUDGED — per transition, never the store's newest line, which
 //! re-answered one event forever.
 //!
 //! # Narrower than CLOUD-451, and said (CLOUD-696)
 //!
-//! It records only while a landing holds the lease, so a boot that recorded
-//! nothing is UNOBSERVED, never idle: idleness reported from a coverage gap is
-//! evidence manufactured from silence.
+//! It records only while a landing runs, so a boot that recorded nothing is
+//! UNOBSERVED, never idle: idleness reported from a coverage gap is evidence
+//! manufactured from silence.
 //!
 //! # The stores
 //!
 //! Two journal families under the per-worktree git directory, written through
-//! [`crate::journal::append_line`] (the one durable append path) and read through
+//! [`crate::journal::append_line_healing`] and read through
 //! [`crate::journal::fold_lines`], which drops a torn tail — the value a torn
-//! tail would corrupt is exactly the kind this census classifies by. The
+//! tail would corrupt is exactly the kind this census classifies by. The write
+//! drops a torn tail too, before appending, or the next record would be glued to
+//! the fragment and the pair fold back as one whole line. The
 //! once-per-boot mark sits beside the beats, outside the journal's shards.
 //!
 //! [`classify`], [`previous`] and [`tally`] are pure functions of the folded
@@ -45,7 +49,7 @@
 //MUTANT reason-with-space-accepted|s@^    if reason.is_some_and(@    if false \&\& reason.is_some_and(@|the_notes_carry_epoch_boot_and_only_a_given_reason
 //MUTANT mark-ignored|s@^    seen.trim_end() == boot$@    seen.trim_end() == "never-a-boot"@|a_reclaim_is_reported_once_and_the_repeat_is_silent
 //MUTANT mark-not-keyed-to-boot|s@^    seen.trim_end() == boot$@    !seen.is_empty()@|a_new_boot_is_reported_though_an_older_one_was_already_marked
-//MUTANT boot-unrecorded-at-session-start|s@^        let _ = record_boot(&git_dir, &boot);$@        let _ = (\&git_dir, \&boot);@|report_once_records_this_boot_before_it_reads
+//MUTANT boot-unrecorded-at-session-start|s@^        let _ = record_boot(&git_dir, &boot);$@        let _ = (\&git_dir, \&boot);@|report_once_records_this_boot_for_the_next_container
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -218,9 +222,16 @@ fn fold(git_dir: &Path, family: &str) -> Option<Vec<String>> {
 /// Two shards would fold back sorted by shard name, not by time.
 pub const SHARD: &str = "census";
 
-/// Append one record to a family, durably.
+/// Append one record to a family, durably, dropping a torn tail first.
+///
+/// Through [`crate::journal::append_line_healing`], because the fold's torn-tail
+/// protection otherwise holds only until this append: a torn `x … land-stopped`
+/// followed by the next container's `h …` would fold back as ONE whole `x` under
+/// the old boot, reading an interrupted landing as idle and swallowing the new
+/// record. Each family has one sequential writer — the landing's own notes, and
+/// the session start's boot record — which is what that path requires.
 fn append(git_dir: &Path, family: &str, line: &str) -> Result<()> {
-    crate::journal::append_line(&store(git_dir, family), SHARD, line)
+    crate::journal::append_line_healing(&store(git_dir, family), SHARD, line)
 }
 
 /// The per-worktree git directory, or `None` outside a repository.
@@ -360,9 +371,12 @@ fn in_flight(epoch: &str, prev: &str, boot: &str) -> String {
 /// container can be.
 ///
 /// `--once` is the session-start form (CLOUD-1301), and it absorbs what
-/// `[tasks."session:census"]` did around the report. RECORD BEFORE READ, because
-/// recording after reading would make this boot part of the evidence it is
-/// compared against. Only the positive reading speaks, and only once per BOOT:
+/// `[tasks."session:census"]` did around the report. It RECORDS this boot, which
+/// is what gives the next container a boundary to judge; the order against the
+/// read is immaterial, because [`previous`] excludes this boot whether or not it
+/// is recorded yet (`recording_this_boot_does_not_move_the_boot_it_replaced`).
+/// The shell's "record before read" guarded a comparison this reading no longer
+/// makes, and is not claimed. Only the positive reading speaks, and only once per BOOT:
 /// the previous boot is immutable history, so after the first read the verdict is
 /// noise. The mark is keyed to the boot, which is what makes it self-clearing on
 /// a new container. It prints BEFORE the mark is written, so a mark that cannot be
@@ -539,6 +553,18 @@ mod tests {
         assert_eq!(previous(&boots, "2000"), Some("1500"));
         assert_eq!(previous(&lines(&["2000"]), "2000"), None);
         assert_eq!(previous(&lines(&["1000", "junk"]), "2000"), Some("1000"));
+    }
+
+    /// Why `report --once` claims no record-before-read ORDER: recording this
+    /// boot first or last judges the same predecessor, because `previous`
+    /// excludes it either way. What recording buys is the NEXT boundary.
+    #[test]
+    fn recording_this_boot_does_not_move_the_boot_it_replaced() {
+        assert_eq!(
+            previous(&lines(&["500"]), "9000"),
+            previous(&lines(&["500", "9000"]), "9000")
+        );
+        assert_eq!(previous(&lines(&["500", "9000"]), "9000"), Some("500"));
     }
 
     #[test]
