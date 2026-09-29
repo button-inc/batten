@@ -3971,7 +3971,17 @@ fn run_record_decide(
         rule: rules.to_vec(),
         ..cli::CheckFlags::default()
     };
-    run_check(&flags, mode, overrides, out, err)
+    let decided = run_check(&flags, mode, overrides, out, err);
+    // THE READING ANSWERS THE DECISION IT WAS WRITTEN FOR, AND NO LATER ONE.
+    // Left in the store, a firing's record went on refusing every `check` and
+    // `enforce` over the whole ruleset until the next `stop` rewrote it — the
+    // previous turn's stranding turned into a blocker at `verify` and `land`,
+    // which the retired body (stderr and an exit code, no record) never was.
+    // Removed whatever the decision said, so no rule reads it afterwards.
+    //MUTANT-SUITE crates/batten/tests/it/finding_sink.rs
+    //MUTANT decided-record-kept|s@^    record::clear_named("record decide", \&record::safe_component("family", family)?)?;$@@|a_decided_record_never_answers_a_later_check
+    record::clear_named("record decide", &record::safe_component("family", family)?)?;
+    decided
 }
 
 /// `pr unsubscribed <drop|record|check> <pr>` (CLOUD-518, CLOUD-790; retired off

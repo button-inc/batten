@@ -7477,8 +7477,9 @@ severity = "deny"
 
 # CLOUD-252/475/775, the decision half of `[tasks.finding-sink-check]`, retired
 # under CLOUD-843. `deny` so `record decide` exits 2 on a firing, which the
-# `finding-sink` stop handler's door reads as its rung's advice. Silent with no
-# record, so an ordinary `check` is unaffected.
+# `finding-sink` stop handler's door reads as its rung's advice. `record decide`
+# removes the reading once it has decided, so no record outlives its `stop` and
+# an ordinary `check` or `enforce` (verify, land) finds none to fire on.
 [[rule]]
 id = "turn file other"
 kind = "policy"

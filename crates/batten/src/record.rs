@@ -836,6 +836,9 @@ pub enum Decision {
 /// so a reading echoed there would be said on every turn. The decision's own
 /// output is the only thing this verb says.
 ///
+/// **Transient**: the dispatcher removes the record once the decision is made
+/// ([`clear_named`]), so a reading never answers a later `check` or `enforce`.
+///
 /// # Errors
 ///
 /// As [`run_derive`]: a [`UsageError`] for an unknown family, a malformed input

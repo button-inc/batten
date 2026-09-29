@@ -434,21 +434,32 @@ fn an_unreadable_transcript_abstains() {
     assert_eq!(turns.check_in(&turns.repo, "{}").0, Some(0));
 }
 
-/// An abstention removes the stale record, or a finding recorded on an earlier
-/// turn would keep answering as this one's.
+/// A firing leaves no record behind. The retired body said its verdict on
+/// stderr and in its exit code and wrote nothing, so a stranding on one turn
+/// never refused a later `check` or `enforce` over the whole ruleset — the
+/// `verify` and `land` gates. A reading left in the store would, until the next
+/// `stop` rewrote it.
 #[test]
-fn an_abstention_removes_the_stale_record() {
+fn a_decided_record_never_answers_a_later_check() {
     let turns = Turns::new("stale").prompt().say(CITED);
     fired(&turns.check(), 1);
+    for argv in [
+        &["check"][..],
+        &["check", "--rule", "turn file other"][..],
+        &["enforce"][..],
+    ] {
+        let decided = common::run(&turns.repo, argv);
+        assert_eq!(
+            decided.status.code(),
+            Some(0),
+            "{argv:?}: the decided record is gone, so nothing is decided: {}{}",
+            String::from_utf8_lossy(&decided.stdout),
+            String::from_utf8_lossy(&decided.stderr)
+        );
+    }
+    // And an abstention after it is silent too.
     let (code, _, both) = turns.check_in(&turns.repo, "");
     assert_eq!(code, Some(0), "{both}");
-    let decided = common::run(&turns.repo, &["check", "--rule", "turn file other"]);
-    assert_eq!(
-        decided.status.code(),
-        Some(0),
-        "no record, so nothing is decided: {}",
-        String::from_utf8_lossy(&decided.stdout)
-    );
 }
 
 #[test]
