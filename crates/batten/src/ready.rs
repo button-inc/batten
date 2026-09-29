@@ -685,6 +685,15 @@ fn closes_a_key(text: &str, at: usize) -> bool {
 // mutation to reach.
 //MUTANT-SUITE crates/batten/tests/it/issue_key.rs
 //MUTANT case-insensitive-key-accepted|s@^            Regex::new(&row.regex)@            Regex::new(\&format!("(?i){}", row.regex))@|the_committed_reader_refuses_the_lowercase_spelling
+//
+// `mise-tasks/ready-lint.sh`'s four rows, CARRIED (CLOUD-1221). They sit under the
+// suite line above because a cargo suite filters by case name across every test
+// target, so the named cases in `tests/it/ready.rs` are selected from here just
+// the same. The replay row's `..` stands for the `||` a row cannot spell.
+//MUTANT break-read-off-the-whole-line|s@^    let breaking = type_token.contains('!')@    let breaking = bump_line.contains('!')@|the_break_marker_is_read_off_the_type_token_and_never_off_the_line
+//MUTANT emission-dropped|s@^        "cites-body",$@        "cites-body-dropped",@|the_bodys_cited_keys_are_emitted_before_any_verdict
+//MUTANT emission-after-the-verdict|s@^        return Ok(report);$@        return Ok(Report { findings: report.findings, ..Report::default() });@|the_bodys_cited_keys_are_emitted_before_any_verdict
+//MUTANT replay-demanded-of-a-warn-gate|s@^    if !grammar.gate_intro.is_match(block) .. !grammar.deny_severity.is_match(block) {$@    if !grammar.gate_intro.is_match(block) {@|a_deny_gate_owes_a_replay_and_a_warn_gate_does_not
 impl Grammar {
     /// Is this WHOLE string a key? The four shell `case` globs' question.
     ///
