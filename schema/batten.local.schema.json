@@ -830,7 +830,7 @@
           ]
         },
         "captured": {
-          "description": "The reductions this policy row reads out of the capture store,\n**declared** (CLOUD-1188).\n\nEach row becomes an entry of `input.tree.captured` under its own `id`,\ncarrying the REDUCTION it asked for — a boolean, a count, or a bounded\ntoken — and never the response it came from. A row declares what to reduce\nand how, because handing a module a payload would put a tracker's prose on\nthe policy input where any predicate could lift it into a pointer.\n\n**The store, never stdin**: a stdin-fed fact is dropped by the surface\ntable before projection, is context re-sent every turn, and is invisible to\nthe step-receipt key — three independent refusals, any one of which is\nenough.",
+          "description": "The reductions this policy row reads out of the capture store,\n**declared** (CLOUD-1188).\n\nEach row becomes an entry of `input.tree.captured` under its own `id`,\ncarrying the REDUCTION it asked for — a boolean, a count, or a bounded\ntoken — and never the response it came from. A row declares what to reduce\nand how, because handing a module a payload would put a tracker's prose on\nthe policy input where any predicate could lift it into a pointer.\n\n**The store, never stdin**: a stdin-fed fact is dropped by the surface\ntable before projection, is context re-sent every turn, and is invisible to\nthe `batten step` key — three independent refusals, any one of which is\nenough.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/CaptureQuery"
@@ -1240,6 +1240,7 @@
             "pinned-toolchain",
             "shell-hygiene",
             "supply-chain",
+            "tracker-hygiene",
             "trunk-based"
           ]
         },

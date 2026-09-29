@@ -464,7 +464,7 @@
       }
     },
     "step": {
-      "description": "The step cache's table (CLOUD-424, CLOUD-843): each step a caller brackets\nwith `batten step`, the pathspecs whose index entries key its receipt and\nthe tool argvs whose answers do. Empty means no step is declared, so every\n`batten step` call is a miss that records nothing.\n\nConsumer-specific by nature, for `startup`'s reason: which steps a\nrepository runs and what each reads are facts about that repository\n(non-negotiable rule 1). Read from the committed authority alone, never\nlayered. The type, its validator and the cache are [`crate::step`].",
+      "description": "The step cache's table (CLOUD-424, CLOUD-843): each step a caller brackets\nwith `batten step`, the pathspecs whose index entries key its receipt and\nthe tool argvs whose answers do. Empty means no step is declared, so every\n`batten step` call is a miss that records nothing.\n\nConsumer-specific by nature, for `startup`'s reason: which steps a\nrepository runs and what each reads are facts about that repository\n(non-negotiable rule 1). Read from the committed authority alone, never\nlayered. The row and its validator are [`crate::step_table`]; the cache\nthat reads the table back lives above this loader and is not named here.",
       "type": "array",
       "items": {
         "$ref": "#/$defs/Step"
@@ -2096,6 +2096,13 @@
             "type": "string"
           }
         },
+        "probe": {
+          "description": "The claims this consumer's tasks need from the credential, each with the\nread endpoint that proves it, which `batten doctor forge` probes\n(CLOUD-843, retiring `gh-preflight`).\n\n**Declared HERE, interpreted in [`crate::preflight`]**, for `query`'s\nreason directly above: which endpoints a consumer calls and which claim\neach needs are the consumer's facts, and walking them is mechanism.\n\n**No weakening comparison in `trust.rs`, and the absence is argued.** A\nprobe row is a DIAGNOSIS, not a gate: dropping one makes the report\nshorter and refuses nothing it refused before, because no verdict any rule\nrenders reads it.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Probe"
+          }
+        },
         "query": {
           "description": "The paginated reads this consumer declares, each recorded by\n`batten record query <id>` (CLOUD-843).\n\n**Declared HERE, interpreted in [`crate::forge_query`]**, and the split is\nthe layering rather than a filing accident: this table is the `[forge]`\nsection and this module is its owner, while the template grammar, the\nwalk and the reduction reach `git`, `forge` and `record` — edges this\nmodule, which reaches `fetch` alone, must not grow. So the rows are plain\ndata here and every reading of them is that module's.\n\n**No weakening comparison in `trust.rs`, and the absence is argued.**\nDeleting a row is LOUD rather than silent: the `[[record]]` row that\ndeclares its family still names `record query <id>` as the writer, and\nthat invocation then exits 1 on an id nothing declares. Editing a row's\nendpoint, window or reduction changes WHAT is measured, and none of those\nhas a monotone reading a raise-only clamp could order.",
           "type": "array",
@@ -2511,6 +2518,13 @@
       "description": "The `[mcp]` table: where the wiring lives, and what to return instead of a\npayload.",
       "type": "object",
       "properties": {
+        "permission_aliases": {
+          "description": "Server names whose committed permission rules apply under WHATEVER key the\nhost exposes the server as this session (CLOUD-191, CLOUD-843).\n\nEach is a name some `[[mcp.source]]` row's `endpoint_contains` declares,\nbecause the endpoint is the only thing that identifies a renamed server:\n`mcp grant` finds the exposed key's endpoint, matches it to one of these\nnames, and applies the committed `permissions` rules written for that name.\n`mcp posture` reads the same list for the grants a connector would still\nprompt for.\n\n**A LIST, and deliberately not every `endpoint_contains` name.** A name here\nturns a committed allow rule into a pre-approval under a key nobody\ncommitted. A server the host authorises at its own connector layer must not\nbe translated, or the translation grants what the host did not — so the\nconsumer states which servers its permission file governs, rather than the\nengine inferring it from a selector written for dispatch.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "result": {
           "description": "What to return instead of a method's full response.\n\nA method with no row here is dispatched and returned whole.",
           "type": "array",
@@ -2897,6 +2911,35 @@
       "required": [
         "id",
         "hook"
+      ]
+    },
+    "Probe": {
+      "description": "One `[[forge.probe]]` row: a claim the credential must carry, and the\nendpoint that proves it (CLOUD-843).\n\n**Read-only by construction.** A row whose `probe` is `false` is DECLARED and\nreported as never probed — a write cannot be tested without performing it,\nand an endpoint that needs an existing object may answer 404 for want of one.",
+      "type": "object",
+      "properties": {
+        "claim": {
+          "description": "The claim the endpoint needs, as the forge names it in a refusal —\n`checks=read`, `pull_requests=write`.",
+          "type": "string"
+        },
+        "endpoint": {
+          "description": "The API-relative endpoint, no leading slash, with `{owner}` and `{repo}`\nresolved from the checkout's forge remote. A query string is allowed:\na probe asks for one row, not a collection.",
+          "type": "string"
+        },
+        "probe": {
+          "description": "Whether the endpoint is probed. `false` declares the claim and never\ncalls the endpoint.",
+          "type": "boolean",
+          "default": true
+        },
+        "used_by": {
+          "description": "Which of the consumer's tasks need the claim, for the report.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "endpoint",
+        "claim",
+        "used_by"
       ]
     },
     "Production": {
@@ -3756,7 +3799,7 @@
           ]
         },
         "captured": {
-          "description": "The reductions this policy row reads out of the capture store,\n**declared** (CLOUD-1188).\n\nEach row becomes an entry of `input.tree.captured` under its own `id`,\ncarrying the REDUCTION it asked for — a boolean, a count, or a bounded\ntoken — and never the response it came from. A row declares what to reduce\nand how, because handing a module a payload would put a tracker's prose on\nthe policy input where any predicate could lift it into a pointer.\n\n**The store, never stdin**: a stdin-fed fact is dropped by the surface\ntable before projection, is context re-sent every turn, and is invisible to\nthe step-receipt key — three independent refusals, any one of which is\nenough.",
+          "description": "The reductions this policy row reads out of the capture store,\n**declared** (CLOUD-1188).\n\nEach row becomes an entry of `input.tree.captured` under its own `id`,\ncarrying the REDUCTION it asked for — a boolean, a count, or a bounded\ntoken — and never the response it came from. A row declares what to reduce\nand how, because handing a module a payload would put a tracker's prose on\nthe policy input where any predicate could lift it into a pointer.\n\n**The store, never stdin**: a stdin-fed fact is dropped by the surface\ntable before projection, is context re-sent every turn, and is invisible to\nthe `batten step` key — three independent refusals, any one of which is\nenough.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/CaptureQuery"
@@ -4166,6 +4209,7 @@
             "pinned-toolchain",
             "shell-hygiene",
             "supply-chain",
+            "tracker-hygiene",
             "trunk-based"
           ]
         },

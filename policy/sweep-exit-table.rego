@@ -93,7 +93,19 @@ mise_task(row) := row.run[count(row.run) - 1] if {
 
 run_lines(body) := split(body.run, "\n") if is_string(body.run)
 
-run_lines(body) := [line | some command in body.run; is_string(command); some line in split(command, "\n")] if is_array(body.run)
+# The array's string entries joined and split once, rather than a nested
+# iteration over each entry's split: regorus refused to schedule the nested
+# comprehension ("statements not scheduled in query"), so the whole rule faulted
+# and decided nothing. Joining with the separator it splits on yields the same
+# lines in the same order.
+#
+# The comprehension is bound in the BODY, not written in the head: regorus also
+# refused to schedule it as the head expression of this function.
+run_lines(body) := lines if {
+	is_array(body.run)
+	strings := [command | some command in body.run; is_string(command)]
+	lines := split(concat("\n", strings), "\n")
+}
 
 # A command line: neither blank nor a shell comment.
 commands(body) := [trimmed |

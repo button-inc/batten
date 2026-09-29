@@ -173,6 +173,9 @@ pub mod task;
 pub mod taskset;
 /// Third-party tool verdicts, keyed to (tool, pinned version, input digest).
 pub mod tools;
+/// The `tracker-hygiene` preset's readings: tracker payloads and a pull request
+/// body, reduced to the record families its modules decide over (CLOUD-843).
+pub mod tracker_reading;
 pub mod transcript;
 pub mod traversal;
 pub mod trust;
@@ -3564,7 +3567,7 @@ struct Gathered {
 //MUTANT gather-trunk-ignored|s@        evidence.claimed.extend(keys.iter().cloned());@        let _ = keys;@|an_in_progress_issue_whose_commits_are_on_main_is_landed_unswept
 //MUTANT gather-merged-ignored|s@        evidence.merged.extend(keys.iter().cloned());@        let _ = keys;@|the_merged_set_is_gathered_when_no_file_names_it
 //MUTANT gather-refs-ignored|s@            Ok(names) => gathered.refs = Some(names),@            Ok(_) => {}@|the_remote_branch_list_is_gathered_and_an_empty_one_could_not_look
-//MUTANT gather-trunk-unread-is-empty|s@git::messages_reachable(root, &trunk)@Some(String::new())@|a_gather_that_cannot_read_the_trunk_is_could_not_look
+//MUTANT gather-trunk-unread-is-empty|s@git::messages_reachable_from(root, &trunk)@Some(String::new())@|a_gather_that_cannot_read_the_trunk_is_could_not_look
 //MUTANT gather-trunk-hardcoded|s@worktree::land_target(root, config.must_land_on.as_deref())@Ok::<_, anyhow::Error>(Some(String::from("origin/main")))@|the_gather_reads_the_declared_trunk_not_origin_main
 //MUTANT gather-merged-failure-is-empty|s@            Err(why) => return Ok(Err(format!("merged pull requests: {why}"))),@            Err(_) => gathered.merged = Some(std::collections::BTreeSet::new()),@|a_gather_whose_merged_pull_requests_cannot_be_read_is_could_not_look
 //MUTANT sweep-issue-read-dropped|s@        stream.push_str(&text);@        let _ = \&text;@|several_ids_are_resolved_in_one_sweep
@@ -3612,7 +3615,7 @@ fn gather_evidence(
                     .to_owned(),
             ));
         };
-        let Some(log) = git::messages_reachable(root, &trunk) else {
+        let Some(log) = git::messages_reachable_from(root, &trunk) else {
             return Ok(Err(format!(
                 "{trunk} did not resolve, or its history could not be walked to the end, so \
                  which keys the trunk closes cannot be read"

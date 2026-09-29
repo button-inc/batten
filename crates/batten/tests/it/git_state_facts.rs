@@ -725,7 +725,7 @@ fn an_undeclared_config_or_index_family_is_null() {
 }
 
 /// A TRUNK WALK THAT BREAKS PARTWAY IS COULD-NOT-LOOK, never the shorter history
-/// above the break (`git::messages_reachable`, CLOUD-843's p6-board package).
+/// above the break (`git::messages_reachable_from`, CLOUD-843's p6-board package).
 ///
 /// Asserted through the one verb that reads it, `landed abandoned --gather`, and
 /// twice over the same repository: whole, the walk reaches the commit that

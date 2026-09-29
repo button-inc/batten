@@ -1157,6 +1157,194 @@ dependencies. A recovered crate outside it means the binary was not built from t
         ],
         patterns: &[],
     },
+    // CLOUD-843. The board's own claims held to what the tree and the forge
+    // already say: a Done that no release carries, a Done over a pull request
+    // still open, a duplicate close taken in its target's operation, a deferral
+    // with no owner, and a body that never closes what its branch served.
+    //
+    // EVERY MODULE READS A FAMILY `record derive` WRITES, and the family names are
+    // the engine's rather than a consumer's: `crate::tracker_reading` owns both
+    // the names and the line shapes, so nothing here names a consumer fact. A
+    // consumer declares one `[[record]]` row per family it produces, as for any
+    // record a module reads.
+    //
+    // ONE ROW JUDGES ALL FIVE, which is safe only because the producer clears
+    // every tracker family before it reads: the store then holds the answer to
+    // the question just asked and nothing older (`record::run_derive`).
+    Manifest {
+        name: "tracker-hygiene",
+        version: 1,
+        modules: &[
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:tracker-hygiene>/closing-key-closes.rego",
+                source: include_str!("policy/presets/tracker-hygiene/closing-key-closes.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:tracker-hygiene>/deferral-has-an-owner.rego",
+                source: include_str!("policy/presets/tracker-hygiene/deferral-has-an-owner.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:tracker-hygiene>/done-has-no-open-pull.rego",
+                source: include_str!("policy/presets/tracker-hygiene/done-has-no-open-pull.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:tracker-hygiene>/done-is-released.rego",
+                source: include_str!("policy/presets/tracker-hygiene/done-is-released.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:tracker-hygiene>/duplicate-close-is-argued.rego",
+                source: include_str!(
+                    "policy/presets/tracker-hygiene/duplicate-close-is-argued.rego"
+                ),
+            },
+        ],
+        verdicts: &[
+            VendoredVerdict {
+                id: "diff key missing",
+                gloss: "the pull request body names its issue but never in closing form, so the merge moves nothing",
+                class: "A tracker's merged-event automation fires only for a closing pull request: a \
+trailer-only reference merges and never moves the row, where a closing keyword moves it in \
+seconds. Write the closing keyword before the key, or a line-anchored hold marker if this pull \
+request is not meant to complete it.",
+                routes: &[run(
+                    "task run first",
+                    "write the closing keyword, then record the body again with `batten record derive closing-key`",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "diff key dropped",
+                gloss: "the pull request body closes some of the keys its commits served and strands the rest",
+                class: "A served key the body does not close never reaches review while its work is on \
+the trunk. Close each one, or name it on a hold marker line to decline just that one.",
+                routes: &[run(
+                    "task run first",
+                    "close the stranded key, then record the body again with `batten record derive closing-key`",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "diff read partial",
+                gloss: "the closing-key record is missing one of its four readings",
+                class: "A record missing a reading decides over part of the answer, so it is refused \
+rather than judged.",
+                routes: &[run(
+                    "task run first",
+                    "record the body again with `batten record derive closing-key`",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "prose own unnamed",
+                gloss: "a pull-request paragraph defers a decision and names no owning issue besides the one it claims",
+                class: "A pull-request body is not a durable home: nothing sweeps merged bodies, and the \
+board is what others read. File the decision and name its key in the same paragraph; the key \
+this pull request claims names the work in hand, not a home for what it leaves open.",
+                routes: &[run(
+                    "task run first",
+                    "file the owning issue, name it in the paragraph, then record the body again with `batten record derive deferral`",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "prose read partial",
+                gloss: "the deferral record carries no closing census, or one that disagrees with its lines",
+                class: "A record torn mid-write judges part of a body as if it were all of it.",
+                routes: &[run(
+                    "task run first",
+                    "record the body again with `batten record derive deferral`",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "issue ship early",
+                gloss: "an issue is headed for Done while one of its own pull requests is still open",
+                class: "A merged pull request completes a diff, and a board reading it as completing an \
+issue is right only when the issue carries one. Every pull request an issue carries has to have \
+landed or been closed before the issue is done, and a draft is open. The refusal is arithmetic: \
+whether the merged ones did the work is not judged.",
+                routes: &[read(
+                    "record read first",
+                    "the open pull request the refusal names",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "issue point missing",
+                gloss: "an issue is headed for Done and carries no pull request at all",
+                class: "Review already requires a linked pull request, so Done cannot need less. An \
+issue with none either shipped nothing or links its work somewhere the gate cannot read.",
+                routes: &[read("record read first", "the issue's attachments")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "issue list partial",
+                gloss: "the done-pr record carries no closing census, or one that disagrees with its lines",
+                class: "A record torn mid-write judges part of a board as if it were all of it.",
+                routes: &[run(
+                    "task run first",
+                    "record the board again with `batten record derive done-pr`",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "issue ship ahead",
+                gloss: "an issue reads Done while its commits are on the trunk and no release contains them",
+                class: "Done means released, and landed-but-unreleased is review. Refs come from commit \
+messages, so a ref inside a release cannot confirm a Done — but a ref on the trunk that no \
+release tag reaches is conclusive: nothing shipped it.",
+                routes: &[read(
+                    "record read first",
+                    "the release that has not been cut",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "issue read partial",
+                gloss: "the done record carries no closing census, or one that disagrees with its lines",
+                class: "A record torn mid-write judges part of a board as if it were all of it. The \
+census is written last and counts the lines above it, so a missing or wrong one is a write that \
+did not finish rather than a clean board.",
+                routes: &[run(
+                    "task run first",
+                    "record the board again with `batten record derive done`",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "issue grade twice",
+                gloss: "a duplicate close was decided in the same operation as its target's own close",
+                class: "Whether two rows contradict is not computable, and this does not claim to. A \
+duplicate close whose target entered a completed state in the same second is two decisions taken \
+as one, and one was never argued. Argue the close on its own: either the rows really say the same \
+thing, or the closed one carries a finding about the survivor and needs reopening.",
+                routes: &[read("record read first", "both rows the pointer names")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "issue count partial",
+                gloss: "the duplicate-close record carries no closing census, or one that disagrees with its lines",
+                class: "A record torn mid-write judges part of a board as if it were all of it. The \
+census is written last and counts the lines above it.",
+                routes: &[run(
+                    "task run first",
+                    "record the board again with `batten record derive duplicate-close`",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+        ],
+        patterns: &[],
+    },
     Manifest {
         name: "trunk-based",
         version: 1,
