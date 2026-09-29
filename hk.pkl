@@ -38,6 +38,9 @@ local gate = new Mapping<String, Step> {
     check = "mise run hk-version"
   }
   ["suite-bench-check"] {
+    // `slow` tier: it builds the engine, so a commit would pay a compile
+    // (CLOUD-1397). It runs at `verify` and in CI, before merge.
+    profiles = List("slow")
     check = "cargo run --quiet -p batten -- check --rule 'suite measure stale'"
   }
   // CLOUD-266's rule reaches the one budget nobody had looked at (CLOUD-668).
@@ -53,6 +56,9 @@ local gate = new Mapping<String, Step> {
   // the retired script and keeps the file the budget is declared in — a module
   // is judged by `batten check`, which needs no task of its own.
   ["mcp-timeout-budget"] {
+    // `slow` tier: it builds the engine, so a commit would pay a compile
+    // (CLOUD-1397). It runs at `verify` and in CI, before merge.
+    profiles = List("slow")
     glob = List(".claude/settings.json", "policy/mcp-timeout-budget.rego")
     check = "cargo run --quiet -p batten -- check --rule 'bound guard missing'"
   }
@@ -72,6 +78,9 @@ local gate = new Mapping<String, Step> {
     check = "mise run no-armed-ripcord"
   }
   ["hook-profile-check"] {
+    // `slow` tier: it builds the engine, so a commit would pay a compile
+    // (CLOUD-1397). It runs at `verify` and in CI, before merge.
+    profiles = List("slow")
     glob = List("hk.pkl", ".claude/hooks/git-hook.sh")
     check = "mise run record-verdicts"
   }
@@ -89,6 +98,9 @@ local gate = new Mapping<String, Step> {
     check = "mise run hk-drift"
   }
   ["mutant-census"] {
+    // `slow` tier: it builds the engine, so a commit would pay a compile
+    // (CLOUD-1397). It runs at `verify` and in CI, before merge.
+    profiles = List("slow")
     glob = List("mise-tasks/**", "policy/*.rego", "mise.toml")
     check = "mise run mutant-census"
   }
@@ -98,6 +110,9 @@ local gate = new Mapping<String, Step> {
   // and `ci` while the pre-commit tier stayed blind to the surface it was added
   // for.
   ["rules-drift"] {
+    // `slow` tier: it builds the engine, so a commit would pay a compile
+    // (CLOUD-1397). It runs at `verify` and in CI, before merge.
+    profiles = List("slow")
     glob =
       List(
         ".claude/rules/*.md",
@@ -124,6 +139,9 @@ local gate = new Mapping<String, Step> {
   // `[[hook.handler]]` is a wiring destination: a handler row is a registration
   // this gate is the census over.
   ["hooks-wiring-check"] {
+    // `slow` tier: it builds the engine, so a commit would pay a compile
+    // (CLOUD-1397). It runs at `verify` and in CI, before merge.
+    profiles = List("slow")
     glob =
       List(
         "crates/batten/src/hook.rs",
@@ -149,6 +167,9 @@ local gate = new Mapping<String, Step> {
   // flag the reference names and the surface lacks tells them to type something
   // that will not parse.
   ["reference-check"] {
+    // `slow` tier: it builds the engine, so a commit would pay a compile
+    // (CLOUD-1397). It runs at `verify` and in CI, before merge.
+    profiles = List("slow")
     glob =
       List(
         "crates/batten/src/surface.rs",
@@ -201,6 +222,9 @@ local gate = new Mapping<String, Step> {
   // because the config parses, the schema validates and `batten check` exits 0
   // over a rule set that has been switched off (CLOUD-87).
   ["config-lint"] {
+    // `slow` tier: it builds the engine, so a commit would pay a compile
+    // (CLOUD-1397). It runs at `verify` and in CI, before merge.
+    profiles = List("slow")
     glob = List("batten.toml", "crates/batten/src/lint.rs", "crates/batten/src/trust.rs")
     check = "mise run config-lint"
   }
@@ -214,6 +238,9 @@ local gate = new Mapping<String, Step> {
   // recorded here and adjudicated by `validator-verdict-clean` off the
   // `renovate-config` row, rather than decided in shell (CLOUD-1199, CLOUD-1262).
   ["renovate-config-validator"] {
+    // `slow` tier: it builds the engine, so a commit would pay a compile
+    // (CLOUD-1397). It runs at `verify` and in CI, before merge.
+    profiles = List("slow")
     glob = List("renovate.json5")
     check = "mise run record-verdicts"
   }
@@ -240,6 +267,9 @@ local gate = new Mapping<String, Step> {
   // open. What a missing entry costs is the PRE-COMMIT firing — seconds of
   // feedback traded for a ~3-minute `verify`.
   ["schema-check"] {
+    // `slow` tier: it builds the engine, so a commit would pay a compile
+    // (CLOUD-1397). It runs at `verify` and in CI, before merge.
+    profiles = List("slow")
     glob =
       List(
         "crates/batten/src/action.rs",
@@ -326,6 +356,9 @@ local gate = new Mapping<String, Step> {
   // four files that can move the contract, plus the workflow whose matrix
   // decides which targets a release carries at all.
   ["install-check"] {
+    // `slow` tier: it builds the engine, so a commit would pay a compile
+    // (CLOUD-1397). It runs at `verify` and in CI, before merge.
+    profiles = List("slow")
     glob =
       List(
         "install.sh",
@@ -337,6 +370,9 @@ local gate = new Mapping<String, Step> {
     check = "mise run install-check"
   }
   ["release-tracking-check"] {
+    // `slow` tier: it builds the engine, so a commit would pay a compile
+    // (CLOUD-1397). It runs at `verify` and in CI, before merge.
+    profiles = List("slow")
     glob =
       List(
         ".github/workflows/release-plz.yml",
@@ -365,10 +401,16 @@ local gate = new Mapping<String, Step> {
   // workflow must fire the step that reads it. The predecessor read the same
   // files and this glob did not say so.
   ["lock-complete"] {
+    // `slow` tier: it builds the engine, so a commit would pay a compile
+    // (CLOUD-1397). It runs at `verify` and in CI, before merge.
+    profiles = List("slow")
     glob = List("mise.lock", "mise.toml", ".github/workflows/*.yml")
     check = "mise run lock-complete"
   }
   ["policy-budget"] {
+    // `slow` tier: it builds the engine, so a commit would pay a compile
+    // (CLOUD-1397). It runs at `verify` and in CI, before merge.
+    profiles = List("slow")
     glob = List("AGENTS.md", ".serena/project.yml", "batten.toml")
     check = "mise run policy-budget"
   }
@@ -385,6 +427,9 @@ local gate = new Mapping<String, Step> {
   // changing an exit meaning must re-run this, not just editing the prose. That
   // is the same both-ends glob the surface-derivation gates carry.
   ["skill-check"] {
+    // `slow` tier: it builds the engine, so a commit would pay a compile
+    // (CLOUD-1397). It runs at `verify` and in CI, before merge.
+    profiles = List("slow")
     glob =
       List(
         "skills/**",
@@ -411,6 +456,9 @@ local gate = new Mapping<String, Step> {
   // which is why the second command names the rule rather than running a bare
   // `batten check` under a name that promises the link gate.
   ["macos-link-check"] {
+    // `slow` tier: it builds the engine, so a commit would pay a compile
+    // (CLOUD-1397). It runs at `verify` and in CI, before merge.
+    profiles = List("slow")
     glob = List("Cargo.toml", "Cargo.lock", "crates/**/Cargo.toml")
     check = "mise run macos-link-record && mise run batten -- check --rule 'workspace carry unsafe'"
   }
@@ -420,6 +468,9 @@ local gate = new Mapping<String, Step> {
   // over a record, so this step is what produces it on the inputs that move the
   // document. The producer spawns syft and the checker, which `check` cannot.
   ["ntia-check"] {
+    // `slow` tier: it builds the engine, so a commit would pay a compile
+    // (CLOUD-1397). It runs at `verify` and in CI, before merge.
+    profiles = List("slow")
     glob =
       List(
         "Cargo.toml",
