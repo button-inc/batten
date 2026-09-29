@@ -324,6 +324,32 @@ fn blocker_resolved(board: &Board<'_>, words: &Vocabulary<'_>, id: &str) -> bool
     false
 }
 
+/// Whether the set holds `id` AND it carries a milestone.
+///
+/// Named rather than inlined for the mutation rows below: a `sed` script cannot
+/// spell the closure's `|p|`, since `|` is the row's own separator.
+fn milestoned(board: &Board<'_>, id: &str) -> bool {
+    board.get(id).is_some_and(|row| row.milestoned)
+}
+
+// THE SHELL'S `#MUTANT` ROWS, CARRIED (CLOUD-1221). Each names the case in the
+// compiled tier that must fail when the arm is removed, which is what made the
+// retired program's suite evidence rather than a transcript.
+//MUTANT-SUITE crates/batten/tests/it/graph_check.rs
+//MUTANT canceled-blocker-still-starves|s@^    if kind == "canceled" {$@    if false {@|a_todo_row_whose_only_blocker_is_canceled_reaches_the_frontier
+//MUTANT duplicate-blocker-still-starves|s@^    if kind == "duplicate" {$@    if false {@|a_todo_row_whose_only_blocker_is_duplicate_reaches_the_frontier
+//MUTANT in-review-loses-its-name-arm|s@^    if row.status == words.review {$@    if false {@|a_blocker_in_review_still_resolves_since_its_type_is_started
+//MUTANT retirement-is-silent|s@^                out.note(&row.id, &format!("frontier-over-retired-blocker{retired}"));$@                let _ = \&retired;@|a_frontier_row_over_a_retired_blocker_says_so
+//MUTANT milestone-refusal-is-a-note|s@^            out.violation(&row.id, &format!("unmilestoned@            out.note(\&row.id, \&format!("unmilestoned@|a_todo_issue_with_no_milestone_in_a_set_where_others_carry_one_is_refused
+//MUTANT child-refusal-is-a-note|s@^                out.violation(&row.id, &format!("child-unmilestoned@                out.note(\&row.id, \&format!("child-unmilestoned@|a_child_with_no_milestone_under_a_milestoned_parent_is_refused
+//MUTANT declared-rephase-refused|s@^            } else if milestoned(board, parent) && !row.milestoned {$@            } else if milestoned(board, parent) {@|a_child_carrying_a_different_milestone_is_the_declared_re_phase_and_passes
+//MUTANT unscannable-refusal-is-a-note|s@^            out.unjudged("graph", &format!("status-claim-unscannable@            out.note("graph", \&format!("status-claim-unscannable@|a_claim_naming_a_column_no_piped_issue_occupies_is_refused_not_ignored
+//MUTANT receipt-carries-no-ids|s@^        judged: board.ids(),$@        judged: Vec::new(),@|a_coherent_board_records_one_receipt_per_id_it_judged
+//MUTANT todo-refusal-is-a-note|s@^            out.violation(&row.id, "todo-not-ready");$@            out.note(\&row.id, "todo-not-ready");@|a_todo_issue_with_no_ready_block_is_refused
+//MUTANT absent-blocker-reads-as-resolved|s@^            if !board.contains(to) {$@            if false {@|a_blocker_outside_the_piped_set_is_unjudgeable_not_resolved
+//MUTANT in-review-none-not-exempt|s@^            if row.pull_requests == 0 && !declares_none {$@            if row.pull_requests == 0 {@|an_in_review_row_declaring_no_commit_is_exempt_from_in_review_no_pr
+//MUTANT declared-none-with-pr-passes|s@^                out.violation(&row.id, "declares-no-commit-with-pr");$@                let _ = declares_none;@|a_row_declaring_no_commit_that_carries_a_pr_is_refused_for_the_contradiction
+
 /// What this row's §6 declares, from the one grammar's `bump` emission.
 ///
 /// A row whose lint cannot run reads as "did not say", which leaves
@@ -431,7 +457,7 @@ fn row_rules(
                     &row.id,
                     &format!("child-milestone-unjudgeable (parent {parent} not in the set)"),
                 );
-            } else if board.get(parent).is_some_and(|p| p.milestoned) && !row.milestoned {
+            } else if milestoned(board, parent) && !row.milestoned {
                 out.violation(&row.id, &format!("child-unmilestoned (parent {parent})"));
             }
         }
