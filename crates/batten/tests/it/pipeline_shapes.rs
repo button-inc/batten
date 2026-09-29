@@ -155,6 +155,39 @@ fn a_trailing_list_element_replaces_the_status() {
     assert_denied("mise exec -- cargo test >log 2>&1; ls");
 }
 
+/// A NEWLINE IS A `;` FOR THE STATUS, AND THE SEGMENT HID IT (CLOUD-986).
+///
+/// Measured 2026-08-23: `test:cargo` failed with 52 compile errors, `echo`
+/// succeeded on the next line, and the notification read `completed (exit code
+/// 0)`. Segment identity spans a newline, so the `;` arm above had no terminator
+/// to see. Backgrounded, so `task run blocked` is out of the way and the case
+/// measures this row alone.
+#[test]
+fn a_verdict_followed_by_a_newline_has_its_status_replaced() {
+    assert!(
+        cause_backgrounded("mise run verify\necho \"exit=$?\"").contains("verdict carry other")
+    );
+    assert!(cause_backgrounded("git push origin branch\ntrue").contains("verdict carry other"));
+    // A REPEATED line is still not the last one: identity is by address.
+    assert!(cause_backgrounded("mise run verify\nmise run verify").contains("verdict carry other"));
+    // Pointer-only: the caller's own command line is never echoed back.
+    assert!(!cause_backgrounded("mise run verify\necho \"exit=$?\"").contains("exit=$?"));
+}
+
+/// The discriminating allows for CLOUD-986: the rule keys on the verdict whose
+/// status was replaced, never on the trailing line.
+#[test]
+fn a_newline_after_a_query_or_before_a_verdict_is_not_a_discard() {
+    // The verdict on the LAST line keeps its status: the compound exits with it.
+    assert_allowed_backgrounded("git status --short\nmise run verify");
+    // A bare status echo with no verdict before it.
+    assert_allowed("echo \"exit=$?\"");
+    assert_allowed("git log --oneline -1\necho \"exit=$?\"");
+    // CLOUD-723: a heredoc body is prose, so its `;` and its lines are not a
+    // sequence after the verdict that owns the opener.
+    assert_allowed("git push origin branch <<'EOF'\nprose; more prose\nEOF");
+}
+
 #[test]
 fn an_and_chain_is_allowed_because_it_cannot_manufacture_a_green() {
     // The deliberate departure from the written acceptance, and the reason is

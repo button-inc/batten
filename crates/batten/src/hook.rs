@@ -5685,7 +5685,7 @@ fn receipt_refusal(
 enum Discard {
     /// Piped into a pager or filter: the pipeline exits with the filter's status.
     Piped,
-    /// Followed by `;` or `||`: only the last element's status survives.
+    /// Followed by `;`, `||` or a newline: only the last element's status survives.
     Trailing,
     /// Detached by `nohup` or a trailing `&`: the call returns before the work.
     Orphaned,
@@ -5832,6 +5832,21 @@ fn pipeline_rules(policy: &Policy, envelope: &Envelope) -> Decision {
             {
                 return disposed(rule, pipeline_refusal(rule, Discard::Trailing));
             }
+            // A NEWLINE IS A `;` FOR THE STATUS, and the segment hides it (CLOUD-986).
+            // Segment identity spans a newline, so `mise run verify` and `echo
+            // "exit=$?"` on the next line are one segment with no terminator, and
+            // the arm above never saw a sequence. The shell still reports the LAST
+            // line's status. Measured 2026-08-23: 52 compile errors reported as
+            // `completed (exit code 0)`. A later line in the same segment is the
+            // trailing element, whatever it runs; identity by address rather than
+            // by value, so a repeated line is still told apart from the last one.
+            let last_line = segment
+                .lines
+                .last()
+                .is_some_and(|last| std::ptr::eq(last, line));
+            if !last_line {
+                return disposed(rule, pipeline_refusal(rule, Discard::Trailing));
+            }
         }
     }
     Decision::Allow
@@ -5958,6 +5973,9 @@ fn substitution_decision(
 /// cannot be placed, and that is `None` too.
 //MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
 //MUTANT cd-not-followed|s@^    if tokens.first().copied() != Some("cd") {$@    if true {@|a_leading_cd_out_of_the_repository_moves_the_containment_check
+// CLOUD-986's arm in `pipeline_rules`, declared here because this is where the
+// file's `pipeline_shapes.rs` suite begins.
+//MUTANT newline-sequence-unread|s@^            if !last_line {$@            if false {@|a_verdict_followed_by_a_newline_has_its_status_replaced
 fn followed_cd(
     segment: &Segment,
     line: &SegmentLine,

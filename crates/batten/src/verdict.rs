@@ -1208,7 +1208,7 @@ pub enum Native {
     ToolSubstituted,
     /// A verdict-bearing command was piped into a pager or filter.
     VerdictPiped,
-    /// A verdict-bearing command was followed by `;` or `||`.
+    /// A verdict-bearing command was followed by `;`, `||` or a newline.
     VerdictTrailing,
     /// A verdict-bearing command was detached from its tool call.
     RunOrphaned,
@@ -2012,7 +2012,7 @@ already captures a backgrounded task's output where the human watches.",
     },
     VendoredVerdict {
         id: "verdict carry other",
-        gloss: "a verdict-bearing command followed by `;` or `||` has its status replaced",
+        gloss: "a verdict-bearing command followed by `;`, `||` or a newline has its status replaced",
         class: "Only the last element's status survives, so the compound reports the wrong \
 command's verdict. This is the laundered shape: it reads as correct, and backgrounded it is \
 worse than a misread, because the completion notification then carries the compound's \
