@@ -14,6 +14,7 @@ pub mod advisory;
 pub mod agent;
 pub mod arm;
 pub mod asked;
+pub mod attestation;
 pub mod attribution;
 pub mod baseline;
 /// The board's column vocabulary, resolved from config rather than held as
@@ -13388,7 +13389,26 @@ fn run_attribution(
             run_attribution_tagger(&tag, json, overrides, out)
         }
         AttributionCommand::Identity => run_attribution_identity(overrides, err),
+        AttributionCommand::Signing => run_attribution_signing(err),
     }
+}
+
+/// Switch signing off in this checkout when its signer is broken (CLOUD-669,
+/// retiring `[tasks.signing-posture-repair]` under CLOUD-843).
+///
+/// The report goes to stderr for `attribution identity`'s reason: it is a
+/// statement about what Batten did to the clone, not a verdict. Outside a
+/// repository this refuses and writes nothing — the retired body's exit 2.
+fn run_attribution_signing(err: &mut dyn Write) -> Result<ExitCode> {
+    let repaired = signer_posture::repair(Path::new(".")).map_err(|_| {
+        UsageError::raise(
+            "attribution signing: not a git repository, or its config could not be written, \
+             so the signing posture was left as it was"
+                .to_owned(),
+        )
+    })?;
+    writeln!(err, "{}", repaired.line())?;
+    Ok(ExitCode::Success)
 }
 
 /// Judge who cut one tag (CLOUD-1794).

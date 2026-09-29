@@ -634,18 +634,19 @@ declared_modules := {
 	# `record` call it without the producer's effects reaching the engine: the
 	# spawn stays in the task (house-style §5) and only the reading is here.
 	"probe_verdict",
-	# `signer_posture` arrived with CLOUD-1717, `probe_verdict`'s sibling and
-	# its class: it reaches NOTHING in this crate. It takes the two git config
-	# values as `&str` and never runs `git config` itself, which is what keeps
-	# the reading testable against a scratch path and a developer's real
-	# configuration out of the tests (CLOUD-591's boundary).
+	# `signer_posture` arrived with CLOUD-1717 as `probe_verdict`'s sibling, and
+	# CLOUD-843 gave it ONE edge: `git`, for the in-process config read and the
+	# repo-local write the retired `signing-posture-record` and
+	# `signing-posture-repair` bodies spawned `git config` for. `posture` itself
+	# still reaches nothing and takes the two values as `&str`, which is what keeps
+	# the classification testable against a scratch path and a developer's real
+	# configuration out of its unit tests (CLOUD-591's boundary); `read` and
+	# `repair` are the thin gix-backed shell around it, never a spawn.
 	#
-	# It owns the RECORD'S SHAPE as well as the classification, and that is the
-	# placement rather than scope creep: the shape was a sequence of `printf`
-	# calls in a task body that nothing tested, including the truncation of each
-	# sha to eight characters — which is the difference between a pointer and a
-	# payload. The producer still gathers the facts, because `git config` and
-	# `git rev-list` are spawns §5 keeps outside; what they MEAN is composed here.
+	# It owns the RECORD'S SHAPE as well as the classification: one `signer`
+	# line. The conflict and the signed commits it once also carried are
+	# `input.tree["git-config"]` and `input.tree["commit-meta"]` now, decided by
+	# the `supply-chain` preset.
 	"signer_posture",
 	# `cargo_graph` arrived with CLOUD-1717 and this rule named it, the coverage
 	# clause working an eighteenth time.
@@ -689,6 +690,13 @@ declared_modules := {
 	# mints no `Finding` and reaches no decider, and it starts no program, which
 	# is what keeps the verb on the derived read-only allowlist.
 	"census",
+	# `attestation` arrived with CLOUD-843, retiring `[tasks.attestation-record]`.
+	# A PRODUCER in `forge_query`'s class: it probes the forge over `rest`, runs
+	# the verifier through `exec`'s one shared spawn, and writes through
+	# `record`'s named-family store. It decides nothing -- the `supply-chain`
+	# preset does -- and it reaches the network, so the mediated and `check`
+	# edges to it are forbidden below for `rest`'s reason.
+	"attestation",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
@@ -753,7 +761,7 @@ forbidden[from] contains to if {
 		# network by the route the `rest` entry refuses, one name later.
 		"hook": {
 			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
-			"pr_watch", "fast_forward", "main_watch", "forge_query",
+			"pr_watch", "fast_forward", "main_watch", "forge_query", "attestation",
 		},
 		# `repair` RUNS A CONSUMER'S DECLARED COMMAND ON THE MEDIATED PATH
 		# (CLOUD-1639), so it inherits `hook`'s set entire and for the same
@@ -776,7 +784,7 @@ forbidden[from] contains to if {
 		# `crate::repair`'s header carry the other half.
 		"repair": {
 			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
-			"pr_watch", "fast_forward", "main_watch", "forge_query",
+			"pr_watch", "fast_forward", "main_watch", "forge_query", "attestation",
 		},
 		# `check` NAMES NO MODULE TODAY, so this row is INERT — and that is worth
 		# stating rather than leaving a reader to infer enforcement from a table
@@ -792,7 +800,7 @@ forbidden[from] contains to if {
 		# not fire, which is how a row with no possible subject announces itself.
 		"check": {
 			"lease", "gitwrite", "land",
-			"pr_watch", "fast_forward", "main_watch", "forge_query",
+			"pr_watch", "fast_forward", "main_watch", "forge_query", "attestation",
 		},
 		# And the other direction, which is `symbols`' and `pinned`'s row again: the
 		# dispatcher sits below the engine and must not reach the module that
@@ -892,6 +900,10 @@ forbidden[from] contains to if {
 		# producer that reached the engine deciding over its record would be a
 		# measurement that knew which verdict it was feeding (CLOUD-843).
 		"forge_query": {"rules", "hook"},
+		# `attestation -> {rules, hook}`, `forge_query`'s pair for its reason: the
+		# producer of the attestation record must not reach the engine deciding
+		# over it (CLOUD-843).
+		"attestation": {"rules", "hook"},
 	}
 	some to in targets
 }
@@ -1137,6 +1149,26 @@ test_the_forge_query_producer_reaches_what_it_composes if {
 	count(violation) == 0 with input as judging(
 		"crates/batten/src/record.rs",
 		[internal("forge_query", 20)],
+	)
+}
+
+# CLOUD-843's attestation producer, both directions, `forge_query`'s pair again,
+# and the arrangement it composes, so the table places the module rather than
+# banning it.
+test_the_mediated_path_must_not_reach_the_attestation_producer if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("attestation", 31)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/attestation.rs",
+		[internal("rules", 12)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/attestation.rs",
+		[internal("rest", 10), internal("record", 11), internal("exec", 12)],
 	)
 }
 

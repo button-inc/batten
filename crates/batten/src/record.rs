@@ -279,6 +279,11 @@ pub fn run(
             crate::cli::RecordCensusCommand::Report { .. } => "record census report",
             crate::cli::RecordCensusCommand::Tally => "record census tally",
         }),
+        crate::cli::RecordCommand::Attestation {
+            tag,
+            binary,
+            verifier,
+        } => crate::attestation::run(tag.as_deref(), &binary, verifier.as_deref(), err),
     }
 }
 
@@ -780,20 +785,20 @@ fn derive_reading(
             )
         }
         "signing-posture" => {
-            only_these_inputs(
-                inputs,
-                family,
-                &["signingkey", "ssh-program", "gpgsign", "signed"],
-            )?;
-            let signingkey = required_input(inputs, family, "signingkey")?;
-            let program = required_input(inputs, family, "ssh-program")?;
-            // THE TWO ABSENT-MEANS-NOTHING INPUTS. A producer that found no
-            // conflict and no signed commit still sends both, empty; treating an
-            // omitted input as "no" here would make "the producer did not look"
-            // and "the producer looked and found none" the same record.
-            let conflict = required_input(inputs, family, "gpgsign")? == "conflict";
-            let signed = required_input(inputs, family, "signed")?;
-            crate::signer_posture::record(signingkey, program, conflict, signed)
+            // NO INPUTS SINCE CLOUD-843. The task body that ran `git config` and
+            // handed the two values over retired; the engine reads them through
+            // gix itself, which is a read of this checkout rather than a spawn, so
+            // house-style §5's reason for keeping the gathering outside is gone.
+            // An input here is a caller still speaking the retired contract, and
+            // it is refused rather than silently ignored.
+            only_these_inputs(inputs, family, &[])?;
+            let posture = crate::signer_posture::read(Path::new(".")).map_err(|_| {
+                UsageError::raise(format!(
+                    "record derive {family}: not a git repository, so the signer posture could \
+                     not be read. Nothing recorded."
+                ))
+            })?;
+            crate::signer_posture::record(&posture)
         }
         "transcript-corpus" => {
             only_these_inputs(inputs, family, &["root", "threshold", "exclude"])?;

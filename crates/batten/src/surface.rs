@@ -2724,6 +2724,32 @@ const DIVERGENCE_SINCE: FlagDecl = FlagDecl::valued(
     "The window's start, ISO-8601 (default: 24 hours before now)",
 );
 
+/// `[tag]` on `record attestation`: the release to judge.
+const ATTESTATION_TAG: FlagDecl = FlagDecl::positional_optional(
+    "tag",
+    "The release tag to judge; absent is the latest release",
+);
+
+/// `--binary <name>` on `record attestation`: the file the verifier judges.
+///
+/// Required, and the consumer's: which executable a release attests is a fact
+/// about that consumer, never a name the engine may carry (rule 1).
+const ATTESTATION_BINARY: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued(
+        "binary",
+        "binary",
+        "The binary's file name inside each archive (a `.exe` suffix also matches)",
+    )
+};
+
+/// `--verifier <program>` on `record attestation`.
+const ATTESTATION_VERIFIER: FlagDecl = FlagDecl::valued(
+    "verifier",
+    "verifier",
+    "The program that downloads the release and verifies each binary (default: gh)",
+);
+
 /// `--max-pages <n>` on `record divergence`: the walk's bound per workflow.
 const DIVERGENCE_MAX_PAGES: FlagDecl = FlagDecl::valued(
     "max_pages",
@@ -5012,6 +5038,21 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Write,
         flags: &[],
     },
+    // The SIGNATURE surface's write, `attribution identity`'s twin (CLOUD-669,
+    // retiring `[tasks.signing-posture-repair]` under CLOUD-843). Repo-local
+    // only, and only against a signer whose key cannot be verified or
+    // reproduced: a verifiable signer is left signing, which is the end state
+    // CLOUD-591 works toward. `write`, self-declared (§5) — it may write
+    // `.git/config` in this checkout.
+    CommandDecl {
+        path: "attribution signing",
+        id: "attribution.signing",
+        about: "Switch signing off in this clone when its signer cannot be verified or reproduced",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[],
+    },
     // The `worktree` noun only dispatches, and it stays `Unclassified` even
     // now that `status` is the whole subtree (CLOUD-780 retired `reclaim`).
     // Absence is `Ask`, never `Read`, and classifying the noun `read` would put
@@ -6442,6 +6483,20 @@ pub const SURFACE: &[CommandDecl] = &[
             DIVERGENCE_SINCE,
             DIVERGENCE_MAX_PAGES,
         ],
+    },
+    // A release's attestation posture and each archive's verifier verdict
+    // (retiring `[tasks.attestation-record]`). `write`: it reads the forge,
+    // spawns the verifier and records a family. Could-not-look — no credential,
+    // a posture neither 200 nor 404, a failed download or unpack — is exit 3
+    // and removes any stale record.
+    CommandDecl {
+        path: "record attestation",
+        id: "record.attestation",
+        about: "Record a release's attestation posture and what the verifier says of each archive's binary",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[ATTESTATION_TAG, ATTESTATION_BINARY, ATTESTATION_VERIFIER],
     },
     // The reclaim census (retiring `[tasks.reclaim-census]`): whether active work
     // was live when a container was replaced. A noun, because its four arms have
