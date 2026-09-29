@@ -146,6 +146,50 @@ fn refusal(root: &Path, admission: &str, expected: &Situation<'_>) -> Refused {
         .expect_err("the presentation was refused")
 }
 
+/// CLOUD-1997: the subject a reader copies off the refusal line binds exactly as
+/// the refusal does. A receipt refusal prints `verify commit` and binds
+/// `verify,commit`; five admissions spent from the line were honoured by
+/// nothing until the verbs normalised it. An admission issued under the
+/// normalised subject is found by the situation the refusal builds.
+#[test]
+fn a_subject_copied_from_the_refusal_line_binds_as_the_refusal_does() {
+    assert_eq!(
+        admission::subject_as_bound("verify commit"),
+        "verify,commit"
+    );
+    assert_eq!(
+        admission::subject_as_bound("verify,commit"),
+        "verify,commit"
+    );
+    assert_eq!(admission::subject_as_bound("receipt"), "receipt");
+    // A path is bound as itself, never split.
+    assert_eq!(
+        admission::subject_as_bound("policy/agent-spawn.rego"),
+        "policy/agent-spawn.rego"
+    );
+    let root = fixture("copied-subject");
+    let issued = admission::issue(
+        &root,
+        binding(
+            &admission::subject_as_bound("verify commit"),
+            "head1",
+            "epoch1",
+            "the verify receipt names a head the rebase replaced",
+        ),
+    )
+    .expect("issued");
+    let spent = admission::consume(
+        &root,
+        &issued,
+        &situation("verify,commit", "call:head1", "epoch1"),
+    )
+    .expect("the store answered");
+    assert!(
+        spent.is_ok(),
+        "the refusal's own subject finds the admission: {spent:?}"
+    );
+}
+
 #[test]
 fn an_admission_bound_to_another_subject_is_refused() {
     // The harvesting case, and the reason the subject is inside the hash rather

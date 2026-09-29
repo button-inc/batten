@@ -784,6 +784,25 @@ pub fn consume(
     Ok(Ok(spent))
 }
 
+/// The subject a caller typed, in the spelling an admission binds (CLOUD-1997).
+///
+/// A refusal whose subjects are artifacts binds them joined by `,`
+/// (`refusal::admission_subject`), while its pointer line prints them joined by
+/// a space — so `turn mint ahead` refuses as `… verify commit …` and binds
+/// `verify,commit`. A reader copies the line; five admissions spent that way
+/// were honoured by nothing. So a subject carrying whitespace and no path
+/// separator is read as the artifact list the line printed, and rejoined.
+/// A path subject is returned untouched: a path is bound as itself.
+#[must_use]
+pub fn subject_as_bound(subject: &str) -> String {
+    let trimmed = subject.trim();
+    if trimmed.contains('/') || !trimmed.contains(char::is_whitespace) {
+        return trimmed.to_owned();
+    }
+    //MUTANT rendered-subject-unmatched|s@^    trimmed.split_whitespace().collect::<Vec<_>>().join(",")$@    trimmed.to_owned()@|a_subject_copied_from_the_refusal_line_binds_as_the_refusal_does
+    trimmed.split_whitespace().collect::<Vec<_>>().join(",")
+}
+
 /// The five fields a caller can know without holding the record.
 #[derive(Debug, Clone, Copy)]
 pub struct Situation<'a> {

@@ -6566,17 +6566,34 @@ fn run_override(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     match command {
+        // THE SUBJECT AS THE REFUSAL LINE PRINTS IT IS ACCEPTED (CLOUD-1997), and
+        // normalised once here so both verbs bind the same spelling.
         OverrideCommand::Request {
             rule,
             verdict,
             subject,
-        } => run_override_request(&rule, &verdict, &subject, overrides, out, err),
+        } => run_override_request(
+            &rule,
+            &verdict,
+            &admission::subject_as_bound(&subject),
+            overrides,
+            out,
+            err,
+        ),
         OverrideCommand::Spend {
             admission,
             rule,
             verdict,
             subject,
-        } => run_override_spend(&admission, &rule, &verdict, &subject, overrides, out, err),
+        } => run_override_spend(
+            &admission,
+            &rule,
+            &verdict,
+            &admission::subject_as_bound(&subject),
+            overrides,
+            out,
+            err,
+        ),
     }
 }
 
