@@ -163,9 +163,9 @@ jobs:
           # digest above pins the ACTION; this pins the MISE it installs, which
           # is a separate resolution the digest does not reach.
           version: 2026.9.1
-          # The analyzer, plus the `jq` its receipt check needs: the task body is
-          # `step-receipt check zizmor` first, and `step-receipt` reads
-          # `mise tasks info --json` through `jq` before it decides whether to run
-          # `zizmor --offline` at all. Nothing else — this job compiles nothing.
-          install_args: zizmor aqua:jqlang/jq
+          # The analyzer and nothing else — this job compiles nothing. The task
+          # body is `zizmor --offline` alone since CLOUD-843 retired the shell
+          # receipt check that needed `jq`; the step cache is an engine verb, and
+          # an engine build here would cost more than the analysis it skips.
+          install_args: zizmor
       - run: mise run zizmor

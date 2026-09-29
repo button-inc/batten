@@ -146,6 +146,9 @@ pub mod tokens;
 
 pub mod startup;
 pub mod state;
+/// The step cache (CLOUD-424): a step answered from its receipt when its exact
+/// declared inputs, arguments and tools already passed.
+pub mod step;
 pub mod stop;
 pub mod store;
 /// The per-suite cost corpus, derived from the report the runner already wrote.
@@ -444,10 +447,22 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // CLOUD-843's foundation surface: the arguments are final, and each body
         // lands with the package that retires the shell it replaces. Until then
         // the verb is could-not-look, never a pass.
+        // The step table is read from the committed authority alone
+        // (`resolve::committed`): which files key a receipt is not a question a
+        // local layer may answer, because a narrower set is a receipt that
+        // answers for bytes nobody checked.
         Some(Command::Step { command }) => match command {
-            cli::StepCommand::Check { .. } => unimplemented("step check"),
-            cli::StepCommand::Record { .. } => unimplemented("step record"),
-            cli::StepCommand::Run { .. } => unimplemented("step run"),
+            cli::StepCommand::Check { step, args } => {
+                crate::step::run_check(&step, &args, &overrides, out)
+            }
+            cli::StepCommand::Record { step, args } => {
+                crate::step::run_record(&step, &args, &overrides, out, err)
+            }
+            cli::StepCommand::Run {
+                step,
+                args,
+                command,
+            } => crate::step::run_step(&step, &args, &command, &overrides, err),
         },
         Some(Command::Sbom(_)) => unimplemented("sbom"),
         Some(Command::Dist(_)) => unimplemented("dist"),

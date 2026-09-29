@@ -65,8 +65,8 @@ fn the_batten_check_body_was_found_at_all() {
         "the batten-check body invokes the engine"
     );
     assert!(
-        body.contains("step-receipt check"),
-        "the batten-check body is receipt-gated"
+        body.contains("step run batten-check --"),
+        "the batten-check body is receipt-gated through `batten step run`"
     );
 }
 
@@ -91,39 +91,38 @@ fn the_engine_invocation_is_not_wrapped_in_a_replacing_guard() {
 }
 
 /// The positive half, and it is what stops the assertion above being satisfiable by
-/// deleting the invocation. The status is captured and re-exited with the SAME
-/// value — a body that captured it and exited `1` would pass a mere "captures `$?`"
-/// test while keeping the defect.
+/// deleting the invocation.
+///
+/// CHANGED WITH CLOUD-843: the capture-and-re-exit (`verdict=$?` / `exit
+/// "$verdict"`) was the shell spelling of propagation, and it retired with the
+/// shell receipt around it. `enforce` is now the COMMAND `batten step run` hands to
+/// `exec`, whose child code is the verb's exit unchanged, and the receipt is
+/// written only after a zero exit. So the property is two facts: the engine
+/// invocation is the step's command on the same entry — nothing between them to
+/// replace a code — and the compiled verb passes a `2` through and records
+/// nothing, which `step_receipt::a_failing_command_passes_its_code_through_and_records_nothing`
+/// asserts over the binary rather than over this body.
 #[test]
-fn the_engine_status_is_captured_and_re_exited_unchanged() {
+fn the_engine_status_is_the_step_command_so_it_passes_through_unchanged() {
     let body = batten_check_body();
+    let runner = body
+        .find("step run batten-check -- ")
+        .expect("the step verb brackets the engine");
+    let engine = body[runner..]
+        .find("-- enforce")
+        .map(|offset| runner + offset)
+        .expect("the engine is the step's command");
+    let entry_end = body[runner..]
+        .find('"')
+        .map_or(body.len(), |offset| runner + offset);
     assert!(
-        body.contains("verdict=$?"),
-        "the batten-check body captures the engine's exit status"
+        engine < entry_end,
+        "`enforce` must be the command of the SAME `step run` entry — a separate \
+         entry would run the engine outside the verb that propagates its code"
     );
     assert!(
-        body.contains(r#"exit "$verdict""#),
-        "the batten-check body exits with the status it captured, unchanged"
-    );
-
-    // ORDER IS THE PROPERTY, not mere presence: a capture that is never tested, or
-    // tested after the receipt is written, leaves the defect in place. mise task
-    // bodies do not run under `set -e`, so nothing else enforces this.
-    let capture = body.find("verdict=$?").expect("the capture is present");
-    let propagate = body
-        .find(r#"exit "$verdict""#)
-        .expect("the exit is present");
-    let record = body
-        .find("step-receipt record")
-        .expect("the receipt write is present");
-    assert!(
-        capture < propagate,
-        "the status is captured before it is propagated"
-    );
-    assert!(
-        propagate < record,
-        "a non-zero verdict exits before the receipt is written — a denied run must \
-         leave no receipt, or the next run answers from a cache of the failure"
+        !body.contains("verdict=$?") && !body.contains("|| true"),
+        "no shell remains between the engine and the task's exit to replace its code"
     );
 }
 

@@ -452,6 +452,13 @@
         "$ref": "#/$defs/Startup"
       }
     },
+    "step": {
+      "description": "The step cache's table (CLOUD-424, CLOUD-843): each step a caller brackets\nwith `batten step`, the pathspecs whose index entries key its receipt and\nthe tool argvs whose answers do. Empty means no step is declared, so every\n`batten step` call is a miss that records nothing.\n\nConsumer-specific by nature, for `startup`'s reason: which steps a\nrepository runs and what each reads are facts about that repository\n(non-negotiable rule 1). Read from the committed authority alone, never\nlayered. The type, its validator and the cache are [`crate::step`].",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Step"
+      }
+    },
     "strictness": {
       "description": "How strictly the gates apply. Absent means \"this file does not speak to\nstrictness\", which is what lets [`crate::resolve`] attribute the\neffective value to the layer that actually set it. Policy-bearing, so an\noverride may only raise it (§8).",
       "anyOf": [
@@ -4773,6 +4780,39 @@
         "id",
         "gloss",
         "check"
+      ]
+    },
+    "Step": {
+      "description": "One declared step: what its verdict depends on.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The step's name, as its caller passes it to `batten step`.",
+          "type": "string"
+        },
+        "inputs": {
+          "description": "Git pathspecs (no `:` magic) whose INDEX entries are key material. `.`\nis the whole tracked tree.\n\nThe index rather than the worktree, and the worktree must agree with it\nover the set: a diverged or untracked path under a spec is no key at all.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tools": {
+          "description": "Programs, as argv, whose stdout is key material: a tool's version, or\nthe declaration of the step's own command. Each must exit 0 and print\nsomething, or there is no key.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "inputs",
+        "tools"
       ]
     },
     "Strictness": {

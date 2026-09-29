@@ -655,7 +655,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,land-divergence,task-linear-check,macos-link,task-mcp-allow-check,nonverdict,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census"
+MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,land-divergence,task-linear-check,macos-link,task-mcp-allow-check,nonverdict,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,engine-step,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -842,13 +842,17 @@ description = "Clippy with warnings denied"
 # flags live in one place. The workspace lints only mean anything if every
 # target is checked and a warning fails.
 # Receipt-gated (CLOUD-424): unchanged sources under an unchanged clippy are a
-# verdict already held.
-run = '''
-if [ "$(mise run -q step-receipt check lint:clippy | cut -c1-3)" = hit ]; then exit 0; fi
-if ! cargo clippy --all-targets --all-features -- -D warnings; then exit 1; fi
-mise run -q step-receipt record lint:clippy || true
-'''
-# ITS OWN BUILD DIRECTORY, and the cargo statement above stays byte-identical so
+# verdict already held. `batten step run` is the whole bracket — a hit exits 0,
+# a miss runs the command and records only on a zero exit — and its key is the
+# `[[step]]` row `lint:clippy` in `batten.toml` plus this exact argv.
+#
+# THE CACHE'S OWN BUILD SHARES THE ORDINARY TARGET DIRECTORY, and `env` below is
+# why. The isolation this task needs is CLIPPY's (the paragraph under the run
+# line), so the variable rides the step's own argv rather than the task's `env`,
+# where it would also send the engine's `cargo run` into `target/clippy` and pay
+# a second full debug build of it there.
+run = "cargo run --quiet -p batten -- step run lint:clippy -- env CARGO_TARGET_DIR=target/clippy cargo clippy --all-targets --all-features -- -D warnings"
+# ITS OWN BUILD DIRECTORY, and the clippy argv above keeps its flags unchanged so
 # no CI parity reading moves. `verify` runs this beside `test:cargo`, the narrow
 # nextest lanes and the cross builds, all in `target/`, and clippy's
 # `--all-targets --all-features` check build shares dependency units with them.
@@ -858,19 +862,19 @@ mise run -q step-receipt record lint:clippy || true
 # never once when run alone. The cost is one extra check-mode build of the
 # dependency graph, paid once and then cached; the alternative was a gate that
 # failed by timing. CLOUD-1913 records the investigation.
-env = { CARGO_TARGET_DIR = "target/clippy" }
 
 [tasks."lint:fmt"]
 description = "rustfmt in check mode"
 # Safe as the single definition: hk's `cargo-fmt` builtin already checks the
 # whole workspace (`--manifest-path {{workspace_indicator}}`), not file by file,
 # so routing it here costs no scoping.
-# Receipt-gated (CLOUD-424), same shape as lint:clippy.
-run = '''
-if [ "$(mise run -q step-receipt check lint:fmt | cut -c1-3)" = hit ]; then exit 0; fi
-if ! cargo fmt --all --check; then exit 1; fi
-mise run -q step-receipt record lint:fmt || true
-'''
+# NOT receipt-gated any more (CLOUD-843), and the arithmetic is the reason.
+# `cargo fmt --all --check` costs about a second; the retired receipt paid two
+# mise parses (~0.75s each) around it, so the cache cost more than the step. And
+# hk's `cargo-fmt` runs at COMMIT, outside the `slow` tier: a cache reached
+# through `cargo run -p batten` would put an engine build on every commit, which
+# CLOUD-1397 took off it.
+run = "cargo fmt --all --check"
 
 [tasks."lint:toml"]
 description = "taplo: TOML syntax, duplicate keys, schema bindings, and formatting"
@@ -1290,7 +1294,7 @@ description = "Run the Rust workspace test suite"
 # suite — and the record is an economy whose failure must never fail a suite
 # that passed.
 run = '''
-if [ "$(mise run -q step-receipt check test:cargo | cut -c1-3)" = hit ]; then exit 0; fi
+if [ "$(cargo run --quiet -p batten -- step check test:cargo | cut -c1-3)" = hit ]; then exit 0; fi
 # THE CARGO STATEMENT STAYS BARE, and property 16 of `ci-local-parity` is why
 # (CLOUD-662): it reads this task's single cargo statement and requires a
 # foreign CI leg's line to be `mise exec -- ` plus exactly that statement. A
@@ -1349,7 +1353,7 @@ if [ "$tracked_before" != "$tracked_after" ]; then
   exit 1
 fi
 # <<< tree-after
-mise run -q step-receipt record test:cargo || true
+cargo run --quiet -p batten -- step record test:cargo || true
 '''
 
 # --- the four tiers `hk` reaches by name (CLOUD-1164) ---------------------------
@@ -1536,8 +1540,9 @@ description = "Gate: the API delta on this branch is compatible with the bump re
 # nor `origin/main`'s had moved. The key is everything the verdict reads: this
 # tree's crates (the specs), the baseline's crate tree ids and the branch's
 # commit messages (a commit may declare the break) as `--arg`s, and the tool
-# versions. `step-receipt` answers "run" under CI, so CI still confirms.
-run = "export BATTEN_STEP_SPECS='crates Cargo.toml Cargo.lock batten.toml' BATTEN_STEP_TOOLS='cargo semver-checks --version && rustc --version'; b=$(printf '%s-%s-%s' \"$(git rev-parse -q --verify origin/main:crates)\" \"$(git rev-parse -q --verify origin/main:Cargo.toml)\" \"$(git rev-parse -q --verify origin/main:Cargo.lock)\"); m=$(git log --format=%B origin/main..HEAD | sha256sum | cut -c1-64); if [ \"$(mise run -q step-receipt check semver --arg \"$b\" --arg \"$m\" | cut -c1-3)\" = hit ]; then exit 0; fi; cargo run --quiet -p batten -- semver check || exit $?; mise run -q step-receipt record semver --arg \"$b\" --arg \"$m\" || true"
+# versions — the `[[step]]` row `semver` in `batten.toml` — plus this argv.
+# `batten step` answers "run" under CI, so CI still confirms.
+run = "b=$(printf '%s-%s-%s' \"$(git rev-parse -q --verify origin/main:crates)\" \"$(git rev-parse -q --verify origin/main:Cargo.toml)\" \"$(git rev-parse -q --verify origin/main:Cargo.lock)\"); m=$(git log --format=%B origin/main..HEAD | sha256sum | cut -c1-64); exec cargo run --quiet -p batten -- step run semver --arg \"$b\" --arg \"$m\" -- cargo run --quiet -p batten -- semver check"
 
 [tasks."claim-check"]
 description = "Gate: the issue you are about to pull is actually unclaimed (reads get_issue payloads on stdin)"
@@ -3033,7 +3038,7 @@ else
   # exactly like a producer that never ran. The receipt still buys the expensive
   # half: the probe BUILD is skipped and the reading is re-derived from the
   # verdict the receipt attests, which costs a `record derive` and nothing else.
-  if [ "$(mise run -q step-receipt check evaluator-io-check | cut -c1-3)" = hit ]; then
+  if [ "$(cargo run --quiet -p batten -- step check evaluator-io-check | cut -c1-3)" = hit ]; then
     printf 'probe failed\n' | cargo run --quiet -p batten -- record named evaluator-io-probe
     exit $?
   fi
@@ -3064,7 +3069,7 @@ fi
 
 
 if [ -z "${EVALUATOR_IO_PROBE_CMD:-}" ] && [ "$verdict" = 'probe failed' ]; then
-  mise run -q step-receipt record evaluator-io-check || true
+  cargo run --quiet -p batten -- step record evaluator-io-check || true
 fi
 """
 
@@ -6723,15 +6728,14 @@ run_pkl() {
 # `renovate-config-validator` and `pkl` steps each spawned this task, and
 # `verify`'s body ran it a fourth time over the same bytes. The key is what the
 # three read — `hk.pkl`, `renovate.json5`, `mise.toml` through the hk plans —
-# and the three tools' versions. The forge arm below is a property of the
+# and the three tools' versions, declared as the `[[step]]` row
+# `record-verdicts` in `batten.toml`. The forge arm below is a property of the
 # WORLD, not the tree, and stays outside the receipt: it runs every time.
-export BATTEN_STEP_SPECS='hk.pkl renovate.json5 mise.toml'
-export BATTEN_STEP_TOOLS='pkl --version && renovate-config-validator --version && hk --version'
 # A RECEIPT ONLY OVER CLEAN VERDICTS. A validator that errored (a network
 # flake reads the same as a bad config) must be asked again next run, never
 # cached: an error record under a receipt replays forever until an input moves.
 dirty=0
-if [ "$(mise run -q step-receipt check record-verdicts | cut -c1-3)" != hit ]; then
+if [ "$(cargo run --quiet -p batten -- step check record-verdicts | cut -c1-3)" != hit ]; then
 
 if run_pkl hk.pkl; then
 	verdict="status clean"
@@ -6799,10 +6803,9 @@ jq -r --slurpfile full "$full" '
 # hand. A receipt keyed off this run's `dirty` alone then replays that error
 # until an input moves. So it is written only when the store itself reads clean.
 if [ "$dirty" = 0 ] && cargo run --quiet -p batten -- check --rule 'tool judge dirty' >/dev/null 2>&1; then
-	mise run -q step-receipt record record-verdicts || true
+	cargo run --quiet -p batten -- step record record-verdicts || true
 fi
 fi
-unset BATTEN_STEP_SPECS BATTEN_STEP_TOOLS
 
 # THE FORGE'S OWN VERDICT, and the row it feeds had never been fed (CLOUD-1707).
 # `crates/batten/src/forge.rs` reads `.git/batten-forge/<sha>` and
@@ -7007,11 +7010,7 @@ description = "cargo-deny: licenses, advisories, sources"
 # The advisory DB is a property of the world, and worlds change on a clock, not
 # on this branch: CI still runs the full check on every PR, which is the same
 # split lock-currency already made.
-run = '''
-if [ "$(mise run -q step-receipt check deny | cut -c1-3)" = hit ]; then exit 0; fi
-if ! cargo deny check; then exit 1; fi
-mise run -q step-receipt record deny || true
-'''
+run = "cargo run --quiet -p batten -- step run deny -- cargo deny check"
 
 [tasks."build:release"]
 description = "Build the release binary the hook registrations execute"
@@ -7843,14 +7842,17 @@ description = "Consumer #1: evaluate the committed batten.toml with batten's own
 # `provision apply` keeps its own `exit 1` deliberately. A scanner that could not be
 # installed is a fault of the environment, not a verdict about the tree, and `1` is
 # already what the engine emits for "a `command` rule whose binary cannot run".
-run = '''
-if [ "$(mise run -q step-receipt check batten-check | cut -c1-3)" = hit ]; then exit 0; fi
-if ! cargo run --quiet -p batten -- provision apply; then exit 1; fi
-cargo run --quiet -p batten -- enforce
-verdict=$?
-if [ "$verdict" != 0 ]; then exit "$verdict"; fi
-mise run -q step-receipt record batten-check || true
-'''
+#
+# PROPAGATION IS NOW THE STEP VERB'S, NOT THIS BODY'S (CLOUD-843). `enforce` is
+# the command `batten step run` hands to `exec`, whose child code is the verb's
+# exit unchanged — a `2` stays `2` — and the receipt is written only after a
+# zero exit, so a denied run leaves none. The capture-and-re-exit above was the
+# shell spelling of exactly that. `provision apply` runs first on every pass: a
+# warm cache is a checksum read, and an array entry that fails stops the task.
+run = [
+  "cargo run --quiet -p batten -- provision apply",
+  "cargo run --quiet -p batten -- step run batten-check -- cargo run --quiet -p batten -- enforce",
+]
 
 [tasks.policy-budget]
 description = "Gate: the always-loaded context (AGENTS.md + anything else declared always-load) fits its token budget"
@@ -7999,7 +8001,9 @@ description = "Static-analyse the GitHub Actions workflows (dangerous triggers, 
 # `action.yml` is named alongside `.github/` because the shipped Action (CLOUD-68)
 # is a workflow surface with the same injection and unpinned-uses hazards, and
 # zizmor's directory walk does not reach a repository-root action definition.
-# Receipt-gated (CLOUD-424) on the workflow surface and zizmor's version.
+# NOT receipt-gated any more (CLOUD-843): the cache is an engine verb, and the
+# CI job this task runs in compiles nothing (`zizmor.yml`), so gating it would
+# put a full engine build in front of a seconds-long offline analysis.
 #
 # `--offline` is load-bearing, and it is the lock-check split applied here
 # (CLOUD-410). GH_TOKEN in [env] used to enable zizmor's ONLINE audits, which
@@ -8012,11 +8016,7 @@ description = "Static-analyse the GitHub Actions workflows (dangerous triggers, 
 # THIS COMMIT; whether a pinned action has an advisory today is a question about
 # the world, it changes with no diff, and it belongs on a clock — which is
 # `.github/workflows/zizmor-advisories.yml`, beside lock-currency and ci-drift.
-run = '''
-if [ "$(mise run -q step-receipt check zizmor | cut -c1-3)" = hit ]; then exit 0; fi
-if ! zizmor --offline --min-severity high .github/ action.yml; then exit 1; fi
-mise run -q step-receipt record zizmor || true
-'''
+run = "zizmor --offline --min-severity high .github/ action.yml"
 
 [tasks.zizmor-advisories]
 description = "Currency only: is any pinned action the subject of a published advisory? Runs on a schedule, never on the landing path — it needs the network"
@@ -8078,7 +8078,7 @@ echo "lock-check: mise.lock is complete and current"
 #
 # AFFORDABLE BECAUSE OF THE RECEIPT, measured 2026-09-09 rather than assumed:
 # a re-run whose inputs, command and toolchain are unchanged answers from
-# `step-receipt` in **1.0s**; a run that must re-derive takes 54s cold. So the
+# its step receipt in **1.0s**; a run that must re-derive takes 54s cold. So the
 # per-turn cost is a second on every turn that changed no Rust, and 54s on the
 # turns that changed some — which are the turns that need it.
 #
@@ -8273,248 +8273,6 @@ run = "cargo run --quiet -p batten -- check --rule 'job bind missing'"
 [tasks."awk-regex-check"]
 description = "Gate: an awk program carries no pattern that is unsafe under the shell that invokes it"
 run = "cargo run --quiet -p batten -- check --rule 'pattern carry unsafe'"
-# Economy: per-step receipts keyed by input content (CLOUD-424), ported off
-# `mise-tasks/step-receipt.sh` under CLOUD-1752. The whole-gate receipt is keyed
-# to a SHA, so a rebase that leaves the tree byte-identical re-runs every step;
-# this keys each step on what it actually reads instead.
-#
-# NOT test-impact selection, which this repository refused and still refuses:
-# nothing infers what a change "could" affect. The claim is the one a receipt
-# already makes — same inputs, command and tool versions, same verdict — applied
-# per step. The key hashes the declared input set as INDEX blob ids, the task body
-# from `mise tasks info` (a file task's bytes too), the live `--version` output of
-# the step's tools, and any `--arg`. Those spawns stay HERE (house-style §5); only
-# the storage moved, onto CLOUD-1713's keyed store (`batten record keyed|show`).
-#
-# FAIL CLOSED, EVERYWHERE. A key that cannot be computed — an unreadable file, a
-# spec resolving to nothing, a tool that will not print, an undeclared step, a
-# worktree disagreeing with the index over the set — is "run the step", never
-# "assume unchanged". An unreadable store reads as a miss and refuses a record.
-#
-# CHECK AND RECORD ARE A PAIR. `check` files the key it computed under
-# `step-pending`; `record` recomputes and refuses on any mismatch, so a tree that
-# changed while the step ran can never mint a receipt for bytes it never judged.
-#
-# ONE RECEIPT PER STEP, by construction: the `steps` family is keyed by STEP and
-# holds `<timestamp> <key>`, so a new pass overwrites the old key rather than
-# accumulating beside it, and the record is pointer-only.
-#
-# THE CONTRACT CHANGED WITH THE CALL SITE, and CLOUD-498 is why. The program was
-# invoked by path because `mise run` wraps an exit 1 in its stock `ERROR task
-# failed`, and a miss is not a failure. So `check` now answers in WORDS at exit 0
-# — `hit <key12>` or `miss …` — and callers test the first word. `record` keeps
-# exit 1 for a refusal, which is a real "not recorded" event; callers guard it,
-# because the step's verdict is the run's. Each call pays mise's ~0.75s parse,
-# against steps of 1–54s.
-#
-# LOCAL ONLY. Under CI (or BATTEN_STEP_RECEIPT_BYPASS) `check` answers `miss` and
-# `record` writes nothing: CI confirms independently. BATTEN_STEP_SPECS and
-# BATTEN_STEP_TOOLS override the table, which is the lever the tier drives.
-[tasks.step-receipt]
-#MUTANT-SUITE crates/batten/tests/it/step_receipt.rs
-#MUTANT hit-without-key-match|s/^\tif \[\[ "\$stored" = "\$key" \]\]; then$/\tif true; then/|a_changed_input_file_misses
-#MUTANT args-not-keyed|s/^\t\tprintf 'args %s\\n' "\$extra"$/\t\t:/|a_changed_argument_misses
-#MUTANT tools-not-keyed|s/^\tprintf 'tools %s\\n' "\$toolsout"$/\t:/|a_changed_tool_version_misses
-#MUTANT dirty-index-trusted|s/^\t\tif ! git diff --quiet -- "\${spec_arr\[@\]}" 2>\/dev\/null; then return 1; fi$/\t\t:/|unstaged_divergence_is_no_key
-#MUTANT weld-unchecked|s/^\tif \[\[ "\$key" != "\$expected" \]\]; then$/\tif false; then/|inputs_changing_while_the_step_ran_refuse_the_record
-#MUTANT ci-caches|s/^if \[\[ -n "\${CI:-}\${BATTEN_STEP_RECEIPT_BYPASS:-}" \]\]; then$/if false; then/|under_ci_the_cache_neither_hits_nor_records
-description = "Economy: per-step receipts keyed by input content — a step whose exact inputs, command and tools already passed is answered from its receipt"
-shell = "bash -c"
-dir = "{{cwd}}"
-usage = 'arg "[args]..." var=#true help="check|record <step> [--arg <value>]..."'
-run = '''
-{% raw %}
-set -uo pipefail
-args=()
-read -ra args <<<"${usage_args:-${*:-}}"
-usage() {
-	echo "::error:: usage: step-receipt <check|record> <step> [--arg <value>]..." >&2
-	exit 2
-}
-verb="${args[0]:-}"
-step="${args[1]:-}"
-case "$verb" in
-check | record) ;;
-*) usage ;;
-esac
-[[ -n "$step" ]] || usage
-extra=""
-i=2
-while ((i < ${#args[@]})); do
-	[[ "${args[i]}" = "--arg" ]] || usage
-	((i + 1 < ${#args[@]})) || usage
-	extra="$extra${args[i + 1]}
-"
-	i=$((i + 2))
-done
-
-# Say which step the gate is on (CLOUD-425): `land` exports its own pid and
-# nothing else sets it. Best-effort — bookkeeping never changes a verdict.
-if [[ -n "${BATTEN_TASK_PID:-}" ]] && [[ "$verb" = "check" ]]; then
-	mise run task-registry phase "$BATTEN_TASK_PID" "$step" >/dev/null 2>&1 || true
-fi
-
-if [[ -n "${CI:-}${BATTEN_STEP_RECEIPT_BYPASS:-}" ]]; then
-	if [[ "$verb" = "check" ]]; then
-		echo "miss — the cache is off here (CI or bypass); running the step"
-	fi
-	exit 0
-fi
-
-# The step table. `batten.toml` rides in the Rust specs because the committed
-# config steers the `the_committed_*` cases (CLOUD-59); `test:bats` is glob-less
-# because its suites read the whole tree.
-rust_specs="crates Cargo.toml Cargo.lock batten.toml"
-rust_tools="rustc --version && cargo --version"
-specs=""
-tools=""
-known=no
-case "$step" in
-lint:fmt)
-	specs="$rust_specs rustfmt.toml"
-	tools="cargo fmt --version"
-	known=yes
-	;;
-lint:clippy)
-	specs="$rust_specs clippy.toml .clippy.toml"
-	tools="cargo clippy --version && rustc --version"
-	known=yes
-	;;
-test:cargo | msrv | cross-check | evaluator-io-check)
-	specs="$rust_specs"
-	tools="$rust_tools"
-	known=yes
-	;;
-darwin-link)
-	specs="$rust_specs"
-	tools="cargo-zigbuild --version && zig version && rustc --version"
-	known=yes
-	;;
-deny)
-	specs="$rust_specs deny.toml"
-	tools="cargo deny --version"
-	known=yes
-	;;
-zizmor)
-	specs=".github action.yml"
-	tools="zizmor --version"
-	known=yes
-	;;
-batten-check)
-	specs="batten.toml $rust_specs mise.toml .github tests AGENTS.md .serena/project.yml"
-	tools="$rust_tools"
-	known=yes
-	;;
-test:bats)
-	specs=""
-	tools="bats --version"
-	known=yes
-	;;
-esac
-if [[ "${BATTEN_STEP_SPECS+set}" = "set" ]]; then
-	specs="$BATTEN_STEP_SPECS"
-	known=yes
-fi
-if [[ "${BATTEN_STEP_TOOLS+set}" = "set" ]]; then
-	tools="$BATTEN_STEP_TOOLS"
-	known=yes
-fi
-
-# Everything the key hashes. Any failure is a bare `return 1`: no key, so run.
-material() {
-	local body file fhash toolsout others files spec_arr
-	[[ "$known" = "yes" ]] || return 1
-	printf 'step %s\n' "$step"
-	if [[ -n "$extra" ]]; then
-		printf 'args %s\n' "$extra"
-	fi
-	body=$(mise tasks info "$step" --json 2>/dev/null | jq -c '{run, file, shell}' 2>/dev/null) || return 1
-	[[ -n "$body" ]] || return 1
-	printf 'body %s\n' "$body"
-	file=$(jq -r '.file // empty' <<<"$body" 2>/dev/null) || return 1
-	if [[ -n "$file" ]]; then
-		fhash=$(sha256sum "$file" 2>/dev/null) || return 1
-		printf 'bodyfile %s\n' "$fhash"
-	fi
-	toolsout=$(bash -c "$tools" 2>/dev/null) || return 1
-	[[ -n "$toolsout" ]] || return 1
-	printf 'tools %s\n' "$toolsout"
-	if [[ -n "$specs" ]]; then
-		read -ra spec_arr <<<"$specs"
-		if ! git diff --quiet -- "${spec_arr[@]}" 2>/dev/null; then return 1; fi
-		others=$(git ls-files --others --exclude-standard -- "${spec_arr[@]}" 2>/dev/null) || return 1
-		[[ -z "$others" ]] || return 1
-		files=$(git ls-files -s -- "${spec_arr[@]}" 2>/dev/null) || return 1
-	else
-		git diff --quiet 2>/dev/null || return 1
-		others=$(git ls-files --others --exclude-standard 2>/dev/null) || return 1
-		[[ -z "$others" ]] || return 1
-		files=$(git ls-files -s 2>/dev/null) || return 1
-	fi
-	[[ -n "$files" ]] || return 1
-	printf 'inputs\n%s\n' "$files"
-}
-
-compute_key() {
-	material | sha256sum | awk '{print $1}'
-}
-
-# The stored value's second field, or nothing. A miss, an unreadable store and a
-# malformed record all read as nothing, which the callers treat as "run".
-stored_key() {
-	local answer
-	answer=$(batten record show "$1" "$step" 2>/dev/null) || return 0
-	[[ "$(head -n1 <<<"$answer")" = "hit" ]] || return 0
-	sed -n '2p' <<<"$answer" | awk '{print $NF}'
-}
-
-case "$verb" in
-check)
-	if ! key=$(compute_key) || [[ -z "$key" ]]; then
-		printf '\n' | batten record keyed step-pending "$step" >/dev/null 2>&1 || true
-		echo "miss — $step: no key (dirty, unreadable, or undeclared inputs); running the step"
-		exit 0
-	fi
-	stored=$(stored_key steps)
-	# A HIT LEAVES THE PENDING SLOT ALONE. It is one slot per step, and `verify`
-	# runs some steps twice at once (`cargo-clippy` finished twice inside
-	# `[hooks]`, measured on #1036): blanking it here, or on `record` below, left
-	# the concurrent twin's `record` with nothing to match and failed a green step.
-	# A stale pending cannot mint a false receipt — `record` recomputes the key and
-	# refuses on any difference — so clearing it bought nothing.
-	if [[ "$stored" = "$key" ]]; then
-		echo "hit ${key:0:12} — $step: this receipt already covers these exact inputs, command and tools; not re-deriving"
-		exit 0
-	fi
-	# The pending key is what a later `record` must match. A store that will not
-	# take it costs the economy, never the verdict: `record` then refuses.
-	printf '%s\n' "$key" | batten record keyed step-pending "$step" >/dev/null 2>&1 || true
-	echo "miss — $step: no receipt for ${key:0:12}; running the step"
-	exit 0
-	;;
-record)
-	expected=$(stored_key step-pending)
-	if [[ -z "$expected" ]]; then
-		echo "step-receipt: $step — no pending key from a paired check; not recording" >&2
-		exit 1
-	fi
-	if ! key=$(compute_key); then
-		key=""
-	fi
-	if [[ "$key" != "$expected" ]]; then
-		echo "step-receipt: $step — the inputs changed while the step ran; a receipt now would attest bytes the run never judged. Not recording" >&2
-		exit 1
-	fi
-	if ! printf '%s %s\n' "$(date -u +%FT%TZ)" "$key" | batten record keyed steps "$step" >/dev/null 2>&1; then
-		echo "step-receipt: $step — could not write the receipt; the next run re-derives" >&2
-		exit 1
-	fi
-	echo "step-receipt: $step — recorded ${key:0:12}"
-	;;
-esac
-{% endraw %}
-'''
-
 [tasks."target-ensure"]
 description = "Effect: ensure one rustup target is installed, behind the per-toolchain lock so concurrent callers queue instead of colliding"
 # NO `"$1"`: mise appends a task's positional arguments to its `run` string, so
@@ -8524,7 +8282,7 @@ run = "cargo run --quiet -p batten -- doctor target"
 
 [tasks."darwin-link"]
 description = "Gate: the macOS targets actually LINK from Linux, which is what proves no dependency needs an Apple SDK"
-run = "darwin_link() { t=\"${1:-${DARWIN_TARGET:-aarch64-apple-darwin}}\"; case \"$t\" in *-apple-darwin) ;; *) echo \"::error:: darwin-link: expected an *-apple-darwin target, got '$t'\" >&2; exit 2 ;; esac; if [ \"$(mise run -q step-receipt check darwin-link --arg \"$t\" | cut -c1-3)\" = hit ]; then exit 0; fi; mise run target-ensure \"$t\" || exit 1; cargo zigbuild --workspace --profile darwin-link --target \"$t\" || exit 1; mise run -q step-receipt record darwin-link --arg \"$t\" || true; echo \"darwin-link: $t links with no macOS SDK\"; }; darwin_link"
+run = "darwin_link() { t=\"${1:-${DARWIN_TARGET:-aarch64-apple-darwin}}\"; case \"$t\" in *-apple-darwin) ;; *) echo \"::error:: darwin-link: expected an *-apple-darwin target, got '$t'\" >&2; exit 2 ;; esac; mise run target-ensure \"$t\" || exit 1; cargo run --quiet -p batten -- step run darwin-link --arg \"$t\" -- cargo zigbuild --workspace --profile darwin-link --target \"$t\" || exit 1; echo \"darwin-link: $t links with no macOS SDK\"; }; darwin_link"
 
 [tasks."cross-turn"]
 description = "One turn's cross-triple type-check, detached — reports the previous run's failure and never blocks the turn"
@@ -8570,7 +8328,7 @@ description = "Type-check for other targets from Linux (no macOS runner needed)"
 run = '''
 # Receipt-gated (CLOUD-424): a hit skips the target install too — the verdict
 # is about the sources, and the toolchain half lives in the key.
-if [ "$(mise run -q step-receipt check cross-check | cut -c1-3)" = hit ]; then exit 0; fi
+if [ "$(mise run -q batten -- step check cross-check | cut -c1-3)" = hit ]; then exit 0; fi
 for t in x86_64-pc-windows-gnu x86_64-unknown-linux-musl; do
   # Guarded because task bodies do not run under `set -e`: with more than one
   # triple in the list, a failed target install would otherwise be masked by a
@@ -8626,7 +8384,7 @@ for t in x86_64-pc-windows-gnu x86_64-unknown-linux-musl; do
     exit 1
   fi
 done
-mise run -q step-receipt record cross-check || true
+mise run -q batten -- step record cross-check || true
 '''
 
 [tasks."test:musl"]
@@ -8851,12 +8609,12 @@ env = { MCP_TIMEOUT_LOGS = "target/mcp-logs-for-fixtures-never-created" }
 # The error direction was benign, which is why nothing broke: believing "no
 # `set -e`" makes an author ADD guards. An author who believed the opposite would
 # omit them, and that is the direction this correction exists to prevent.
-# Receipt-gated (CLOUD-424). Deliberately glob-less in step-receipt's table:
+# Receipt-gated (CLOUD-424). Its `[[step]]` row in `batten.toml` declares `.`:
 # these suites read mise.toml, hk.pkl, workflows and fixture trees all over the
 # repo, so the honest input set is the whole tracked tree — a rebase that
 # changed no bytes still skips, and any content change anywhere re-runs.
 run = '''
-if [ "$(mise run -q step-receipt check test:bats | cut -c1-3)" = hit ]; then exit 0; fi
+if [ "$(cargo run --quiet -p batten -- step check test:bats | cut -c1-3)" = hit ]; then exit 0; fi
 # BUILD ONCE, THEN FEED THE SEAM THE PROGRAMS ALREADY DECLARE (CLOUD-1198).
 #
 # This task's only build dependency was `doctor --no-targets` — the submodule
@@ -9025,7 +8783,7 @@ elif [ "$elapsed" -ge "$recorded" ]; then
   echo "::error:: test:bats: ${elapsed}s wall at $workers workers against ${recorded}s recorded serial for the same suites — the workers cost more than they bought on this machine. Reported, not refused: the corpus and this run may not come from comparable hardware (CLOUD-386)." >&2
 fi
 echo "test:bats: $ran/$expected cases, $(printf '%s\n' $suites | wc -l | tr -d ' ') suite(s), $workers workers, ${elapsed}s wall vs ${recorded}s recorded serial"
-mise run -q step-receipt record test:bats || true
+cargo run --quiet -p batten -- step record test:bats || true
 '''
 
 [tasks.hooks]
@@ -9869,7 +9627,7 @@ fi
 # THE BODY, BECAUSE `depends` RUNS IN PARALLEL AND THIS MUST NOT. The `ci` leg
 # above still runs the suite through hk, so a `depends` entry would start a second
 # full run concurrently with it rather than answering from its receipt. Here the
-# gate set has already finished, so `step-receipt` hits and this costs ~0.3s —
+# gate set has already finished, so `batten step` hits and this costs ~0.3s —
 # which is also what makes it an assertion about coverage rather than a second
 # execution. A taplo reflow of that array would have broken three suites that read
 # `depends` as a single line, which is the other reason it does not go there.

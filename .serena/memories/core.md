@@ -2840,6 +2840,21 @@ view` and no argument, which reads the CURRENT BRANCH — so under a detached
   `id` must be a declared `[[record]]` family, refused at load, so a query no
   module can read is unwritable. `[forge]` is read from the committed authority
   alone (`resolve::committed`), never layered.
+- `step.rs` — the step cache (CLOUD-424), retiring `[tasks.step-receipt]`
+  (CLOUD-843): `batten step check|record|run <step> [--arg V]...`. A `[[step]]`
+  row (`id`, `inputs` as git pathspecs, `tools` as argvs) keys a LOCAL receipt on
+  the index entries under the specs (`git::index_facts`, no spawn), each tool
+  argv's stdout, every `--arg` in order and, under `run`, the command. Fail
+  closed: an undeclared step, a silent tool, an empty set, a diverged or
+  untracked path is no key, so the step runs. `check` files the key under
+  `step-pending`; `record` recomputes and refuses (exit 2) on any mismatch, so no
+  receipt attests bytes the run never judged; a hit never blanks pending (twin
+  runs). `run` spawns through `exec::run` (child's code passes through) and tools
+  through `exec::piped_argv`, so the module spawns nothing itself. Off under `CI`
+  or `BATTEN_STEP_RECEIPT_BYPASS`. The table is read from the committed authority
+  alone; the retired `BATTEN_STEP_SPECS`/`BATTEN_STEP_TOOLS` overrides did not
+  survive, because a caller naming its own inputs could key a receipt to files
+  the step never read.
 - `severity.rs` — the severity taxonomy (CLOUD-168): one rank table plus the
   adapter across the three axes — `RuleSeverity` (config, CLOUD-61),
   `AdvisoryTier` (the one _stored_ severity, CLOUD-80/78), `ReportLevel`

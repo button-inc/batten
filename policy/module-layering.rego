@@ -689,6 +689,15 @@ declared_modules := {
 	# mints no `Finding` and reaches no decider, and it starts no program, which
 	# is what keeps the verb on the derived read-only allowlist.
 	"census",
+	# `step` arrived with CLOUD-843, retiring `[tasks.step-receipt]`, and is
+	# `record`'s class: a cache over the keyed store. It reaches `git` for the
+	# index entries it hashes, `exec` for the one placed boundary its tool argvs
+	# and command run through (it spawns nothing of its own), `record` for the
+	# store, `resolve` for the committed step table and `task` for the phase it
+	# announces. IT DECIDES NOTHING -- a hit spares a re-run and never mints a
+	# `Finding` -- so its edges into the engine that decides are forbidden below,
+	# and a mediated call must not reach a verb that runs a consumer's command.
+	"step",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
@@ -751,9 +760,13 @@ forbidden[from] contains to if {
 		# `forge_query` joins for `rest`'s reason one hop further out (CLOUD-843):
 		# it reaches `rest`, so a mediated call able to reach it reaches the
 		# network by the route the `rest` entry refuses, one name later.
+		# `step` joins for `repair`'s reason below (CLOUD-843): its `run` arm
+		# executes a command the caller names and writes a receipt, and a
+		# mediated call adjudicates cached state -- it never runs a step.
 		"hook": {
 			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
 			"pr_watch", "fast_forward", "main_watch", "forge_query",
+			"step",
 		},
 		# `repair` RUNS A CONSUMER'S DECLARED COMMAND ON THE MEDIATED PATH
 		# (CLOUD-1639), so it inherits `hook`'s set entire and for the same
@@ -892,6 +905,10 @@ forbidden[from] contains to if {
 		# producer that reached the engine deciding over its record would be a
 		# measurement that knew which verdict it was feeding (CLOUD-843).
 		"forge_query": {"rules", "hook"},
+		# `step -> {rules, hook}`, the same pair for the same reason: a cache that
+		# reached the engine deciding over the step it caches would be a receipt
+		# that knew which verdict it was standing in for (CLOUD-843).
+		"step": {"rules", "hook"},
 	}
 	some to in targets
 }
@@ -1137,6 +1154,42 @@ test_the_forge_query_producer_reaches_what_it_composes if {
 	count(violation) == 0 with input as judging(
 		"crates/batten/src/record.rs",
 		[internal("forge_query", 20)],
+	)
+}
+
+# CLOUD-843's step cache, both directions. The mediated call must not reach a
+# verb that runs a consumer's command and writes a receipt, and the cache must
+# not reach the engine that decides over the step it stands in for.
+test_the_mediated_path_must_not_reach_the_step_cache if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("step", 31)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/step.rs",
+		[internal("rules", 12)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/step.rs",
+		[internal("hook", 13)],
+	)
+}
+
+# AND THE ARRANGEMENT: the cache composes the index, the placed spawn boundary,
+# the keyed store, the committed table and the task registry, and the verb
+# dispatch reaches it. A table that banned the module outright would satisfy the
+# case above.
+test_the_step_cache_reaches_what_it_composes if {
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/step.rs",
+		[internal("git", 10), internal("exec", 11), internal("record", 12), internal("resolve", 13), internal("task", 14)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/lib.rs",
+		[internal("step", 20)],
 	)
 }
 

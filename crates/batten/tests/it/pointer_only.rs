@@ -779,9 +779,6 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // pointer-only assertions still run over that refusal unchanged. THE PACKAGE
     // THAT FILLS A BODY REMOVES ITS NAME HERE, in the same change — a name left
     // behind after its verb answers is the widening this list's header forbids.
-    "step check",
-    "step record",
-    "step run",
     "sbom",
     "dist",
     "mcp grant",
@@ -1700,7 +1697,9 @@ const CENSUS: &[Verb] = &[
     // disposition each package inherits rather than one this change chose for
     // them: a step key, an inventory's asset name, a board pointer, a census
     // count — none has a reason to carry a byte it read. The skeletons answer
-    // `unimplemented` today (see `MAY_ANSWER_COULD_NOT_LOOK`); `census shell`
+    // `unimplemented` today (see `MAY_ANSWER_COULD_NOT_LOOK`); the three `step`
+    // arms answer now (an undeclared step is a miss in words, a record with no
+    // pending key a refusal naming only the step); `census shell`
     // answers now, over the corpus's task body, workflow step and `emit.sh`,
     // each of which carries a content canary it must count and never quote.
     Verb {

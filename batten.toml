@@ -18046,3 +18046,107 @@ id = "mediator-matches-the-tree"
 gloss = "the engine adjudicating this tree was built from it, so a declared gate is not silently dropped"
 check = ["batten", "doctor", "mediator"]
 repair = ["mise", "run", "install:local"]
+
+# THE STEP CACHE'S TABLE (CLOUD-424), retiring `[tasks.step-receipt]`'s hard-coded
+# `case` under CLOUD-843. Each row is a step a task brackets with `batten step`:
+# `inputs` are the pathspecs whose INDEX entries key its receipt, `tools` the argvs
+# whose answers do — a toolchain's version, or `mise tasks info <task> --json`
+# where the step's command is a shell body `batten step run` cannot see as argv.
+# A `step run` caller's command IS its argv, and the verb keys it. A step no row
+# declares is a miss that records nothing, so a name drifting between a task and
+# this table costs the economy and never a verdict; `step_receipt.rs` holds every
+# name a task passes against this table anyway.
+#
+# `batten.toml` rides in every Rust row's inputs because the committed config
+# steers the `the_committed_*` cases (CLOUD-59). `test:bats` declares `.`: its
+# suites read `mise.toml`, `hk.pkl`, workflows and fixture trees all over the
+# repository, so the honest input set is the whole tracked tree.
+#
+# `lint:fmt` and `zizmor` are GONE from the table rather than carried: both steps
+# cost a second or two, the cache is an engine build, and the first runs at commit
+# while the second runs in a CI job that compiles nothing.
+[[step]]
+id = "lint:clippy"
+inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml", "clippy.toml", ".clippy.toml"]
+tools = [["cargo", "clippy", "--version"], ["rustc", "--version"]]
+
+[[step]]
+id = "test:cargo"
+inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml"]
+tools = [
+  ["rustc", "--version"],
+  ["cargo", "--version"],
+  ["mise", "tasks", "info", "test:cargo", "--json"],
+]
+
+[[step]]
+id = "cross-check"
+inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml"]
+tools = [
+  ["rustc", "--version"],
+  ["cargo", "--version"],
+  ["mise", "tasks", "info", "cross-check", "--json"],
+]
+
+# The probe build `evaluator-io-record` skips on a hit. The retired table keyed it
+# on `mise tasks info evaluator-io-check`, a task that no longer exists, so the
+# key never formed and the step never hit; the body it caches is
+# `evaluator-io-record`'s, which is what this row names.
+[[step]]
+id = "evaluator-io-check"
+inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml"]
+tools = [
+  ["rustc", "--version"],
+  ["cargo", "--version"],
+  ["mise", "tasks", "info", "evaluator-io-record", "--json"],
+]
+
+[[step]]
+id = "darwin-link"
+inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml"]
+tools = [["cargo-zigbuild", "--version"], ["zig", "version"], ["rustc", "--version"]]
+
+[[step]]
+id = "deny"
+inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml", "deny.toml"]
+tools = [["cargo", "deny", "--version"]]
+
+[[step]]
+id = "batten-check"
+inputs = [
+  "batten.toml",
+  "crates",
+  "Cargo.toml",
+  "Cargo.lock",
+  "mise.toml",
+  ".github",
+  "tests",
+  "AGENTS.md",
+  ".serena/project.yml",
+]
+tools = [["rustc", "--version"], ["cargo", "--version"]]
+
+[[step]]
+id = "test:bats"
+inputs = ["."]
+tools = [["bats", "--version"], ["mise", "tasks", "info", "test:bats", "--json"]]
+
+# CLOUD-1891: keyed on BOTH sides of the comparison. This tree's crates are the
+# inputs; the baseline's tree ids and the branch's commit messages arrive as
+# `--arg`s from the task, because neither is a path in this tree.
+[[step]]
+id = "semver"
+inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml"]
+tools = [["cargo", "semver-checks", "--version"], ["rustc", "--version"]]
+
+# The three validator records are a function of committed bytes, so one run
+# answers for all (CLOUD-1891). The task's forge arm stays outside the key.
+[[step]]
+id = "record-verdicts"
+inputs = ["hk.pkl", "renovate.json5", "mise.toml"]
+tools = [
+  ["pkl", "--version"],
+  ["renovate-config-validator", "--version"],
+  ["hk", "--version"],
+  ["mise", "tasks", "info", "record-verdicts", "--json"],
+]

@@ -53,7 +53,7 @@ fn shard_dir(dir: &Path, family: &str) -> std::path::PathBuf {
 #[test]
 fn a_hit_returns_the_stored_value_and_a_miss_says_miss() {
     // THE DISCRIMINATING PAIR. A store that answered an empty string for both
-    // would pass any assertion about the hit alone, and `step-receipt`'s whole
+    // would pass any assertion about the hit alone, and `batten step`'s whole
     // decision is "run the step or skip it" — so a miss that reads as an empty
     // hit skips a step nothing has verified.
     let dir = repo("hit-miss");

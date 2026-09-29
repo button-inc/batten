@@ -1370,6 +1370,11 @@ pub enum Native {
     /// Position is API; the reading order is not, and `Native::ALL` below is where
     /// the grouping belongs.
     RecordTableRefused,
+    /// The `[[step]]` table would not load (CLOUD-843).
+    ///
+    /// **APPENDED LAST**, for [`Native::RecordTableRefused`]'s reason: position is
+    /// API, and `Native::ALL` is where the grouping belongs.
+    StepTableRefused,
 }
 
 impl Native {
@@ -1422,6 +1427,7 @@ impl Native {
         Native::RecordTableRefused,
         Native::ProvisionTableRefused,
         Native::StartupTableRefused,
+        Native::StepTableRefused,
         Native::PlanReadStale,
         Native::OutcomeTableRefused,
         Native::ProgramUnknown,
@@ -1459,6 +1465,7 @@ impl Native {
         Native::RecordTableRefused,
         Native::ProvisionTableRefused,
         Native::StartupTableRefused,
+        Native::StepTableRefused,
     ];
 
     /// The token this class is declared and rendered under.
@@ -1511,6 +1518,7 @@ impl Native {
             Native::RecordTableRefused => "record declare refused",
             Native::ProvisionTableRefused => "provision declare refused",
             Native::StartupTableRefused => "startup declare refused",
+            Native::StepTableRefused => "step declare refused",
         }
     }
 }
@@ -2256,6 +2264,18 @@ it was supposed to decide something.",
         routes: &[read("config read first", "batten.toml")],
         applicability: Applicability::Advice,
     },
+    VendoredVerdict {
+        id: "step declare refused",
+        gloss: "the step table would not load",
+        class: "`[[step]]` declares what keys a step's receipt: the pathspecs whose index \
+entries it hashes and the tool argvs whose answers it hashes. A row with no inputs keys no \
+file and would answer for any tree; a row with no tools lets a receipt outlive the toolchain \
+that earned it; a `:`-magic pathspec selects nothing and reads as a clean set. Each is a \
+receipt attesting bytes nobody checked, so it is refused at load rather than trusted at the \
+first hit.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
 ];
 
 /// Every class the binary ships, as the registry carries them.
@@ -2654,6 +2674,7 @@ mod tests {
                 | Native::RecordTableRefused
                 | Native::ProvisionTableRefused
                 | Native::StartupTableRefused
+                | Native::StepTableRefused
                 | Native::ProgramUnknown => native.id(),
             };
             // The prefix is gone (CLOUD-1284), so what makes this a token is the

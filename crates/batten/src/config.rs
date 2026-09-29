@@ -752,6 +752,17 @@ pub struct Config {
     /// reading are [`crate::census`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub census: Option<crate::census::Census>,
+    /// The step cache's table (CLOUD-424, CLOUD-843): each step a caller brackets
+    /// with `batten step`, the pathspecs whose index entries key its receipt and
+    /// the tool argvs whose answers do. Empty means no step is declared, so every
+    /// `batten step` call is a miss that records nothing.
+    ///
+    /// Consumer-specific by nature, for `startup`'s reason: which steps a
+    /// repository runs and what each reads are facts about that repository
+    /// (non-negotiable rule 1). Read from the committed authority alone, never
+    /// layered. The type, its validator and the cache are [`crate::step`].
+    #[serde(default, rename = "step", skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<crate::step::Step>,
 }
 
 /// The `[perf]` table: accepted invocation-latency regressions (CLOUD-1163
@@ -2154,6 +2165,13 @@ fn validate_sections(config: &Config) -> Result<()> {
     // guarded failure is a `path` key present and blank, which would resolve to
     // the repository root and read as an unparseable transcript (CLOUD-95).
     crate::transcript::validate(config.transcript.as_ref())?;
+    // A step row keying nothing, trusting no tool, or reading a pathspec this
+    // build cannot — each a receipt that answers for bytes nobody checked — is
+    // refused here, where the row is named (CLOUD-843).
+    under(
+        Native::StepTableRefused,
+        crate::step::validate(&config.steps),
+    )?;
     // A pin that can never match, a name that owns a cache path twice, an empty
     // required field: each is refused here rather than at fetch time, where the
     // failure would blame the artifact for a typo in this file.
@@ -3787,6 +3805,10 @@ impl Config {
             // An authority declaring no census declares nowhere shell lives; the
             // verb says so rather than counting a tree it was told nothing about.
             census: None,
+            // An authority declaring no steps keys no receipt: every `batten step`
+            // call is a miss that runs the step and records nothing, which is the
+            // cache off rather than a cache answering for anything.
+            steps: Vec::new(),
         }
     }
 }
@@ -4274,6 +4296,7 @@ mod tests {
             "crate::record::validate(",
             Native::RecordTableRefused,
         ),
+        ("steps", "crate::step::validate(", Native::StepTableRefused),
     ];
 
     /// The one CLASSED refusal that is not a `Config` table.
