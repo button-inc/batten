@@ -1204,7 +1204,7 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   a stdin-fed fact declared `Surface::Check` is not admitted, so the module
   silently sees nothing; a payload on stdin is context re-sent every turn, the
   channel `ready lint` and `claim check` were both moved off; and the
-  step-receipt key does not include stdin, so two runs over different payloads on
+  `batten step` key does not include stdin, so two runs over different payloads on
   one tree hit one receipt and skip. `capture::list` is sorted by handle rather
   than by time, so a reduction is a pure function of the store's bytes — the byte
   stability `Surface::Check` requires. **The reduction is part of the FACT**: a
@@ -1584,7 +1584,7 @@ transcript CONTENT needs 1029 first, and nothing landed authorises one.
   no code, no case file and no `#MUTANT` row to reach. A hash comparison is what
   better-shaped prose cannot satisfy, because the prose is the input to the hash.
   **Spawn on miss, read on hit**, keyed by (prompt digest, subject digest) —
-  `step-receipt`'s pattern, so the agent runs once per unique subject rather than
+  `batten step`'s pattern, so the agent runs once per unique subject rather than
   once per landing lap, and editing the ticket body or pushing a commit leaves
   the record under a name nothing looks up. The keying is the anti-staleness
   property, not an optimisation.

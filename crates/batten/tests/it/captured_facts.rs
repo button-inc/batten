@@ -15,7 +15,7 @@
 //! capture listing is sorted by handle rather than by time, so the answer is a
 //! pure function of the store's bytes. A stdin channel would also be dropped by
 //! the surface table before projection, would be context re-sent every turn, and
-//! is invisible to the step-receipt key — three refusals, any one sufficient.
+//! is invisible to the `batten step` key — three refusals, any one sufficient.
 //!
 //! A `with input as` case can do none of this: it fabricates the very shape the
 //! engine may be unable to produce (CLOUD-845, CLOUD-857), and here it would

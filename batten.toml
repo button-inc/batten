@@ -7927,7 +7927,7 @@ node = "tasks"
 # declared `Surface::Check` is dropped by the surface table before projection, so
 # the module silently sees nothing. A payload on stdin is a payload something
 # read, which is context re-sent every turn — the channel `ready lint` and
-# `claim check` were both moved off. And the step-receipt key does not include
+# `claim check` were both moved off. And the `batten step` key does not include
 # stdin, so two runs over different payloads on one unchanged tree hit one
 # receipt and skip, which is a false green.
 #
@@ -11561,8 +11561,8 @@ expires = "2027-02-28"
 #
 # MEASURED BEFORE IT WAS WIRED, 2026-09-09: the handler returns in 224ms because
 # the type-check is detached, and the check it launches costs 1.0s on a tree that
-# changed no Rust (the `step-receipt` hit) against 54s when it must re-derive. So
-# the tax is a second on the turns that need nothing and a minute of BACKGROUND
+# changed no Rust (a step-cache hit, measured under the task `batten step`
+# retired) against 54s when it must re-derive. So the tax is a second on the turns that need nothing and a minute of BACKGROUND
 # work on the turns that do.
 #
 # IT IS NOT A SECOND `verify` AND MUST NOT BECOME ONE. `verify` stays the
