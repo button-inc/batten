@@ -1031,6 +1031,56 @@ pub(crate) fn percent_decoded(text: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// Whether `endpoint` carries `needle` as a WHOLE address: the endpoint itself,
+/// or the percent-decoded value of one of its query parameters, compared with
+/// the scheme, the query, the fragment and any trailing `/` set aside.
+///
+/// **THE STRICT READING, FOR A DECISION** (CLOUD-843). [`endpoint_carries`] is a
+/// dispatch selector, where a substring is enough because an ambiguous match is
+/// refused. A permission alias TRANSLATES a committed grant onto a key nobody
+/// committed, so the match that licenses it is equality: an address that merely
+/// extends the governed one (`…/meta-x`, `…/meta/sub`), or carries it somewhere
+/// other than a whole parameter value, is another server and resolves to
+/// nothing. This is the retired resolver's exact comparison of the wrapped
+/// upstream, without spelling the parameter a host wraps it in (non-negotiable
+/// rule 1): ANY parameter's value may be the address.
+//MUTANT upstream-prefix-accepted|s@^        if bare_address(&address) == want {$@        if bare_address(\&address).starts_with(want) {@|a_url_that_extends_the_governed_upstream_resolves_to_silence
+//MUTANT upstream-param-unread|s@^    for address in std::iter::once(endpoint.to_owned()).chain(query_values(endpoint)) {$@    for address in std::iter::once(endpoint.to_owned()) {@|a_committed_allow_and_deny_reach_the_toolbox_under_a_flipped_name
+pub(crate) fn endpoint_names(endpoint: &str, needle: &str) -> bool {
+    let want = bare_address(needle);
+    if want.is_empty() {
+        return false;
+    }
+    for address in std::iter::once(endpoint.to_owned()).chain(query_values(endpoint)) {
+        if bare_address(&address) == want {
+            return true;
+        }
+    }
+    false
+}
+
+/// Every query parameter's value in `endpoint`, percent-decoded, in order.
+fn query_values(endpoint: &str) -> Vec<String> {
+    let Some((_, query)) = endpoint.split_once('?') else {
+        return Vec::new();
+    };
+    let query = query.split('#').next().unwrap_or_default();
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .map(|(_, value)| percent_decoded(value))
+        .collect()
+}
+
+/// An address with its scheme, query, fragment and trailing `/` set aside.
+fn bare_address(address: &str) -> &str {
+    let rest = address.split_once("://").map_or(address, |(_, rest)| rest);
+    rest.split(['?', '#'])
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches('/')
+}
+
 /// One hex digit's value, or `None` where the byte is not one.
 const fn hex_value(digit: u8) -> Option<u8> {
     match digit {
@@ -3047,6 +3097,39 @@ mod tests {
         // The raw spelling still answers, so no landed selector stops matching.
         assert!(endpoint_carries(wrapped, "upstream.test%2Fv1"));
         assert!(!endpoint_carries(wrapped, "other.test/v1/meta"));
+    }
+
+    #[test]
+    fn a_governed_address_is_named_only_whole() {
+        let needle = "upstream.test/v1/meta";
+        // Wrapped in any parameter, or the endpoint itself, with or without a
+        // scheme, a query or a trailing slash.
+        assert!(endpoint_names(
+            "https://proxy.test/p?mcp_url=https%3A%2F%2Fupstream.test%2Fv1%2Fmeta&s=1",
+            needle
+        ));
+        assert!(endpoint_names(
+            "https://proxy.test/p?s=1&u=https%3A%2F%2Fupstream.test%2Fv1%2Fmeta%2F",
+            needle
+        ));
+        assert!(endpoint_names("https://upstream.test/v1/meta?s=1", needle));
+        // An address extending it, or carrying it inside a longer one, is another.
+        assert!(!endpoint_names("https://upstream.test/v1/meta-x", needle));
+        assert!(!endpoint_names("https://upstream.test/v1/meta/sub", needle));
+        assert!(!endpoint_names(
+            "https://proxy.test/p?mcp_url=https%3A%2F%2Fupstream.test%2Fv1%2Fmeta%2Fsub",
+            needle
+        ));
+        assert!(!endpoint_names(
+            "https://proxy.test/upstream.test/v1/meta",
+            needle
+        ));
+        assert!(!endpoint_names(
+            "https://evil-upstream.test/v1/meta",
+            needle
+        ));
+        // An empty needle names nothing.
+        assert!(!endpoint_names("https://upstream.test/v1/meta", ""));
     }
 
     #[test]

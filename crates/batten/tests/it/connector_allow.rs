@@ -22,7 +22,7 @@
 // carried: "a verb the committed file says nothing about resolves to silence" crates/batten/src/mcp_grant.rs kind:verb
 // carried: "a deny outranks an allow glob over the same server" crates/batten/src/mcp_grant.rs kind:verb
 // changed: "a claude.ai connector resolves to silence, never to a grant" crates/batten/src/mcp_grant.rs kind:verb still silence, and the reason moved from a hard-coded endpoint constant to the consumer's `[mcp] permission_aliases`: a server its selector names only for dispatch is not governed, so its name is never translated
-// carried: "a server carrying no mcp_url resolves to silence" crates/batten/src/mcp_grant.rs kind:verb
+// changed: "a server carrying no mcp_url resolves to silence" crates/batten/src/mcp_grant.rs kind:verb still silence for every entry that does not carry the governed address WHOLE, which is the retired exact comparison; the engine reads any query parameter's decoded value rather than spelling the host's `mcp_url`, so an entry whose own address IS the governed one now resolves to it, and the scheme is set aside
 // carried: "the readable spelling is left to the CLI's own matching" crates/batten/src/mcp_grant.rs kind:verb
 // carried: "a non-MCP tool resolves to silence" crates/batten/src/mcp_grant.rs kind:verb
 // changed: "an absent injected config resolves to silence" crates/batten/src/mcp_grant.rs kind:verb the injected config is found through the declared `[[mcp.source]]` rows rather than a `/tmp/mcp-config-cse_*.json` glob; `--config` still names one outright, and an absent one is still silence
@@ -223,6 +223,29 @@ fn a_claude_ai_connector_resolves_to_silence_never_a_grant() {
         "silence Claude_Code_Remote"
     );
     assert_eq!(f.verdict("Bash"), "silence -");
+}
+
+/// THE RETIRED EXACT COMPARISON, KEPT (CLOUD-843 review): the translation is a
+/// grant under a key nobody committed, so an address that merely EXTENDS the
+/// governed upstream, or carries it inside a longer path, is another server.
+#[test]
+fn a_url_that_extends_the_governed_upstream_resolves_to_silence() {
+    let f = Fixture::new("extends");
+    common::write(
+        &f.dir,
+        "near.json",
+        r#"{"mcpServers":{
+  "bbbbbbbb-5555-6666-7777-888888888888":{"url":"https://api.anthropic.com/v1/code/mcp/proxy?mcp_url=https%3A%2F%2Fapi.anthropic.com%2Fv1%2Fcode%2Fmcp%2Fmeta-x"},
+  "cccccccc-5555-6666-7777-888888888888":{"url":"https://api.anthropic.com/v1/code/mcp/meta/sub"},
+  "dddddddd-5555-6666-7777-888888888888":{"url":"https://proxy.test/api.anthropic.com/v1/code/mcp/meta"}
+}}"#,
+    );
+    let near = f.path("near.json");
+    for key in ["bbbbbbbb", "cccccccc", "dddddddd"] {
+        let tool = format!("mcp__{key}-5555-6666-7777-888888888888__send_later");
+        let (code, out, err) = f.run(&[&tool, "--config", &near], "");
+        assert_eq!((code, out.as_str()), (Some(0), "silence -"), "{key} {err}");
+    }
 }
 
 #[test]

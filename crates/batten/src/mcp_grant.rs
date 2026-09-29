@@ -189,12 +189,15 @@ fn governed_maps<'a>(inputs: &Inputs<'a>) -> Vec<Governed<'a>> {
 /// would make the answer depend on the order the selectors were declared. Both
 /// are silence.
 //MUTANT-SUITE crates/batten/tests/it/connector_allow.rs
-//MUTANT connector-translated|s@mcp::endpoint_carries(&endpoint, needle))$@true)@|a_claude_ai_connector_resolves_to_silence_never_a_grant
+//MUTANT connector-translated|s@mcp::endpoint_names(&endpoint, needle))$@true)@|a_claude_ai_connector_resolves_to_silence_never_a_grant
 fn alias_in(entry: &Node, selectors: &[(&str, &str)]) -> Option<String> {
     let endpoint = mcp::endpoint_of(entry)?;
+    // THE STRICT MATCH, never the dispatch selector's substring: this licenses a
+    // committed grant under a key nobody committed, so an address that merely
+    // extends the governed one must not resolve to it.
     let matched: Vec<&str> = selectors
         .iter()
-        .filter(|(_, needle)| mcp::endpoint_carries(&endpoint, needle))
+        .filter(|(_, needle)| mcp::endpoint_names(&endpoint, needle))
         .map(|(name, _)| *name)
         .collect();
     match matched.as_slice() {
