@@ -22,6 +22,18 @@
 //! proposed this sentinel scoped to the unreadable arm; this instance refutes that
 //! scoping, because there the config loads.
 //!
+//! # Not consulted where the config will not load, and that is the floor's job
+//!
+//! A pull is read only once a policy LOADED — `run_hook` reaches it
+//! through the admission step, after `load_policy` succeeded. Over a config that
+//! will not parse, the hook returns through the unadjudicable refusal first, so
+//! creating this sentinel there is refused like any other write. That arm needs
+//! no ripcord: its floor already admits a read and a write onto the authority,
+//! which is everything a pull would open. What it needed was a refusal that SAYS
+//! so — measured 2026-09-29, a session mid-rebase tried this sentinel, `git` and
+//! an MCP read, and never the `Read` and `Edit` that were open (CLOUD-1847's
+//! arm, and the unadjudicable remedy's doc in `lib.rs`).
+//!
 //! # Why a file, and why it is not the retired general hook hatch
 //!
 //! The environment hatch is unreachable from inside the state it is advertised

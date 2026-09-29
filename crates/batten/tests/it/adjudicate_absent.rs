@@ -238,6 +238,30 @@ fn the_declaration_that_would_not_parse_is_named_without_quoting_it() {
     );
 }
 
+#[test]
+fn the_refusal_names_the_repair_floor_it_admits() {
+    // THE REFUSAL IS THE ONLY MAP OUT, so it must point at a route this arm opens.
+    // It used to render `Fix::None` — "restore it with git" — and `git` runs
+    // through the surface this arm refuses. Measured mid-rebase: a session tried
+    // git, a Grep, the ripcord and an MCP read, all refused, and never the `Read`
+    // and the authority `Edit` below that were admitted the whole time.
+    let dir = fixture("adjudicate-names-floor", WILL_NOT_PARSE);
+    let output = run_with_stdin(
+        dir.as_path(),
+        &["adjudicate", "--harness", "claude-code"],
+        &payload(),
+    );
+    let rendered = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        rendered.contains("repair the file with those") && rendered.contains("batten.toml"),
+        "the refusal names the read-and-edit floor on the authority: {rendered}"
+    );
+    assert!(
+        !rendered.contains("restore it with git"),
+        "a remedy this same arm refuses is not a remedy: {rendered}"
+    );
+}
+
 // ─── THE FLOOR UNDER THE REFUSAL (CLOUD-1842) ───
 //
 // The cases above prove the engine does not fail OPEN on a config it cannot

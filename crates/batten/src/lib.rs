@@ -14492,6 +14492,34 @@ fn names_the_config_authority(path: &str) -> bool {
     name == config::CONFIG_FILE || name == resolve::LOCAL_CONFIG_FILE
 }
 
+/// The remedy [`deny_unadjudicable`] renders: the floor it admits, named.
+///
+/// **IT USED TO BE [`Fix::None`], AND THAT TEXT SENT THE CALLER INTO THE WALL.**
+/// `Fix::None` renders the crate's general recourse, "change it through the
+/// surface that owns it, or restore it with git" — and over an unreadable config
+/// `git` runs through the one surface this arm refuses. Measured mid-rebase with
+/// conflict markers in the authority: the agent tried `git rebase --abort`, a
+/// `Grep`, a ripcord `Write` and an MCP read, each refused as the floor requires,
+/// and never tried the `Read` and the authority `Edit` that
+/// [`recoverable_without_rules`] was admitting the whole time. The session was
+/// declared unrecoverable while its repair route stood open.
+///
+/// So the refusal states the floor it is the other half of. The two file names
+/// are this crate's own constants, not a consumer's (non-negotiable rule 1), and
+/// rebuilding is named without a command because which command rebuilds is the
+/// consumer's.
+//MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
+//MUTANT unadjudicable-remedy-unnamed|s@repair the file with those@restore it with git@|the_refusal_names_the_repair_floor_it_admits
+fn unadjudicable_remedy() -> Fix {
+    Fix::Run(format!(
+        "a `Read` still answers and an `Edit` or `Write` of `{}` or `{}` still lands — \
+         repair the file with those; every other call stays refused until it loads, \
+         so rebuild the binary instead if the config is newer than it",
+        config::CONFIG_FILE,
+        resolve::LOCAL_CONFIG_FILE,
+    ))
+}
+
 /// Refuse a call whose rules this build could not load (CLOUD-1677).
 ///
 /// Lifted out of [`run_hook`] rather than left inline because that function is
@@ -14578,10 +14606,7 @@ fn deny_unadjudicable(
             "this build could not load the rules it is registered to enforce, so nothing judged \
              this call: {pointer}"
         ),
-        // No remedy the ENGINE may declare: the repair is rebuilding or
-        // reinstalling the binary, or fixing the config, and each is the
-        // consumer's own command (non-negotiable rule 1).
-        Fix::None,
+        unadjudicable_remedy(),
     );
     let rendering = Rendering {
         ceiling: None,
