@@ -2567,6 +2567,57 @@ fn the_corpus_is_live_subject_matter() {
     );
 }
 
+/// `board check`'s census row cannot reach a verdict on the shared corpus: that
+/// authority declares no `[[pattern]]` row and no `[board]` table, so the verb
+/// answers `Usage` before it reads a payload, and the sweep's one exit-code
+/// assertion over it ("not 3") holds vacuously. This drives it to its VIOLATION
+/// renderer over the committed vocabulary, with a canary as the refused row's
+/// whole body — the one arm where a body could leak.
+#[test]
+fn board_check_reaches_its_verdict_and_emits_no_body() {
+    let repo = Fixture::new("pointer-only-board-check")
+        .file("Cargo.toml", "[workspace.package]\nversion = \"0.0.125\"\n")
+        .git()
+        .base_commit()
+        .build();
+    let config = scratch("pointer-only-board-check-config");
+    common::write(
+        &config,
+        "batten.toml",
+        &format!(
+            "version = 1\n{}\n{}",
+            common::declared_board(),
+            common::declared_patterns()
+        ),
+    );
+    let body = canary("boardrow");
+    let payload = format!(
+        r#"[{{"id":"CLOUD-1120","status":"Todo","statusType":"unstarted","attachments":[],"relations":{{"blockedBy":[]}},"projectMilestone":{{"id":"m-1","name":"m"}},"description":"{body}"}}]"#
+    );
+    let config_arg = config.display().to_string();
+    let run = common::run_with_stdin(
+        &repo,
+        &["--config-in", config_arg.as_str(), "board", "check"],
+        &payload,
+    );
+    let emitted = format!(
+        "{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        run.status.code(),
+        Some(2),
+        "the verb must reach its verdict, or what it did not emit proves nothing: {emitted}"
+    );
+    assert!(emitted.contains("CLOUD-1120 todo-not-ready"), "{emitted}");
+    assert!(
+        !emitted.contains(&body),
+        "board check emitted the refused row's body. Output is a pointer, never the \
+         payload (non-negotiable rule 4): {emitted}"
+    );
+}
+
 #[test]
 fn no_verb_emits_content_it_merely_read() {
     // The law, swept over the whole surface. Each verb runs on its own corpus so
