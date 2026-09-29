@@ -689,6 +689,13 @@ declared_modules := {
 	# mints no `Finding` and reaches no decider, and it starts no program, which
 	# is what keeps the verb on the derived read-only allowlist.
 	"census",
+	# `release` arrived with CLOUD-843, retiring three release task bodies. A
+	# PRODUCER in `forge_query`'s class: it reads a release over `rest`, hashes
+	# its assets, writes through `record`'s named-family store and polls through
+	# `pr_watch`'s one clock. It decides nothing -- the `release-hygiene` preset
+	# and the consumer's module do -- and it reaches the network, so the mediated
+	# and `check` edges to it are forbidden below for `rest`'s reason.
+	"release",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
@@ -753,7 +760,7 @@ forbidden[from] contains to if {
 		# network by the route the `rest` entry refuses, one name later.
 		"hook": {
 			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
-			"pr_watch", "fast_forward", "main_watch", "forge_query",
+			"pr_watch", "fast_forward", "main_watch", "forge_query", "release",
 		},
 		# `repair` RUNS A CONSUMER'S DECLARED COMMAND ON THE MEDIATED PATH
 		# (CLOUD-1639), so it inherits `hook`'s set entire and for the same
@@ -776,7 +783,7 @@ forbidden[from] contains to if {
 		# `crate::repair`'s header carry the other half.
 		"repair": {
 			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
-			"pr_watch", "fast_forward", "main_watch", "forge_query",
+			"pr_watch", "fast_forward", "main_watch", "forge_query", "release",
 		},
 		# `check` NAMES NO MODULE TODAY, so this row is INERT — and that is worth
 		# stating rather than leaving a reader to infer enforcement from a table
@@ -792,7 +799,7 @@ forbidden[from] contains to if {
 		# not fire, which is how a row with no possible subject announces itself.
 		"check": {
 			"lease", "gitwrite", "land",
-			"pr_watch", "fast_forward", "main_watch", "forge_query",
+			"pr_watch", "fast_forward", "main_watch", "forge_query", "release",
 		},
 		# And the other direction, which is `symbols`' and `pinned`'s row again: the
 		# dispatcher sits below the engine and must not reach the module that
@@ -892,6 +899,10 @@ forbidden[from] contains to if {
 		# producer that reached the engine deciding over its record would be a
 		# measurement that knew which verdict it was feeding (CLOUD-843).
 		"forge_query": {"rules", "hook"},
+		# `release -> {rules, hook}`, `forge_query`'s pair for its reason: the
+		# producer of a release record and a checksum manifest must not reach the
+		# engine deciding over them (CLOUD-843).
+		"release": {"rules", "hook"},
 	}
 	some to in targets
 }
@@ -1122,6 +1133,24 @@ test_the_mediated_path_must_not_reach_the_forge_query_producer if {
 	count(violation) == 1 with input as judging(
 		"crates/batten/src/forge_query.rs",
 		[internal("rules", 12)],
+	)
+}
+
+# CLOUD-843's release producer, both directions, `forge_query`'s pair again.
+test_the_mediated_path_must_not_reach_the_release_producer if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("release", 31)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/release.rs",
+		[internal("rules", 12)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/release.rs",
+		[internal("rest", 10), internal("record", 11), internal("pr_watch", 12), internal("git", 13)],
 	)
 }
 
