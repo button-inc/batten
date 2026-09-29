@@ -655,7 +655,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,land-divergence,task-linear-check,macos-link,task-mcp-allow-check,nonverdict,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census"
+MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,agent-spawn,land-divergence,task-linear-check,macos-link,task-mcp-allow-check,nonverdict,ntia,task-test:cargo,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,engine-turn,engine-unsubscribe,engine-probe,finding-sink"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -2859,13 +2859,14 @@ cargo run --quiet -p batten -- record named timeout-drift <"$census"
 # both, and anchoring on it is what stops this going quietly could-not-look the
 # day someone adds or drops `--quiet`.
 #
-# `EVALUATOR_IO_PROBE_CMD` overrides the invocation so the tier can drive all
-# three verdicts without a two-minute rebuild per case. Read-only; never set
-# outside `crates/batten/tests/it/evaluator_io_probe.rs`.
+# The body is retired (CLOUD-843): `batten record probe` runs the probe build
+# after `--` and derives the reading from its exit status and output in process,
+# so the task is one argv. The tier drives all three verdicts through that verb
+# with a stub command rather than a two-minute rebuild per case.
 #
-# Receipt-gated (CLOUD-424) on the real path only: a feature toggle forces a
-# fresh compile of the crate and its test binary, the one case where the ~0.3s a
-# check/record pair costs is obviously dwarfed.
+# NOT RECEIPT-GATED ANY MORE. The step cache is `batten step run`'s, whose body is
+# another package's (CLOUD-843); a cache hit there must still leave this record,
+# which the retired body did by writing `probe failed` on a hit.
 #
 # POINTER-ONLY: one token. The probe log carries module bodies and paths, and no
 # byte of it reaches the record.
@@ -3020,53 +3021,7 @@ echo "signing-posture: signing disabled in this checkout — ${signer#broken }"
 
 [tasks.evaluator-io-record]
 description = "Effect: record whether the IO-free evaluator test goes red under `probe-evaluator-io`, for `test judge never`"
-shell = "bash -c"
-run = """
-probe_test=no_evaluator_feature_admits_io
-if [ -n "${EVALUATOR_IO_PROBE_CMD:-}" ]; then
-  # shellcheck disable=SC2086 # deliberate word-splitting: the override is an argv
-  set -- $EVALUATOR_IO_PROBE_CMD
-else
-  # A CACHE HIT MUST STILL LEAVE A RECORD. Exiting here wrote none, so the
-  # module went silent for the whole run on the strength of a receipt — a
-  # verdict about an earlier tree standing in for one about this one, spelled
-  # exactly like a producer that never ran. The receipt still buys the expensive
-  # half: the probe BUILD is skipped and the reading is re-derived from the
-  # verdict the receipt attests, which costs a `record derive` and nothing else.
-  if [ "$(mise run -q step-receipt check evaluator-io-check | cut -c1-3)" = hit ]; then
-    printf 'probe failed\n' | cargo run --quiet -p batten -- record named evaluator-io-probe
-    exit $?
-  fi
-  set -- cargo test --quiet -p batten --features probe-evaluator-io \
-    --test policy_modules "$probe_test" -- --include-ignored
-fi
-
-log=$(mktemp)
-trap 'rm -f "$log"' EXIT
-
-status=0
-"$@" >"$log" 2>&1 || status=$?
-# The READING is the engine's (CLOUD-1717): the spawn above stays here,
-# where house-style §5 puts a producer's effects, and the classification of
-# what it wrote is `crates/batten/src/probe_verdict.rs` — Rust the engine
-# tests rather than a script beside this task.
-# A DERIVATION THAT FAILED IS NOT A PROBE THAT SAID NOTHING. `|| exit 0` turned
-# every usage error `record.rs` raises — a renamed family, a malformed input, an
-# unwritable store — into a SUCCESSFUL producer run that wrote no record, and
-# `policy/evaluator-io-probe.rego` reads that absence as silence. The loud
-# could-not-look is the `probe unread` token the reading itself emits; a
-# derivation that could not run has not reached a reading at all.
-if ! verdict=$(cargo run --quiet -p batten -- record derive evaluator-io-probe \
-  --input "status=$status" --input "test=$probe_test" <"$log"); then
-  echo "::error:: evaluator-io-record: the probe's reading could not be derived, so nothing was recorded." >&2
-  exit 2
-fi
-
-
-if [ -z "${EVALUATOR_IO_PROBE_CMD:-}" ] && [ "$verdict" = 'probe failed' ]; then
-  mise run -q step-receipt record evaluator-io-check || true
-fi
-"""
+run = "cargo run --quiet -p batten -- record probe evaluator-io-probe --input test=no_evaluator_feature_admits_io -- cargo test --quiet -p batten --features probe-evaluator-io --test policy_modules no_evaluator_feature_admits_io -- --include-ignored"
 
 [tasks.transcript-corpus-record]
 description = "Effect: count this host's independent session transcripts against a threshold, for `corpus count thin`"
@@ -3383,262 +3338,21 @@ echo "sums=$SUMS"
 {% endraw %}
 '''
 
-# CLOUD-518's gate and CLOUD-790's actor, moved off `mise-tasks/pr-unsubscribed.sh`
-# under CLOUD-1717. `drop` and `record` are effects that mint a receipt under
-# `$GIT_DIR`; `check`'s decision is `policy/pr-unsubscribed.rego`, over what this
-# body reads from that store. `land` runs `pr-unsubscribed drop` and then `check`
-# as entry gates (`LAND_ENTRY_GATES`), by this name.
+# CLOUD-518's gate and CLOUD-790's actor, retired onto `batten pr unsubscribed`
+# under CLOUD-843. The receipt store, the endpoint call and the reading are the
+# engine's (`crates/batten/src/unsubscribe.rs`); `check`'s decision is
+# `policy/pr-unsubscribed.rego`, run over the record it writes.
+#
+# EVERYTHING THE HOST IS, THIS FILE DECLARES (non-negotiable rule 1): the
+# variable carrying the session id (the id `[[mcp.source]] claude-code-remote`
+# spells its wiring file with), the variable carrying the credential file's
+# path, the endpoint — the `/github/mcp` route and not the toolbox one, with
+# `{session}` where the id goes — and the tool. `land` runs `pr-unsubscribed
+# drop` and then `check` as entry gates (`LAND_ENTRY_GATES`), by this name, with
+# the arm and the pull request appended to this argv.
 [tasks.pr-unsubscribed]
-#MUTANT-SUITE crates/batten/tests/it/pr_unsubscribed.rs
-#MUTANT drop-mints-on-any-status|s/^\tif \[\[ "\$code" = 200 \]\] && \[\[ -n "\$body" \]\]; then$/\tif true; then/|a_refused_or_errored_call_mints_nothing_and_drop_never_blocks
-#MUTANT drop-blocks-on-failure|s@^\t\techo "pr-unsubscribed: could not drop.*@\t\tfail_input "could not drop"@|a_refused_or_errored_call_mints_nothing_and_drop_never_blocks
 description = "Gate: this session has dropped the PR's webhook subscription (records unsubscribe_pr_activity's answer, then decides) — CLOUD-518"
-shell = "bash -c"
-usage = '''
-arg "<verb>" help="drop | record | check"
-arg "<pr>" help="the pull request number"
-'''
-run = '''
-{% raw %}
-set -uo pipefail
-
-fail_input() {
-	echo "::error:: pr-unsubscribed: $*" >&2
-	exit 2
-}
-
-verb="${usage_verb:-}"
-pr="${usage_pr:-}"
-if [[ -n "${BATTEN_BIN:-}" ]]; then batten=("$BATTEN_BIN"); else batten=(cargo run --quiet -p batten --); fi
-
-case "$verb" in
-drop | record | check) ;;
-*) fail_input "usage: pr-unsubscribed drop|record|check <pr>" ;;
-esac
-
-case "$pr" in
-'' | *[!0-9]*) fail_input "\"$pr\" is not a pull request number" ;;
-esac
-
-git_dir=$(git rev-parse --git-dir 2>/dev/null) ||
-	fail_input "not a git repository — cannot read or write a receipt"
-
-# THE SESSION, BY PRESENCE OF THE INJECTED CONFIG. The directory is overridable so
-# the suite can supply one without ever reading a real session's, and the FILENAME
-# shape is the anchor — CLOUD-191's endpoint-anchoring pattern, reduced to the one
-# question that needs no credential: is there a session here at all.
-#
-# Returns non-zero when there is none, which both verbs read as "nothing to drop".
-session_id() {
-	local candidate base session=
-	for candidate in "${BATTEN_MCP_CONFIG_DIR:-/tmp}"/mcp-config-cse_*.json; do
-		[[ -f "$candidate" ]] || continue
-		base=${candidate##*/}
-		base=${base#mcp-config-}
-		session=${base%.json}
-	done
-	if [[ -z "$session" ]]; then
-		return 1
-	fi
-	printf '%s' "$session"
-}
-
-receipt_path() {
-	printf '%s' "$git_dir/batten-receipts/pr-unsubscribed.$1.$2"
-}
-
-# Present for THIS session and THIS pr. A session that cannot be identified has no
-# subscription to have dropped, so the absence of one is not a missing receipt.
-receipt_present() {
-	local session
-	session=$(session_id) || return 0
-	[[ -f "$(receipt_path "$session" "$1")" ]]
-}
-
-# ONE MINTER FOR BOTH WRITERS. `drop` and `record` differ only in where the answer
-# came from — this endpoint's response body, or the agent's own tool call pasted
-# on stdin — and the receipt they leave must be identical, or `check` would be
-# reading two facts through one filename. Factored out when `drop` landed rather
-# than duplicated, so a change to the receipt's shape cannot apply to one path
-# and not the other.
-#
-# Pointer-only, in the receipt as well as on stdout: what was recorded, for which
-# PR, in which session, by which path, and a digest of the answer — never the
-# answer, which is a message about a webhook stream and has no business being
-# stored here.
-mint_receipt() { # mint_receipt <session> <pr> <answer> <via>
-	local session=$1 pr=$2 answer=$3 via=$4 digest
-
-	mkdir -p "$git_dir/batten-receipts" 2>/dev/null ||
-		fail_input "cannot create the receipt store"
-
-	digest=$(printf '%s' "$answer" | sha256sum 2>/dev/null | cut -c1-12) || digest=unhashed
-
-	{
-		echo "pr $pr"
-		echo "session $session"
-		echo "via $via"
-		echo "answer-sha256 $digest"
-		echo "answer-bytes ${#answer}"
-	} >"$(receipt_path "$session" "$pr")" 2>/dev/null ||
-		fail_input "cannot write the receipt for #$pr"
-
-	echo "pr-unsubscribed: recorded the drop of #$pr's webhook subscription via $via (answer $digest)"
-}
-
-# THE DECISION IS `policy/pr-unsubscribed.rego`'s. This reads the receipt store,
-# which a module cannot, records the session (or `-` where there is none), the PR,
-# and whether this session holds a receipt for it, then runs the one rule.
-if [[ "$verb" = check ]]; then
-	checked_session=$(session_id) || checked_session=-
-	receipt=absent
-	if [[ "$checked_session" != - ]] && receipt_present "$pr"; then
-		receipt=present
-	fi
-	printf 'session\t%s\npr\t%s\nreceipt\t%s\n' "$checked_session" "$pr" "$receipt" |
-		"${batten[@]}" record named pr-unsubscribed || fail_input "could not record the reading for #$pr"
-	exec "${batten[@]}" check --rule 'event watch other'
-fi
-
-# --- drop --------------------------------------------------------------------
-#
-# The actor. Everything here fails OPEN — every path that cannot establish its
-# input prints why and exits 0 without a receipt, leaving `check` to demand the
-# manual `record` exactly as before. That is not defensiveness: an actor that
-# could refuse would put a second way to wedge a landing in front of the gate it
-# exists to satisfy, and `land` runs this on every lap.
-#
-# The mutation mints a receipt whatever the endpoint answered, which is the whole
-# of the honest limit: a receipt must attest to an accepted call, not to an
-# attempted one. With it in place a 403 lands as silently as a 200.
-# And the fail-open must hold in the other direction. A `drop` that exits non-zero
-# on a status it did not like turns `land`'s first step into a wedge on every
-# clone whose session cannot reach the endpoint.
-# Anchored on BOTH tabs, because the line lives inside `give_up` inside the verb
-# block — a one-tab pattern matched nothing and `mutant` called it `inert`, which
-# is the right verdict and a quieter failure than an unappliable one. Anchored on
-# `echo` too, so the pattern cannot also rewrite this declaration line into a
-# top-level `fail_input` call.
-if [[ "$verb" = drop ]]; then
-	give_up() { # give_up <pointer-only reason>
-		echo "pr-unsubscribed: could not drop #$pr's webhook subscription ($1) — the manual path is unaffected"
-		exit 0
-	}
-
-	# No session means no subscription, the same reading `check` and `record`
-	# already take off harness.
-	dropping_session=$(session_id) ||
-		give_up "no injected client config, so this clone has no session"
-
-	# THE CREDENTIAL IS ONE THE CONTAINER IS GIVEN, never one scraped from another
-	# process — the line CLOUD-673 drew and this keeps. It is read here and passed
-	# to `curl` on stdin via `--config`, so it never appears in a command line any
-	# `ps` can read, and it is never printed, logged, or written to the receipt.
-	token_file="${CLAUDE_SESSION_INGRESS_TOKEN_FILE:-}"
-	[[ -n "$token_file" ]] && [[ -f "$token_file" ]] ||
-		give_up "no session-ingress token file"
-
-	command -v curl >/dev/null 2>&1 || give_up "no curl on PATH"
-
-	# `{owner, repo, pullNumber}` is the tool's whole input schema. The remote is
-	# the authority on the first two; a shape this cannot parse is a clone this
-	# has no business guessing about.
-	remote=$(git remote get-url origin 2>/dev/null) ||
-		give_up "no origin remote"
-	slug=${remote#*github.com}
-	slug=${slug#:}
-	slug=${slug#/}
-	slug=${slug%.git}
-	owner=${slug%%/*}
-	repo=${slug#*/}
-	case "$owner/$repo" in
-	*[!A-Za-z0-9._/-]* | */*/* | */ | /*) give_up "origin is not a github owner/repo" ;;
-	esac
-	[[ -n "$owner" ]] && [[ -n "$repo" ]] || give_up "origin is not a github owner/repo"
-
-	# THE ROUTE IS `/github/mcp`, NOT THE TOOLBOX ONE — see the header's table.
-	# Overridable so the suite can point it at a stub without a credential or a
-	# network; the default is a public vendor address, committable by the same
-	# reasoning `connector-allow-resolve` records for its endpoint constant.
-	endpoint="${BATTEN_CCR_ENDPOINT:-https://api.anthropic.com}/v2/ccr-sessions/${dropping_session}/github/mcp"
-
-	body_file="$git_dir/batten-receipts/.drop-$$.body"
-	mkdir -p "$git_dir/batten-receipts" 2>/dev/null ||
-		give_up "cannot create the receipt store"
-
-	# `--config -` reads the header from stdin, keeping the bearer out of argv.
-	code=$(printf '%s\n' "header = \"Authorization: Bearer $(cat "$token_file")\"" |
-		curl -sS --max-time 30 -o "$body_file" -w '%{http_code}' \
-			--config - \
-			-X POST "$endpoint" \
-			-H 'Content-Type: application/json' \
-			-H 'Accept: application/json, text/event-stream' \
-			--data "$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unsubscribe_pr_activity","arguments":{"owner":"%s","repo":"%s","pullNumber":%s}}}' "$owner" "$repo" "$pr")" 2>/dev/null) || code=""
-
-	body=$(cat "$body_file" 2>/dev/null) || body=""
-	rm -f "$body_file" 2>/dev/null
-
-	# An MCP error is carried in a 200 as `isError`, so the status alone is not the
-	# verdict — a tool that refused must not mint a receipt saying it complied.
-	case "$body" in
-	*'"isError":true'* | *'"isError": true'*) give_up "the tool reported an error (http ${code:-none})" ;;
-	esac
-
-	if [[ "$code" = 200 ]] && [[ -n "$body" ]]; then
-		mint_receipt "$dropping_session" "$pr" "$body" endpoint
-		exit 0
-	fi
-
-	give_up "http ${code:-none}"
-fi
-
-# --- record ------------------------------------------------------------------
-
-session=$(session_id) || session=
-# A `record` off-harness is a caller doing the right thing in a place where there
-# was nothing to do. Silent success, for the same reason `check` passes there: a
-# gate that scolds the honest case teaches its own bypass.
-[[ -n "$session" ]] || {
-	echo "pr-unsubscribed: no injected client config, so this clone has no session and no subscription — nothing to record for #$pr"
-	exit 0
-}
-
-# THE ANSWER MUST NAME THIS PULL REQUEST, as a named predicate so the mutation
-# that removes it is a one-line substitution carrying no pipe. The declaration
-# grammar is three pipe-separated fields, so a script containing one is parsed as a
-# fourth and truncated — measured on this file: three rows came back
-# `unappliable-mutation` and `names-no-case` because their scripts matched lines
-# written with `||`.
-#
-# `case` rather than a regex: the only question is whether `#<pr>` appears, and a
-# pattern would invite exactly the prose-judging this refuses below.
-answer_names_pr() {
-	case "$answer" in
-	*"#$pr"*) return 0 ;;
-	*) return 1 ;;
-	esac
-}
-
-answer=$(cat 2>/dev/null) || fail_input "could not read the answer on stdin"
-[[ -n "${answer//[[:space:]]/}" ]] ||
-	fail_input "stdin is empty; pipe \`unsubscribe_pr_activity\`'s answer for #$pr"
-
-# THE ANSWER MUST NAME THIS PULL REQUEST. Both observed shapes carry it — the
-# no-active-subscription reading names `<owner>/<repo>#<n>` — and requiring it is
-# what stops the honest error this is built for: pasting the answer from the
-# previous PR, on a branch name the harness reuses for a whole engagement.
-#
-# It deliberately does NOT judge the answer's prose beyond that. Matching phrasing
-# would be a gate estimating an outcome from wording (non-negotiable 3), and the
-# outcome it would be guessing at is the one only CLOUD-673 can observe.
-if ! answer_names_pr; then
-	echo "::error:: pr-unsubscribed: that answer does not name #$pr, so it is not evidence about this pull request. Call \`unsubscribe_pr_activity\` for #$pr and pipe what it returns." >&2
-	exit 1
-fi
-
-mint_receipt "$session" "$pr" "$answer" agent
-{% endraw %}
-'''
+run = "cargo run --quiet -p batten -- pr unsubscribed --session-env CLAUDE_CODE_REMOTE_SESSION_ID --token-env CLAUDE_SESSION_INGRESS_TOKEN_FILE --endpoint https://api.anthropic.com/v2/ccr-sessions/{session}/github/mcp --tool unsubscribe_pr_activity --family pr-unsubscribed --rule 'event watch other'"
 
 # CLOUD-258/262/278's reading half, ported off `mise-tasks/release-assets-check.sh`
 # under CLOUD-1717. The decisions are `policy/release-assets.rego`'s; this records
@@ -4226,149 +3940,27 @@ exit 2
 '''
 
 # A turn that cites `path:line` evidence and gives it no OPEN row stranded a
-# finding (CLOUD-252) — retired off `mise-tasks/finding-sink-check.sh` under
-# CLOUD-1717, and reached as the `finding-sink` `[[hook.handler]] on = "stop"`
-# row, which the engine runs as its end-of-turn ladder's second rung.
+# finding (CLOUD-252, CLOUD-475, CLOUD-775) — retired onto `batten record decide`
+# under CLOUD-843, and reached as the `finding-sink` `[[hook.handler]] on = "stop"`
+# row, the engine's end-of-turn ladder's second rung.
 #
-# It reads the TRANSCRIPT, because `last_assistant_message` carries only the
-# final text block (measured under half a turn's prose), and joins the LAST
-# turn's prose against that turn's own `tool_use` records, main thread only. ONE
-# SHAPE, MEASURED: a `path:line` citation (1 firing, the true positive); the
-# exit-claim and fenced-block shapes were dropped as a false positive and dead.
-# No "already filed" exemption: it suppressed the measured true positive.
+# THE READING IS THE ENGINE'S (`crates/batten/src/turn.rs`): the LAST turn, main
+# thread only; whether its prose matches `[[pattern]] finding-citation`; and its
+# tool calls, each with the row it names (a direct call's `id`/`issueId`, or the
+# `finding-mediated-key` group of a mediated `batten mcp call`) and the column
+# this clone's `issue-read` receipt recorded for that row at field 5. THE DECISION
+# IS `policy/finding-sink.rego`: a home is a row that OPENS, an amendment to a row
+# in an open column, or a memory/document write. Recorded is not scheduled
+# (CLOUD-475, CLOUD-775).
 #
-# RECORDED IS NOT SCHEDULED (CLOUD-475, CLOUD-775). A home is a row that OPENS
-# (`save_issue` with no id), an amendment to a row this clone's own
-# `issue-read` receipt records in an open column, or a memory/document write. A
-# comment on a Done row, or on a row with no receipt, is not — could-not-look
-# must not be the cheapest way to buy silence.
-#
-# Stdin is the host's Stop payload (its `transcript_path`) or a bare path. The
-# contract is the handler door's: exit 1 with the pointer and the practice on
-# stderr when it fires, and 0 otherwise. With no transcript to read it ABSTAINS
-# at exit 0 with the reason on stderr and nothing on stdout, which the door reads
-# as a pass: its table has no abstention code, a 3 is a contract violation shown
-# every turn, and a 2 is a refusal. Never a finding from nothing. POINTER, NEVER PAYLOAD: a turn number, never a byte of the prose.
+# COULD-NOT-LOOK ABSTAINS at exit 0 with nothing on stdout, which the handler
+# door reads as a pass: no transcript, a line that is not JSON, or a cwd outside
+# a checkout. A firing is `check`'s exit 2 with its pointer, which the door reads
+# as the rung's advice. POINTER, NEVER PAYLOAD: `turn:<n>`, never the prose.
 [tasks.finding-sink-check]
-#MUTANT-SUITE crates/batten/tests/it/finding_sink.rs
-#MUTANT mediated-filing-unseen|s@elif .type == "tool_use" and .name == "Bash"@elif false@|a_filing_through_the_mediated_route_clears_it
-#MUTANT class-split-removed|s@^OPENS_A_ROW=.*@OPENS_A_ROW='save_'@|a_comment_alone_is_not_a_home
-#MUTANT terminal-row-is-a-home|s@#open\$'@#'@|an_annotation_on_a_terminal_row_still_reports
-#MUTANT citation-never-fires|s@^CITATION=.*@CITATION='^\$never'@|a_cited_finding_with_no_durable_write_fires
-#MUTANT sidechain-credited|s@select(.isSidechain != true)@select(true)@|a_subagents_write_is_not_credited_to_the_turn
-#MUTANT whole-transcript-judged|s@^start=\$(tail -n 1 @start=$(head -n 1 @|only_the_last_turn_is_judged
 description = "Gate: a turn that cites path:line evidence and makes no durable write stranded a finding (reads a Stop payload or transcript path on stdin; pointer-only)"
-shell = "bash -c"
 dir = "{{cwd}}"
-run = '''
-{% raw %}
-set -uo pipefail
-input=$(cat) || exit 0
-transcript="$input"
-if [[ "${input#"${input%%[![:space:]]*}"}" == \{* ]]; then
-	transcript=$(jq -r '.transcript_path // empty' <<<"$input" 2>/dev/null) || transcript=""
-fi
-transcript="${transcript//[[:space:]]/}"
-if [[ -z "$transcript" ]] || [[ ! -r "$transcript" ]]; then
-	echo "finding-sink-check: abstained — no readable transcript" >&2
-	exit 0
-fi
-# A path separator or a known source extension, so a duration, ratio or port is
-# not read as evidence; the extensionless `mise-tasks/` files need the first.
-CITATION='([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+|[A-Za-z0-9_-]+\.(rs|toml|yml|yaml|bats|md|json|pkl|sh|lock)):[0-9]+'
-# Matched on the tool-name SUFFIX: the server prefix changes on reconnect.
-OPENS_A_ROW='save_issue#noid$'
-AMENDS_AN_OPEN_ROW='save_(issue|comment)#open$'
-OTHER_DURABLE='(save_document|write_memory|edit_memory|rename_memory)#'
-git_dir=$(git rev-parse --git-dir 2>/dev/null) || git_dir=""
-# The OPEN set is enumerated; an unknown column falls to `terminal`.
-row_class() { # row_class <key-or-empty> -> noid / open / terminal
-	case "$1" in
-	"") echo noid && return ;;
-	[A-Z]*-[0-9]*) ;;
-	*) echo terminal && return ;;
-	esac
-	[[ -n "$git_dir" ]] || { echo terminal && return; }
-	column=$(awk 'NR==1{print $5}' "$git_dir/batten-receipts/issue-read.$1" 2>/dev/null) || column=""
-	case "$column" in
-	backlog | todo | in-progress | in-review) echo open ;;
-	*) echo terminal ;;
-	esac
-}
-# PASS 1 — turn boundaries: a real user prompt, never a `tool_result`. The count
-# is the turn number and the last boundary is where the judged turn begins
-# (CLOUD-479: only that turn's blocks are built). One record per line.
-if ! boundaries=$(jq -r '
-    select(.isSidechain != true)
-    | select(.type == "user")
-    | select( (.message.content | type) == "string"
-              or ( (.message.content | type) == "array"
-                   and ( [ .message.content[] | select(type == "object" and .type == "text") ] | length ) > 0 ) )
-    | input_line_number
-  ' "$transcript" 2>/dev/null); then
-	echo "finding-sink-check: abstained — the transcript is not readable JSONL" >&2
-	exit 0
-fi
-turns=$(grep -c . <<<"$boundaries")
-start=$(tail -n 1 <<<"$boundaries")
-fired=0
-if [[ -n "$start" ]]; then
-	# PASS 2 — the last turn's assistant blocks, tagged T (prose) or U (tool#key).
-	if ! blocks=$(tail -n +"$start" "$transcript" | jq -r '
-	    select(.isSidechain != true)
-	    | select(.type == "assistant")
-	    | (.message.content // [])[]
-	    | select(type == "object")
-	    | if .type == "text" then "T" + ((.text // "") | gsub("\n"; " "))
-	      elif .type == "tool_use" and .name == "Bash"
-	           and ((.input.command // "") | test("mcp call [A-Za-z0-9_-]+ save_(issue|comment)\\b")) then
-	        # THE SANCTIONED ROUTE: this repository files through `batten mcp call`,
-	        # and the raw MCP tools are denied, so a filing arrives as a Bash block.
-	        # Its method and row come from the call itself.
-	        (.input.command) as $c
-	        | "U" + ($c | capture("mcp call [A-Za-z0-9_-]+ (?<m>save_(issue|comment))").m) + "#" +
-	          ([$c | capture("(id|issueId)[^A-Z]{0,4}(?<k>[A-Z]+-[0-9]+)") | .k] | first // "")
-	      elif .type == "tool_use" then "U" + (.name // "") + "#" +
-	             ((.input // {}) | if type == "object"
-	              then ((.id // .issueId // "") | tostring) else "" end)
-	      else empty end
-	  ' 2>/dev/null); then
-		echo "finding-sink-check: abstained — the transcript is not readable JSONL" >&2
-		exit 0
-	fi
-	prose=$(grep '^T' <<<"$blocks")
-	tools=$(grep '^U' <<<"$blocks")
-	clean=0
-	if [[ -n "$tools" ]]; then
-		while IFS= read -r name; do
-			[[ -n "$name" ]] || continue
-			name="${name#U}"
-			name="${name%%#*}#$(row_class "${name#*#}")"
-			if grep -qE "($OPENS_A_ROW|$AMENDS_AN_OPEN_ROW|$OTHER_DURABLE)" <<<"$name"; then
-				clean=1
-				break
-			fi
-		done <<<"$tools"
-	fi
-	if [[ "$clean" = 0 ]] && grep -qE "$CITATION" <<<"$prose"; then
-		fired=1
-	fi
-fi
-# Anti-vacuity: a gate that cannot fire is not a gate that found nothing.
-if [[ "$turns" = 0 ]]; then
-	echo "finding-sink-check: no turns in $transcript — nothing to judge" >&2
-	exit 0
-fi
-[[ "$fired" = 0 ]] && exit 0
-# THE REFUSAL NAMES THE PRACTICE, NOT THE RULE (CLOUD-475): what is missing is an
-# OPEN row, and an author who commented the finding believes it written down.
-{
-	echo "turn:$turns finding-without-durable-write"
-	echo "The last of $turns turn(s) cited path:line evidence and gave it no OPEN row. Writing to a row that is closed — or to one this clone has recorded no read of — records the finding without scheduling it. Go re-derive it and file an open issue linked \`relatedTo\` the source, or put it on a row that is still open."
-} >&2
-exit 1
-{% endraw %}
-'''
+run = "cargo run --quiet -p batten -- record decide turn-writes --input citation=finding-citation --input key=finding-mediated-key --input fields=id,issueId --input receipt=issue-read --input field=5 --rule 'turn file other'"
 
 # An issue may become Done only if none of its own pull requests is still open
 # (CLOUD-468) — retired off `mise-tasks/done-pr-check.sh` under CLOUD-1752. A

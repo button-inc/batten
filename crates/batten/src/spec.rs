@@ -1094,6 +1094,10 @@ mod tests {
             "pr ensure".to_owned(),
             "pr file".to_owned(),
             "pr link".to_owned(),
+            // CLOUD-518's gate and actor (CLOUD-843, retiring
+            // `[tasks.pr-unsubscribed]`). Every arm writes, so it is off the
+            // read-only allowlist.
+            "pr unsubscribed".to_owned(),
             "pr watch".to_owned(),
             "provision".to_owned(),
             "provision apply".to_owned(),
@@ -1136,6 +1140,9 @@ mod tests {
             "record census report".to_owned(),
             "record census tally".to_owned(),
             "record closes".to_owned(),
+            // Derive, write silently, then decide (CLOUD-843, retiring
+            // `[tasks.finding-sink-check]`): the write band, off the allowlist.
+            "record decide".to_owned(),
             // CLOUD-1717's READING door, and the write band is where it belongs:
             // it applies a reading the engine owns and WRITES the result, so it
             // is absent from the read-only allowlist above for `record named`'s
@@ -1161,6 +1168,10 @@ mod tests {
             // The plan a branch declared, so `plan-complete` decides over a
             // record rather than over a transcript it cannot re-read.
             "record plan".to_owned(),
+            // `record derive` with the probe run moved in (CLOUD-843, retiring
+            // `[tasks.evaluator-io-record]`). It runs the caller's command, so
+            // it is unclassified and off the allowlist.
+            "record probe".to_owned(),
             // CLOUD-843's forge-read door. The write band for `record derive`'s
             // reason, and more so: it reaches the network as well as the store,
             // so it is absent from the read-only allowlist above.

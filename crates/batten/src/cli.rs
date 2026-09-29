@@ -829,6 +829,9 @@ pub enum PrCommand {
         /// The pull request to re-read.
         pr: String,
     },
+    /// Drop, attest, or record the reading of this session's webhook
+    /// subscription to a pull request (CLOUD-843).
+    Unsubscribed(UnsubscribedRequest),
 }
 
 /// Subcommands of `checks`.
@@ -1707,6 +1710,54 @@ pub enum RecordCommand {
         /// The sub-verb selected.
         command: RecordCensusCommand,
     },
+    /// Run a probe command and derive a family's reading from its exit status
+    /// and output (CLOUD-843, retiring `[tasks.evaluator-io-record]`).
+    ///
+    /// [`RecordCommand::Derive`] with the producer moved in: the command's exit
+    /// is the `status` input and its combined output the document.
+    Probe {
+        /// The record family, which selects the reading.
+        family: String,
+        /// The non-document inputs, as `<key>=<value>`; never `status`.
+        inputs: Vec<String>,
+        /// The probe command, after `--`.
+        command: Vec<String>,
+    },
+    /// Derive a family's reading, write it silently, and decide over it with
+    /// the named rules (CLOUD-843, retiring `[tasks.finding-sink-check]`).
+    Decide {
+        /// The record family, which selects the reading.
+        family: String,
+        /// The non-document inputs, as `<key>=<value>`.
+        inputs: Vec<String>,
+        /// The rule ids that decide over the record, as `check --rule` takes.
+        rules: Vec<String>,
+    },
+}
+
+/// `pr unsubscribed`'s arguments (CLOUD-843, retiring `[tasks.pr-unsubscribed]`).
+///
+/// A struct for [`ExecRequest`]'s reason: eight fields on a variant would be a
+/// break every time one more is added.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct UnsubscribedRequest {
+    /// `drop`, `record` or `check`.
+    pub verb: String,
+    /// The pull request number.
+    pub pr: String,
+    /// The NAME of the environment variable holding this host's session id.
+    pub session_env: String,
+    /// The NAME of the environment variable holding the credential file's path.
+    pub token_env: Option<String>,
+    /// The endpoint, with `{session}` where the session id goes.
+    pub endpoint: Option<String>,
+    /// The tool the endpoint is asked to call.
+    pub tool: Option<String>,
+    /// The record family, and the receipts' filename prefix.
+    pub family: String,
+    /// The rule `check` decides with.
+    pub rule: Option<String>,
 }
 
 /// Subcommands of `receipt`.
@@ -2735,6 +2786,16 @@ fn pr_of(matches: &ArgMatches) -> Option<PrCommand> {
         ("closes", matches) => Some(PrCommand::Closes {
             pr: matches.get_one::<String>("pr").cloned()?,
         }),
+        ("unsubscribed", matches) => Some(PrCommand::Unsubscribed(UnsubscribedRequest {
+            verb: matches.get_one::<String>("verb").cloned()?,
+            pr: matches.get_one::<String>("pr").cloned()?,
+            session_env: matches.get_one::<String>("session_env").cloned()?,
+            token_env: matches.get_one::<String>("token_env").cloned(),
+            endpoint: matches.get_one::<String>("endpoint").cloned(),
+            tool: matches.get_one::<String>("tool").cloned(),
+            family: matches.get_one::<String>("family").cloned()?,
+            rule: matches.get_one::<String>("rule").cloned(),
+        })),
         _ => None,
     }
 }
@@ -3072,6 +3133,31 @@ fn record_of(matches: &ArgMatches) -> Option<RecordCommand> {
         ("census", matches) => {
             record_census_of(matches).map(|command| RecordCommand::Census { command })
         }
+        // The trailing argv is required by the surface, so clap has already
+        // refused a probe with nothing to run.
+        ("probe", matches) => Some(RecordCommand::Probe {
+            family: matches.get_one::<String>("family")?.clone(),
+            inputs: matches
+                .get_many::<String>("input")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
+            command: matches
+                .get_many::<String>("command")?
+                .cloned()
+                .collect::<Vec<_>>(),
+        }),
+        // `--rule` is required by the surface: a decision needs a rule to make it.
+        ("decide", matches) => Some(RecordCommand::Decide {
+            family: matches.get_one::<String>("family")?.clone(),
+            inputs: matches
+                .get_many::<String>("input")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
+            rules: matches
+                .get_many::<String>("rule")?
+                .cloned()
+                .collect::<Vec<_>>(),
+        }),
         _ => None,
     }
 }
