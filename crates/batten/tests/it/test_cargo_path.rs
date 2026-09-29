@@ -1,11 +1,31 @@
-//! `test:cargo`'s PATH mask, run verbatim (CLOUD-1951).
+//! No `batten` resolvable by name while the suite runs (CLOUD-1951).
 //!
 //! CI's test job has no `batten` on PATH; this box has two — `target/release`
 //! through `_.path` and the installed release in `~/.local/bin`. A case or hook
-//! that spawns a bare `batten` therefore passed locally and failed on CI. The
-//! task masks every PATH directory holding one. This tier runs the task's own
-//! block, extracted between its markers, so the assertion is over the shipped
-//! bytes rather than a copy of them.
+//! that spawns a bare `batten` therefore passed locally and failed on CI.
+//!
+//! `test:cargo`'s shell body used to mask the whole suite's PATH, and this tier
+//! ran that block verbatim. The body retired to one argv (CLOUD-843), and the mask
+//! moved into the harness every case reaches the binary through:
+//! `common::batten()` hands its child `common::ambient_path()`. So these cases
+//! drive `common::mask_batten` — the function that builds it — directly, over
+//! PATHs they construct.
+//!
+//! THE OTHER HALF OF THAT BODY, CLOUD-1953's before/after comparison of tracked
+//! state, moved to `receipt record`'s refusal of a tree that differs from HEAD at
+//! the end of `verify:gated`, which covers every gate the lap runs rather than
+//! this one suite; `receipt_clean.rs` is where that refusal is pinned.
+
+// Its mutations are declared HERE, for the reason `target_prune.rs` gives for its
+// own: `test name undefined` reads `crates/batten/tests/**` for the row, and the
+// expression belongs to `common/mod.rs`, which is no gate's source — so the rows
+// are INERT under the sweep and are applied BY HAND against `common/mod.rs`, the
+// named case run, the file restored.
+/*
+#MUTANT-SUITE crates/batten/tests/it/test_cargo_path.rs
+#MUTANT installed-batten-visible|s@^        if name == "batten" {$@        if name == "not-batten" {@|the_mask_hides_every_batten_and_keeps_the_rest
+#MUTANT batten-directory-kept|s@^            let shadow = shadows.join(name);$@            let shadow = dir.clone();@|the_mask_hides_every_batten_and_keeps_the_rest
+*/
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -13,26 +33,6 @@ use crate::common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-
-/// The committed block of `test:cargo` between `# >>> <name>` and `# <<< <name>`.
-fn block(name: &str) -> String {
-    let text = fs::read_to_string(common::at_root("mise.toml")).expect("read mise.toml");
-    let open = format!("# >>> {name}");
-    let close = format!("# <<< {name}");
-    let start = text
-        .find(&open)
-        .expect("the opening marker is in mise.toml")
-        + open.len();
-    let end = text[start..]
-        .find(&close)
-        .expect("the closing marker follows it")
-        + start;
-    text[start..end].to_owned()
-}
-
-fn mask() -> String {
-    block("no-batten-path")
-}
 
 fn stub(dir: &Path, name: &str) {
     fs::create_dir_all(dir).expect("fixture dir");
@@ -45,50 +45,25 @@ fn stub(dir: &Path, name: &str) {
     }
 }
 
-/// What `command -v <name>` resolves to after the mask, one entry per name.
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays, and test-only: the mask is shell the task runs under `sh`, so running it under `sh` is the only reading of the shipped bytes"
-)]
-fn resolved_after_mask(dirs: &[PathBuf], target: &Path, names: &[&str]) -> Vec<Option<String>> {
-    let mut probe = String::new();
-    for name in names {
-        probe.push_str("command -v ");
-        probe.push_str(name);
-        probe.push_str(" || echo MISSING\n");
-    }
-    let out = std::process::Command::new("/bin/sh")
-        .arg("-c")
-        .arg(format!("{}\n{probe}", mask()))
-        // The system directories stay last, as on any real PATH: the mask itself
-        // spawns `rm`, `mkdir` and `ln`.
-        .env(
-            "PATH",
-            std::env::join_paths(
-                dirs.iter()
-                    .cloned()
-                    .chain([PathBuf::from("/usr/bin"), PathBuf::from("/bin")]),
-            )
-            .expect("join the fixture PATH"),
-        )
-        .env("CARGO_TARGET_DIR", target)
-        .output()
-        .expect("run the mask under sh");
-    assert!(out.status.success(), "the mask exits 0: {out:?}");
-    String::from_utf8(out.stdout)
-        .expect("utf-8")
-        .lines()
-        .map(|line| (line != "MISSING").then(|| line.to_owned()))
-        .collect()
+/// Where a name lookup over `path` finds `name`, or `None`.
+///
+/// The lookup the shell performs, in process: the first directory in order that
+/// holds an entry of that name.
+fn resolves(path: &std::ffi::OsStr, name: &str) -> Option<PathBuf> {
+    std::env::split_paths(path)
+        .map(|dir| dir.join(name))
+        .find(|candidate| candidate.exists())
 }
 
-/// `#MUTANT installed-batten-visible` reddens here: linking `batten` into the
-/// shadow makes it resolvable again.
+/// `#MUTANT installed-batten-visible` and `#MUTANT batten-directory-kept` redden
+/// here: linking `batten` into the shadow, or keeping its directory, makes it
+/// resolvable again.
 #[test]
 fn the_mask_hides_every_batten_and_keeps_the_rest() {
     if !cfg!(unix) {
-        // Symlinks and `/bin/sh`: the mask runs inside a mise task, which the
-        // windows leg reaches through `cargo nextest` directly, never this body.
+        // The shadow is symlinks and the stubs are shebang scripts; off Unix the
+        // directory is dropped instead, which hides `batten` as surely and `mise`
+        // with it — the cost `common::shadow_of`'s other arm states.
         return;
     }
     let root = common::scratch("test-cargo-path");
@@ -99,17 +74,21 @@ fn the_mask_hides_every_batten_and_keeps_the_rest() {
     stub(&local, "batten");
     stub(&local, "mise");
     stub(&other, "tool");
-    let path = [release, local, other.clone()];
+    let path = std::env::join_paths([&release, &local, &other]).expect("join the fixture PATH");
 
-    let found = resolved_after_mask(&path, &root.join("target"), &["batten", "mise", "tool"]);
-    assert_eq!(found[0], None, "no batten resolves by name under the mask");
+    let masked = common::mask_batten(&path, &root.join("shadows"));
+    assert_eq!(
+        resolves(&masked, "batten"),
+        None,
+        "no batten resolves by name under the mask"
+    );
     assert!(
-        found[1].is_some(),
+        resolves(&masked, "mise").is_some(),
         "mise, beside the installed batten, still resolves"
     );
     assert_eq!(
-        found[2].as_deref(),
-        Some(other.join("tool").to_str().expect("utf-8 path")),
+        resolves(&masked, "tool"),
+        Some(other.join("tool")),
         "a directory with no batten is left in place"
     );
 }
@@ -117,85 +96,28 @@ fn the_mask_hides_every_batten_and_keeps_the_rest() {
 /// A PATH with no `batten` anywhere comes out unchanged.
 #[test]
 fn a_path_without_batten_is_untouched() {
-    if !cfg!(unix) {
-        // As above: symlinks and `/bin/sh`.
-        return;
-    }
     let root = common::scratch("test-cargo-path-clean");
     let other = root.join("other");
     stub(&other, "tool");
-    let found = resolved_after_mask(
-        std::slice::from_ref(&other),
-        &root.join("target"),
-        &["tool"],
-    );
-    assert_eq!(
-        found[0].as_deref(),
-        Some(other.join("tool").to_str().expect("utf-8 path"))
-    );
+    let path = std::env::join_paths([&other]).expect("join the fixture PATH");
+    assert_eq!(common::mask_batten(&path, &root.join("shadows")), path);
 }
 
-/// Run the tree guard's two blocks around `between`, in `repo`.
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays, and test-only: the guard is shell the task runs under `sh`, so running it under `sh` is the only reading of the shipped bytes"
-)]
-fn guard(repo: &Path, between: &str) -> std::process::Output {
-    std::process::Command::new("/bin/sh")
-        .arg("-c")
-        .arg(format!(
-            "{}\n{between}\n{}",
-            block("tree-before"),
-            block("tree-after")
-        ))
-        .current_dir(repo)
-        .output()
-        .expect("run the guard under sh")
-}
-
-fn tracked_repo(name: &str) -> PathBuf {
-    let root = common::scratch(name);
-    common::init_repo(&root);
-    fs::write(root.join("RESULTS.md"), "committed\n").expect("seed a tracked file");
-    common::git_in(&root, &["add", "-A"]);
-    common::git_in(&root, &["commit", "--quiet", "-m", "base"]);
-    root
-}
-
-/// `#MUTANT suite-tree-write-admitted` reddens here. The shape is #928's:
-/// a case rewrote the committed `RESULTS.md` from a verb run in this checkout.
+/// THE HARNESS HANDS THE MASK TO THE BINARY UNDER TEST, which is what makes it
+/// the suite's rather than one tier's: a child the binary starts inherits it.
 #[test]
-fn a_suite_that_rewrites_a_tracked_file_is_refused() {
-    if !cfg!(unix) {
-        // The guard is a mise task body run under `sh`, as above.
-        return;
+fn the_binary_under_test_is_handed_the_masked_path() {
+    let command = common::batten();
+    let handed = command
+        .get_envs()
+        .find(|(name, _)| *name == "PATH")
+        .and_then(|(_, value)| value.map(std::ffi::OsStr::to_os_string));
+    assert_eq!(handed, Some(common::ambient_path()));
+    if cfg!(unix) {
+        assert_eq!(
+            resolves(&common::ambient_path(), "batten"),
+            None,
+            "and no batten resolves by name through it"
+        );
     }
-    let repo = tracked_repo("test-cargo-tree-written");
-    let out = guard(&repo, "echo rewritten > RESULTS.md");
-    assert_eq!(
-        out.status.code(),
-        Some(1),
-        "a changed tracked file is refused: {out:?}"
-    );
-    let stderr = String::from_utf8(out.stderr).expect("utf-8");
-    assert!(
-        stderr.contains("RESULTS.md"),
-        "the refusal names the path: {stderr}"
-    );
-}
-
-/// The pass side: without it the refusal above is satisfied by a guard that
-/// refuses every run.
-#[test]
-fn a_suite_that_leaves_the_tree_alone_passes() {
-    if !cfg!(unix) {
-        // As above.
-        return;
-    }
-    let repo = tracked_repo("test-cargo-tree-clean");
-    let out = guard(&repo, "mkdir -p target && echo scratch > target/x");
-    assert!(
-        out.status.success(),
-        "untracked output is not a tracked change: {out:?}"
-    );
 }

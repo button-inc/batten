@@ -1728,6 +1728,10 @@ pub enum ReceiptCommand {
     Status {
         /// The check whose receipt is judged.
         check: String,
+        /// Further checks, any ONE of whose receipts satisfies the question
+        /// (CLOUD-843) — empty for the single-check reading every earlier
+        /// caller makes.
+        or: Vec<String>,
         /// Which git fact the receipt is judged against (CLOUD-741).
         ///
         /// Defaults to [`ReceiptKey::Head`], the only keying this verb had
@@ -2529,6 +2533,12 @@ fn receipt_of(matches: &ArgMatches) -> Option<ReceiptCommand> {
         // default, so an absent value is the ordinary case, not a parse failure.
         "status" => Some(ReceiptCommand::Status {
             check: matches.get_one::<String>("check")?.clone(),
+            // Every occurrence, in the order written: the verdict lines come
+            // out in that order, so a reader sees which kind answered.
+            or: matches
+                .get_many::<String>("or")
+                .map(|found| found.cloned().collect())
+                .unwrap_or_default(),
             key: matches
                 .get_one::<ReceiptKey>("key")
                 .copied()
@@ -3312,6 +3322,7 @@ mod tests {
             Some(Command::Receipt {
                 command: ReceiptCommand::Status {
                     check: "verify".to_owned(),
+                    or: Vec::new(),
                     key: ReceiptKey::Head,
                     json: false,
                 }
@@ -3343,6 +3354,28 @@ mod tests {
             Some(Command::Receipt {
                 command: ReceiptCommand::Status {
                     check: "claim".to_owned(),
+                    or: Vec::new(),
+                    key: ReceiptKey::Branch,
+                    json: false,
+                }
+            })
+        );
+    }
+
+    /// `--or` is repeatable and ORDERED (CLOUD-843): `verify`'s claim step names
+    /// three receipt kinds, and each occurrence must survive rather than the last
+    /// one winning — `ArgAction::Set` would have kept only `carry`.
+    #[test]
+    fn every_alternative_check_survives_in_the_order_written() {
+        assert_eq!(
+            parse(&[
+                "receipt", "status", "claim", "--or", "bot", "--or", "carry", "--key", "branch",
+            ])
+            .command,
+            Some(Command::Receipt {
+                command: ReceiptCommand::Status {
+                    check: "claim".to_owned(),
+                    or: vec!["bot".to_owned(), "carry".to_owned()],
                     key: ReceiptKey::Branch,
                     json: false,
                 }

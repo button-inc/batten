@@ -10704,6 +10704,34 @@ cold = false
 [commit]
 subject_pattern = '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)([(][a-z0-9._-]+[)])?!?: .+'
 
+# EVERY COMMIT IN A JUDGED RANGE NAMES THE ROW IT SERVES — the server-side half
+# of CLOUD-431, retired off `commit-lint`'s shell body into `commit check` by
+# CLOUD-843. The claim receipt never leaves the clone; this is the half a fresh
+# checkout, a reviewer and CI can all see. "Names" is `claim keys`' reading of
+# the whole message through the `[[pattern]]` grammar above, never a key shape
+# spelled here.
+#
+# TWO EXEMPTIONS, each a property of the COMMIT rather than of its subject, and
+# each carried over from the retired body verbatim:
+#
+# * `release` — release-plz authors `chore: release vX.Y.Z` touching only the
+#   version and changelog files. It has no row to name because it is not work on
+#   one; keying on the file set means a hand-written commit borrowing the subject
+#   cannot claim it.
+# * `update-bot` (CLOUD-1207) — a Renovate bump carries no `Refs:` trailer and
+#   cannot: `batten pr ensure` mints the row FROM the pull request, after the
+#   commit exists, and the merge moves it through the body's closing key. Two
+#   conjuncts, because a workflow-only diff is ordinary human work here: the
+#   AUTHOR must be an App's `[bot]` noreply address (`%ae`, since a forge commits
+#   an App's work as itself) AND the paths must be the manifests
+#   `renovate.json5`'s `enabledManagers` can move. Measured on #676 before this
+#   existed: seven days Ready and red, 372 workflow runs, none able to land.
+#
+# THE TABLE ITSELF LANDS WITH THE REGENERATED SCHEMA (CLOUD-1990). `taplo`
+# validates this file against `schema/batten.schema.json`, which is generated
+# by the binary and so cannot know `[commit.claims]` until it is rebuilt; the
+# rows are appended in the integration commit that regenerates it.
+
 # ---------------------------------------------------------------------------
 # The bot lane: which proposals this repository files a tracker row for
 # (CLOUD-693, ported off `mise-tasks/bot-issue.sh` by CLOUD-1295).

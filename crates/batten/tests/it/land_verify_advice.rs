@@ -400,6 +400,40 @@ fn a_refusal_with_no_bet_outstanding_gets_the_ordinary_advice() {
     );
 }
 
+/// **A GATE EXITING 2 OVER AN UNMOVED BASE IS A REFUSAL OF THE TREE** (CLOUD-843).
+///
+/// The consumer's `verify` stopped re-numbering its steps' codes, so a policy
+/// verdict can reach the lap as `2` — the code the lap used to read, unasked, as
+/// "main moved". This fixture has no forge to read the base from, so nothing
+/// confirms a move: the lap must stop with the advice a refused tree earns, and
+/// must NOT answer as the rebase race (`Internal`, which laps). Red before
+/// `land::confirmed`: this exited `3` with no advice at all.
+#[test]
+fn a_gate_exiting_2_over_an_unmoved_base_is_a_refusal_of_the_tree() {
+    let dir = repo("verify-advice-unconfirmed-two", true);
+    let gate = dir.join("gate-two.sh");
+    std::fs::write(
+        &gate,
+        "#!/usr/bin/env bash\nprintf '%s\\n' 'policy/x.rego:1 a real verdict'\nexit 2\n",
+    )
+    .expect("write the gate");
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&gate, std::fs::Permissions::from_mode(0o755))
+            .expect("make the gate runnable");
+    }
+    let (code, said) = verify(&dir, &gate.to_string_lossy());
+
+    assert_eq!(
+        code, 2,
+        "a refused tree is a verdict, never the race: {said}"
+    );
+    assert!(
+        said.contains("reproduce and fix locally"),
+        "a verdict about the tree gets the tree's advice: {said}"
+    );
+}
+
 /// **THE GATE'S OWN OUTPUT REACHES THE OPERATOR.**
 ///
 /// `land::verify` ran through `exec::run_in_env`, whose `ExecConfig::DEFAULT`

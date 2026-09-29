@@ -41,6 +41,8 @@
 #MUTANT approximated-task-may-run-nowhere|s@\tnot approximated_task_runs_in_ci(task)@\tfalse@|a_declared_approximation_for_a_task_no_job_runs_is_refused
 #
 #MUTANT dist-list-unread|s@\tnot provisions_from_a_list(job)@\tfalse@|a_release_leg_that_installs_everything_is_refused
+#MUTANT sequence-body-unread|s@^body_text(run) := concat@body_text_retired(run) := concat@|a_sequence_body_is_read_entry_by_entry
+#MUTANT bare-cargo-statement-unread|s@^\tstartswith(trimmed, "cargo ")$@\tfalse@|a_test_cargo_body_that_is_the_statement_is_read
 #MUTANT-SUITE crates/batten/tests/it/ci_parity.rs
 
 # METADATA
@@ -126,9 +128,9 @@ governed if input.tree.documents["mise.toml"].tasks.verify
 # third link would break this loudly, and an evaluator that followed `mise run`
 # calls transitively would be a second authority on the task graph mise owns.
 verify_text := concat("\n", [
-	object.get(input.tree.documents["mise.toml"].tasks, ["verify", "run"], ""),
+	task_run("verify"),
 	concat(" ", object.get(input.tree.documents["mise.toml"].tasks, ["verify", "depends"], [])),
-	object.get(input.tree.documents["mise.toml"].tasks, ["verify:gated", "run"], ""),
+	task_run("verify:gated"),
 	concat(" ", object.get(input.tree.documents["mise.toml"].tasks, ["verify:gated", "depends"], [])),
 ])
 
@@ -231,7 +233,16 @@ violation contains {
 # the unfiltered run selects too.
 covering_lane := {"ci:quick": "hooks"}
 
-task_run(name) := object.get(input.tree.documents["mise.toml"].tasks, [name, "run"], "")
+task_run(name) := body_text(object.get(input.tree.documents["mise.toml"].tasks, [name, "run"], ""))
+
+# A BODY IS A STRING OR A SEQUENCE OF STRINGS (CLOUD-843). mise runs a `run`
+# array entry by entry, and `verify`, `verify:gated` and `test:musl` became
+# arrays when their shell retired — so every reader above asks the entries,
+# joined, where a scalar-only read would make each of those bodies undefined and
+# every relation over them silently false.
+body_text(run) := run if is_string(run)
+
+body_text(run) := concat("\n", [entry | some entry in run; is_string(entry)]) if is_array(run)
 
 # NARROWING IS A PREFIX, AND THE DIRECTION IS THE WHOLE SOUNDNESS OF IT. `covered`
 # holds when the COVERING body is a prefix of the covered one — the covered lane
@@ -1044,12 +1055,32 @@ violation contains {
 # guard the body wraps it in. A partial rule rather than a function: a body with
 # no such line yields nothing, which is what the could-not-look clause reads.
 task_cargo contains cmd if {
-	body := object.get(input.tree.documents["mise.toml"].tasks, ["test:cargo", "run"], "")
-	some raw in split(body, "\n")
+	some raw in split(task_run("test:cargo"), "\n")
 	trimmed := trim_space(raw)
 	startswith(trimmed, "if ! cargo ")
 	endswith(trimmed, "; then exit 1; fi")
 	cmd := trim_suffix(trim_prefix(trimmed, "if ! "), "; then exit 1; fi")
+}
+
+# THE BODY THAT IS THE STATEMENT (CLOUD-843). `test:cargo` is one argv since its
+# shell retired, so the line needs no guard lifted off it — the whole line is the
+# statement a foreign leg must spell after `mise exec -- `.
+task_cargo contains trimmed if {
+	some raw in split(task_run("test:cargo"), "\n")
+	trimmed := trim_space(raw)
+	startswith(trimmed, "cargo ")
+}
+
+# AND THE STATEMENT A WRAPPER RUNS, after the mandatory `--` (CLOUD-843). A
+# verb that runs a command it was handed — `batten step run <step> -- <cmd>`, the
+# step cache — carries the task's cargo statement as its tail, and that tail is
+# what a foreign leg without the wrapper must still spell.
+task_cargo contains cmd if {
+	some raw in split(task_run("test:cargo"), "\n")
+	parts := split(trim_space(raw), " -- ")
+	count(parts) == 2
+	cmd := parts[1]
+	startswith(cmd, "cargo ")
 }
 
 # Every foreign-runner cargo invocation, EXCLUDING a `--no-run` build. A build
@@ -1316,6 +1347,40 @@ test_a_task_yielding_no_cargo_line_is_refused if {
 	found := violation with input as swap("mise.toml", object.union(sound_manifest, {"tasks": blind}))
 	some f in found
 	f.verdict == "task read unread"
+}
+
+# THE STATEMENT AS THE WHOLE BODY (CLOUD-843). A one-argv `test:cargo` still
+# yields its statement: a foreign leg spelling it is clean, and one that drifts
+# from it is refused exactly as it was against the guarded form.
+test_a_body_that_is_the_statement_yields_it if {
+	bare := object.union(sound_manifest.tasks, {"test:cargo": {"run": "cargo nextest run --workspace"}})
+	count(violation) == 0 with input as swap("mise.toml", object.union(sound_manifest, {"tasks": bare}))
+}
+
+test_a_foreign_leg_drifting_from_a_bare_statement_is_refused if {
+	bare := object.union(sound_manifest.tasks, {"test:cargo": {"run": "cargo nextest run --workspace --locked"}})
+	found := violation with input as swap("mise.toml", object.union(sound_manifest, {"tasks": bare}))
+	some f in found
+	f.verdict == "cargo spelling other"
+}
+
+# A WRAPPER'S TAIL IS THE STATEMENT, after its mandatory `--`.
+test_a_wrapped_statement_yields_its_tail if {
+	wrapped := object.union(
+		sound_manifest.tasks,
+		{"test:cargo": {"run": "batten step run test:cargo -- cargo nextest run --workspace"}},
+	)
+	count(violation) == 0 with input as swap("mise.toml", object.union(sound_manifest, {"tasks": wrapped}))
+}
+
+# A SEQUENCE BODY IS READ ENTRY BY ENTRY: `test:musl` as a `run` array still
+# names the triple its approximation rests on.
+test_a_sequence_body_is_read_entry_by_entry if {
+	sequence := object.union(sound_manifest.tasks, {"test:musl": {"run": [
+		"mise run target-ensure x86_64-unknown-linux-musl",
+		"cargo nextest run --workspace --target x86_64-unknown-linux-musl",
+	]}})
+	count(violation) == 0 with input as swap("mise.toml", object.union(sound_manifest, {"tasks": sequence}))
 }
 
 test_a_sound_tree_is_clean if {

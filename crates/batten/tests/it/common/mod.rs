@@ -312,7 +312,102 @@ pub(crate) fn batten() -> Command {
         command.env_remove(name);
     }
     command.env("BATTEN_BIN", env!("CARGO_BIN_EXE_batten"));
+    // NO `batten` RESOLVABLE BY NAME from anything the binary under test starts
+    // (CLOUD-1951) — see [`ambient_path`].
+    command.env("PATH", ambient_path());
     command
+}
+
+/// This process's `PATH` with no `batten` resolvable by name — every directory
+/// holding one swapped for a shadow of its other entries (CLOUD-1951).
+///
+/// # Why the suite needs it, and why it lives HERE now
+///
+/// CI's test job has neither this checkout's `target/release` (mise's `_.path`)
+/// nor an installed release in `~/.local/bin`; a developer's box has both. So a
+/// case — or a hook the binary under test dispatches — that spawns a bare
+/// `batten` passed here and failed there; the retired `doctor` handler on #928
+/// cost a matrix that way. `test:cargo`'s shell body used to mask the whole
+/// suite's `PATH` before `cargo nextest` ran. That body retired to one argv
+/// (CLOUD-843), and the mask moved to the one door every case reaches the binary
+/// through: [`batten`] hands this to its child, and a tier that builds its own
+/// `PATH` starts from this rather than from the ambient one.
+///
+/// A SHADOW, NOT A DROP: `mise` shares `~/.local/bin` with the installed
+/// release, so removing the directory would hide the tool runner a case may
+/// need along with the binary it must not find. The shadow links every other
+/// entry, and is built idempotently because nextest runs each case in a process
+/// of its own: a link another process made first is an answer, not a failure.
+#[must_use]
+pub(crate) fn ambient_path() -> std::ffi::OsString {
+    static MASKED: std::sync::LazyLock<std::ffi::OsString> = std::sync::LazyLock::new(|| {
+        mask_batten(
+            &std::env::var_os("PATH").unwrap_or_default(),
+            &target_tmp().join("no-batten-path"),
+        )
+    });
+    MASKED.clone()
+}
+
+/// `path` with every directory holding a `batten` replaced by a shadow of its
+/// other entries under `shadows`, one shadow per directory.
+#[must_use]
+pub(crate) fn mask_batten(path: &std::ffi::OsStr, shadows: &Path) -> std::ffi::OsString {
+    let entries: Vec<PathBuf> = std::env::split_paths(path)
+        .map(|dir| {
+            if dir.as_os_str().is_empty() || !holds_batten(&dir) {
+                return dir;
+            }
+            // Named after the directory it shadows, never after its position: a
+            // PATH that reorders between runs must not reuse another
+            // directory's links.
+            let name: String = dir
+                .to_string_lossy()
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                .collect();
+            let shadow = shadows.join(name);
+            shadow_of(&dir, &shadow);
+            shadow
+        })
+        .collect();
+    std::env::join_paths(entries).unwrap_or_else(|_| path.to_os_string())
+}
+
+/// Whether `dir` holds a `batten` a name lookup would find.
+fn holds_batten(dir: &Path) -> bool {
+    dir.join("batten").exists() || dir.join("batten.exe").exists()
+}
+
+/// Link every entry of `dir` but `batten` into `shadow`.
+///
+/// Its mutation is declared in `test_cargo_path.rs`, the file whose cases
+/// observe it (see the block there).
+#[cfg(unix)]
+fn shadow_of(dir: &Path, shadow: &Path) {
+    let _ = fs::create_dir_all(shadow);
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if name == "batten" {
+            continue;
+        }
+        let link = shadow.join(&name);
+        if link.symlink_metadata().is_ok() {
+            continue;
+        }
+        let _ = std::os::unix::fs::symlink(entry.path(), &link);
+    }
+}
+
+/// Where no symlink can be made cheaply, the directory is dropped outright: its
+/// other programs are hidden too, which is the cost the shadow exists to avoid,
+/// paid only where it cannot be built.
+#[cfg(not(unix))]
+fn shadow_of(_dir: &Path, shadow: &Path) {
+    let _ = fs::create_dir_all(shadow);
 }
 
 /// The state root a suite whose subject is the REAL repository must run under.
@@ -326,10 +421,22 @@ pub(crate) fn batten() -> Command {
 pub(crate) fn task_body(name: &str) -> String {
     let manifest = fs::read_to_string(at_root("mise.toml")).expect("the manifest");
     let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
-    parsed["tasks"][name]["run"]
-        .as_str()
-        .unwrap_or_else(|| panic!("[tasks.{name}] declares a run body"))
-        .lines()
+    // A `run` ARRAY is a body too (CLOUD-843): mise runs its entries in order, so
+    // the text a tier reads is those entries, one per line — the shape the
+    // retired shell bodies took when they became argv.
+    let run = &parsed["tasks"][name]["run"];
+    let body = match run.as_array() {
+        Some(steps) => steps
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect::<Vec<_>>()
+            .join("\n"),
+        None => run
+            .as_str()
+            .unwrap_or_else(|| panic!("[tasks.{name}] declares a run body"))
+            .to_owned(),
+    };
+    body.lines()
         .filter(|line| !line.contains("{% raw %}") && !line.contains("{% endraw %}"))
         .collect::<Vec<_>>()
         .join("\n")
@@ -354,7 +461,7 @@ pub(crate) fn task_env(name: &str) -> String {
 )]
 #[must_use]
 pub(crate) fn task_bash(dir: &Path, body: &str) -> std::process::Command {
-    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let inherited = ambient_path();
     let path = std::env::join_paths(
         std::iter::once(dir.join("bin")).chain(std::env::split_paths(&inherited)),
     )

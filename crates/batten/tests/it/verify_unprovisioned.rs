@@ -338,20 +338,30 @@ fn the_extracted_verify_body_is_the_task_and_not_the_whole_file() {
 /// repository's cost record as CLOUD-1775's lost lap, *28 commits claim no
 /// CLOUD-N issue*.
 ///
+/// THE ARMING IS DATA NOW (CLOUD-843): each gate is reached through a wrapper
+/// task whose `env` carries the base, and `verify:gated` runs the wrapper — so the
+/// line asserted is the wrapper's `env`, and the gate set is asserted to reach it.
+///
 /// Fails by: restoring either literal, which is the state five laps over four
 /// borrowed tips were measured in on 2026-09-25/26.
 #[test]
 fn both_base_armed_gates_read_the_base_the_lap_actually_borrowed() {
-    let body = task_body("verify:gated");
-    assert!(
-        body.contains("mise run config-lint"),
-        "the extraction found the gate set, not a neighbouring table"
-    );
-    for (armed, gate) in [
-        ("CONFIG_LINT_BASE", "mise run config-lint"),
-        ("BASE_SHA", "mise run commit-lint"),
+    let gated = task_body("verify:gated");
+    for (wrapper, armed, gate) in [
+        (
+            "verify:config-lint",
+            "CONFIG_LINT_BASE",
+            "mise run config-lint",
+        ),
+        ("verify:commit-lint", "BASE_SHA", "mise run commit-lint"),
     ] {
-        let line = arming(&body, armed, gate);
+        assert!(
+            gated.contains(&format!("mise run {wrapper}")),
+            "the gate set reaches {gate} through {wrapper}: {gated}"
+        );
+        let body = task_body(wrapper);
+        assert!(body.contains(gate), "{wrapper} runs {gate}: {body}");
+        let line = arming(&body, armed);
         assert!(
             line.contains("BATTEN_SPEC_BASE"),
             "{armed} must read the base the lap borrowed, or a speculative lap \
@@ -360,37 +370,31 @@ fn both_base_armed_gates_read_the_base_the_lap_actually_borrowed() {
     }
 }
 
-/// The line that ARMS `gate` with `armed`, never the prose that discusses it.
-///
-/// Both halves of the pair are required, for the reason [`task_body`]'s own
-/// comment records one layer up: this body explains each arming in a comment
-/// above it, so a bare `find` for the variable name returns *"absent
-/// `CONFIG_LINT_BASE` the task runs exactly ..."* — a sentence that will never
-/// contain the expansion, so every assertion over it fails for the wrong reason.
-/// Requiring the invocation on the same line is what picks the executable one.
-fn arming<'a>(body: &'a str, armed: &str, gate: &str) -> &'a str {
+/// The line of a wrapper's `env` that ARMS `armed`, never the prose that
+/// discusses it: an `env = {` line naming the variable.
+fn arming<'a>(body: &'a str, armed: &str) -> &'a str {
     body.lines()
-        .find(|line| line.contains(armed) && line.contains(gate))
-        .unwrap_or_else(|| panic!("{armed} arms {gate} in this body"))
+        .find(|line| line.starts_with("env = {") && line.contains(armed))
+        .unwrap_or_else(|| panic!("{armed} is armed in this body's env"))
 }
 
 /// CLOUD-1702's MIRROR, and without it the case above is satisfied by dropping
 /// the base entirely — which is the dead-gate class, not a fix.
 ///
-/// An unspeculated lap and CI both leave `BATTEN_SPEC_BASE` unset, so the
-/// expansion has to fall back to trunk. A bare `$BATTEN_SPEC_BASE` would arm
-/// `config lint` with an empty ref there and judge nothing at all, which is
-/// exactly the silence house style §8 arms this gate against.
+/// An unspeculated lap and CI both leave `BATTEN_SPEC_BASE` unset — `land`
+/// REMOVES it when no bet is live rather than emptying it — so the reading has to
+/// fall back to trunk. A bare reference would arm `config lint` with an empty ref
+/// there and judge nothing at all, which is exactly the silence house style §8
+/// arms this gate against.
 #[test]
 fn an_unspeculated_lap_still_falls_back_to_trunk() {
-    let body = task_body("verify:gated");
-    for (armed, gate) in [
-        ("CONFIG_LINT_BASE", "mise run config-lint"),
-        ("BASE_SHA", "mise run commit-lint"),
+    for (wrapper, armed) in [
+        ("verify:config-lint", "CONFIG_LINT_BASE"),
+        ("verify:commit-lint", "BASE_SHA"),
     ] {
-        let line = arming(&body, armed, gate);
+        let line = arming(&task_body(wrapper), armed).to_owned();
         assert!(
-            line.contains("${BATTEN_SPEC_BASE:-origin/main}"),
+            line.contains("get_env(name='BATTEN_SPEC_BASE', default='origin/main')"),
             "the fallback is the whole reason this is a no-op off a bet: {line}"
         );
     }
@@ -417,41 +421,34 @@ fn the_verify_mapper_refuses_an_unprovisioned_toolchain_before_it_reads_any_rece
     assert!(guard < gated, "and precedes the gate set that writes one");
 }
 
-/// CLOUD-1683. Exit 1, never 2. `land` reads 2 as "main moved, lap", and nothing
-/// about an unprovisioned container improves by rebasing — so a second way to
-/// mint a 2 here is `land` lapping to its backstop over a real refusal.
+/// CLOUD-1683. A STOP, NEVER A LAP. The precondition is its own step of the
+/// sequence, and a refused step ends `verify` with that step's code — which
+/// `doctor toolchain` spells `1`, never the policy verdict `2`
+/// (`an_unprovisioned_toolchain_is_never_reported_as_a_policy_verdict`). `land`
+/// laps on a `2` only where its own read of the base agrees (CLOUD-843), so
+/// nothing about an unprovisioned container reaches the rebase race either way.
 #[test]
 fn the_toolchain_precondition_is_a_stop_and_not_a_rebase_lap() {
     let body = task_body("verify");
-    let guard = body
-        .find("mise run toolchain-check")
-        .expect("verify asks the toolchain question");
-    let arm = &body[guard..];
-    let fi = arm.find("\nfi").expect("the guard is a block");
     assert!(
-        arm[..fi].contains("exit 1"),
-        "the toolchain guard stops rather than lapping"
+        body.contains("\"mise run toolchain-check\","),
+        "the toolchain question is one whole step of the sequence: {body}"
     );
 }
 
-/// CLOUD-1683. The constraint that is invisible from this file and unfixable if
-/// broken: `tests/verify.bats` stubs the task runner and nothing else, answering
-/// 0 for any task it was not told about. A direct `batten doctor` or `cargo run`
-/// here has no stub, would escape to the real PATH inside that sandbox, and would
-/// redden a suite `shell edit refused` forbids editing — retire it whole or leave
-/// it alone, and there is no third shape. Stated as an assertion so a later
-/// simplification cannot quietly take the unfixable route.
+/// CLOUD-1683. THROUGH THE TASK RUNNER, so the manifest operand travels in the
+/// consumer's own task body rather than in `verify`'s: the step names the task
+/// and nothing reaches the verb directly.
 #[test]
 fn the_toolchain_precondition_is_invoked_through_the_task_runner() {
     let body = task_body("verify");
-    let guard = body
-        .find("if ! mise run toolchain-check")
-        .expect("the guard goes through the task runner");
-    let arm = &body[guard..];
-    let fi = arm.find("\nfi").expect("the guard is a block");
+    let step = body
+        .lines()
+        .find(|line| line.contains("mise run toolchain-check"))
+        .expect("the step goes through the task runner");
     assert!(
-        !arm[..fi].contains("batten doctor"),
-        "the mapper does not reach the verb directly"
+        !step.contains("batten doctor"),
+        "the sequence does not reach the verb directly: {step}"
     );
 }
 

@@ -2528,6 +2528,40 @@ pub fn inside_open_lap(here: &Path, marker: Option<&std::ffi::OsStr>) -> bool {
     }
 }
 
+/// The committed `[prune]` table in `dir`, read ALONE, or `None` when it cannot
+/// be (CLOUD-843).
+///
+/// # The fallback the task body used to spell in shell
+///
+/// A consumer's config gains keys between releases, so the binary on `PATH` is
+/// routinely older than the table it is asked to read — and `Config` is
+/// `deny_unknown_fields`, so that binary refuses the WHOLE file over a key that
+/// has nothing to do with reclaiming disk. The retired `target-prune` body
+/// answered that by falling through to `cargo run`, which is a build: the one
+/// thing this verb exists to make room for, spent on the input that most needs
+/// the room. Measured over one session, `protected_readers`, `[prune.cold.basis]`
+/// and a new `[[recorder]]` variant each killed a lap that way.
+///
+/// So the reclaim reads the one table it needs. What stays strict is the table
+/// itself: [`Prune`] is `deny_unknown_fields` too, so a `[prune]` key this build
+/// predates still refuses rather than being half-understood, and the floors are
+/// validated exactly as a whole-file load would validate them.
+///
+/// **The committed file, never a layered view.** `[prune]` is authority-only, so
+/// there is no override for this read to miss.
+//MUTANT-SUITE crates/batten/src/prune.rs
+//MUTANT prune-table-alone-unread|s@    let declared = table.get("prune")?.as_table()?;@    let declared = table.get("prune-unread")?.as_table()?;@|a_config_this_build_outran_still_yields_its_prune_table
+//MUTANT prune-table-alone-unvalidated|s@    prune.validate().ok()?;@    let _ = prune.validate();@|a_prune_table_that_fails_validation_is_not_read_alone
+#[must_use]
+pub fn declared_alone(dir: &Path) -> Option<Prune> {
+    let text = std::fs::read_to_string(dir.join(crate::config::CONFIG_FILE)).ok()?;
+    let table: toml::Table = toml::from_str(&text).ok()?;
+    let declared = table.get("prune")?.as_table()?;
+    let prune: Prune = toml::from_str(&toml::to_string(declared).ok()?).ok()?;
+    prune.validate().ok()?;
+    Some(prune)
+}
+
 /// The lock cargo holds on a profile directory for the whole of a build.
 const BUILD_LOCK: &str = ".cargo-lock";
 
@@ -2766,6 +2800,75 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         mkdir(&root);
         root
+    }
+
+    // --- the table read alone (CLOUD-843) -------------------------------------
+
+    /// A floor pair whose numbers agree with their declared bases.
+    const FLOORS: &str = "[prune.warm]\nmb = 6000\nworst_mb = 6000\nmultiplier = 1\nmeasured = \"2026-08-22\"\n\n\
+                          [prune.cold]\nmb = 14000\nworst_mb = 14000\nmultiplier = 1\nmeasured = \"2026-08-29\"\n";
+
+    /// A directory holding exactly `config` as its committed authority.
+    fn authority(name: &str, config: &str) -> PathBuf {
+        let root = build_root(name);
+        if let Err(why) = std::fs::write(root.join(crate::config::CONFIG_FILE), config) {
+            panic!("fixture: could not write the config: {why}");
+        }
+        root
+    }
+
+    /// `#MUTANT prune-table-alone-unread` reddens here. The config carries a key
+    /// no build knows — the shape a release meets on every branch that adds one —
+    /// and the reclaim still gets its floors.
+    #[test]
+    fn a_config_this_build_outran_still_yields_its_prune_table() {
+        let root = authority(
+            "alone-outran",
+            &format!(
+                "version = 1\nkey_this_build_predates = true\n\n[prune]\nkeep = 3\n\n{FLOORS}"
+            ),
+        );
+        let Some(read) = declared_alone(&root) else {
+            panic!("the [prune] table beside an unknown key must still be read")
+        };
+        assert_eq!(read.keep, 3, "it is the committed table that was read");
+        assert_eq!(read.cold.mb, 14000);
+    }
+
+    /// `#MUTANT prune-table-alone-unvalidated` reddens here: reading the table alone
+    /// must not skip the arithmetic a whole-file load would have refused.
+    #[test]
+    fn a_prune_table_that_fails_validation_is_not_read_alone() {
+        let root = authority(
+            "alone-invalid",
+            "version = 1\n\n[prune]\nkeep = 0\n\n\
+             [prune.warm]\nmb = 6000\nworst_mb = 6000\nmultiplier = 1\nmeasured = \"2026-08-22\"\n\n\
+             [prune.cold]\nmb = 14000\nworst_mb = 14000\nmultiplier = 1\nmeasured = \"2026-08-29\"\n",
+        );
+        assert!(
+            declared_alone(&root).is_none(),
+            "`keep = 0` is refused alone exactly as it is refused whole"
+        );
+    }
+
+    /// The table stays STRICT: a `[prune]` key this build predates is a refusal,
+    /// never a table read with the key silently dropped.
+    #[test]
+    fn a_prune_key_this_build_predates_is_not_read_around() {
+        let root = authority(
+            "alone-prune-key",
+            &format!("version = 1\n\n[prune]\nkeep = 2\nfuture_key = 1\n\n{FLOORS}"),
+        );
+        assert!(declared_alone(&root).is_none());
+    }
+
+    /// A directory declaring no table, or no config at all, has nothing to read.
+    #[test]
+    fn no_table_and_no_config_read_as_nothing() {
+        let bare = authority("alone-no-table", "version = 1\n");
+        assert!(declared_alone(&bare).is_none());
+        let empty = build_root("alone-no-config");
+        assert!(declared_alone(&empty).is_none());
     }
 
     #[test]

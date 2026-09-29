@@ -13,7 +13,8 @@
 //! it. Producing a denial would mean running the task against a fixture config,
 //! which `batten-check` has no flag for: it is hard-wired to `cargo run … enforce`
 //! over the working tree. So the honest cheap predicate is the one
-//! `tests/task-fail-closed.bats` already uses for `verify`'s body — read the
+//! `tests/task-fail-closed.bats` used for `verify`'s body until both retired into
+//! `verify_chain.rs` (CLOUD-843) — read the
 //! committed task body and assert the property over it. That suite's own case, *"a
 //! captured exit code is checked and exited on, never merely recorded"*, is this
 //! predicate one task over.
@@ -127,19 +128,24 @@ fn the_engine_status_is_captured_and_re_exited_unchanged() {
     );
 }
 
-/// CLOUD-407 must stay fixed, and this file is where a reader would look for it:
-/// `verify` deliberately maps a content failure to `1` so its own `2` can mean
-/// "main moved under this branch". CLOUD-1090 preserves a verdict one layer down
-/// and must not be read as licence to reverse that.
+/// CLOUD-407 must stay fixed, and this file is where a reader would look for it.
+///
+/// `verify` used to MAP a content failure to `1` so its own `2` could mean "main
+/// moved under this branch". That mapper retired with its shell (CLOUD-843): the
+/// task is a sequence of steps, each step's code leaves it unchanged — this
+/// file's own principle, a runner transports a verdict rather than replacing it —
+/// and the lap reads "main moved" off the base itself (`land::confirmed`), so a
+/// policy verdict arriving as `2` still stops. What this case pins is the half a
+/// reader could undo here: no step re-numbers a code on its way out.
 #[test]
-fn verify_still_reserves_exit_2_for_the_rebase_race() {
+fn verify_transports_every_step_s_code_rather_than_re_numbering_it() {
     let body = task_body("verify");
     assert!(
-        body.contains("exit 2"),
-        "verify still has an exit-2 path — CLOUD-407's rebase-race signal"
+        body.contains("verify:gated") && body.contains("linear-check"),
+        "the body read is verify's own sequence: {body}"
     );
     assert!(
-        body.contains(r#"if [ "$linear_rc" = 2 ]; then"#),
-        "verify's exit 2 is reached from linear-check's status, not from a gate's verdict"
+        !body.contains("exit "),
+        "no step of verify chooses an exit code of its own: {body}"
     );
 }
