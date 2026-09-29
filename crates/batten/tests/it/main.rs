@@ -254,6 +254,7 @@ mod minted_facts;
 mod mise_action_floor;
 mod mise_pin_agreement;
 mod mise_preset;
+mod module_closure;
 mod module_map;
 mod msrv_pin_agreement;
 mod mutate;
