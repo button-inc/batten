@@ -3950,8 +3950,9 @@ exit 2
 # `finding-mediated-key` group of a mediated `batten mcp call`) and the column
 # this clone's `issue-read` receipt recorded for that row at field 5. THE DECISION
 # IS `policy/finding-sink.rego`: a home is a row that OPENS, an amendment to a row
-# in an open column, or a memory/document write. Recorded is not scheduled
-# (CLOUD-475, CLOUD-775).
+# in an open column, or a memory/document write called DIRECTLY — a mediated
+# `mcp call <server> <method>` write is not a home (`[[pattern]]
+# finding-mediated-call`). Recorded is not scheduled (CLOUD-475, CLOUD-775).
 #
 # COULD-NOT-LOOK ABSTAINS at exit 0 with nothing on stdout, which the handler
 # door reads as a pass: no transcript, a line that is not JSON, or a cwd outside
