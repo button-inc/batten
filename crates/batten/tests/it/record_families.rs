@@ -110,8 +110,9 @@ fn a_half_written_append_is_not_a_record() {
     // THE DISCRIMINATING CASE (CLOUD-1032). A process killed mid-`write` leaves a
     // line with no terminator. `str::lines` yields it identically to a whole one,
     // so a fold built on `lines()` counts a torn record as a record — and
-    // `reclaim-census` classifies a boot from the KIND of the last record under
-    // it, which is precisely the value a torn tail corrupts.
+    // `record census` classifies a boot from the KIND of the last record under
+    // it, which is precisely the value a torn tail corrupts. Its own tier drives
+    // the same torn tail through the census (`a_torn_stop_does_not_answer_for_its_boot`).
     let dir = repo("torn");
     // Same reason: the torn tail below is appended to THIS record, so a failed
     // write would leave nothing for the fold to be wrong about.

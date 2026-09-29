@@ -712,6 +712,13 @@ declared_modules := {
 	# pinned sources, so its `hook`, `repair` and `check` edges are forbidden below
 	# for `rest`'s reason.
 	"sbom",
+	# `reclaim` arrived with CLOUD-843, retiring `[tasks.reclaim-census]`: the
+	# `record census` verb's body. `record`'s class -- a SENSOR that appends
+	# through `journal`, folds through it, and resolves the store path through
+	# `record` -- plus `git` for the per-worktree directory and `durable` for the
+	# once-per-boot mark. It decides nothing a gate reads, so its `rules` and
+	# `hook` edges are forbidden below for `forge_query`'s reason.
+	"reclaim",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
@@ -922,6 +929,10 @@ forbidden[from] contains to if {
 		# `sbom -> {rules, hook}` for the same reason: a producer that reached the
 		# engine deciding over its record would know which verdict it was feeding.
 		"sbom": {"rules", "hook"},
+		# `reclaim -> {rules, hook}`, the same pair for the same reason: the census
+		# is a sensor, and one that reached the engine adjudicating a call would
+		# be a measurement able to decide over what it measures (CLOUD-843).
+		"reclaim": {"rules", "hook"},
 	}
 	some to in targets
 }
@@ -1211,6 +1222,33 @@ test_the_sbom_producer_is_bounded_both_ways if {
 	count(violation) == 0 with input as judging(
 		"crates/batten/src/sbom.rs",
 		[internal("resolve", 10), internal("record", 11), internal("git", 12), internal("durable", 13)],
+	)
+}
+
+# CLOUD-843's reclaim census, both halves: the sensor must not reach the engine
+# that adjudicates, and it may reach the journal, the record store's path, the
+# per-worktree git directory and the durable write it composes.
+test_the_reclaim_census_must_not_reach_the_engine if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/reclaim.rs",
+		[internal("rules", 12)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/reclaim.rs",
+		[internal("hook", 12)],
+	)
+}
+
+test_the_reclaim_census_reaches_what_it_composes if {
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/reclaim.rs",
+		[internal("journal", 10), internal("record", 11), internal("git", 12), internal("durable", 13)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/record.rs",
+		[internal("reclaim", 20)],
 	)
 }
 

@@ -513,12 +513,22 @@ LAND_CI_WORKFLOW = "ci.yml"
 LAND_ANSWER_ASKS = "120"
 # THE RECLAIM CENSUS'S STOP NOTE (CLOUD-451), declared here because the program
 # is this consumer's and a census name inside `crates/batten` is non-negotiable
-# rule 1's plainest violation. `batten lease release` spawns it when a release
-# applies — which is the engine recording that IT chose to stop its heartbeat,
-# and never the heartbeat's own exit path (CLOUD-491): an exit path runs on the
-# container kill too, and a note from one would erase the only distinction the
-# census draws.
-LEASE_STOP_NOTE = "mise run -q reclaim-census note x land-stopped"
+# rule 1's plainest violation. The engine spawns it wherever a holder CHOSE to
+# stop — `land lap` where the landing RETURNS (never where a lap hands its lease
+# back and laps, which is a landing still running), `lease hold` on its stall
+# bail, and `batten lease release` — and never on an exit path (CLOUD-491): an
+# exit path runs on the container kill too, and a note from one would erase the
+# only distinction the census draws.
+#
+# Both are ARGV for the engine's own `record census note` (CLOUD-843, retiring
+# `[tasks.reclaim-census]`), decoded as `LAND_BODY_GATES` is and never a shell.
+# The beat is the half that never existed, so the census's positive reading was
+# unreachable. It runs ONCE, when `land lap` starts, before any lap or lease: the
+# stop follows only where the landing returns, and the census reads only the kind
+# of the last record, so no later beat inside that window could change a verdict.
+# `lease hold`, unreached today, also writes it per renewal it applied.
+LEASE_STOP_NOTE = "batten record census note x land-stopped"
+LEASE_BEAT_NOTE = "batten record census note h"
 # The subset of that roster for which ABSENCE — no check-run at all, as opposed
 # to one that graded `skipped` — is a legitimate reading rather than a name that
 # has not registered yet. Exactly two WORKFLOWS earn it, and each earns it twice
@@ -673,7 +683,7 @@ CI_VERDICT_STEPS = "Run mise run ,Run mise exec -- "
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,macos-link,task-mcp-allow-check,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,sbom-actions,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,ci-signal,engine-ci-signal,docs-tree-absent,ripcord-untracked,hk-pin-agreement,engine-record,hk-fix-selection.pkl,engine-dist,engine-sbom,supply-chain"
+MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,macos-link,task-mcp-allow-check,ntia,task-pr-unsubscribed,task-test:cargo,release-tracking,sbom-actions,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,ci-signal,engine-ci-signal,docs-tree-absent,ripcord-untracked,hk-pin-agreement,engine-record,hk-fix-selection.pkl,engine-dist,engine-sbom,supply-chain,engine-reclaim,engine-durable"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -3366,219 +3376,6 @@ for tag in "${tags[@]}"; do
 	echo "release-backfill: $tag recorded (run $id)"
 done
 echo "release-backfill: ${#tags[@]} tag(s) recorded, oldest first"
-{% endraw %}
-'''
-
-# Was a LANDING in flight when this container replaced the last one (CLOUD-451)?
-# Retired off `mise-tasks/reclaim-census.sh` under CLOUD-1752. A SENSOR AND
-# NOTHING ELSE: it denies, gates and occupies nothing. `plan-hold` (CLOUD-515) was
-# built on the unobserved premise that occupancy defers a reclaim; this makes the
-# premise answerable before any mechanism is.
-#
-# NARROWER THAN CLOUD-451, and said (CLOUD-696): it writes only while a `land`
-# holds the lease, so a container that recorded nothing is UNOBSERVED (exit 2),
-# never idle — idleness reported from a coverage gap is evidence manufactured
-# from silence, biased toward licensing a mechanism.
-#
-# STRUCTURAL, NOT TEMPORAL (CLOUD-491): the last 182 seconds of writes did not
-# survive a measured replacement, so no clock is in the predicate. `h` per beat,
-# `x` only where something CHOSE to stop, and the verdict is the kind of the last
-# record written UNDER THE BOOT BEING JUDGED — per transition, never the file's
-# newest line, which re-answered one event forever. `tally` derives every
-# boundary in one pass, so counting cannot accumulate.
-#
-#   note h | note x <reason>   a beat, or a chosen stop (always exit 0: a sensor
-#                              never kills what it observes)
-#   record-boot                note this boot, idempotent by the last line
-#   report | tally             the verdict: 0 in flight, 1 stopped on purpose, 2 unobserved
-#   log-path | boot            accessors, ABSOLUTE, so no caller re-derives them
-#
-# `BATTEN_BOOT_TIME` is injectable and, when set, authoritative: malformed is
-# cannot-look, never a silent `/proc/stat` fallback (CLOUD-418).
-[tasks.reclaim-census]
-#MUTANT-SUITE crates/batten/tests/it/reclaim_census.rs
-#MUTANT active-discrimination-collapses|s/if \[\[ "$verdict" = "active" \]\]; then/if false; then/|a_landing_in_flight_when_the_container_was_replaced
-#MUTANT terminal-record-collapses|s/^	x) kind=x ;;$/	x) kind=h ;;/|a_loop_that_stops_on_purpose_leaves_the_matching_x
-#MUTANT absence-reads-as-idle|s@^\t\*) printf 'unobserved\\n' ;;$@\t*) printf 'idle 0\\n' ;;@|absence_is_unobserved_never_idle
-#MUTANT newest-line-answers|s@ .. \$3 == b { k = @ { k = @|a_record_under_an_older_boot_does_not_answer_for_this_boundary
-description = "Record whether active work was live when a container was replaced, and read the verdict back — the evidence CLOUD-451 needs before any mechanism"
-shell = "bash -c"
-dir = "{{cwd}}"
-usage = 'arg "[args]..." var=#true help="report | tally | note h|x [reason] | record-boot | log-path | boot"'
-run = '''
-{% raw %}
-set -uo pipefail
-args=()
-read -ra args <<<"${usage_args:-${*:-}}"
-git_dir() {
-	local d
-	d=$(git rev-parse --absolute-git-dir 2>/dev/null) || return 1
-	[[ -n "$d" ]] || return 1
-	printf '%s\n' "$d"
-}
-boot_time() {
-	local bt
-	if [[ -n "${BATTEN_BOOT_TIME+set}" ]]; then
-		case "$BATTEN_BOOT_TIME" in
-		'' | *[!0-9]*) return 1 ;;
-		esac
-		printf '%s\n' "$BATTEN_BOOT_TIME"
-		return 0
-	fi
-	bt=$(awk '$1 == "btime" { print $2; exit }' /proc/stat 2>/dev/null)
-	case "$bt" in
-	'' | *[!0-9]*) ;;
-	*)
-		printf '%s\n' "$bt"
-		return 0
-		;;
-	esac
-	bt=$(date -u -d "$(uptime -s 2>/dev/null)" +%s 2>/dev/null)
-	case "$bt" in
-	'' | *[!0-9]*) return 1 ;;
-	*) ;;
-	esac
-	printf '%s\n' "$bt"
-}
-mode="${args[0]:-report}"
-case "$mode" in
-log-path)
-	d=$(git_dir) || {
-		echo "::error:: reclaim-census: not a git repository — no log" >&2
-		exit 2
-	}
-	printf '%s\n' "$d/batten-reclaim-log"
-	exit 0
-	;;
-boot)
-	boot=$(boot_time) || {
-		echo "::error:: reclaim-census: cannot read this container's boot time" >&2
-		exit 2
-	}
-	printf '%s\n' "$boot"
-	exit 0
-	;;
-note)
-	kind="${args[1]:-h}"
-	case "$kind" in
-	h) ;;
-	x) kind=x ;;
-	*)
-		echo "::error:: reclaim-census: note takes h or x, not \"$kind\"" >&2
-		exit 2
-		;;
-	esac
-	d=$(git_dir) || exit 0
-	boot=$(boot_time) || exit 0
-	log="$d/batten-reclaim-log"
-	reason="${args[2]:-}"
-	# Omitted rather than empty: a trailing space is a byte difference (rule 5).
-	if [[ -n "$reason" ]]; then
-		printf '%s %s %s %s\n' "$kind" "$(date -u +%s)" "$boot" "$reason" >>"$log" 2>/dev/null || true
-	else
-		printf '%s %s %s\n' "$kind" "$(date -u +%s)" "$boot" >>"$log" 2>/dev/null || true
-	fi
-	sync -d "$log" 2>/dev/null || true
-	exit 0
-	;;
-record-boot)
-	boot=$(boot_time) || {
-		echo "::error:: reclaim-census: cannot read this container's boot time — not recording it" >&2
-		exit 2
-	}
-	d=$(git_dir) || {
-		echo "::error:: reclaim-census: not a git repository — cannot record this boot" >&2
-		exit 2
-	}
-	boots="$d/batten-boots"
-	last=$(tail -n 1 -- "$boots" 2>/dev/null)
-	[[ "$last" = "$boot" ]] || printf '%s\n' "$boot" >>"$boots" 2>/dev/null || true
-	exit 0
-	;;
-report | tally) ;;
-*)
-	echo "::error:: reclaim-census: unknown mode \"$mode\" (want: report | tally | note | record-boot | log-path | boot)" >&2
-	exit 2
-	;;
-esac
-boot=$(boot_time) || {
-	echo "::error:: reclaim-census: cannot read this container's boot time — cannot say what the last replacement interrupted" >&2
-	exit 2
-}
-d=$(git_dir) || {
-	echo "::error:: reclaim-census: not a git repository — cannot say what the last replacement interrupted" >&2
-	exit 2
-}
-log="$d/batten-reclaim-log"
-boots="$d/batten-boots"
-# The last record written under ONE boot, over the whole log: the newest line
-# overall may belong to a different container entirely.
-kind_under() {
-	awk -v b="$1" '
-		($1 == "h" || $1 == "x") && $3 == b { k = $1; e = $2 }
-		END { if (k != "") printf "%s %s\n", k, e }
-	' "$log" 2>/dev/null
-}
-boot_list() {
-	[[ -r "$boots" ]] || return 0
-	awk '/^[0-9]+$/ { print }' "$boots" 2>/dev/null
-}
-classify() { # classify <boot> -> active|idle|unobserved [epoch]
-	local k e
-	read -r k e <<<"$(kind_under "$1")"
-	case "$k" in
-	h) printf 'active %s\n' "$e" ;;
-	x) printf 'idle %s\n' "$e" ;;
-	*) printf 'unobserved\n' ;;
-	esac
-}
-if [[ "$mode" = tally ]]; then
-	prev=
-	transitions=0
-	active=0
-	idle=0
-	unobserved=0
-	while IFS= read -r b; do
-		[[ -n "$b" ]] || continue
-		if [[ -n "$prev" ]]; then
-			transitions=$((transitions + 1))
-			read -r verdict _rest <<<"$(classify "$prev")"
-			case "$verdict" in
-			active) active=$((active + 1)) ;;
-			idle) idle=$((idle + 1)) ;;
-			*) unobserved=$((unobserved + 1)) ;;
-			esac
-		fi
-		prev="$b"
-	done <<<"$(boot_list)"
-	if [[ "$transitions" -eq 0 ]]; then
-		echo "::error:: reclaim-census: this disk records no container replacement — nothing to tally" >&2
-		exit 2
-	fi
-	echo "reclaim-census: $transitions replacement(s) recorded — $active with a landing in flight, $idle idle of landings, $unobserved unobserved"
-	exit 0
-fi
-prev=
-while IFS= read -r b; do
-	[[ -n "$b" ]] || continue
-	[[ "$b" = "$boot" ]] && continue
-	prev="$b"
-done <<<"$(boot_list)"
-if [[ -z "$prev" ]]; then
-	echo "::error:: reclaim-census: no boot predates $boot — this container's disk carries no evidence either way" >&2
-	exit 2
-fi
-read -r verdict epoch <<<"$(classify "$prev")"
-if [[ "$verdict" = "active" ]]; then
-	echo "reclaim-census: A LANDING WAS IN FLIGHT when this container replaced the last one (last beat $epoch under boot $prev, now $boot)"
-	exit 0
-fi
-if [[ "$verdict" = "idle" ]]; then
-	echo "reclaim-census: the last landing stopped on purpose at $epoch — no landing was in flight when boot $prev was replaced"
-	exit 1
-fi
-echo "::error:: reclaim-census: boot $prev recorded nothing — UNOBSERVED, not idle; this sensor only sees landings and none ran there" >&2
-exit 2
 {% endraw %}
 '''
 
@@ -6422,43 +6219,6 @@ description = "Session start: reclaim the hook surface from launcher-provisioned
 quiet = true
 silent = "stdout"
 run = "batten wiring reclaim -y"
-
-[tasks."session:census"]
-description = "Session start: record this boot and read back what was running when the container we replaced went down (CLOUD-451)"
-# RECORD BEFORE READ, and the order is load-bearing: recording this boot after
-# reading would make it part of the evidence it is being compared against.
-#
-# NEVER FATAL, and that is why it is `|| true` rather than the `|| { …; exit 1; }`
-# every other step above carries: a verdict about a PAST container is not a
-# provisioning failure, and halting a session over one would be the sensor
-# deciding something it has no business deciding. Only the positive reading
-# speaks — the report's exit 1 (idle when replaced) and exit 2 (cannot look) are
-# silent, because a line every session start would be noise in the overwhelming
-# case where nothing happened.
-#
-# AND IT SPEAKS ONCE PER BOOT, NOT ONCE PER SESSION (CLOUD-1301). `report`
-# classifies the PREVIOUS boot, which is immutable history: no landing completed
-# here changes what the last container was doing when it died. So on a container
-# whose predecessor was reclaimed mid-landing the verdict is TRUE and repeats at
-# every session start for the life of the container — and after the first read it
-# is exactly the noise CLOUD-891 removed. The comment above already makes that
-# argument for the negative readings and did not apply it to the positive one.
-#
-# THE MARK SITS BESIDE THE LOG, NEVER IN IT, and is keyed to the boot time. Both
-# paths come from the census's own `log-path` and `boot` accessors rather than
-# being rebuilt here, so this body holds no second opinion about where the store
-# lives — the census is `[tasks.reclaim-census]`, and keeping the mark out of it
-# is what lets the suppression live in this row alone.
-# Keying on the boot is what makes it self-clearing: a new container has a new
-# boot time, so its own first reclaim verdict is reported rather than suppressed
-# by a mark the previous container left.
-#
-# EVERY FAILURE PATH STILL REPORTS. If the mark cannot be resolved or written —
-# no git dir, no readable boot time — the verdict is printed, because a sensor
-# that goes quiet when its bookkeeping breaks has deleted the instrument
-# CLOUD-451 built. Suppression is the thing that must fail closed, never the
-# report.
-run = "mise run reclaim-census record-boot >/dev/null 2>&1 || true; v=$(mise run reclaim-census report 2>/dev/null) || exit 0; [ -n \"$v\" ] || exit 0; l=$(mise run reclaim-census log-path 2>/dev/null) || { printf '%s\\n' \"$v\"; exit 0; }; b=$(mise run reclaim-census boot 2>/dev/null) || { printf '%s\\n' \"$v\"; exit 0; }; m=\"$l.reported\"; [ \"$(cat \"$m\" 2>/dev/null)\" = \"$b\" ] && exit 0; printf '%s\\n' \"$v\"; printf '%s\\n' \"$b\" >\"$m\" 2>/dev/null || true"
 
 # CLOUD-843. The successor to `mise-tasks/lock-complete.sh`, and the same wrapper
 # shape `rules-drift` above takes: the step name and the rule id are one object,

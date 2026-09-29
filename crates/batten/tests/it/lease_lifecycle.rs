@@ -39,10 +39,11 @@
 // AND ONE CASE FROM `tests/reclaim-census.bats`, which reached into
 // `mise-tasks/land-lock.sh` to count the hold loop's own beat records, so the
 // case moved with the program it was counting. The suite itself retired whole
-// under CLOUD-1717 onto `[tasks.reclaim-census]`; its one path-level row lives
-// in `reclaim_census.rs`, since a deleted path owes exactly one mapping.
+// under CLOUD-1717 onto `[tasks.reclaim-census]`, and that task retired in turn
+// onto `batten record census` (CLOUD-843); its one path-level row lives in
+// `reclaim_census.rs`, since a deleted path owes exactly one mapping.
 //
-// carried: "land-lock's hold loop records a beat and every stop it chooses" crates/batten/src/lease.rs kind:verb
+// changed: "land-lock's hold loop records a beat and every stop it chooses" crates/batten/src/lib.rs kind:mechanism this row used to read `carried` into lease.rs, and no code there or anywhere wrote the beat, so the census's positive reading was unreachable in production. Since CLOUD-843 the landing that runs, `land lap`, writes `$LEASE_BEAT_NOTE` once when it starts, before any lap or lease, and `$LEASE_STOP_NOTE` where it returns, never where a lap hands its lease back and laps (`land_census_window`, `a_landing_notes_its_start_and_every_chosen_end`); its in-process `Heartbeat` writes no census note, because the census reads only the kind of the last record and nothing between that beat and that stop can change it, while a beat there also fired under the hand-stepping `land wait`, which no window closes; the unreached `lease hold` beats through `lease_renewed` and notes a stop only on the bail it chose, the stall, never on the holder-gone bail (`a_hold_notes_a_stop_only_where_it_chose_one`). Never on an exit path (CLOUD-491)
 //
 // The seventy-seven cases, one row each, keyed by TITLE — a row whose first
 // field is the suite path is indexed as another arm for it and the deletion

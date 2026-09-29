@@ -813,10 +813,6 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     "mcp grant",
     "mcp posture",
     "board check",
-    "record census note",
-    "record census record-boot",
-    "record census report",
-    "record census tally",
 ];
 
 /// One entry per leaf verb of [`SURFACE`], asserted total by
@@ -1807,9 +1803,14 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // `--once`, the form the session-start row runs. The corpus records one
+    // boot, so the plain form's only reading here is "no boot predates this one"
+    // — could-not-look, exit 3 since CLOUD-843 folded the report onto §7 — and
+    // listing it under `MAY_ANSWER_COULD_NOT_LOOK` would widen that list for a
+    // fixture choice. `--once` records, reads and exits 0 over the same stores.
     Verb {
         path: "record census report",
-        args: &[],
+        args: &["--once"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
@@ -2510,6 +2511,11 @@ fn run_in(corpus: &Corpus, args: &[&str], stdin: Stdin) -> Run {
         // and the only one a census about OUTPUT should be exercising.
         .env("BATTEN_REST_FIXTURE", corpus.home.join("no-answers"))
         .env("XDG_CACHE_HOME", corpus.home.join("cache"))
+        // AND THE BOOT TIME IS PINNED, so the `record census` arms answer the
+        // same on every platform. Without it the boot comes from `/proc/stat`,
+        // which a macOS leg has not got — and `record-boot` there answers
+        // could-not-look for the platform, not for anything this census asks.
+        .env("BATTEN_BOOT_TIME", "1700000000")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

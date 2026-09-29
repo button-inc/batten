@@ -175,9 +175,9 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   exempt list is asserted equal to the ban's `stays_bash`. Not layered (§8): a
   local file able to add an exempt glob could make a wave read as progress. The
   other CLOUD-843 foundation verbs (`step check|record|run`,
-  `mcp grant|posture`, `board check`, `record census …`)
-  carry final arguments and answer `unimplemented` at exit 3 until their package
-  lands; the serena launcher's home is the existing `mcp spawn`, which
+  `mcp grant|posture`, `board check`) carry final arguments
+  and answer `unimplemented` at exit 3 until their package lands; the serena
+  launcher's home is the existing `mcp spawn`, which
   `.mcp.json` now names (`mise-tasks/serena-mcp.sh` retired).
 - The small-body retirement's mechanisms (CLOUD-1991, p13): `record derive
 <graph family> --input resolve=<triple|any>` resolves its own `cargo metadata
@@ -202,6 +202,23 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
 auditable` wraps `cargo` and `zigbuild` and never `cross` (CLOUD-263). Every
   program runs through `exec::piped_argv`, so it adds no spawn site; stdout is
   `archive=`/`binary=` only, and a failed build's output goes to stderr at exit 3.
+- `reclaim.rs` — `record census note|record-boot|report|tally`, the reclaim
+  census (CLOUD-451) retired off `[tasks.reclaim-census]` and
+  `[tasks."session:census"]` by CLOUD-843. Two journal families
+  (`reclaim-beats`, `reclaim-boots`) through
+  `journal::append_line_healing`/`fold_lines`;
+  `boot_time()` is `BATTEN_BOOT_TIME` (malformed = could-not-look) then
+  `/proc/stat`. `classify`/`previous`/`tally` are pure. `report --once` records,
+  reads, and writes the per-boot mark itself. `report` folds onto §7 via
+  `ExitCode::combine`: in flight 2, stopped 0, unobserved/could-not-look 3. The
+  landing's ONE beat (`$LEASE_BEAT_NOTE`) opens `land_census_window`; its stop
+  (`$LEASE_STOP_NOTE`) is where the landing RETURNS, never a lap's hand-back
+  (`lease_hand_back` notes nothing), and `lease hold`'s stall bail only — never
+  an exit path (CLOUD-491). The lap `Heartbeat` notes nothing: `classify` reads
+  only the last record's kind, and `land wait` has no window to close a beat.
+  Only the census families heal a torn tail on append
+  (`journal::append_line_healing`); `append_line` does not, its shards being
+  shared by concurrent hook processes.
 - `claim.rs` — whether an issue is pullable, and the receipt that records the
   pull (CLOUD-272, CLOUD-431; ported off `mise-tasks/claim-check.sh` by
   CLOUD-1121). The tracker's automation fires on the PR event — the END of the
