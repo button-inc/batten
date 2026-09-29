@@ -147,6 +147,7 @@ mod derived_facts;
 mod design_audit;
 mod dev_profile;
 mod digest_major_agreement;
+mod dist;
 mod doctor;
 mod doctor_session;
 mod doctor_target;

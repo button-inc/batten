@@ -161,12 +161,15 @@ fn fixture(name: &str, files: &[(&str, &str)]) -> PathBuf {
     root
 }
 
-/// A `.mcp.json` launching one server through a scoped `mise exec`, with the
-/// command spelled as CLOUD-714's shim rather than as `mise` — the selector is
-/// argv, and a fixture that used the bare command would not say so.
+/// A `.mcp.json` launching one server through a scoped `mise exec`, fronted by
+/// CLOUD-714's launcher exactly as the committed manifest spells it
+/// (`batten mcp spawn serena -- mise exec …`) — the selector is argv, and a
+/// fixture that used the bare command would not say so. The launcher's OWN `--`
+/// comes first, so this is also the case that a terminator read from the start
+/// of argv would get wrong.
 fn scoped(version: &str) -> String {
     format!(
-        r#"{{"mcpServers":{{"serena":{{"command":"mise-tasks/serena-mcp.sh","args":["exec","pipx:serena-agent@{version}","--","serena","start-mcp-server"]}}}}}}"#
+        r#"{{"mcpServers":{{"serena":{{"command":"batten","args":["mcp","spawn","serena","--","mise","exec","pipx:serena-agent@{version}","--","serena","start-mcp-server"]}}}}}}"#
     )
 }
 
@@ -302,12 +305,48 @@ fn a_shimmed_bare_exec_is_still_refused() {
         &[
             (
                 ".mcp.json",
-                r#"{"mcpServers":{"serena":{"command":"mise-tasks/serena-mcp.sh","args":["exec","--","serena","start-mcp-server"]}}}"#,
+                r#"{"mcpServers":{"serena":{"command":"some-shim","args":["exec","--","serena","start-mcp-server"]}}}"#,
             ),
             ("mise.toml", PINS),
         ],
     );
     denied(&root);
+}
+
+// THE SAME SELECTOR, ONE LAUNCHER LATER (CLOUD-843). The committed manifest now
+// fronts the launch with `batten mcp spawn <server> --`, so the verb's own words
+// lead the argv and `exec` is no longer its first word. Reading only `args[0]`
+// would make the committed server exempt — the regression this gate exists for,
+// restored by the retirement of the shim that used to front it.
+#[test]
+fn a_launcher_fronted_bare_exec_is_still_refused() {
+    let root = fixture(
+        "fronted-bare",
+        &[
+            (
+                ".mcp.json",
+                r#"{"mcpServers":{"serena":{"command":"batten","args":["mcp","spawn","serena","--","mise","exec","--","serena","start-mcp-server"]}}}"#,
+            ),
+            ("mise.toml", PINS),
+        ],
+    );
+    denied(&root);
+}
+
+// The committed manifest itself passes: its launch is fronted, scoped, and names
+// the version `mise.toml` pins. Read over the COMMITTED bytes, so a repoint that
+// dropped the scope or the pin is red here rather than in a session that could
+// not start its server.
+#[test]
+fn the_committed_launch_is_fronted_scoped_and_pinned() {
+    let manifest =
+        fs::read_to_string(common::at_root(".mcp.json")).expect("the committed manifest");
+    let pins = fs::read_to_string(common::at_root("mise.toml")).expect("the committed pins");
+    let root = fixture(
+        "committed",
+        &[(".mcp.json", &manifest), ("mise.toml", &pins)],
+    );
+    clean(&root);
 }
 
 // ---------------------------------------------------------------------------

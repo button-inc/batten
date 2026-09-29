@@ -772,6 +772,11 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // `doctor target` reaches rustup and the network. A fixture that made it
     // answer would be installing a toolchain target.
     "doctor target",
+    // `dist` reads its package through `cargo metadata`, and the corpus is no
+    // cargo workspace, so even `--stem` has nothing to name and answers
+    // could-not-look. Its body is filled (CLOUD-843); this is its subject being
+    // absent, not a skeleton.
+    "dist",
     // CLOUD-843's FOUNDATION SKELETONS, here on a bar of their own and named as
     // such rather than waved through under the one above: each row's arguments
     // are final and its body lands with the package retiring the shell it
@@ -783,7 +788,6 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     "step record",
     "step run",
     "sbom",
-    "dist",
     "mcp grant",
     "mcp posture",
     "board check",

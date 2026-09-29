@@ -9938,7 +9938,7 @@ suite_shared = [
 
 # The workflow whose matrix names the targets a release builds (CLOUD-65),
 # ported out of `mise-tasks/install-check.sh`. `release install` compares three
-# authorities that must agree on an asset NAME — this matrix, `dist.sh`'s naming,
+# authorities that must agree on an asset NAME — this matrix, `batten dist`'s naming,
 # and the binstall manifest — and which file carries the matrix is a fact about
 # this repository's lane rather than about the comparison.
 #

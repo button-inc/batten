@@ -80,8 +80,8 @@ file itself for the "why", this is only the "where":
   is the design rather than an omission — an installability answer that needed
   the network would be unavailable exactly when the release pipeline is broken,
   and a gate that stops deciding under load is not a gate. The magic-byte clause
-  is load-bearing beyond its own subject: it is why `serena-mcp` cannot retire by
-  committing a binary. It reaches `error` for `UsageError` and nothing else.
+  is load-bearing beyond its own subject: it is why the serena launcher could not
+  retire by committing a binary (it retired onto `batten mcp spawn` instead). It reaches `error` for `UsageError` and nothing else.
 - `lib.rs` — library entry point, declares the module tree. `run(cli, mode, out,
 err)` takes **both** channels and the resolved `Mode`, so a verb can write a
   ladder-gated message itself instead of that being `main.rs`'s privilege
@@ -174,10 +174,21 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   an exempt file is measured and set apart, never totalled, and this repo's
   exempt list is asserted equal to the ban's `stays_bash`. Not layered (§8): a
   local file able to add an exempt glob could make a wave read as progress. The
-  other CLOUD-843 foundation verbs (`step check|record|run`, `sbom`, `dist`,
+  other CLOUD-843 foundation verbs (`step check|record|run`, `sbom`,
   `mcp grant|posture`, `board check`, `record divergence`, `record census …`)
   carry final arguments and answer `unimplemented` at exit 3 until their package
-  lands; the serena launcher's home is the existing `mcp spawn`.
+  lands; the serena launcher's home is the existing `mcp spawn`, which
+  `.mcp.json` now names (`mise-tasks/serena-mcp.sh` retired).
+- `dist.rs` — `batten dist <target> [--stem] [--build-tool cargo|cross|zigbuild]`,
+  the release build and archive, retiring `mise-tasks/dist.sh` (CLOUD-843). The
+  package, its ONE binary target, its version, the workspace root and the target
+  directory come from `cargo metadata` where the verb stands, so no crate name is
+  spelled (rule 1); zero or several binaries is could-not-look, never a guess.
+  `archive_stem`/`archive_ext` are the asset-name contract binstall and
+  `install.sh` read, and `release install` calls them in process. `cargo
+auditable` wraps `cargo` and `zigbuild` and never `cross` (CLOUD-263). Every
+  program runs through `exec::piped_argv`, so it adds no spawn site; stdout is
+  `archive=`/`binary=` only, and a failed build's output goes to stderr at exit 3.
 - `claim.rs` — whether an issue is pullable, and the receipt that records the
   pull (CLOUD-272, CLOUD-431; ported off `mise-tasks/claim-check.sh` by
   CLOUD-1121). The tracker's automation fires on the PR event — the END of the

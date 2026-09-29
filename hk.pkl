@@ -362,7 +362,7 @@ local gate = new Mapping<String, Step> {
     glob =
       List(
         "install.sh",
-        "mise-tasks/dist.sh",
+        "crates/batten/src/dist.rs",
         "crates/batten/Cargo.toml",
         "Cargo.toml",
         ".github/workflows/release-artifacts.yml",

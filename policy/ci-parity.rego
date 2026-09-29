@@ -953,7 +953,7 @@ violation contains {
 #
 # PRESENCE, NOT MEMBERSHIP, and the narrowness is deliberate. Asserting WHICH
 # tools the list must name would make this a second authority on what a release
-# build needs, which is `mise.toml`'s and `dist.sh`'s to answer — the same
+# build needs, which is `mise.toml`'s and `batten dist`'s to answer — the same
 # objection `ci-parity`'s own header raises against re-deriving the task graph
 # here. `ci-tools-check` already holds the other direction, that every name in a
 # list resolves to a `[tools]` entry. What has no gate is the list existing at
