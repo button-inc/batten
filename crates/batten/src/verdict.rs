@@ -1602,6 +1602,15 @@ pub const fn admit(id: &'static str, precondition: &'static str) -> VendoredRout
     }
 }
 
+/// CLOUD-1823's route, shared by the two receipt classes a `turn mint ahead`
+/// deadlock can carry (CLOUD-1977) so the precondition is written once.
+const STALE_RECEIPT_ROUTE: VendoredRoute = admit(
+    "articulate the stale receipt",
+    "the check this receipt names is red on this head for a reason only a write can repair, so \
+re-running it cannot change its answer, and the work the receipt was taken about is already \
+pushed",
+);
+
 /// Every class the BINARY ships: the native ones and the vendored presets'.
 ///
 /// # Why the presets' vocabulary ships with the presets
@@ -1848,19 +1857,16 @@ commit, in this checkout. The receipt is missing, older than the row allows, rec
 against a different head, or records something the row does not accept -- and the refusal \
 names which, because the four call for different repairs. Re-running the check is the \
 remedy for a missing one and useless for a refuted one.",
+        // CLOUD-1823's route, declared where the refusal lands (CLOUD-1977). A red
+        // check writes no receipt, so `turn mint ahead` over a red head refuses as
+        // MISSING, never as `receipt read other`. The route there alone was
+        // unreachable from the deadlock it was written for: `admit_mediated` binds
+        // to the class the refusal carries.
+        //MUTANT-SUITE crates/batten/tests/it/punt_receipt.rs
+        //MUTANT missing-receipt-route-dropped|s@^        routes: &\[read("config read first", "batten.toml"), STALE_RECEIPT_ROUTE\],$@        routes: \&[read("config read first", "batten.toml")],@|a_spent_admission_clears_a_missing_receipt
         routes: &[
             read("config read first", "batten.toml"),
-            // CLOUD-1823's route, declared where the refusal lands (CLOUD-1977).
-            // A red check writes no receipt, so `turn mint ahead` over a red head
-            // refuses as MISSING, never as `receipt read other`. The route there
-            // alone was unreachable from the deadlock it was written for:
-            // `admit_mediated` binds to the class the refusal carries.
-            admit(
-                "articulate the stale receipt",
-                "the check this receipt names is red on this head for a reason only a write can \
-repair, so re-running it cannot change its answer, and the work the receipt was taken about is \
-already pushed",
-            ),
+            STALE_RECEIPT_ROUTE,
         ],
         applicability: Applicability::Advice,
     },
@@ -1918,12 +1924,7 @@ the wrong repair.",
             // half is the one that matters — it is the harm the refusing row
             // actually guards, and an asker who cannot state it is being stopped
             // for the right reason.
-            admit(
-                "articulate the stale receipt",
-                "the check this receipt names is red on this head for a reason only a write can \
-repair, so re-running it cannot change its answer, and the work the receipt was taken about is \
-already pushed",
-            ),
+            STALE_RECEIPT_ROUTE,
         ],
         applicability: Applicability::Advice,
     },
