@@ -149,6 +149,9 @@ pub mod state;
 /// The step cache (CLOUD-424): a step answered from its receipt when its exact
 /// declared inputs, arguments and tools already passed.
 pub mod step;
+/// The `[[step]]` row and its load-time validator: a leaf the loader reaches
+/// without reaching the cache (CLOUD-843).
+pub mod step_table;
 pub mod stop;
 pub mod store;
 /// The per-suite cost corpus, derived from the report the runner already wrote.

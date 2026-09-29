@@ -698,6 +698,14 @@ declared_modules := {
 	# `Finding` -- so its edges into the engine that decides are forbidden below,
 	# and a mediated call must not reach a verb that runs a consumer's command.
 	"step",
+	# `step_table` is the `[[step]]` row and its load-time validator, split out
+	# of `step` in review (CLOUD-843). With the type in `step`, `config` reached
+	# `step` and `step` reached `resolve`, so `config -> step -> resolve -> config`
+	# closed a cycle through the `config -> resolve` edge the table forbids --
+	# the one-hop route this file's own standard refuses (CLOUD-1260). It is a
+	# LEAF: `error` for the refusal and `git` for the pathspec predicate `rules`
+	# already shares, and nothing that loads a config.
+	"step_table",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
@@ -816,7 +824,10 @@ forbidden[from] contains to if {
 		"mcp": {"hook"},
 		"surface": {"cli", "lib"},
 		"cli": {"lib", "journal"},
-		"config": {"resolve", "trust", "lint", "epoch"},
+		# `config -> step` joins the chain for `step_table`'s reason (CLOUD-843):
+		# `step` reaches `resolve`, so the edge is `config -> resolve` one hop
+		# further out. The loader names the row through the leaf instead.
+		"config": {"resolve", "trust", "lint", "epoch", "step"},
 		"resolve": {"trust", "lint", "epoch"},
 		"trust": {"lint", "epoch"},
 		"lint": {"epoch"},
@@ -911,6 +922,10 @@ forbidden[from] contains to if {
 		# reached the engine deciding over the step it caches would be a receipt
 		# that knew which verdict it was standing in for (CLOUD-843).
 		"step": {"rules", "hook"},
+		# `step_table -> {step, resolve, config, rules, hook}`: the leaf the loader
+		# reaches must reach nothing that loads a config or decides, or the cycle
+		# it was split out to break comes back one name later (CLOUD-843).
+		"step_table": {"step", "resolve", "config", "rules", "hook"},
 	}
 	some to in targets
 }
@@ -1182,6 +1197,50 @@ test_the_mediated_path_must_not_reach_the_step_cache if {
 	count(violation) == 1 with input as judging(
 		"crates/batten/src/step.rs",
 		[internal("hook", 13)],
+	)
+}
+
+# THE CYCLE THE REVIEW FOUND, closed at both ends (CLOUD-843). The loader must
+# not reach the cache (which reaches `resolve`), and the leaf holding the row
+# must not reach anything that loads a config.
+test_the_loader_must_not_reach_the_step_cache if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/config.rs",
+		[internal("step", 765)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/step_table.rs",
+		[internal("resolve", 11)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/step_table.rs",
+		[internal("config", 12)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/step_table.rs",
+		[internal("step", 13)],
+	)
+}
+
+# AND THE ARRANGEMENT THAT REPLACES IT: the loader names the row through the
+# leaf, the leaf reaches only `error` and `git`, and the cache reads the row.
+test_the_loader_reaches_the_step_row_through_the_leaf if {
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/config.rs",
+		[internal("step_table", 765)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/step_table.rs",
+		[internal("error", 17), internal("git", 60)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/step.rs",
+		[internal("step_table", 83)],
 	)
 }
 

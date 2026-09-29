@@ -760,9 +760,10 @@ pub struct Config {
     /// Consumer-specific by nature, for `startup`'s reason: which steps a
     /// repository runs and what each reads are facts about that repository
     /// (non-negotiable rule 1). Read from the committed authority alone, never
-    /// layered. The type, its validator and the cache are [`crate::step`].
+    /// layered. The row and its validator are [`crate::step_table`]; the cache
+    /// that reads the table back lives above this loader and is not named here.
     #[serde(default, rename = "step", skip_serializing_if = "Vec::is_empty")]
-    pub steps: Vec<crate::step::Step>,
+    pub steps: Vec<crate::step_table::Step>,
 }
 
 /// The `[perf]` table: accepted invocation-latency regressions (CLOUD-1163
@@ -2170,7 +2171,7 @@ fn validate_sections(config: &Config) -> Result<()> {
     // refused here, where the row is named (CLOUD-843).
     under(
         Native::StepTableRefused,
-        crate::step::validate(&config.steps),
+        crate::step_table::validate(&config.steps),
     )?;
     // A pin that can never match, a name that owns a cache path twice, an empty
     // required field: each is refused here rather than at fetch time, where the
@@ -4296,7 +4297,11 @@ mod tests {
             "crate::record::validate(",
             Native::RecordTableRefused,
         ),
-        ("steps", "crate::step::validate(", Native::StepTableRefused),
+        (
+            "steps",
+            "crate::step_table::validate(",
+            Native::StepTableRefused,
+        ),
     ];
 
     /// The one CLASSED refusal that is not a `Config` table.
