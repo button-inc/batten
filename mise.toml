@@ -1264,11 +1264,13 @@ description = "Run every test suite — Rust and shell"
 depends = ["test:cargo", "test:bats"]
 
 # A NAMED subset of the suite, for observing one case red under one mutation
-# (CLOUD-418). `test:cargo` cannot serve this: its body takes no `"$@"`, so a
-# filter passed to it is silently DROPPED and the whole suite runs — and because
-# nextest fail-fast then cancels scheduling, a case that never ran reads exactly
-# like a case that passed. Measured this session: a `-E 'test(differential)'`
-# that matched nothing summarised green.
+# (CLOUD-418). `test:cargo` used to be unable to serve this: its shell body took
+# no `"$@"`, so a filter passed to it was silently DROPPED and the whole suite
+# ran — and a case that never ran read exactly like a case that passed. Measured
+# then: a `-E 'test(differential)'` that matched nothing summarised green. Since
+# CLOUD-843 `test:cargo` is one argv too, and mise appends a filter to it just as
+# it does here; this task stays the NAMED door for a subset, so `test:cargo`
+# keeps meaning the whole suite to every caller that reads its name.
 #
 # Deliberately NOT receipt-routed and deliberately NOT part of `test` or
 # `verify`. A receipt keyed on the step's inputs would be minted by a run of ONE
@@ -1660,10 +1662,10 @@ description = "Reclaim superseded build artifacts, and refuse below a measured d
 # carrying CLOUD-1030's repair.
 #
 # THE TASK NAME SURVIVES THE MIGRATION, for `perf-pair`'s reason above and with
-# the same edge: `verify`'s body and `mise-tasks/land.sh` both invoke
-# `mise run target-prune` by name, and `land.sh` is an authored shell rule
-# `shell edit refused` refuses to see edited. Keeping the name is what holds
-# this retirement to the one program being retired.
+# the same edge: `build:release` depends on it by name, and `verify` reaches it
+# as `target-prune:lap`, which runs this same argv with the open-lap marker
+# cleared. Keeping the name is what holds this retirement to the one program
+# being retired.
 #
 # `-y` RATHER THAN A PROMPT, and it is house-style §5's binding on a destructive
 # verb rather than a convenience: the primary caller is `verify`, which is
@@ -1698,9 +1700,12 @@ description = "Reclaim superseded build artifacts, and refuse below a measured d
 # THE COST, stated rather than absorbed: until a release carries
 # `declared_alone`, a release binary older than the tree's `batten.toml` refuses
 # here where the retired body built the engine instead. `_.path` puts this
-# checkout's own `target/release` first, so the window closes the moment any
-# build of this tree exists; a clone with none runs
-# `cargo run -p batten -- target prune -y` once by hand.
+# checkout's own `target/release` first, so the window closes the moment a
+# release build of this tree exists. A clone with neither a release build nor an
+# installed `batten` cannot reach one through `build:release` either, since that
+# task depends on this one: it runs `./install.sh` or `cargo build --release -p
+# batten` once by hand (a `cargo run` puts its binary in `target/debug`, which
+# `_.path` does not name, so it would not close the window).
 #
 # `batten`, BARE, and resolved through `_.path` like `alive` and `ci-wait`: the
 # point of this task is to run WITHOUT building, which `cargo run` cannot do.
@@ -1708,8 +1713,8 @@ run = "batten target prune -y"
 
 # THE LAP'S OWN BOUNDARY (CLOUD-861, CLOUD-1913), as a task because the marker is
 # an environment fact and a `run` array cannot scope one to a single step.
-# `verify` exports `BATTEN_PRUNE_LAP_OPEN` to everything it runs so that a nested
-# `build:release` — `test:bats`'s startup repair — does not escalate mid-gate;
+# `verify` exports `BATTEN_PRUNE_LAP_OPEN` to everything it runs so that any
+# nested `target-prune` (a `build:release` reached mid-gate) does not escalate;
 # the lap's opener and closer are the two prunes that must act anyway, so they
 # clear it for their own call and nothing else. This is the retired body's
 # `BATTEN_PRUNE_LAP_OPEN= mise run target-prune`, spelled as data.
@@ -6952,21 +6957,26 @@ description = "Build the release binary the hook registrations execute"
 # `the_reclaim_itself_stays_dependency_free_and_the_surfaces_are_not_empty` in
 # `crates/batten/tests/it/session_provisioning.rs` asserts rather than assumes.
 #
-# WHETHER IT NEEDS A BUILD depends on whether `batten` is installed, and this
-# paragraph once said otherwise. It claimed the reclaim "needs no build in order
-# to run" and called that checked; `target-prune`'s own header says the fallback
-# is "for a clone that has not been provisioned", and that fallback was `cargo
-# run` — a build. So on an unprovisioned clone with a short disk, the precondition
-# this task depends on compiled the engine first and died on `ENOSPC`. CLOUD-1838
-# closed that: with `batten` installed the reclaim runs build-free; with it absent,
-# a disk below the cold-build floor is refused WITHOUT a build, and only a disk
-# with room for one pays for it. The claim is now true because the code changed,
-# not because the sentence did.
+# THE PRECONDITION NEEDS A `batten` TO RUN AT ALL (CLOUD-843), and this is a
+# narrowing stated rather than absorbed. `target-prune` is one bare `batten`
+# argv now, never a build: the retired body's no-binary arm (CLOUD-1838), which
+# compared `df` against `[prune.cold]` and built only above it, is gone with the
+# shell it was written in. So on a machine with no `batten` on PATH and no
+# `target/release/batten`, this task — and `install:local` through it — stops
+# at the runner's "not found" before a byte is built. That case is
+# provisioning's: `session:batten` installs a release through `install.sh`, and
+# a clone nobody provisioned runs `./install.sh` (or `cargo build --release -p
+# batten`, which puts the tree's own binary first on `_.path`) once by hand.
 #
-# IT DOES NOT REACH INSIDE `verify`'S LAP, which is the pairing that would break
-# if it did: this task's callers are `install:local` and the two benches, while
-# `verify`, `verify:gated` and `land` reach the engine through `cargo run -p
-# batten` directly. So the two prune calls that bracket a lap keep their order.
+# IT DOES NOT REACH INSIDE `verify`'S LAP TODAY: its callers are `install:local`
+# and the two benches, none of which `verify` runs — `test:bats`'s reach into it
+# went with its startup-table dependency (CLOUD-1753). `verify` itself reaches the
+# engine two ways, `cargo run -p batten` for its questions and a bare `batten`
+# for the prunes that bracket the lap. Should a caller of this task ever run
+# under `verify`, CLOUD-1913's open-lap marker, which `verify` exports to
+# everything it runs, makes that nested prune touch nothing, while
+# `target-prune:lap` clears the marker for the lap's own opener and closer. So
+# those two keep their order either way.
 #
 # WHAT IT DOES COST, stated so a reviewer need not derive it. `prune::Phase` is
 # DERIVED from the lap journal rather than declared — a run that finds an open
@@ -8757,9 +8767,10 @@ env = { MCP_TIMEOUT_LOGS = "target/mcp-logs-for-fixtures-never-created" }
 # CORRECTED 2026-09-01, measured. These three comments said "with no `set -e`" and
 # were wrong. The discriminator is a DECLARED SHELL, not the file: a task that
 # declares `shell = "bash -c"` really does run every line regardless — that is the
-# case `rules/toolchain.md` documents and `tests/task-fail-closed.bats`
-# gates, over `verify` and `verify:gated`, both of which declare it. This task
-# declares none, so it gets the default and `-e` with it. Observed while landing
+# case `rules/toolchain.md` documents. `verify` and `verify:gated` were its two
+# instances until CLOUD-843 made both `run` arrays, which need no guard at all
+# (`crates/batten/tests/it/verify_chain.rs`). This task declares no shell, so it
+# gets the default and `-e` with it. Observed while landing
 # CLOUD-1085: a bare call in a default body aborted the task before the branch
 # reporting which failure it was could run.
 #
@@ -8994,11 +9005,11 @@ run = "hk check --all"
 # CLOUD-1753.
 #
 # THE TASK NAME SURVIVES THE MIGRATION, for `perf-pair`'s reason and with a
-# sharper edge here: `verify:gated` names it in BOTH `depends` and its body, and
-# two governed suites — `tests/verify.bats` and `tests/task-fail-closed.bats` —
-# assert the literal string in each place, the second including that the body's
-# call PRECEDES the `receipt record` it guards. A renamed task would need those
-# suites edited, which a retirement may not do.
+# sharper edge here: `verify:gated` names it in BOTH `depends` and its run
+# array, and `crates/batten/tests/it/verify_chain.rs` asserts the literal name in
+# each place, including that the array's first step PRECEDES the `receipt record`
+# it guards (`the_receipt_is_the_last_step_and_follows_the_lap_close`). A renamed
+# task would need that tier edited alongside it.
 #
 # A ONE-LINE WRAPPER, and the whole predicate is the engine's. `receipt clean`
 # and the guard inside `receipt record` both call one `receipt::tree_state`, so
@@ -9575,8 +9586,9 @@ depends = ["tree-clean", "ci", "cross-check", "darwin-link", "zizmor", "semver",
 # THE BODY, AS A SEQUENCE (CLOUD-843, CLOUD-1990). It was hand-guarded shell
 # because a task body does not run under `set -e`; a `run` array needs no guard,
 # since mise stops at the first failing step and the receipt is the last one —
-# so every refusal still leaves no receipt, which is the whole of what
-# `tests/task-fail-closed.bats` pinned. The order is the retired body's:
+# so every refusal still leaves no receipt, which is the whole of what the
+# retired `tests/task-fail-closed.bats` pinned and `verify_chain.rs` pins now.
+# The order is the retired body's:
 #
 # * `tree-clean` FIRST (CLOUD-277): the gates above read the working tree and the
 #   receipt is keyed to HEAD, so a dirty tree must fail before anything is decided

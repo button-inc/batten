@@ -208,8 +208,6 @@ exempt := {
 	"tests/remedy-payload-source.bats": "batten.toml — STRANDS mise-tasks/board-payloads.sh",
 	"tests/session-start.bats": ".claude/hooks/session-start.sh",
 	"tests/spawn-census.bats": "clippy.toml",
-	"tests/task-fail-closed.bats": "mise.toml",
-	"tests/verify.bats": "mise.toml",
 	"tests/zizmor-split.bats": "mise.toml",
 }
 
@@ -322,7 +320,7 @@ test_one_immortal_subject_among_several_is_reported if {
 
 # A declared exemption silences arm A and nothing else.
 test_a_declared_exemption_is_not_reported if {
-	found := violation with input as tree({"tests/verify.bats": ["# subject: mise.toml"]}, {})
+	found := violation with input as tree({"tests/zizmor-split.bats": ["# subject: mise.toml"]}, {})
 	count(found) == 0
 }
 
@@ -343,7 +341,7 @@ test_a_tree_that_is_not_this_corpus_is_not_judged_against_the_table if {
 
 # And for a suite that has become fully retirable.
 test_an_exemption_for_a_now_retirable_suite_is_reported if {
-	found := violation with input as tree({"tests/verify.bats": ["# subject: mise-tasks/verify.sh"]}, {})
+	found := violation with input as tree({"tests/zizmor-split.bats": ["# subject: mise-tasks/zizmor-split.sh"]}, {})
 	some finding in found
 	finding.verdict == "suite admit stale"
 }

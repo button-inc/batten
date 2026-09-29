@@ -937,8 +937,10 @@ how three wrong comments landed** (CLOUD-1085, measured 2026-09-01). A task that
 declares NO `shell =` gets the default and `-e` with it, so there a bare failing
 command aborts the body where it stands rather than falling through. `test:bats`
 is such a task and its own comments claimed the opposite for their whole life;
-`verify` and `verify:gated` declare `shell = "bash -c"` and are the case this
-section is about. Guard either way — under `-e` the guard is what lets a step name
+`verify` and `verify:gated` declared `shell = "bash -c"` and were the case this
+section is about, until CLOUD-843 made both `run` arrays — mise stops an array
+at its first failing step, so the shape that needs no guard is the one to reach
+for first. Guard a body either way — under `-e` the guard is what lets a step name
 its own failure instead of inheriting mise's — but do not carry "every line runs"
 across to a body that declared nothing.
 
@@ -971,9 +973,10 @@ A third instance was the caller, not a script: `verify`'s own body called
 `linear-check` and `commit-lint` unguarded, so a `main` that moved under the
 branch left it running commit-lint against a stale `BASE_SHA`, writing the
 receipt `ready-guard` honours, and printing `fast-forward-green` — `gh pr ready`
-allowed, and CI minutes spent, on work that failed its own pre-flight. Guarded
-now, with `tests/task-fail-closed.bats` asserting the body carries no bare `mise
-run` call and reaches its receipt write only past the guards.
+allowed, and CI minutes spent, on work that failed its own pre-flight. It was
+guarded, then retired to a `run` array (CLOUD-843): each step's failure stops the
+sequence, and `crates/batten/tests/it/verify_chain.rs` asserts every step is
+argv and the receipt write is the last step, past every gate.
 
 The rule: **a gate step that cannot run must exit non-zero and leave no
 receipt.** Prefer `if ! cmd; then echo "::error:: …" >&2; exit 1; fi` over a
