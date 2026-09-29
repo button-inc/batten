@@ -1297,8 +1297,11 @@ description = "Run the Rust workspace test suite"
 #   rebuilding the workspace. The retired body bracketed the statement with
 #   `step-receipt check` and `step-receipt record`; `batten step run` IS that
 #   bracket — a hit exits 0, a miss runs the command after its `--` and records
-#   only when it passes — so the `test:cargo` arm of the step table keeps its
-#   caller. `cargo run` rather than a bare `batten`, the spelling `deny` and
+#   only when it passes. That verb and its step table are CLOUD-843's P4 package
+#   (`[[step]] id = "test:cargo"` in `batten.toml`), not `step-receipt`'s shell
+#   `case`, whose `test:cargo` arm this retirement removed with its last caller.
+#   Until P4 lands `step run` answers unimplemented, so this task depends on that
+#   merge. `cargo run` rather than a bare `batten`, the spelling `deny` and
 #   `lint:clippy` use: this task must run in a clone that has built nothing yet.
 # * NO `batten` RESOLVABLE BY NAME WHILE THE SUITE RUNS (CLOUD-1951). CI's test
 #   job has neither `target/release` nor an installed release on PATH, so a case
@@ -1320,7 +1323,9 @@ description = "Run the Rust workspace test suite"
 #   after `mise run ci`. Either covers every gate that lap ran rather than this
 #   one suite. STRICTER THAN THE RETIRED BODY, which read `--untracked-files=no`:
 #   a case that leaves a new untracked, unignored file behind now refuses too.
-#   What it no longer catches is a bare `mise run test:cargo` outside either lap,
+#   NARROWER IN ITS DIAGNOSTIC: the retired body listed the changed paths, and
+#   `receipt clean` prints a count and never a path (house-style §6), so the
+#   reader runs `git status` to find them. What it no longer catches is a bare `mise run test:cargo` outside either lap,
 #   which no gate reads.
 #
 # THE STATEMENT AFTER THE `--` STAYS BARE, and `ci-local-parity` property 16 is
@@ -8322,7 +8327,7 @@ lint:clippy)
 	tools="cargo clippy --version && rustc --version"
 	known=yes
 	;;
-test:cargo | msrv | cross-check | evaluator-io-check)
+msrv | cross-check | evaluator-io-check)
 	specs="$rust_specs"
 	tools="$rust_tools"
 	known=yes
