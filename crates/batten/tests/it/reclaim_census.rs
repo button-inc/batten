@@ -15,13 +15,13 @@
 //!
 // carried: mise-tasks/reclaim-census.sh crates/batten/src/reclaim.rs kind:verb crates/batten/tests/it/reclaim_census.rs
 // carried: tests/reclaim-census.bats crates/batten/src/reclaim.rs kind:verb crates/batten/tests/it/reclaim_census.rs
-// carried: "a landing in flight when the container was replaced" crates/batten/src/reclaim.rs kind:verb
-// carried: "a landing that stopped on purpose means none was in flight" crates/batten/src/reclaim.rs kind:verb
-// carried: "ABSENCE IS UNOBSERVED, NEVER IDLE — the row the whole correction turns on" crates/batten/src/reclaim.rs kind:verb
-// carried: "REGRESSION: a record under an OLDER boot does not answer for this boundary" crates/batten/src/reclaim.rs kind:verb
-// carried: "records under THIS boot do not answer for the boundary either" crates/batten/src/reclaim.rs kind:verb
-// carried: "no boot predates this one: a fresh disk cannot look" crates/batten/src/reclaim.rs kind:verb
-// carried: "a malformed BATTEN_BOOT_TIME is cannot-look, not a silent /proc fallback" crates/batten/src/reclaim.rs kind:verb
+// changed: "a landing in flight when the container was replaced" crates/batten/src/reclaim.rs kind:verb same reading on stdout, folded onto §7 through `ExitCode::combine` (rule 5): the one finding is exit 2 where the task answered 0
+// changed: "a landing that stopped on purpose means none was in flight" crates/batten/src/reclaim.rs kind:verb same reading on stdout, folded onto §7: nothing to report is exit 0 where the task answered 1, which is §7's usage code and no statement about a past container can be
+// changed: "ABSENCE IS UNOBSERVED, NEVER IDLE — the row the whole correction turns on" crates/batten/src/reclaim.rs kind:verb same reading on stderr, folded onto §7: a blind spot is could-not-look, exit 3 where the task answered 2 — the code `record-boot` and `tally` give the same causes
+// changed: "REGRESSION: a record under an OLDER boot does not answer for this boundary" crates/batten/src/reclaim.rs kind:verb same UNOBSERVED reading, at exit 3 where the task answered 2 (folded onto §7)
+// changed: "records under THIS boot do not answer for the boundary either" crates/batten/src/reclaim.rs kind:verb same UNOBSERVED reading, at exit 3 where the task answered 2 (folded onto §7)
+// changed: "no boot predates this one: a fresh disk cannot look" crates/batten/src/reclaim.rs kind:verb same could-not-look on stderr, at §7's exit 3 where the task answered 2
+// changed: "a malformed BATTEN_BOOT_TIME is cannot-look, not a silent /proc fallback" crates/batten/src/reclaim.rs kind:verb still could-not-look and still never a `/proc/stat` fallback, at §7's exit 3 where the task's `report` answered 2
 // changed: "an unknown verb exits 2 and names the ones that exist" crates/batten/src/cli.rs kind:verb the modes are clap subcommands now, so an unknown one is refused by the parser before the verb runs, at §7's usage code 1 rather than the task's 2, and the parser's own error names what it did not recognise
 // carried: "tally classifies every boundary, not just the newest" crates/batten/src/reclaim.rs kind:verb
 // carried: "COUNTING IS IDEMPOTENT: repeated reads of one history give one answer" crates/batten/src/reclaim.rs kind:verb
@@ -32,8 +32,8 @@
 // carried: "A SENSOR NEVER KILLS WHAT IT OBSERVES: an unwritable log is still exit 0" crates/batten/src/reclaim.rs kind:verb
 // carried: "record-boot is idempotent by the last line, so a resumed session adds nothing" crates/batten/src/reclaim.rs kind:verb
 // carried: "record-boot appends when the boot genuinely changed" crates/batten/src/reclaim.rs kind:verb
-// changed: "A KILLED LOOP LEAVES AN h, even though its trap runs" crates/batten/src/lib.rs kind:mechanism there is no shell loop and no trap any more: the beat is written by `lease hold` itself on every APPLIED renewal (`lease_renewed`, pinned by `an_applied_renewal_writes_its_receipt_and_the_declared_beat`), and the stop only by `note_release` — so a killed holder leaves its last beat by construction. What remains observable here is the census half, `beats_that_end_without_a_stop_read_as_in_flight`
-// carried: "a loop that stops on purpose leaves the matching x" crates/batten/src/reclaim.rs kind:verb
+// changed: "A KILLED LOOP LEAVES AN h, even though its trap runs" crates/batten/src/lib.rs kind:mechanism there is no shell loop and no trap any more. The holder that runs is `land lap`'s in-process `Heartbeat`, which writes `$LEASE_BEAT_NOTE` once per beat whose renewal the remote took (`note_beat`, pinned by `a_beat_is_noted_only_when_the_renewal_was_taken`); the stop is written only where the lap CHOSE to stop, by `lease_hand_back` on the landed and the undo paths (`a_chosen_stop_writes_the_stop_note_even_when_the_lease_is_unreadable`). A kill runs neither, so the last record stays a beat by construction. What is observable here is the census half, `beats_that_end_without_a_stop_read_as_in_flight`; the beat CALL inside `Heartbeat::beat` is reachable only against a live lease remote, which no offline seam exists for (`tests/it/lease_health.rs`)
+// changed: "a loop that stops on purpose leaves the matching x" crates/batten/src/reclaim.rs kind:verb the matching x is still the last record and still reads as a deliberate stop, now at §7's exit 0 where the task's `report` answered 1
 // changed: "log-path and boot print the store and the boot time" crates/batten/src/reclaim.rs kind:verb withdrawn as accessors: they existed only so `session:census` could rebuild the mark path in shell, and `report --once` writes the mark itself, so no caller re-derives either
 // changed: "the stores are $GIT_DIR/batten-reclaim-log and $GIT_DIR/batten-boots" crates/batten/src/reclaim.rs kind:verb the two stores are journal families (`reclaim-beats`, `reclaim-boots`) written through `journal::append_line` and read through `fold_lines`, which drops a torn tail — `a_torn_stop_does_not_answer_for_its_boot` — where the hand-rolled log would have read one as the last record. A disk's pre-retirement history is not migrated: the first boot after the change is UNOBSERVED, which is the verdict the census already gives a boundary it has no record of
 
@@ -133,7 +133,11 @@ fn a_landing_in_flight_when_the_container_was_replaced() {
         .noted(PRIOR_BOOT, &["h"])
         .with_boots(&[THIS_BOOT]);
     let (code, text) = c.run(&["report"]);
-    assert_eq!(code, Some(0), "{text}");
+    assert_eq!(
+        code,
+        Some(2),
+        "the one finding is §7's verdict code: {text}"
+    );
     assert!(text.contains("A LANDING WAS IN FLIGHT"), "{text}");
     assert!(
         text.contains(&format!("under boot {PRIOR_BOOT}, now {THIS_BOOT}")),
@@ -149,7 +153,7 @@ fn a_landing_that_stopped_on_purpose_means_none_was_in_flight() {
         .noted(PRIOR_BOOT, &["x", "land-stopped"])
         .with_boots(&[THIS_BOOT]);
     let (code, text) = c.run(&["report"]);
-    assert_eq!(code, Some(1), "{text}");
+    assert_eq!(code, Some(0), "nothing to report is clean: {text}");
     assert!(text.contains("stopped on purpose"), "{text}");
     assert!(text.contains("no landing was in flight"), "{text}");
 }
@@ -158,12 +162,12 @@ fn a_landing_that_stopped_on_purpose_means_none_was_in_flight() {
 fn absence_is_unobserved_never_idle() {
     let c = Clone::new("unobserved").boundary();
     let (code, text) = c.run(&["report"]);
-    assert_eq!(code, Some(2), "{text}");
+    assert_eq!(code, Some(3), "a blind spot is could-not-look: {text}");
     assert!(text.contains("UNOBSERVED, not idle"), "{text}");
     // Records under THIS boot do not answer for the boundary either.
     let c = Clone::new("this-boot").boundary().noted(THIS_BOOT, &["h"]);
     let (code, text) = c.run(&["report"]);
-    assert_eq!(code, Some(2), "{text}");
+    assert_eq!(code, Some(3), "{text}");
     assert!(text.contains("UNOBSERVED"), "{text}");
 }
 
@@ -175,7 +179,7 @@ fn a_record_under_an_older_boot_does_not_answer_for_this_boundary() {
         .noted(OLD_BOOT, &["x", "land-stopped"])
         .with_boots(&[PRIOR_BOOT, THIS_BOOT]);
     let (code, text) = c.run(&["report"]);
-    assert_eq!(code, Some(2), "{text}");
+    assert_eq!(code, Some(3), "{text}");
     assert!(text.contains("UNOBSERVED"), "{text}");
 }
 
@@ -183,13 +187,13 @@ fn a_record_under_an_older_boot_does_not_answer_for_this_boundary() {
 fn a_fresh_disk_or_a_malformed_boot_time_cannot_look() {
     let c = Clone::new("fresh").with_boots(&[THIS_BOOT]);
     let (code, text) = c.run(&["report"]);
-    assert_eq!(code, Some(2), "{text}");
+    assert_eq!(code, Some(3), "{text}");
     assert!(text.contains("no evidence either way"), "{text}");
     let c = Clone::new("malformed")
         .with_boots(&[PRIOR_BOOT])
         .noted(PRIOR_BOOT, &["h"])
         .with_boots(&[THIS_BOOT]);
-    assert_eq!(c.at("nonsense", &["report"]).0, Some(2));
+    assert_eq!(c.at("nonsense", &["report"]).0, Some(3));
     // AUTHORITATIVE WHEN SET: a malformed override never falls through to
     // `/proc/stat`, so it records no boot (could-not-look, exit 3) and a note
     // under it writes nothing while still exiting 0.
@@ -321,7 +325,7 @@ fn beats_that_end_without_a_stop_read_as_in_flight() {
         c.beats()
     );
     let (code, text) = c.run(&["report"]);
-    assert_eq!(code, Some(0), "{text}");
+    assert_eq!(code, Some(2), "{text}");
     assert!(text.contains("A LANDING WAS IN FLIGHT"), "{text}");
 }
 
@@ -341,7 +345,7 @@ fn a_loop_that_stops_on_purpose_leaves_the_matching_x() {
             .is_some_and(|line| line.starts_with("x ") && line.ends_with("land-stopped")),
         "{beats:?}"
     );
-    assert_eq!(c.run(&["report"]).0, Some(1));
+    assert_eq!(c.run(&["report"]).0, Some(0));
 }
 
 /// THE DISCRIMINATING CASE FOR THE STORE (CLOUD-1032): a process killed
@@ -368,7 +372,7 @@ fn a_torn_stop_does_not_answer_for_its_boot() {
     text.push_str(&format!("x 1600 {PRIOR_BOOT} land-stopped"));
     std::fs::write(&shard, &text).expect("writable shard");
     let (code, out) = c.run(&["report"]);
-    assert_eq!(code, Some(0), "{out}");
+    assert_eq!(code, Some(2), "{out}");
     assert!(out.contains("A LANDING WAS IN FLIGHT"), "{out}");
 }
 

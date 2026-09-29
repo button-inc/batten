@@ -11377,6 +11377,9 @@ struct Heartbeat<'clone> {
     /// different places and the whole point is that the request crosses between
     /// them.
     stood_down: std::sync::Mutex<Option<String>>,
+    /// The consumer's reclaim-census beat (`$LEASE_BEAT_NOTE`), read once; empty
+    /// spawns nothing. See [`note_beat`].
+    beat_note: String,
 }
 
 impl<'clone> Heartbeat<'clone> {
@@ -11388,6 +11391,7 @@ impl<'clone> Heartbeat<'clone> {
             pid: std::process::id(),
             last: std::sync::atomic::AtomicI64::new(0),
             stood_down: std::sync::Mutex::new(None),
+            beat_note: std::env::var("LEASE_BEAT_NOTE").unwrap_or_default(),
         }
     }
 
@@ -11452,8 +11456,12 @@ impl<'clone> Heartbeat<'clone> {
         // that looks at the lease every few seconds. Latched here and honoured at
         // the lap boundary — never here, where a release would drop the lease
         // inside this holder's own matrix and let a second lander start.
-        if let lease::Beat::StandDown(from) =
-            lease::beat(self.root, terms, progress.as_deref(), now)
+        let beat = lease::beat(self.root, terms, progress.as_deref(), now);
+        // THE CENSUS BEAT, on THIS path because it is the one a landing runs
+        // (CLOUD-843): `lease hold` is unreached, so a beat written only there
+        // left every reclaim under a landing UNOBSERVED.
+        note_beat(self.root, &beat, &self.beat_note);
+        if let lease::Beat::StandDown(from) = beat
             && let Ok(mut asked) = self.stood_down.lock()
         {
             asked.get_or_insert(from);
@@ -12397,7 +12405,39 @@ fn run_lease_hold(
 /// **Never fatal, in either direction.** This runs on the paths that are already
 /// ending; a clone that cannot reach the remote here has a problem, but the caller
 /// is stopping anyway and reporting it would replace the reason it is stopping.
+///
+/// **Every caller CHOSE to stop, so every call writes the census stop**
+/// (CLOUD-843): the lap on its landed and its undo paths, `lease hold` on its two
+/// bails. The lap never reaches `lease release`, so a stop written only by
+/// [`note_release`] left each finished landing's last record a beat — the false
+/// "in flight" that record exists to prevent. See [`lease_hand_back_noting`].
 fn lease_hand_back(root: &Path, terms: &lease::Terms, holder: &str, now: i64) {
+    let stop_note = std::env::var("LEASE_STOP_NOTE").unwrap_or_default();
+    lease_hand_back_noting(root, terms, holder, now, &stop_note);
+}
+
+//MUTANT chosen-stop-unnoted|s@^    note_declared(root, stop_note);$@@|a_chosen_stop_writes_the_stop_note_even_when_the_lease_is_unreadable
+/// [`lease_hand_back`] with the stop note passed in.
+///
+/// **The note is written whatever the tombstone did, and after it.** The stop
+/// was chosen either way: a lease that already lapsed, was taken, or could not be
+/// read still ends a landing on purpose, and gating the note on the swap would
+/// leave that landing's last beat reading as a container death. After it, so
+/// nothing this process writes follows the stop. Never on an exit path
+/// (CLOUD-491): a kill reaches none of this function's callers.
+fn lease_hand_back_noting(
+    root: &Path,
+    terms: &lease::Terms,
+    holder: &str,
+    now: i64,
+    stop_note: &str,
+) {
+    lease_tombstone_if_held(root, terms, holder, now);
+    note_declared(root, stop_note);
+}
+
+/// The tombstone half of [`lease_hand_back`]: only a lease this clone holds.
+fn lease_tombstone_if_held(root: &Path, terms: &lease::Terms, holder: &str, now: i64) {
     let Ok(observed) = lease::observe(terms) else {
         return;
     };
@@ -12469,16 +12509,31 @@ fn note_declared(root: &Path, declared: &str) {
     let _ = exec::piped_argv(root, &argv, "", exec::Diagnostics::Keep, &[]);
 }
 
-//MUTANT-SUITE crates/batten/src/lib.rs
-//MUTANT renewal-writes-no-beat|s@^    note_declared(root, beat_note);$@@|an_applied_renewal_writes_its_receipt_and_the_declared_beat
-/// A renewal that applied: its receipt, then the consumer's reclaim-census beat
-/// (`$LEASE_BEAT_NOTE`, read once by the heartbeat and passed as `beat_note`).
+//MUTANT beat-unnoted|s@^    if !matches!(beat, lease::Beat::Quiet) {$@    if false {@|a_beat_is_noted_only_when_the_renewal_was_taken
+//MUTANT quiet-beat-noted|s@^    if !matches!(beat, lease::Beat::Quiet) {$@    if true {@|a_beat_is_noted_only_when_the_renewal_was_taken
+/// The census beat for one heartbeat: `beat_note` iff the renewal was TAKEN.
 ///
-/// **One beat per APPLIED renewal, and its absence was the live defect**
-/// (CLOUD-843): the heartbeat wrote none, so the census's positive reading — *a
-/// landing was in flight when the container went* — was unreachable in
-/// production, and every reclaim under a landing read as UNOBSERVED. After the
-/// receipt, so a beat never claims a hold the remote refused.
+/// [`lease::Beat::Renewed`] and [`lease::Beat::StandDown`] both renewed; only
+/// [`lease::Beat::Quiet`] did not, and a beat after a refused swap would claim a
+/// hold this clone may no longer have. The lap's [`Heartbeat::beat`] calls it
+/// on every beat; its one argv is the consumer's, for [`note_release`]'s reason.
+fn note_beat(root: &Path, beat: &lease::Beat, beat_note: &str) {
+    if !matches!(beat, lease::Beat::Quiet) {
+        note_declared(root, beat_note);
+    }
+}
+
+//MUTANT renewal-writes-no-beat|s@^    note_declared(root, beat_note);$@@|an_applied_renewal_writes_its_receipt_and_the_declared_beat
+/// `lease hold`'s renewal that applied: its receipt, then the consumer's
+/// reclaim-census beat (`$LEASE_BEAT_NOTE`, read once by the hold loop and
+/// passed as `beat_note`). After the receipt, so a beat never claims a hold the
+/// remote refused.
+///
+/// **This is the UNREACHED holder's half** — nothing in the tree runs `lease
+/// hold` today. The landing's own heartbeat is [`Heartbeat::beat`], whose beat is
+/// [`note_beat`]; that is the path that makes the census's positive reading, *a
+/// landing was in flight when the container went*, reachable (CLOUD-843). Both
+/// are kept so the verb and the lap cannot disagree about what a beat records.
 ///
 /// The argv is the consumer's for [`note_release`]'s reason: the beat and the
 /// stop are one census, and only the consumer knows it keeps one. The stop stays
@@ -21931,6 +21986,68 @@ mod tests {
         let _ = std::fs::remove_file(&beat);
         lease_renewed(&root, "claude/x", 43, "");
         assert!(!beat.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A scratch clone for the census-note cases, and the marker file a declared
+    /// `touch` note would create in it.
+    #[cfg(unix)]
+    fn census_scratch(name: &str) -> (PathBuf, PathBuf) {
+        let root =
+            std::env::temp_dir().join(format!("batten-census-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        crate::gitwrite::init_on_main(&root).unwrap();
+        let marker = root.join("noted");
+        (root, marker)
+    }
+
+    /// THE PRODUCTION BEAT (CLOUD-843, round-1 review): the lap's `Heartbeat`
+    /// writes the census beat through `note_beat`, and only for a beat whose
+    /// renewal the remote TOOK. `Renewed` and `StandDown` both renewed; `Quiet`
+    /// wrote nothing, and a beat after it would claim a hold this clone may not
+    /// have. The CALL inside `Heartbeat::beat` needs a live lease remote to reach,
+    /// which no offline seam exists for (`tests/it/lease_health.rs`).
+    #[cfg(unix)]
+    #[test]
+    fn a_beat_is_noted_only_when_the_renewal_was_taken() {
+        let (root, marker) = census_scratch("beat");
+        let note = format!("touch {}", marker.display());
+        for taken in [
+            lease::Beat::Renewed,
+            lease::Beat::StandDown(String::from("peer")),
+        ] {
+            note_beat(&root, &taken, &note);
+            assert!(marker.exists(), "{taken:?} renewed, so it is a beat");
+            std::fs::remove_file(&marker).unwrap();
+        }
+        note_beat(&root, &lease::Beat::Quiet, &note);
+        assert!(!marker.exists(), "a quiet beat renewed nothing");
+        // And a consumer that declares no beat gets nothing spawned.
+        note_beat(&root, &lease::Beat::Renewed, "");
+        assert!(!marker.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// THE PRODUCTION STOP (CLOUD-843, round-1 review): the lap hands its lease
+    /// back through `lease_hand_back`, never `lease release`, so the stop note is
+    /// written there — and whatever the tombstone did, because the stop was
+    /// chosen either way. The remote here does not even parse as a URL, so the
+    /// observe fails before any network and the note must still be written.
+    #[cfg(unix)]
+    #[test]
+    fn a_chosen_stop_writes_the_stop_note_even_when_the_lease_is_unreadable() {
+        let (root, marker) = census_scratch("stop");
+        let terms = lease::Terms {
+            remote: String::from("not a remote"),
+            ..lease::Terms::default()
+        };
+        let note = format!("touch {}", marker.display());
+        lease_hand_back_noting(&root, &terms, "someone", 42, &note);
+        assert!(marker.exists(), "the chosen stop was noted");
+        std::fs::remove_file(&marker).unwrap();
+        lease_hand_back_noting(&root, &terms, "someone", 42, "");
+        assert!(!marker.exists(), "no declared stop, nothing spawned");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

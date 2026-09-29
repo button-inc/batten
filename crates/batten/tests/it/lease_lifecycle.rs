@@ -43,7 +43,7 @@
 // onto `batten record census` (CLOUD-843); its one path-level row lives in
 // `reclaim_census.rs`, since a deleted path owes exactly one mapping.
 //
-// changed: "land-lock's hold loop records a beat and every stop it chooses" crates/batten/src/lib.rs kind:mechanism this row used to read `carried` into lease.rs, and no code there or anywhere wrote the beat: `lease hold` renewed silently, so the census's positive reading was unreachable in production. Since CLOUD-843 the beat is `lease_renewed`, run once per APPLIED renewal after the receipt and pinned by `an_applied_renewal_writes_its_receipt_and_the_declared_beat`; the stop stays in `note_release` alone (CLOUD-491)
+// changed: "land-lock's hold loop records a beat and every stop it chooses" crates/batten/src/lib.rs kind:mechanism this row used to read `carried` into lease.rs, and no code there or anywhere wrote the beat, so the census's positive reading was unreachable in production. Since CLOUD-843 the holder that runs, `land lap`'s in-process `Heartbeat`, writes `$LEASE_BEAT_NOTE` per beat whose renewal was taken (`note_beat`, pinned by `a_beat_is_noted_only_when_the_renewal_was_taken`), and every stop the lap chooses writes `$LEASE_STOP_NOTE` through `lease_hand_back` (`a_chosen_stop_writes_the_stop_note_even_when_the_lease_is_unreadable`); the unreached `lease hold` does the same through `lease_renewed` and its bails. Never on an exit path (CLOUD-491)
 //
 // The seventy-seven cases, one row each, keyed by TITLE — a row whose first
 // field is the suite path is indexed as another arm for it and the deletion

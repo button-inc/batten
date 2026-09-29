@@ -507,17 +507,17 @@ LAND_WORKFLOW = "fast-forward.yml"
 LAND_ANSWER_ASKS = "120"
 # THE RECLAIM CENSUS'S STOP NOTE (CLOUD-451), declared here because the program
 # is this consumer's and a census name inside `crates/batten` is non-negotiable
-# rule 1's plainest violation. `batten lease release` spawns it when a release
-# applies — which is the engine recording that IT chose to stop its heartbeat,
-# and never the heartbeat's own exit path (CLOUD-491): an exit path runs on the
-# container kill too, and a note from one would erase the only distinction the
-# census draws.
+# rule 1's plainest violation. The engine spawns it wherever a holder CHOSE to
+# stop — `land lap` handing its lease back on its landed and undo paths, and
+# `batten lease release` — and never on the heartbeat's own exit path
+# (CLOUD-491): an exit path runs on the container kill too, and a note from one
+# would erase the only distinction the census draws.
 #
 # Both are ARGV for the engine's own `record census note` (CLOUD-843, retiring
 # `[tasks.reclaim-census]`), decoded as `LAND_BODY_GATES` is and never a shell.
-# The beat is the half that never existed: `lease hold` renewed without writing
-# one, so the census's positive reading was unreachable. It runs once per APPLIED
-# renewal, after the receipt, so a beat never claims a hold the remote refused.
+# The beat is the half that never existed: the lap's heartbeat renewed without
+# writing one, so the census's positive reading was unreachable. It runs once per
+# beat whose renewal the remote took, so a beat never claims a refused hold.
 LEASE_STOP_NOTE = "batten record census note x land-stopped"
 LEASE_BEAT_NOTE = "batten record census note h"
 # The subset of that roster for which ABSENCE — no check-run at all, as opposed

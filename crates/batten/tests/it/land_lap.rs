@@ -369,10 +369,12 @@ fn the_shipped_lap_validates_and_ends_at_the_commit_point() {
 ///
 /// `tests/reclaim-census.bats` carried this as *"land records the stop it causes
 /// itself"*, reading `mise-tasks/land.sh` for the note. The note moved rather
-/// than died: the lander used to spawn it inline, and the engine's `lease
-/// release` spawns what `$LEASE_STOP_NOTE` names — since CLOUD-843 the argv of
-/// `batten record census note x`, the census having retired off its task. So the
-/// case is PORTED here rather than withdrawn.
+/// than died: the lander used to spawn it inline, and the engine spawns what
+/// `$LEASE_STOP_NOTE` names wherever a holder CHOSE to stop — the lap's own
+/// `lease_hand_back` on its landed and undo paths, and `lease release` — since
+/// CLOUD-843 the argv of `batten record census note x`, the census having retired
+/// off its task. So the case is PORTED here rather than withdrawn; the engine's
+/// spawn is `a_chosen_stop_writes_the_stop_note_even_when_the_lease_is_unreadable`.
 ///
 /// **The declaration is the subject, not the spawn.** The note's text is this
 /// consumer's — a census program's argv — so `crates/batten` may not carry it
@@ -401,9 +403,11 @@ fn the_landings_own_stop_note_is_still_declared() {
         "the declared note must still mark a landing's own stop: {}",
         declared[0]
     );
-    // AND ITS PAIR, the beat `lease hold` writes per applied renewal (CLOUD-843).
-    // A stop with no beats before it can only ever answer "stopped on purpose",
-    // which is how the census's positive reading was unreachable in production.
+    // AND ITS PAIR, the beat the lap's own `Heartbeat` writes per renewal the
+    // remote took (CLOUD-843, `note_beat`). A stop with no beats before it can
+    // only ever answer "stopped on purpose", which is how the census's positive
+    // reading was unreachable in production. This pins the DECLARATION; the
+    // engine's spawn of it is `a_beat_is_noted_only_when_the_renewal_was_taken`.
     let beats: Vec<&str> = manifest
         .lines()
         .filter(|line| line.trim_start().starts_with("LEASE_BEAT_NOTE"))

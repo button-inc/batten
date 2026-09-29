@@ -162,10 +162,11 @@ fn report_once_records_this_boot_before_it_reads() {
 #[test]
 fn every_reading_is_exit_zero_and_only_the_positive_one_speaks() {
     // A fresh disk has no predecessor to judge: the plain `report` says so on
-    // stderr at exit 2, and the session-start form stays silent at exit 0.
+    // stderr at exit 3 (could-not-look), and the session-start form stays
+    // silent at exit 0.
     let repo = common::scratch("reclaim-report-once-fresh");
     common::init_repo(&repo);
-    assert_eq!(census(&repo, NOW, &["report"]).0, Some(2));
+    assert_eq!(census(&repo, NOW, &["report"]).0, Some(3));
     assert_eq!(session_start(&repo), "");
     // And a malformed boot time is could-not-look, which is still silent.
     let (code, out, _) = census(&repo, "nonsense", &["report", "--once"]);

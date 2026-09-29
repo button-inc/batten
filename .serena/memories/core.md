@@ -184,9 +184,11 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   (`reclaim-beats`, `reclaim-boots`) through `journal::append_line`/`fold_lines`;
   `boot_time()` is `BATTEN_BOOT_TIME` (malformed = could-not-look) then
   `/proc/stat`. `classify`/`previous`/`tally` are pure. `report --once` records,
-  reads, and writes the per-boot mark itself. The beat is `lease hold`'s, once
-  per APPLIED renewal via the consumer's `$LEASE_BEAT_NOTE` (`lease_renewed`),
-  and the stop stays in `note_release` (CLOUD-491).
+  reads, and writes the per-boot mark itself. `report` folds onto §7 via
+  `ExitCode::combine`: in flight 2, stopped 0, unobserved/could-not-look 3. The
+  beat is the lap `Heartbeat`'s (`note_beat`, per renewal taken, via the
+  consumer's `$LEASE_BEAT_NOTE`); the stop is every chosen hand-back
+  (`lease_hand_back`, `$LEASE_STOP_NOTE`), never an exit path (CLOUD-491).
 - `claim.rs` — whether an issue is pullable, and the receipt that records the
   pull (CLOUD-272, CLOUD-431; ported off `mise-tasks/claim-check.sh` by
   CLOUD-1121). The tracker's automation fires on the PR event — the END of the

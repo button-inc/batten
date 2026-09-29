@@ -1765,9 +1765,14 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // `--once`, the form the session-start row runs. The corpus records one
+    // boot, so the plain form's only reading here is "no boot predates this one"
+    // — could-not-look, exit 3 since CLOUD-843 folded the report onto §7 — and
+    // listing it under `MAY_ANSWER_COULD_NOT_LOOK` would widen that list for a
+    // fixture choice. `--once` records, reads and exits 0 over the same stores.
     Verb {
         path: "record census report",
-        args: &[],
+        args: &["--once"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
