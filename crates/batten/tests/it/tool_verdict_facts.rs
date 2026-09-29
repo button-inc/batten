@@ -620,3 +620,86 @@ fn the_shipped_module_passes_a_recorded_clean() {
         "the reserved clean status is not a finding\n{answer}{cause}"
     );
 }
+
+// --- `record validate`: the producer runs the row's own argv (CLOUD-843) ------
+//
+// The successor for `[tasks.record-verdicts]`' two validator arms. The row
+// declares the argv; the verb runs it and records `exit <n>` under the row's key,
+// and the shipped module decides what a code means.
+
+/// The shipped fixture, with the `config-validator` row declaring `run`.
+fn validated_fixture(name: &str, run: &str) -> PathBuf {
+    let dir = shipped_fixture(name);
+    write(
+        &dir,
+        "batten.toml",
+        &SHIPPED_CONFIG.replace(
+            "input = \"subject.toml\"\n",
+            &format!("input = \"subject.toml\"\nrun = {run}\n"),
+        ),
+    );
+    dir
+}
+
+fn validate(dir: &Path) -> std::process::Output {
+    let mut command = batten();
+    command
+        .current_dir(dir)
+        .args(["record", "validate", "config-validator"]);
+    command.output().expect("run batten record validate")
+}
+
+#[test]
+fn a_validator_that_exits_nonzero_is_recorded_and_refused() {
+    let dir = validated_fixture("validate-dirty", r#"["false"]"#);
+    let minted = validate(&dir);
+    assert_eq!(
+        minted.status.code(),
+        Some(0),
+        "a validator's non-zero exit is a verdict to record, not the verb's failure\n{}",
+        stderr(&minted)
+    );
+    let outcome = check(&dir);
+    assert!(
+        stdout(&outcome).contains("tool judge dirty"),
+        "a recorded non-zero exit refuses\n{}{}",
+        stdout(&outcome),
+        stderr(&outcome)
+    );
+}
+
+#[test]
+fn a_validator_that_exits_zero_is_recorded_clean_and_its_report_is_not() {
+    // THE DISCRIMINATING HALF, and rule 4 over the one path that runs a tool:
+    // `git --version` prints, and none of it reaches the record or the verdict.
+    let dir = validated_fixture("validate-clean", r#"["git", "--version"]"#);
+    let minted = validate(&dir);
+    assert_eq!(minted.status.code(), Some(0), "{}", stderr(&minted));
+    let outcome = check(&dir);
+    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
+    assert!(!answer.contains("tool judge dirty"), "{answer}{cause}");
+    assert!(!answer.contains("git version"), "{answer}{cause}");
+}
+
+#[test]
+fn a_validator_that_will_not_start_records_nothing() {
+    // COULD-NOT-LOOK: a validator that never ran has no verdict, and recording
+    // one would be a could-not-look spelled as a finding.
+    let dir = validated_fixture("validate-absent", r#"["no-such-validator-on-path"]"#);
+    let minted = validate(&dir);
+    assert_ne!(minted.status.code(), Some(0), "{}", stderr(&minted));
+    let outcome = check(&dir);
+    assert!(
+        !stdout(&outcome).contains("tool judge dirty"),
+        "{}{}",
+        stdout(&outcome),
+        stderr(&outcome)
+    );
+}
+
+#[test]
+fn a_row_declaring_no_argv_is_refused_rather_than_run() {
+    let dir = shipped_fixture("validate-undeclared");
+    let refused = validate(&dir);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+}
