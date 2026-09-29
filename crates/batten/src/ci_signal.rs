@@ -21,8 +21,8 @@
 //!
 //! No workflow file, job name or step spelling is named here. The two workflows
 //! arrive as flags or through `$LAND_CI_WORKFLOW` / `$LAND_WORKFLOW` — the latter
-//! the variable `land fast-forward` already reads — the required roster through
-//! `$CI_REQUIRED_CHECKS`, which `land` reads, the fan-in as `--exclude-job` or
+//! the variable `land fast-forward` already reads — the required roster as
+//! `--required-check` or `$CI_REQUIRED_CHECKS`, which `land` reads, the fan-in as `--exclude-job` or
 //! `$CI_FANIN_CHECK`, which `land` reads too, and the verdict-step prefixes as
 //! `--verdict-step` or `$CI_VERDICT_STEPS`. A flag outranks its variable; the
 //! variable is how a consumer states each fact ONCE for every caller. The two
@@ -602,6 +602,8 @@ fn classify(job: &Value, verdict_steps: &[String]) -> (&'static str, String) {
 //MUTANT unreadable-run-dropped|s@^            unread_runs += 1;$@@|a_run_whose_jobs_cannot_be_read_is_counted_unreadable
 //MUTANT verdict-steps-unread|s@^    let verdict_steps = listed(verdict_steps, "CI_VERDICT_STEPS", false);$@    let verdict_steps = verdict_steps.to_vec();@|the_producer_classifies_failed_required_jobs_and_the_module_decides
 //MUTANT fan-in-unread|s@^    let excluded = listed(excluded, "CI_FANIN_CHECK", true);$@    let excluded = excluded.to_vec();@|the_producer_classifies_failed_required_jobs_and_the_module_decides
+//MUTANT roster-env-unread|s@^    let roster = listed(required, "CI_REQUIRED_CHECKS", true);$@    let roster = required.to_vec();@|the_producer_classifies_failed_required_jobs_and_the_module_decides
+//MUTANT roster-flag-ignored|s@^    let roster = listed(required, "CI_REQUIRED_CHECKS", true);$@    let roster = listed(\&[], "CI_REQUIRED_CHECKS", true);@|the_vendored_route_runs_on_its_flags_alone
 #[must_use]
 pub fn nonverdict(spec: &Nonverdict, slug: &str, git_dir: &Path, fetch: Transport<'_>) -> Produced {
     let per_page = spec.window.to_string();
@@ -848,30 +850,26 @@ pub fn run_divergence(
 ///
 /// # Errors
 ///
-/// A [`UsageError`] when `$CI_REQUIRED_CHECKS` is empty — without the roster a
-/// count over every job is meaningless — when neither `--verdict-step` nor
-/// `$CI_VERDICT_STEPS` names a verdict step, or when
-/// `--window` cannot be read; an internal error when the store cannot be
+/// A [`UsageError`] when neither `--required-check` nor `$CI_REQUIRED_CHECKS`
+/// names a job — without the roster a count over every job is meaningless —
+/// when neither `--verdict-step` nor `$CI_VERDICT_STEPS` names a verdict step,
+/// or when `--window` cannot be read; an internal error when the store cannot be
 /// written. Could-not-look is [`ExitCode::Internal`], as for
 /// [`run_divergence`].
 pub fn run_nonverdict(
     window: Option<&str>,
+    required: &[String],
     excluded: &[String],
     verdict_steps: &[String],
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let roster: Vec<String> = std::env::var("CI_REQUIRED_CHECKS")
-        .unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(str::to_owned)
-        .collect();
+    let roster = listed(required, "CI_REQUIRED_CHECKS", true);
     if roster.is_empty() {
         return Err(UsageError::raise(format!(
-            "{NONVERDICT}: `$CI_REQUIRED_CHECKS` is empty, so there is no roster to tell a \
-             required job from an unrelated one. Nothing was recorded."
+            "{NONVERDICT}: neither `--required-check` nor `$CI_REQUIRED_CHECKS` names a \
+             required job, so there is no roster to tell a required job from an unrelated \
+             one. Nothing was recorded."
         )));
     }
     let verdict_steps = listed(verdict_steps, "CI_VERDICT_STEPS", false);

@@ -6084,6 +6084,7 @@ trace\:"Add everything"))' \
 (nonverdict)
 _arguments "${_arguments_options[@]}" : \
 '--window=[How many recent failed runs to read, 1 to 100 (default\: 30)]:window:_default' \
+'*--required-check=[A required job, by exact name; only these are counted (repeatable; default\: \$CI_REQUIRED_CHECKS)]:required_check:_default' \
 '*--exclude-job=[A job never counted, such as a fan-in whose failure its siblings cause (repeatable; default\: \$CI_FANIN_CHECK)]:exclude_job:_default' \
 '*--verdict-step=[A step-name prefix that marks a failed step as verdict-bearing (repeatable; default\: \$CI_VERDICT_STEPS)]:verdict_step:_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"

@@ -565,7 +565,7 @@ of a window is a budget met over nothing in particular. A persistent read failur
 rate-limit problem, not a clean window.",
                 routes: &[run(
                     "task run first",
-                    "batten record nonverdict --verdict-step <prefix>",
+                    "batten record nonverdict --required-check <job> --verdict-step <prefix>",
                 )],
                 applicability: crate::verdict::Applicability::Advice,
             },
@@ -578,7 +578,7 @@ measured as an agent sent to reproduce a lint failure that passed locally becaus
 ran.",
                 routes: &[run(
                     "task run first",
-                    "batten record nonverdict --verdict-step <prefix>",
+                    "batten record nonverdict --required-check <job> --verdict-step <prefix>",
                 )],
                 applicability: crate::verdict::Applicability::Advice,
             },

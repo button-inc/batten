@@ -73,7 +73,7 @@
 // carried: "an unreadable run is exit 2 even when the count is under budget" crates/batten/src/policy/presets/ci-signal/required-failures-reach-a-verdict.rego kind:mechanism
 // carried: "ANTI-VACUITY: an empty window exits 0 and says it judged nothing" crates/batten/src/policy/presets/ci-signal/required-failures-reach-a-verdict.rego kind:mechanism
 // carried: "POINTER, NEVER PAYLOAD: the report carries no step output, only coordinates" crates/batten/src/policy/presets/ci-signal/required-failures-reach-a-verdict.rego kind:mechanism
-// changed: "empty stdin is exit 2, not a clean window" mise.toml there is no stdin: the decider's input is the record family, and an ABSENT family is could-not-look, which on the engine's contract must read as silence rather than as the exit 2 that now means a finding. The property the case was protecting is kept on the other side of the door — the producer refuses and writes nothing rather than recording an empty window
+// changed: "empty stdin is exit 2, not a clean window" crates/batten/src/ci_signal.rs kind:verb there is no stdin: the decider's input is the record family, and an ABSENT family is could-not-look, which on the engine's contract must read as silence rather than as the exit 2 that now means a finding. The property the case was protecting is kept on the producer's side of the door — a roster or spelling named nowhere is refused before any request, and a run list that cannot be read removes the stale record and exits 3, so neither ever records an empty window
 // carried: "records with no window summary are exit 2 — there is no window to judge" crates/batten/src/policy/presets/ci-signal/required-failures-reach-a-verdict.rego `torn` refuses a record present with no summary as `job read partial`. The first port read it as silence and said so here; that was the dropped refusal, restored
 // carried: "two concatenated scans are exit 2 — a count over both describes neither" crates/batten/src/policy/presets/ci-signal/required-failures-reach-a-verdict.rego a count over both still describes neither, so neither is judged against the budget; the record is refused as torn instead of passing silent, which is what the retired arm did
 // carried: "a non-numeric count is exit 2 rather than being coerced to zero" crates/batten/src/policy/presets/ci-signal/required-failures-reach-a-verdict.rego `count_of` still refuses to coerce, and `torn` now reads the undefined count as a refusal rather than leaving the window unjudged
@@ -87,7 +87,7 @@
 // carried: "nonverdict-scan.bats::A 304 KEEPS THE PREVIOUS READING rather than reading as an empty window" crates/batten/src/forge.rs kind:mechanism crates/batten/tests/it/forge_window.rs
 // carried: "nonverdict-scan.bats::a 304 with no cached body is unreadable, never an empty window" crates/batten/src/forge.rs kind:mechanism crates/batten/tests/it/forge_window.rs
 // carried: "an unreadable jobs read is counted, not silently dropped" crates/batten/src/ci_signal.rs kind:verb crates/batten/tests/it/nonverdict.rs
-// changed: "an empty roster is unreadable rather than a count over every job" mise.toml this one genuinely changed rather than moved: with no roster the producer now refuses and records nothing, because recording `unreadable=1` over an empty window would spell total blindness as the partial-coverage finding, and those are different facts
+// changed: "an empty roster is unreadable rather than a count over every job" crates/batten/src/ci_signal.rs kind:verb this one genuinely changed rather than moved: with no roster named by `--required-check` or `$CI_REQUIRED_CHECKS` the producer now refuses before any request and writes nothing, because recording `unreadable=1` over an empty window would spell total blindness as the partial-coverage finding, and those are different facts
 // carried: "a summary line is always emitted, even when nothing failed" crates/batten/src/ci_signal.rs kind:verb crates/batten/tests/it/nonverdict.rs
 // carried: "POINTER, NEVER PAYLOAD: records carry coordinates, and no log is fetched" crates/batten/src/ci_signal.rs kind:verb crates/batten/tests/it/nonverdict.rs
 // changed: "single-run mode classifies one run on stdout for land" crates/batten/src/ci_signal.rs kind:verb dropped: `--run` had no caller left in the tree once `land` read the forge in process, and a mode nobody invokes is an untested path
@@ -344,8 +344,9 @@ fn an_empty_window_is_a_reading_rather_than_a_finding() {
 
 #[test]
 fn an_absent_record_says_nothing_rather_than_passing() {
-    // Both total-blindness arms of the retired scan — an empty roster, an
-    // unreadable run list — are now the producer refusing and writing nothing.
+    // Both total-blindness arms of the retired scan leave no record: an empty
+    // roster is refused before any request, and an unreadable run list removes
+    // the stale record, so neither can answer as a clean window.
     let dir = repo("absent");
 
     let quiet = run(&dir, &["check", "--fail-on-warning"]);
@@ -556,14 +557,17 @@ fn the_producer_classifies_failed_required_jobs_and_the_module_decides() {
 #[test]
 fn a_flag_outranks_the_environment_it_defaults_from() {
     // The environment is the default, never an override: a caller naming the
-    // fan-in and the spellings on the command line is classified by those, even
-    // where the environment names others that would change every line.
+    // roster, the fan-in and the spellings on the command line is classified by
+    // those, even where the environment names others that would change every line.
     let dir = repo("flags");
     let forge = forge("flags", &window_routes());
+    let mut argv = vec!["record", "nonverdict"];
+    for name in ROSTER.split(',') {
+        argv.extend(["--required-check", name]);
+    }
     let measured = common::batten()
+        .args(argv)
         .args([
-            "record",
-            "nonverdict",
             "--exclude-job",
             "final",
             "--verdict-step",
@@ -572,9 +576,48 @@ fn a_flag_outranks_the_environment_it_defaults_from() {
             "Run mise exec -- ",
         ])
         .env("GH_REPO", "acme/widgets")
-        .env("CI_REQUIRED_CHECKS", ROSTER)
+        .env("CI_REQUIRED_CHECKS", "lint")
         .env("CI_FANIN_CHECK", "ci")
         .env("CI_VERDICT_STEPS", "Set up job")
+        .env("BATTEN_REST_FIXTURE", &forge)
+        .current_dir(&dir)
+        .output()
+        .expect("the compiled binary runs");
+    assert_eq!(measured.status.code(), Some(0), "{}", said(&measured));
+    assert!(
+        String::from_utf8_lossy(&measured.stdout)
+            .ends_with("window\truns=3\tfailed_jobs=5\tnonverdict=3\tverdict=2\tunreadable=0\n"),
+        "{}",
+        said(&measured)
+    );
+}
+
+#[test]
+fn the_vendored_route_runs_on_its_flags_alone() {
+    // THE PRESET'S ROUTE AS WRITTEN, outside any environment that states the
+    // consumer's facts: `ci-signal`'s two nonverdict verdicts route a reader to
+    // `batten record nonverdict --required-check <job> --verdict-step <prefix>`,
+    // so every fact the verb needs has a flag and no hidden variable is required.
+    let dir = repo("route");
+    let forge = forge("route", &window_routes());
+    let mut argv = vec!["record", "nonverdict"];
+    for name in ROSTER.split(',') {
+        argv.extend(["--required-check", name]);
+    }
+    argv.extend([
+        "--exclude-job",
+        "final",
+        "--verdict-step",
+        "Run mise run ",
+        "--verdict-step",
+        "Run mise exec -- ",
+    ]);
+    let measured = common::batten()
+        .args(argv)
+        .env_remove("CI_REQUIRED_CHECKS")
+        .env_remove("CI_FANIN_CHECK")
+        .env_remove("CI_VERDICT_STEPS")
+        .env("GH_REPO", "acme/widgets")
         .env("BATTEN_REST_FIXTURE", &forge)
         .current_dir(&dir)
         .output()
@@ -644,8 +687,9 @@ fn an_unreadable_run_list_is_could_not_look_and_an_empty_roster_is_refused() {
     assert_ne!(refused.status.code(), Some(0), "{}", said(&refused));
     assert_ne!(refused.status.code(), Some(3), "{}", said(&refused));
     assert!(
-        said(&refused).contains("CI_REQUIRED_CHECKS"),
-        "{}",
+        said(&refused).contains("CI_REQUIRED_CHECKS")
+            && said(&refused).contains("--required-check"),
+        "the refusal names both homes of the roster\n{}",
         said(&refused)
     );
 

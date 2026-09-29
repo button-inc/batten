@@ -285,10 +285,12 @@ pub fn run(
         ),
         crate::cli::RecordCommand::Nonverdict {
             window,
+            required_checks,
             exclude_jobs,
             verdict_steps,
         } => crate::ci_signal::run_nonverdict(
             window.as_deref(),
+            &required_checks,
             &exclude_jobs,
             &verdict_steps,
             out,

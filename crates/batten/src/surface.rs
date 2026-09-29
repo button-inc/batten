@@ -2734,6 +2734,19 @@ const NONVERDICT_WINDOW: FlagDecl = FlagDecl::valued(
     "How many recent failed runs to read, 1 to 100 (default: 30)",
 );
 
+/// `--required-check <name>` on `record nonverdict`, repeatable: the roster a
+/// failed job must be on to be counted, which is the consumer's fact. Absent,
+/// the verb reads `$CI_REQUIRED_CHECKS`, comma-separated, the roster `land`
+/// already reads, and refuses when neither names one.
+const NONVERDICT_REQUIRED: FlagDecl = FlagDecl {
+    value: ValueDecl::StrMany,
+    ..FlagDecl::valued(
+        "required_check",
+        "required-check",
+        "A required job, by exact name; only these are counted (repeatable; default: $CI_REQUIRED_CHECKS)",
+    )
+};
+
 /// `--exclude-job <name>` on `record nonverdict`, repeatable: a job whose
 /// failure its siblings manufacture, such as a fan-in, which is the consumer's
 /// name to give. Absent, the verb reads `$CI_FANIN_CHECK`, the fan-in `land`
@@ -6483,7 +6496,12 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Write,
-        flags: &[NONVERDICT_WINDOW, NONVERDICT_EXCLUDE, NONVERDICT_STEP],
+        flags: &[
+            NONVERDICT_WINDOW,
+            NONVERDICT_REQUIRED,
+            NONVERDICT_EXCLUDE,
+            NONVERDICT_STEP,
+        ],
     },
     // The reclaim census (retiring `[tasks.reclaim-census]`): whether active work
     // was live when a container was replaced. A noun, because its four arms have

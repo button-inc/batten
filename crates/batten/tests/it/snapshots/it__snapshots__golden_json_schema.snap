@@ -3127,6 +3127,14 @@ expression: stdout_of(&output)
               "help": "A job never counted, such as a fan-in whose failure its siblings cause (repeatable; default: $CI_FANIN_CHECK)"
             },
             {
+              "name": "required_check",
+              "short": null,
+              "long": "required-check",
+              "takes_value": true,
+              "positional": false,
+              "help": "A required job, by exact name; only these are counted (repeatable; default: $CI_REQUIRED_CHECKS)"
+            },
+            {
               "name": "verdict_step",
               "short": null,
               "long": "verdict-step",

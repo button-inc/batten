@@ -11789,13 +11789,17 @@ _batten() {
             return 0
             ;;
         batten__subcmd__record__subcmd__nonverdict)
-            opts="-q -v -y -h --window --exclude-job --verdict-step --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --window --required-check --exclude-job --verdict-step --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
                 --window)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --required-check)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;

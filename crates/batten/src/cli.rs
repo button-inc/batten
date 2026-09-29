@@ -1709,6 +1709,8 @@ pub enum RecordCommand {
     Nonverdict {
         /// How many recent failed runs to read; absent is 30.
         window: Option<String>,
+        /// The required jobs, by exact name; none reads `$CI_REQUIRED_CHECKS`.
+        required_checks: Vec<String>,
         /// Jobs excluded by name, such as a fan-in whose failure its siblings
         /// manufacture; none reads `$CI_FANIN_CHECK`.
         exclude_jobs: Vec<String>,
@@ -3085,6 +3087,10 @@ fn record_of(matches: &ArgMatches) -> Option<RecordCommand> {
         }),
         ("nonverdict", matches) => Some(RecordCommand::Nonverdict {
             window: matches.get_one::<String>("window").cloned(),
+            required_checks: matches
+                .get_many::<String>("required_check")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
             exclude_jobs: matches
                 .get_many::<String>("exclude_job")
                 .map(|values| values.cloned().collect())
