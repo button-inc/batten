@@ -573,6 +573,36 @@ fn the_committed_tasks_are_argv_and_the_committed_row_reads_the_real_workflow() 
         authority.contains(&format!("documents = [\"{WORKFLOW_PATH}\", \"mise.toml\"]")),
         "the row declares the workflow this tier writes"
     );
+    // EVERY RULE THE CHECK TASK NAMES IS A COMMITTED ROW, and the manifest half is
+    // the preset's. This tier's fixture writes its own `batten.toml`, so without
+    // this a check task naming an undeclared rule would stay green here while the
+    // committed gate enforced nothing.
+    let rows: toml::Value = toml::from_str(&authority).expect("batten.toml parses");
+    let declared: Vec<&toml::Value> = rows["rule"].as_array().expect("[[rule]]").iter().collect();
+    let row = |id: &str| {
+        declared
+            .iter()
+            .find(|entry| entry.get("id").and_then(toml::Value::as_str) == Some(id))
+            .copied()
+    };
+    let check = common::task_value(
+        &common::task_block("release-assets-check").expect("the task"),
+        "run",
+    );
+    for id in ["release grade other", "release pin other"] {
+        assert!(
+            check.contains(&format!("'{id}'")),
+            "the task checks {id}: {check}"
+        );
+        assert!(row(id).is_some(), "batten.toml declares {id}");
+    }
+    assert_eq!(
+        row("release pin other")
+            .and_then(|entry| entry.get("preset"))
+            .and_then(toml::Value::as_str),
+        Some("release-hygiene"),
+        "the manifest half is the vendored preset's"
+    );
 }
 
 #[test]
@@ -603,17 +633,148 @@ fn the_manifest_job_runs_after_everything_that_uploads_an_asset() {
     );
 }
 
+/// Every matrix leg of the committed workflow as `(target, build-tool)`, read as
+/// TEXT — an oracle independent of the module's parsed-document path, so a tier
+/// comparing the two catches the module misreading the real shape.
+fn committed_legs() -> Vec<(String, String)> {
+    let mut legs: Vec<(String, String)> = Vec::new();
+    for line in committed(WORKFLOW_PATH).lines().map(str::trim_start) {
+        if let Some(target) = line.strip_prefix("- target:") {
+            legs.push((target.trim().to_owned(), String::new()));
+        } else if let Some(tool) = line.strip_prefix("build-tool:")
+            && let Some(leg) = legs.last_mut()
+            && leg.1.is_empty()
+        {
+            tool.trim().clone_into(&mut leg.1);
+        }
+    }
+    assert!(legs.len() >= 7, "{} legs: {legs:?}", legs.len());
+    assert!(
+        legs.iter().all(|(_, tool)| !tool.is_empty()),
+        "every leg names its build tool: {legs:?}"
+    );
+    legs
+}
+
+/// A fixture repository carrying the COMMITTED build workflow, not the fixture.
+fn real_repo(name: &str) -> PathBuf {
+    let workflow = committed(WORKFLOW_PATH);
+    repo(name, Some(workflow.as_str()))
+}
+
+/// Record `assets` as release `TAG`, then run `release grade other` alone.
+fn graded(dir: &Path, name: &str, assets: &[String]) -> (Option<i32>, String) {
+    let forge = forge(name, assets, None);
+    let produced = produce(dir, &forge, Some(TAG));
+    assert_eq!(
+        produced.status.code(),
+        Some(0),
+        "the producer records: {}",
+        said(&produced)
+    );
+    let decided = against(dir, &forge, &["check", "--rule", "release grade other"]);
+    (decided.status.code(), said(&decided))
+}
+
 #[test]
 fn the_real_matrix_is_readable_by_the_module() {
-    let workflow = committed(WORKFLOW_PATH);
-    let targets = workflow
+    // THE COMMITTED WORKFLOW THROUGH THE MODULE'S OWN PARSE PATH
+    // (`jobs.*.strategy.matrix.include`, `build-tool`): on a release carrying
+    // nothing the workflow builds, every target the matrix declares is named
+    // missing, and each leg's binary SBOM is demanded exactly when its build tool
+    // is not `cross`. A module that could not read the real shape says
+    // `release read partial` instead, or names fewer targets.
+    let legs = committed_legs();
+    let dir = real_repo("real-matrix");
+    let (code, text) = graded(&dir, "real-matrix", &["unrelated.txt".to_owned()]);
+    assert_eq!(code, Some(2), "{text}");
+    assert!(!text.contains("release read partial"), "{text}");
+    for (target, tool) in &legs {
+        assert!(
+            text.lines()
+                .any(|line| line.starts_with(&format!("{target} "))),
+            "{target}: {text}"
+        );
+        let sbom = format!("-{TAG}-{target}.spdx.json ");
+        assert_eq!(
+            text.lines().any(|line| line.contains(&sbom)),
+            tool != "cross",
+            "{target} ({tool}): {text}"
+        );
+    }
+}
+
+/// The basenames of the committed workflow's literal `.json`/`.sh` upload
+/// operands — no `$` expansion — read as text.
+fn committed_upload_literals() -> Vec<String> {
+    committed(WORKFLOW_PATH)
         .lines()
-        .filter(|l| {
-            let t = l.trim_start();
-            t.starts_with("- target:") || t.starts_with("-  target:")
+        .filter(|line| line.contains("gh release upload"))
+        .flat_map(|line| line.split(' ').map(str::to_owned).collect::<Vec<_>>())
+        .map(|token| token.trim_matches('"').to_owned())
+        .filter(|token| {
+            !token.contains('$') && (token.ends_with(".json") || token.ends_with(".sh"))
         })
-        .count();
-    assert!(targets >= 7, "{targets} targets");
+        .map(|token| basename(&token))
+        .collect()
+}
+
+/// The last `/`-separated segment of `path`.
+fn basename(path: &str) -> String {
+    path.rsplit('/').next().unwrap_or(path).to_owned()
+}
+
+#[test]
+fn the_names_the_module_demands_are_the_names_the_producers_write() {
+    // THE MODULE'S NAME CONSTANTS AGAINST THEIR PRODUCERS. `release-assets.rego`
+    // spells the repository SBOM's two documents and the binary stem itself; the
+    // producers that write them are `[tasks.sbom]` (`--names`) and
+    // `mise-tasks/dist.sh --stem`. A release carrying EXACTLY the names those
+    // producers print, plus the workflow's literal uploads and the reference, is
+    // clean — so a constant that drifts from its producer turns this red as a
+    // `release ship missing` for a name no producer writes.
+    let legs = committed_legs();
+    let names = common::task_bash(&common::at_root("."), &common::task_body("sbom"))
+        .env("usage_names", "true")
+        .env("SBOM_OUT_DIR", "out")
+        .output()
+        .expect("the sbom producer runs");
+    assert!(names.status.success(), "{}", said(&names));
+    let documents: Vec<String> = String::from_utf8_lossy(&names.stdout)
+        .lines()
+        .filter_map(|line| line.split_once('=').map(|(_, path)| basename(path)))
+        .collect();
+    assert_eq!(documents.len(), 2, "{documents:?}");
+    // `dist.sh` reads the version from `Cargo.toml` in its working directory, so a
+    // scratch manifest at the fixture tag's version names the fixture's stems.
+    let crate_dir = scratch("release-assets-stem");
+    write(
+        &crate_dir,
+        "Cargo.toml",
+        &format!("version = \"{}\"\n", TAG.trim_start_matches('v')),
+    );
+    let dist = common::at_root("mise-tasks/dist.sh");
+    let mut assets = documents;
+    for (target, tool) in &legs {
+        let stem = common::task_bash(
+            &crate_dir,
+            &format!("'{}' --stem '{target}'", dist.display()),
+        )
+        .output()
+        .expect("dist.sh runs");
+        assert!(stem.status.success(), "{}", said(&stem));
+        let stem = String::from_utf8_lossy(&stem.stdout).trim().to_owned();
+        assert!(stem.contains(target.as_str()), "{stem}");
+        assets.push(format!("{stem}.tar.gz"));
+        if tool != "cross" {
+            assets.push(format!("{stem}.spdx.json"));
+        }
+    }
+    assets.extend(committed_upload_literals());
+    assets.push(reference_name());
+    let dir = real_repo("producer-names");
+    let (code, text) = graded(&dir, "producer-names", &assets);
+    assert_eq!(code, Some(0), "{assets:?}: {text}");
 }
 
 #[test]

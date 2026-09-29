@@ -45,6 +45,9 @@
 #MUTANT missing-archive-passes|s@^\tnot archived(target)$@\tfalse@|a_release_with_only_the_schema_is_refused
 #MUTANT missing-extra-passes|s@^\tnot name in assets$@\tfalse@|every_non_target_asset_is_demanded_from_both_sources
 #MUTANT unreadable-list-passes|s@^\tnot expectations_readable$@\tfalse@|a_list_that_cannot_be_derived_is_partial_never_complete
+#MUTANT cross-leg-sbom-demanded|s@^\tleg\["build-tool"\] != "cross"$@\ttrue@|the_real_matrix_is_readable_by_the_module
+#MUTANT sbom-document-name-drifts|s@^sbom_documents := {"batten.spdx.json", @sbom_documents := {"batten.sbom.json", @|the_names_the_module_demands_are_the_names_the_producers_write
+#MUTANT stem-binary-drifts|s@^binary := "batten"$@binary := "batten-cli"@|the_names_the_module_demands_are_the_names_the_producers_write
 
 # METADATA
 # description: |
@@ -65,10 +68,15 @@ rules contains "release grade other"
 # the reference. Both are declared as documents on the rule row.
 workflow_path := ".github/workflows/release-artifacts.yml"
 
-# The repository SBOM's two documents, as the sbom producer names them.
+# The repository SBOM's two documents, as the sbom producer names them, and the
+# binary name every per-target asset stem begins with (`dist`'s stem rule).
+# SPELLED HERE AND TIED TO THEIR PRODUCERS BY A GATE, not by agreement: the
+# compiled tier `the_names_the_module_demands_are_the_names_the_producers_write`
+# (crates/batten/tests/it/release_assets.rs) asks `[tasks.sbom]`'s `--names` and
+# `mise-tasks/dist.sh --stem` for every name and requires a release carrying
+# exactly those to be clean, so a constant that drifts reds that tier.
 sbom_documents := {"batten.spdx.json", "batten.cdx.json"}
 
-# The binary name every per-target asset stem begins with (`dist`'s stem rule).
 binary := "batten"
 
 lines := input.tree.records["release-assets"]

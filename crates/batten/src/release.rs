@@ -66,7 +66,7 @@ use crate::rest::Answer;
 //MUTANT sums-hash-the-manifest-itself|s@^    for asset in release.assets.iter().filter(.asset. asset.name != manifest) {$@    for asset in \&release.assets {@|the_manifest_covers_every_asset_never_itself_and_is_byte_stable
 //MUTANT sums-written-empty|s@^    if files.is_empty() {$@    if false {@|a_release_with_no_assets_writes_no_manifest
 //MUTANT-SUITE crates/batten/tests/it/release_assets.rs
-//MUTANT mismatch-never-recorded|s@^            .is_some_and(.bytes. digest(bytes) != .expected)$@            .is_some_and(.bytes. false)@|a_byte_mismatch_is_refused_once_the_names_agree
+//MUTANT mismatch-never-recorded|s@^            .is_some_and(.bytes. digest(bytes) != .expected)$@            .is_none()@|a_byte_mismatch_is_refused_once_the_names_agree
 //MUTANT stale-record-survives-could-not-look|s@^            crate::record::clear_named(RECORD_VERB, FAMILY)?;$@@|an_unreadable_release_is_could_not_look_and_leaves_no_record
 //MUTANT-SUITE crates/batten/tests/it/release_backfill.rs
 //MUTANT backfill-trusts-the-dispatch|s@^                if conclusion != "success" {$@                if false {@|a_failed_run_stops_the_sweep_naming_the_tag

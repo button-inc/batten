@@ -9,8 +9,11 @@
 #
 # AN OR, NOT AN AND. The quiet window is a trailing-edge debounce; the max wait
 # stops a busy `main` from starving the release. Requiring both would mean a repo
-# that never goes quiet never ships. Both bounds are INCLUSIVE, and inclusive now
-# by the producer: `record query` keeps a row whose instant is AT the cut-off.
+# that never goes quiet never ships. Both bounds are EXCLUSIVE now, decided by the
+# producer: `record query` keeps a row whose instant is AT the cut-off, so a commit
+# or release exactly one window old still holds, and the arm is due only once it
+# is strictly older. The retired body was due at the boundary (`age >= window`);
+# the one-second inversion errs toward holding, and the tier ledger records it.
 #
 # THE SPLIT IS §5's, AND SINCE CLOUD-843 IT HAS NO ARITHMETIC IN IT. The body this
 # replaced read a clock and recorded two AGES for this module to compare against
