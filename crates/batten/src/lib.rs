@@ -157,6 +157,9 @@ pub mod task;
 pub mod taskset;
 /// Third-party tool verdicts, keyed to (tool, pinned version, input digest).
 pub mod tools;
+/// The `tracker-hygiene` preset's readings: tracker payloads and a pull request
+/// body, reduced to the record families its modules decide over (CLOUD-843).
+pub mod tracker_reading;
 pub mod transcript;
 pub mod traversal;
 pub mod trust;

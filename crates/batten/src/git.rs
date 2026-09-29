@@ -1513,6 +1513,60 @@ pub fn log_messages(dir: &Path, base: &str) -> Result<Option<String>> {
     Ok(Some(messages))
 }
 
+/// Every commit message reachable from any of `tips` and from none of `hidden`,
+/// newline-joined (CLOUD-843).
+///
+/// [`log_messages`]' walk with both ends supplied, which is what a question
+/// about RELEASES needs and a question about one branch does not: `git log
+/// --tags=<glob>` reads from every matching tag at once, and `git log <rev>
+/// --not --tags=<glob>` reads what one rev carries that no tag does. The tag
+/// selection is the caller's ([`tag_facts`] answers it), so this names no glob.
+///
+/// No tips is an empty answer rather than a walk from HEAD: a caller that
+/// selected nothing asked about nothing.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) when the repository cannot be opened, a tip or a
+/// hidden rev does not resolve, or a commit on the walk cannot be read — could
+/// not look, never an empty history standing in for one nobody read.
+pub fn messages_reachable(dir: &Path, tips: &[String], hidden: &[String]) -> Result<String> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("could not walk the commit history".to_owned());
+    let mut from = Vec::new();
+    for tip in tips {
+        from.push(
+            repo.rev_parse_single(tip.as_str())
+                .map_err(|_| refused())?
+                .detach(),
+        );
+    }
+    if from.is_empty() {
+        return Ok(String::new());
+    }
+    let mut excluded = Vec::new();
+    for rev in hidden {
+        excluded.push(
+            repo.rev_parse_single(rev.as_str())
+                .map_err(|_| refused())?
+                .detach(),
+        );
+    }
+    let walk = repo
+        .rev_walk(from)
+        .with_hidden(excluded)
+        .all()
+        .map_err(|_| refused())?;
+    let mut messages = String::new();
+    for step in walk {
+        let info = step.map_err(|_| refused())?;
+        let commit = repo.find_commit(info.id).map_err(|_| refused())?;
+        messages.push_str(&commit.message_raw_sloppy().to_string());
+        messages.push('\n');
+    }
+    Ok(messages)
+}
+
 /// One commit's attribution record: who wrote it, who committed it, what it
 /// trails, and what it says.
 ///

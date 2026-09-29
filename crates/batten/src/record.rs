@@ -741,6 +741,17 @@ pub fn run_derive(
     out: &mut dyn std::io::Write,
 ) -> Result<ExitCode> {
     let inputs = inputs_of("record derive", inputs)?;
+    // THE TRACKER FAMILIES ARE CLEARED BEFORE ANY OF THEM IS READ (CLOUD-843).
+    // One preset row decides over all five, so a record another tracker question
+    // left on this branch would otherwise answer beside this one — and a reading
+    // that refuses would leave its own previous record answering as current.
+    // Clearing first makes both absences true: the store holds this answer or
+    // nothing.
+    if crate::tracker_reading::is_family(family) {
+        for sibling in crate::tracker_reading::FAMILIES {
+            clear_named("record derive", sibling)?;
+        }
+    }
     let derived = derive_reading(family, &inputs, overrides)?;
     let family = safe_component("family", family)?;
     store_derived(&family, &derived)?;
@@ -825,6 +836,20 @@ fn derive_reading(
         }
         "evaluator-closure" => evaluator_closure_reading(inputs, family, overrides)?,
         "macos-link" => macos_link_reading(inputs, family, overrides)?,
+        // The `tracker-hygiene` preset's five readings (CLOUD-843). The module
+        // owns the reading; this arm hands it the consumer's pattern table, the
+        // checkout it walks, and stdin — nothing here spawns.
+        tracker if crate::tracker_reading::is_family(tracker) => {
+            let config = resolve::resolve(Path::new("."), overrides)?;
+            let stdin = verdict_lines()?;
+            crate::tracker_reading::reading(
+                tracker,
+                inputs,
+                &config.patterns,
+                Path::new("."),
+                &stdin,
+            )?
+        }
         // AN UNKNOWN FAMILY IS A USAGE ERROR, never a record written under a name
         // nothing reads. A producer whose family was renamed would otherwise go on
         // writing happily into a key no module has looked at since.
