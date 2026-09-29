@@ -119,7 +119,7 @@ fn classify(answer: Option<&Answer>) -> Found {
 /// A malformed table (see [`validate`]) and a failed write.
 //MUTANT-SUITE crates/batten/tests/it/gh_preflight.rs
 //MUTANT forbidden-read-passes|s@^        Some(answer) if answer.status == 403 => Found::Missing(@        Some(answer) if answer.status == 499 => Found::Missing(@|a_forbidden_read_is_missing_and_named
-//MUTANT stale-table-unseen|s@^                if named != probe.claim {@                if false {@|a_claim_the_forge_names_that_the_table_does_not_marks_it_stale
+//MUTANT stale-table-unseen|s@^                    if named != probe.claim {$@                    if false {@|a_claim_the_forge_names_that_the_table_does_not_marks_it_stale
 //MUTANT write-probed|s@^        let found = if probe.probe {$@        let found = if true {@|the_declared_only_claims_are_never_probed
 pub fn run(
     probes: &[Probe],

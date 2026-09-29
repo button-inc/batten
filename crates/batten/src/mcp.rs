@@ -1471,9 +1471,18 @@ pub fn bound_in(
 /// set to `always_allow`, and the postures they ran into (CLOUD-765).
 ///
 /// A tool declaring no posture is skipped, for [`bound`]'s reason: the absent
-/// key is the host saying nothing. A rule carrying a `*` is skipped too — the
-/// host honours no wildcard tool segment, so such a rule is not a grant this
-/// could call unenforceable. Duplicate rules count once.
+/// key is the host saying nothing. A rule carrying a `*` in its tool segment
+/// never counts, and needs no arm of its own: the lookup below is by EXACT tool
+/// name, and the host honours no wildcard segment, so such a rule is not a grant
+/// this could call unenforceable. Duplicate rules count once.
+///
+/// The cases are `batten mcp posture`'s compiled tier (`tests/it/mcp_attach.rs`):
+/// `mutate` runs a Rust suite as `cargo test -- <case>` across every target, so a
+/// row here reddens the posture case it names although this file's declared
+/// suite is the dispatch tier.
+//MUTANT allow-check-ignores-policy|s@^            (!posture.is_empty() && posture != ALWAYS_ALLOW).then_some@            (!posture.is_empty()).then_some@|an_allow_rule_whose_tool_the_connector_allows_passes
+//MUTANT bare-rule-unread|s@^        if is_bare_server_rule(rule, server) {$@        if false {@|a_bare_server_rule_counts_once_when_any_tool_asks
+//MUTANT bare-rule-over-allowed-counted|s@^            if !asking.is_empty() {$@            if true {@|a_bare_server_rule_counts_once_when_any_tool_asks
 fn unenforceable_in(
     settings: &[std::path::PathBuf],
     server: &str,
@@ -1522,9 +1531,6 @@ fn unenforceable_in(
         let Some(tool) = rule.strip_prefix(&prefix) else {
             continue;
         };
-        if tool.contains('*') {
-            continue;
-        }
         if let Some(posture) = asking.get(tool) {
             count += 1;
             postures.insert(posture.clone());
