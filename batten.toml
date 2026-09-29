@@ -10621,12 +10621,20 @@ tolerance = 10
 name = "incremental"
 cold = false
 
+# `semver*` AND `perf*` ARE PREFIXES BECAUSE THE EXACT NAMES WENT STALE (CLOUD-1580).
+# They read `semver-checks` and `perf`, while the tree had moved on: `semver.rs`
+# now builds `target/semver-baseline` and `target/semver-current`, and `perf.rs`'s
+# pair profile builds `target/perf-arm`. None of the three matched, so about 1.1 GB
+# of regrowable residue sat outside the walk, and a lap was refused at 15533 MB free
+# against the 15886 MB warm floor with "nothing left to reclaim". `flycheck*` above
+# is the precedent: a set the tree names per use is an open set, and enumerating
+# it goes stale. The prefixes still match the old names, so no reclaim is lost.
 [[prune.regrowable]]
-name = "semver-checks"
+name = "semver*"
 cold = false
 
 [[prune.regrowable]]
-name = "perf"
+name = "perf*"
 cold = false
 
 [[prune.regrowable]]
