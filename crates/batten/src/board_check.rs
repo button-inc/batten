@@ -83,18 +83,22 @@ use crate::exit::ExitCode;
 use crate::pattern::NamedPattern;
 use crate::ready::Grammar;
 
-/// The `[[pattern]]` rows the graph reads.
-pub const GRAPH_PATTERNS: &[&str] = &["board-status-connective"];
+// The `[[pattern]]` row ids this module reads beyond the Ready grammar, each
+// spelled once and read at its one call site: the graph's status connective,
+// then `--cites`'s three rows, then `--refs`'s two.
 
-/// The `[[pattern]]` rows `--cites` reads, beyond the Ready grammar.
-pub const CITES_PATTERNS: &[&str] = &[
-    "ready-obligations-label",
-    "ready-cited-test",
-    "ready-cited-path",
-];
-
-/// The `[[pattern]]` rows `--refs` reads, beyond the Ready grammar.
-pub const REFS_PATTERNS: &[&str] = &["board-clause-citation", "ready-clause-tag"];
+/// The graph's status connective.
+const STATUS_CONNECTIVE: &str = "board-status-connective";
+/// `--cites`: the obligations label of a Ready block.
+const OBLIGATIONS_LABEL: &str = "ready-obligations-label";
+/// `--cites`: a cited test name.
+const CITED_TEST: &str = "ready-cited-test";
+/// `--cites`: a cited path.
+const CITED_PATH: &str = "ready-cited-path";
+/// `--refs`: the clause tail after an issue key.
+const CLAUSE_CITATION: &str = "board-clause-citation";
+/// `--refs`: a clause tag a Ready block declares.
+const CLAUSE_TAG: &str = "ready-clause-tag";
 
 /// The pseudo-id a property of the whole piped SET is reported under.
 ///
@@ -333,7 +337,7 @@ impl Vocabulary {
         // Compiled here and kept as its source: the claim scan composes it into a
         // wider expression, and a row that will not compile on its own must be
         // refused by name rather than silently disabling that scan.
-        let connective = declared_row(patterns, "board-status-connective")?
+        let connective = declared_row(patterns, STATUS_CONNECTIVE)?
             .as_str()
             .to_owned();
         Ok(Self {
@@ -1167,9 +1171,9 @@ impl Cites {
             return Err(undeclared("board.cites_corpus"));
         }
         Ok(Self {
-            obligations: declared_row(declared.patterns, "ready-obligations-label")?,
-            cited_test: declared_row(declared.patterns, "ready-cited-test")?,
-            cited_path: declared_row(declared.patterns, "ready-cited-path")?,
+            obligations: declared_row(declared.patterns, OBLIGATIONS_LABEL)?,
+            cited_test: declared_row(declared.patterns, CITED_TEST)?,
+            cited_path: declared_row(declared.patterns, CITED_PATH)?,
             corpus: selectors(&board.cites_corpus)?,
             exclude: selectors(&board.cites_exclude)?,
             prospective: board.cites_prospective.clone(),
@@ -1433,11 +1437,11 @@ impl Refs {
             .unwrap_or_default();
         // THE KEY IS THE GRAMMAR'S, composed in front of the citation's tail, so
         // the issue key keeps its one definition here too.
-        let tail = declared_row(declared.patterns, "board-clause-citation")?;
+        let tail = declared_row(declared.patterns, CLAUSE_CITATION)?;
         let key = declared.grammar.key_expression();
         Ok(Self {
             citation: composed(&format!("(?P<key>{key})(?:{})", tail.as_str()))?,
-            tag: declared_row(declared.patterns, "ready-clause-tag")?,
+            tag: declared_row(declared.patterns, CLAUSE_TAG)?,
             exclude,
         })
     }

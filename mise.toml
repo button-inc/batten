@@ -5467,7 +5467,9 @@ fi
 # or an In Review payload missing a key the gate decides on (`attachments`,
 # `description`, `relations` — CLOUD-783, since `board check` keys those absences
 # to its `graph` pseudo-id, which the per-issue lookup never matches). PRESENCE,
-# never truthiness: `[]` and `""` are data.
+# never truthiness: `[]` and `""` are data. So is a `board check` that did not
+# answer with one of its own verdicts: exit 1, a missing or crashing engine, or a
+# verb still `unimplemented` all leave an empty report, never a pass.
 #
 # `dir = "{{cwd}}"`: it judges the caller's clone, and `batten board check` reads
 # the manifest's own `batten.toml` through `--config-in` (CLOUD-1221, which
@@ -5480,6 +5482,8 @@ fi
 #MUTANT hold-ignored|s@^\tif \[\[ "\$status" = "In Review" \]\] .*HOLD_MARKER.*; then$@\tif false; then@|an_issue_holding_itself_open_is_held
 #MUTANT gate-verdict-dropped|s@^\t\[\[ "\$status" != "In Review" \]\] @\ttrue @|an_in_review_issue_with_no_pr_is_refused_by_rule
 #MUTANT commit-path-dropped|s@^\tby_commit="\$by_commit \$id"$@\t:@|a_commit_the_tag_contains_is_a_second_way_in
+#MUTANT unrun-gate-passes|s@^\*) judged=0 ;;$@*) judged=1 ;;@|a_board_check_that_did_not_run_is_could_not_look
+#MUTANT unimplemented-verb-passes|s@^3) judged=.*$@3) judged=1 ;;@|a_board_check_that_did_not_run_is_could_not_look
 #MUTANT earlier-tag-reshipped|s@^\t\t! git merge-base --is-ancestor "\$sha" "\$prev" 2>/dev/null @\t\ttrue @|a_commit_an_earlier_tag_shipped_is_not_new
 description = "Which CLOUD-* issues did a release tag ship? Resolves refs from the tag's commit range; cross-checks piped board payloads for the ones still In Review"
 shell = "bash -c"
@@ -5548,8 +5552,18 @@ done
 # A per-issue violation is the payload, not the status, so the exit is not fatal.
 gate_status=0
 gate_report=$(batten --config-in "$(dirname -- "$manifest")" board check <<<"$issues" 2>&1 >/dev/null) || gate_status=$?
-if [[ "$gate_status" = 1 ]]; then
-	echo "::error:: batten board check could not run. A gate that cannot run is not a pass — the sweep needs it, so this is 'could not look'." >&2
+# Only the verb's own answers are a judgement: 0 coherent, 2 a violation, and 3
+# the graph's gap verdict, which names itself. Everything else is a gate that did
+# not run — 1 (an undeclared vocabulary), 126/127 (no engine), 101 (a panic), or
+# a 3 without that verdict (an engine whose verb is still `unimplemented`) — and
+# an empty report read as "nothing refused" would pass every shipped row.
+case "$gate_status" in
+0 | 2) judged=1 ;;
+3) judged=$(grep -c 'payload(s) could not be judged' <<<"$gate_report" || true) ;;
+*) judged=0 ;;
+esac
+if [[ "$judged" = 0 ]]; then
+	echo "::error:: batten board check could not run (exit $gate_status). A gate that cannot run is not a pass — the sweep needs it, so this is 'could not look'." >&2
 	exit 2
 fi
 refusal_for() {

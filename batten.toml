@@ -11316,6 +11316,13 @@ started = ["In Progress", "In Review", "Done"]
 # cites_exclude = ["tests/fixtures/**"]
 # The marker after a backticked path that declares it not written YET (CLOUD-920).
 # cites_prospective = "(new)"
+# Tracked paths `board check --refs` does not scan (CLOUD-809): a file quoting a
+# known-bad clause citation as its own regression witness. EMPTY BY MEASUREMENT,
+# not by default: the retired `spec-ref-check` excluded only itself and its suite,
+# both deleted with it, and no tracked file carries a literal witness today — the
+# `board_check` tier builds its citations at run time. A witness added later is
+# named here, one glob, rather than widening the corpus rule.
+# refs_exclude = []
 
 # ACCEPTED INVOCATION-LATENCY REGRESSIONS (CLOUD-1163 unit 10), transcribed
 # verbatim off the `EXEMPT` heredoc of the retired `mise-tasks/perf-compare.sh`.

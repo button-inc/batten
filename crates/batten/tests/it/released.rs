@@ -414,6 +414,46 @@ fn a_blocker_outside_the_piped_set_is_not_a_refusal() {
     assert!(text.contains("CLOUD-2  In Review -> Done"), "{text}");
 }
 
+/// A stub `batten` ahead of the engine on the fixture's `PATH`: `task_command`
+/// puts `<repo>/bin` first.
+#[cfg(unix)]
+fn stub_engine(repo: &Path, script: &str) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let bin = repo.join("bin");
+    std::fs::create_dir_all(&bin).expect("stub dir");
+    let path = bin.join("batten");
+    std::fs::write(&path, script).expect("write stub");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod stub");
+}
+
+/// A GATE THAT DID NOT RUN IS NEVER A PASS. The retired body refused when the
+/// gate was not executable; the verb's equivalents are an engine that is not on
+/// `PATH`, that panics, that refuses its own invocation, or whose `board check`
+/// is still `unimplemented` at exit 3. Each would leave an empty report, and an
+/// empty report reads as "nothing refused" for every shipped row.
+#[cfg(unix)]
+#[test]
+fn a_board_check_that_did_not_run_is_could_not_look() {
+    for (name, script) in [
+        ("absent", "#!/bin/sh\nexit 127\n"),
+        ("panicked", "#!/bin/sh\nexit 101\n"),
+        ("usage", "#!/bin/sh\nexit 1\n"),
+        (
+            "unimplemented",
+            "#!/bin/sh\necho 'board check: unimplemented' >&2\nexit 3\n",
+        ),
+    ] {
+        let dir = repo(&format!("unrun-{name}"));
+        stub_engine(&dir, script);
+        let (code, text) = released(&dir, "v0.0.2", &set(&[in_review("CLOUD-2")]));
+        assert_eq!(code, Some(2), "{name}: {text}");
+        assert!(
+            text.contains("could not run") && !text.contains("In Review -> Done"),
+            "{name}: {text}"
+        );
+    }
+}
+
 /// The conjunction is composed, never copied, and the marker has one authority.
 #[test]
 fn the_body_carries_no_pr_predicate_and_one_marker() {
