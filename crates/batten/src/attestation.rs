@@ -54,6 +54,14 @@ use anyhow::Result;
 use crate::exec::Diagnostics;
 use crate::exit::ExitCode;
 
+// The producer's mutation rows. Each breaks one arm that turns a WORLD fact into
+// a recorded reading, and each is caught by the compiled-binary case it names —
+// the module deciding over the record cannot see a producer that lied to it.
+//MUTANT-SUITE crates/batten/tests/it/attestation.rs
+//MUTANT unverified-read-as-verified|s@^                    Some(_) => "unverified",$@                    Some(_) => "verified",@|the_producer_records_an_archive_the_verifier_refuses
+//MUTANT gap-probe-unread|s@^        404 => return Produced@        999 => return Produced@|a_platform_gap_is_recorded_as_a_gap_and_judges_nothing
+//MUTANT credential-unchecked|s@^    if crate::rest::declared_credential().is_none() {$@    if false {@|no_credential_is_could_not_look_and_removes_a_stale_record
+
 /// The verb, as a could-not-look line names it.
 const VERB: &str = "record attestation";
 

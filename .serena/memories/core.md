@@ -2623,13 +2623,15 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   before any file test; the `/tmp` test outranks everything, because a reclaimed
   signer breaks verification whatever the key is. It also owns the RECORD'S
   SHAPE, including truncating each sha to eight characters — the difference
-  between a pointer and a payload (rule 4) — which was a sequence of `printf`
-  calls in a task body that nothing tested. It reaches NOTHING and never runs
-  `git config`: the two values arrive as `&str`, which keeps the reading
-  testable against a scratch path and a developer's real configuration out of
-  the tests. Ported off `mise-tasks/signing-posture.sh`; `signing-posture-repair`
-  no longer classifies a second time but reads the posture off the record the
-  producer just wrote. **It never passed through a `.py`, whatever this entry
+  between a pointer and a payload (rule 4). Since CLOUD-843 the record is ONE
+  `signer` line: `read` resolves `user.signingkey` and `gpg.ssh.program` through
+  gix (no spawn, every scope), `posture` stays a pure function of the two
+  strings for its unit tests, and `repair` is `batten attribution signing`'s
+  repo-local write. The conflict between config scopes and the signed commits
+  in range left the record for `input.tree["git-config"]` and
+  `input.tree["commit-meta"]`, decided by the `supply-chain` preset's
+  `signer-is-verifiable.rego`. Ported off `mise-tasks/signing-posture.sh`; the
+  producer and repair task bodies retired under CLOUD-843. **It never passed through a `.py`, whatever this entry
   said first**: that sibling was created and deleted inside the same branch, so
   naming it here recorded branch-internal churn as provenance. The detour is
   real and belongs on `shell-retirement.rego`'s arm F, which now refuses it —
@@ -2840,6 +2842,18 @@ view` and no argument, which reads the CURRENT BRANCH — so under a detached
   `id` must be a declared `[[record]]` family, refused at load, so a query no
   module can read is unwritable. `[forge]` is read from the committed authority
   alone (`resolve::committed`), never layered.
+- `attestation.rs` — `batten record attestation [<tag>] --binary <name>`, the
+  producer retiring `[tasks.attestation-record]` (CLOUD-583, CLOUD-843). It
+  probes `repos/<slug>/attestations/sha256:<zeros>` over `rest` (200 = the
+  platform attests, 404 = a gap, recorded as `posture 404`), resolves the latest
+  release when no tag is given, downloads the archives and verifies each
+  unpacked binary through the verifier (`gh` unless `--verifier`) via
+  `exec::piped_argv`, unpacking `.tar.gz` in process and `.zip` with `unzip`.
+  It writes the `attestation` family (`posture` + `archive <name> <verdict>`).
+  **It decides nothing** — the `supply-chain` preset's
+  `attestation-is-verified.rego` does. No declared credential, no remote, a
+  posture neither 200 nor 404, a failed download or unpack: exit 3 and the stale
+  record removed.
 - `severity.rs` — the severity taxonomy (CLOUD-168): one rank table plus the
   adapter across the three axes — `RuleSeverity` (config, CLOUD-61),
   `AdvisoryTier` (the one _stored_ severity, CLOUD-80/78), `ReportLevel`
