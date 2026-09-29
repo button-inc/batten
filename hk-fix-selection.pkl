@@ -25,6 +25,14 @@
 //
 // POINTER-ONLY (non-negotiable rule 4): step names and a direction, never a
 // byte of either file.
+//
+// Its mutation rows, swept through `mutate`'s file arm (the gate name is this
+// file's path in `MUTANT_GATES`). Each is caught by the compiled case it names,
+// which evaluates THIS module beside an offline fixture config.
+//MUTANT-SUITE crates/batten/tests/it/hk_fix_selection.rs
+//MUTANT fix-selection-unrouted-ignored|s@^    if (unrouted.isEmpty && notAFixer.isEmpty)$@    if (notAFixer.isEmpty)@|the_pkl_predicate_refuses_a_fixer_the_fix_hook_does_not_route
+//MUTANT fix-selection-not-a-fixer-ignored|s@^    if (unrouted.isEmpty && notAFixer.isEmpty)$@    if (unrouted.isEmpty)@|the_pkl_predicate_refuses_a_check_only_step_in_the_fix_hook
+//MUTANT fix-selection-clippy-exception-dropped|s@ && name != "cargo-clippy")$@)@|the_pkl_predicate_passes_a_fix_hook_selecting_exactly_the_fixers
 import "hk.pkl"
 
 local gate = hk.hooks["pre-commit"].steps

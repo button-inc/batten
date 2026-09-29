@@ -655,7 +655,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,land-divergence,macos-link,task-mcp-allow-check,nonverdict,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,docs-tree-absent,ripcord-untracked,hk-pin-agreement,engine-record"
+MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,land-divergence,macos-link,task-mcp-allow-check,nonverdict,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,docs-tree-absent,ripcord-untracked,hk-pin-agreement,engine-record,hk-fix-selection.pkl"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -1007,8 +1007,12 @@ description = "hk's `fix` hook selects exactly the gate's fixer-bearing steps �
 # works, and the flag REPLACES pkl's roots — so it is passed only when a bundle
 # is named: `BATTEN_CA_BUNDLE`, else `SSL_CERT_FILE`, which is how the sandbox
 # names the interception bundle the body's `/root/.ccr` fallback probed for.
-# With neither set this stays the bare invocation.
-run = "mise exec pkl -- pkl eval {% if env.BATTEN_CA_BUNDLE %}--ca-certificates {{env.BATTEN_CA_BUNDLE}} {% elif env.SSL_CERT_FILE %}--ca-certificates {{env.SSL_CERT_FILE}} {% endif %}hk-fix-selection.pkl"
+# EACH IS PASSED ONLY WHEN IT NAMES A FILE (tera's `is file`), the body's `-f`
+# guard: a set-but-missing bundle handed to pkl fails the evaluation, and that
+# non-zero would read as a drift refusal — the could-not-look-as-verdict this
+# guard exists to prevent. With neither naming a file this stays the bare
+# invocation.
+run = "mise exec pkl -- pkl eval {% if env.BATTEN_CA_BUNDLE and env.BATTEN_CA_BUNDLE is file %}--ca-certificates {{env.BATTEN_CA_BUNDLE}} {% elif env.SSL_CERT_FILE and env.SSL_CERT_FILE is file %}--ca-certificates {{env.SSL_CERT_FILE}} {% endif %}hk-fix-selection.pkl"
 
 [tasks."lint:actions"]
 description = "actionlint: workflow mistakes (bad `on:` keys, undefined matrix refs, shellcheck over `run:` blocks)"
@@ -1206,10 +1210,21 @@ usage = '''
 arg "[target]" default="" help="the fuzz target a saved reproducer belongs to; omit to search every target"
 arg "[input]" default="" help="the reproducer file to replay against that target"
 '''
+depends = ["fuzz:tools"]
+run = [
+  "{% if usage.target %}cargo +nightly fuzz run {{usage.target}} {{usage.input}}{% else %}mise run fuzz:search{% endif %}",
+]
+
+[tasks."fuzz:tools"]
+description = "Install the nightly toolchain and the pinned cargo-fuzz that `fuzz` and `fuzz:search` run under (CLOUD-112)"
+# The installs the body ran before either mode, as a task both modes DEPEND on,
+# so `mise run fuzz:search` on a fresh machine installs before it searches
+# exactly as the single body did. Idempotent in the tool (see `[tasks.fuzz]`),
+# which is also why `fuzz`'s no-argument arm reaching `fuzz:search` and running
+# this a second time costs a check, not an install.
 run = [
   "rustup toolchain install nightly --profile minimal",
   "cargo +nightly install cargo-fuzz --version {% if env.CARGO_FUZZ_VERSION %}{{env.CARGO_FUZZ_VERSION}}{% else %}0.13.2{% endif %} --locked",
-  "{% if usage.target %}cargo +nightly fuzz run {{usage.target}} {{usage.input}}{% else %}mise run fuzz:search{% endif %}",
 ]
 
 [tasks."fuzz:search"]
@@ -1226,6 +1241,7 @@ description = "Report: the bounded libFuzzer search over both targets, `fuzz`'s 
 # The two targets are written out rather than looped over: two entries, each
 # stopping the search if it fails, is exactly what the `for` did. `FUZZ_SECONDS`
 # bounds each, 60 when unset.
+depends = ["fuzz:tools"]
 run = [
   "mkdir -p fuzz/work/hook_decode fuzz/work/config_parse",
   "cargo +nightly fuzz run hook_decode fuzz/work/hook_decode fuzz/corpus/hook_decode -- -max_total_time={% if env.FUZZ_SECONDS %}{{env.FUZZ_SECONDS}}{% else %}60{% endif %}",
@@ -7608,6 +7624,18 @@ description = "Session start: install the repo-owned git hooks, the per-clone st
 # answered — creates it, and replaces both hooks with symlinks to the body named
 # here, refusing a body the repository does not carry rather than writing a
 # dangling link. Bare `batten`, the session steps' rule: nothing here compiles.
+#
+# THE VERB IS NEWER THAN EVERY RELEASE UNTIL CLOUD-1991 SHIPS, and that moves a
+# dependency this step never had. Bare `batten` resolves `_.path`'s
+# `target/release` first — built from this tree by `session:batten`, the
+# session-start handler declared before this one — and falls through to the
+# installed release only when that build did not happen. The fallthrough answers
+# `unrecognized subcommand`, so in a session whose release build failed the hooks
+# are NOT linked. It is not a silent bypass: `session:batten` has already said
+# `::error::` out loud, this step exits non-zero, and `[[startup]]
+# commit-gate-installed` reports `batten doctor gate`'s verdict and the failed
+# repair. The retired body had no such dependency; the gap closes when a release
+# carrying `wiring gate` is what `~/.local/bin` holds.
 run = "batten wiring gate .claude/hooks/git-hook.sh"
 
 [tasks."session:identity"]
@@ -8505,7 +8533,12 @@ description = "One turn's cross-triple type-check, detached — reports the prev
 # lines plus the log's path. Which lines are pointers is the
 # `compiler-error-pointer` `[[pattern]]` row, which tolerates the colour escapes
 # `CARGO_TERM_COLOR = "always"` puts between `: ` and `error`. Bare `batten`,
-# the handler's own rule: nothing on a turn compiles.
+# the handler's own rule: nothing on a turn compiles. `singleton detach` is newer
+# than every release until CLOUD-1991 ships, so it resolves only through
+# `_.path`'s `target/release`, which `session:batten` builds at session start;
+# where that build failed, this handler fails every turn — loudly, never as a
+# pass — until it succeeds or a release carries the verb (`session:git-hooks`
+# records the same dependency).
 run = "batten singleton detach cross-turn --marker target/cross-turn.fail --log target/cross-turn.log --pattern compiler-error-pointer -- mise run cross-check"
 
 [tasks.cross-check]
@@ -9320,11 +9353,14 @@ description = "Record what a long-running task is doing, so its liveness and pha
 # be edited, so keeping the name is what makes this retirement reach exactly the
 # two programs it claims.
 #
-# THE TRANSLATION RETIRED WITH ITS LAST CALLER (CLOUD-1991). `land-lock.sh` and
-# `step-receipt` were the callers written against the retiring program's codes,
-# and both are gone — the step cache is `batten step`, which writes the registry
-# in-process. So this name is the verb itself, on the one contract's table, and
-# mise appends the caller's arguments to it.
+# THE TRANSLATION RETIRED (CLOUD-1991). `land-lock.sh` and `step-receipt` were
+# the callers written against the retiring program's codes. `land-lock.sh` is
+# gone. `[tasks.step-receipt]` is NOT gone on this branch — it retires onto
+# `batten step`, which writes the registry in-process, in CLOUD-843's P4 — and
+# until then its `phase` call reaches the engine's table instead of the
+# translated one. It reads no code: the call is `>/dev/null 2>&1 || true`, so
+# either table leaves it unchanged. So this name is the verb itself, on the one
+# contract's table, and mise appends the caller's arguments to it.
 run = "batten task"
 
 [tasks.singleton]

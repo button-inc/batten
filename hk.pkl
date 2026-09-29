@@ -951,16 +951,22 @@ local fixers = new Mapping<String, Step> {
   ["cargo-fmt"] = gate["cargo-fmt"]
 }
 
-// The steps above marked `profiles = List("slow")` are the nine that dominate
-// the gate: 111.1s total, 100.3s of it `test:bats` at nproc=4. Counted from the
-// mapping rather than recalled — `coderabbit-config-check`, `hk-contract-check`,
-// `token-bench-check`, `sbom-check`, `test:bats`, `cargo-clippy`, `test`,
-// `batten-check`, `policy-test`. It said "six" from the tier's first shape and
-// three steps joined it afterwards without the count following, which is the
-// same drift `suite-bench-check` exists to keep out of the bats table: a number
-// in prose has no gate behind it and ages silently. They are not cheaper
-// than they look and they are not optional — they simply do not belong on the
-// path a developer pays on every `git commit`, because `hk check --all` (which
+// The steps above marked `profiles = List("slow")` are the ones that build the
+// engine or scan the whole tree: 111.1s total when the tier was cut, 100.3s of
+// it `test:bats` at nproc=4. THE MAPPING IS THE LIST, AND THIS COMMENT CARRIES
+// NO COUNT. It said "six" from the tier's first shape, then "nine", and every
+// step that joined afterwards left the number behind — the same drift
+// `suite-bench-check` exists to keep out of the bats table: a number in prose
+// has no gate behind it and ages silently. CLOUD-1991 moved five CHEAP checks
+// into the tier, not because they are slow but because their tasks now reach
+// the engine — `hk-version`, `no-docs-tree` and `no-armed-ripcord` are `batten
+// check` over a module, `deno-fmt` and `rego` select through `batten exec
+// --tracked`. That is a real loss at pre-commit, not a reclassification: a
+// commit no longer checks the pin agreement, the docs tree, the ripcord, JSON
+// and YAML formatting or rego lint, and learns of them at `verify`.
+//
+// None of the tier is optional — its steps simply do not belong on the path a
+// developer pays on every `git commit`, because `hk check --all` (which
 // `mise run ci`, and therefore `verify` and CI, drive over this same mapping)
 // runs them regardless of glob, and `ready-guard` refuses to ready a PR with no
 // `verify` receipt for that exact HEAD. The split moves WHEN the cost is paid,
@@ -975,7 +981,7 @@ local fixers = new Mapping<String, Step> {
 //     `hk` a human types — is slow-enabled by default, including one added in
 //     future by someone who never reads this comment;
 //   * `.claude/hooks/git-hook.sh` passes `--profile '!slow'`, whose CLI value wholly
-//     supplants this list for that one process, so the six skip at pre-commit.
+//     supplants this list for that one process, so the tier skips at pre-commit.
 //
 // Inverted — steps opting IN and the call sites enabling — a forgotten flag on
 // any new hk call site would silently drop clippy, the test suite and
