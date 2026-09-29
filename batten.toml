@@ -13140,7 +13140,7 @@ target = "policy/sbom-actions.rego"
 # it was this repository's, so consumer #1 enables it by name like any other
 # consumer would, and its two verdicts (`cargo list empty`, `cargo list wrong`) are
 # the preset's vocabulary. `mise run sbom-binary` produces (`batten sbom --binary`)
-# then checks this one rule; silent with no record. `line_sources` is which
+# and `mise run sbom-binary-check` checks this one rule; silent with no record. `line_sources` is which
 # lockfile the recovered crates are held against.
 [[record]]
 record = "sbom-binary"

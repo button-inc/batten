@@ -1889,20 +1889,29 @@ cargo run --quiet -p batten -- policy test
 description = "Effect: derive the SPDX and CycloneDX inventories of this tree, under the names the release assets carry"
 run = "cargo run --quiet -p batten -- sbom"
 
-# Produce, then the one rule. The binary's inventory is `batten sbom --binary`'s,
-# its record the `supply-chain` preset's to decide (`cargo list other`). The step is
-# the workflow's last before the upload, so a refusal fails the job before the
-# asset can be published.
+# Produce, and — as its OWN task — the one rule. The binary's inventory is
+# `batten sbom --binary`'s, its record the `supply-chain` preset's to decide
+# (`cargo list other`).
+#
+# TWO TASKS, BECAUSE THEY SPEAK ON TWO CHANNELS. The release workflow appends
+# `sbom-binary`'s stdout to `$GITHUB_OUTPUT`, where only `sbom=`/`packages=` belong;
+# a refusal's pointer line on that same stdout would land in the output file
+# instead of the job log (and is not a KEY=VALUE line the runner accepts). The
+# retired body routed it with `>&2`; argv glue has no redirect, so the finding
+# gets a step of its own whose stdout IS the log. `sbom-binary-check` is the
+# workflow's step between the inventory and the upload, so a refusal fails the
+# job before the asset can be published.
 [tasks.sbom-binary]
-description = "Effect+gate: inventory a built binary from its own bytes, and refuse an inventory that catalogs nothing"
+description = "Effect: inventory a built binary from its own bytes, printing the asset's `sbom=`/`packages=` pointers"
 usage = """
 arg "<binary>" help="the built binary"
 arg "<target>" help="the target triple the binary was built for"
 """
-run = [
-  "cargo run --quiet -p batten -- sbom --binary {{usage.binary}} --target {{usage.target}}",
-  "cargo run --quiet -p batten -- check --rule 'cargo list other'",
-]
+run = "cargo run --quiet -p batten -- sbom --binary {{usage.binary}} --target {{usage.target}}"
+
+[tasks.sbom-binary-check]
+description = "Gate: refuse a binary inventory that catalogs nothing, or crates the lockfile does not hold — over `sbom-binary`'s record"
+run = "cargo run --quiet -p batten -- check --rule 'cargo list other'"
 
 # CLOUD-349's two forge reads, ported off `branch-age-check.sh` under CLOUD-1717.
 #

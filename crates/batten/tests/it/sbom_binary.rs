@@ -9,8 +9,9 @@
 //! so this is also the scratch-repo tier proving the bundle decides for a consumer
 //! that is not this one.
 //! The producer was `[tasks.sbom-binary-record]`'s inline body until CLOUD-843
-//! retired it onto the verb; `[tasks.sbom-binary]` is argv glue now, produce and
-//! then the one rule, and its shape is asserted at the foot of this file.
+//! retired it onto the verb; `[tasks.sbom-binary]` is argv glue now that
+//! produces, `[tasks.sbom-binary-check]` the one rule, and their shape is
+//! asserted at the foot of this file.
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
@@ -20,7 +21,7 @@
 // changed: "THE NEGATIVE SELF-TEST: an empty inventory must not report green" crates/batten/src/policy/presets/supply-chain/binary-inventory-is-lockfile-bound.rego refused as `cargo list empty` through `check`, exit 2 rather than 1; the `(0 rust-crate` sentence was the program's prose, and the count is the finding's second subject
 // carried: "ONE package is the other vacuous shape, and also fails" crates/batten/src/policy/presets/supply-chain/binary-inventory-is-lockfile-bound.rego kind:mechanism
 // carried: "the count is filtered to rust-crate, so a self-artifact cannot pad it" crates/batten/src/sbom.rs kind:verb
-// changed: "a refused inventory leaves no asset behind" mise.toml `[tasks.sbom-binary]` is argv now — produce, then `check` — so a refusal fails the step with the asset still on the runner's disk; it is the workflow's last step before the upload, and a failed step publishes nothing. `the_binary_task_produces_then_decides` asserts the task's order and `the_release_workflow_uploads_the_binary_sbom_only_after_the_task_passes` the workflow's, the two halves the property now rests on
+// changed: "a refused inventory leaves no asset behind" mise.toml `[tasks.sbom-binary]` is one argv that produces and `[tasks.sbom-binary-check]` one that decides, two tasks because the producer's stdout is `$GITHUB_OUTPUT`'s and the finding's is the log's — so a refusal fails its own step with the asset still on the runner's disk; that step is the workflow's last before the upload, and a failed step publishes nothing. `the_binary_task_produces_and_its_check_task_decides` asserts the split and `the_release_workflow_uploads_the_binary_sbom_only_after_the_task_passes` the workflow's order and channel, the two halves the property now rests on
 // changed: "a crate absent from Cargo.lock fails, naming counts and not the crate" crates/batten/src/policy/presets/supply-chain/binary-inventory-is-lockfile-bound.rego refused as `cargo list wrong` through `check`; the count of foreign crates is the finding's subject where the program printed `1 of 2`, and the crate's name is still never printed
 // carried: "SUBSET, NOT EQUALITY: a lockfile larger than the recovery passes" crates/batten/src/policy/presets/supply-chain/binary-inventory-is-lockfile-bound.rego kind:mechanism
 // changed: "the asset name comes from dist's stem rule, so seven legs cannot race" crates/batten/src/sbom.rs the stem is `sbom::archive_stem` — `<subject>-v<version>-<target>`, the naming contract `dist.sh --stem` spells — computed in-process rather than by spawning the program, which the engine does not run
@@ -356,26 +357,30 @@ fn no_target_is_a_usage_error_never_a_pass() {
 }
 
 #[test]
-fn the_binary_task_produces_then_decides() {
-    // The property "a refused inventory is never published" rests on this order:
-    // the check is the step's last command, so a refusal fails the step before
-    // the workflow's upload can run.
+fn the_binary_task_produces_and_its_check_task_decides() {
+    // Two tasks because two channels: `sbom-binary`'s stdout is appended to
+    // `$GITHUB_OUTPUT`, so it may carry the producer's KEY=VALUE pointers and
+    // nothing else — a refusal printed there would reach the output file rather
+    // than the job log. The decision is therefore its own task, and the producer
+    // must not run it.
     let manifest = fs::read_to_string(at_root("mise.toml")).expect("the manifest");
     let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
-    let run: Vec<&str> = parsed["tasks"]["sbom-binary"]["run"]
-        .as_array()
-        .expect("[tasks.sbom-binary] is argv glue")
-        .iter()
-        .map(|step| step.as_str().expect("a command"))
-        .collect();
-    assert_eq!(run.len(), 2, "{run:?}");
+    let run = |task: &str| -> String {
+        parsed["tasks"][task]["run"]
+            .as_str()
+            .unwrap_or_else(|| panic!("[tasks.{task}] is one argv"))
+            .to_owned()
+    };
+    let produce = run("sbom-binary");
     assert!(
-        run[0].ends_with("sbom --binary {{usage.binary}} --target {{usage.target}}"),
-        "{run:?}"
+        produce.ends_with("sbom --binary {{usage.binary}} --target {{usage.target}}"),
+        "{produce}"
     );
+    assert!(!produce.contains(" check "), "{produce}");
+    let decide = run("sbom-binary-check");
     assert!(
-        run[1].ends_with("check --rule 'cargo list other'"),
-        "{run:?}"
+        decide.ends_with("check --rule 'cargo list other'"),
+        "{decide}"
     );
 }
 
@@ -408,6 +413,30 @@ fn the_release_workflow_uploads_the_binary_sbom_only_after_the_task_passes() {
             produce["continue-on-error"].is_badvalue(),
             "a refused inventory must fail its step"
         );
+        // The decision is its own step, whose stdout is the job log: never the
+        // step that appends to `$GITHUB_OUTPUT`, and never redirected itself.
+        assert!(
+            !field(produce, "run").contains("sbom-binary-check"),
+            "the check does not share the output-file step"
+        );
+        let decide = steps
+            .iter()
+            .position(|step| field(step, "run").contains("mise run sbom-binary-check"))
+            .expect("a step runs `mise run sbom-binary-check`");
+        assert!(decide > at, "the check follows the inventory step");
+        assert!(
+            !field(&steps[decide], "run").contains('>'),
+            "the check's finding reaches the log, not a file"
+        );
+        assert!(
+            steps[decide]["continue-on-error"].is_badvalue(),
+            "a refused inventory must fail its step"
+        );
+        assert_eq!(
+            field(&steps[decide], "if"),
+            field(produce, "if"),
+            "the check runs on every leg that inventories"
+        );
         let reads = format!("steps.{id}.outputs.sbom");
         let uploads: Vec<usize> = steps
             .iter()
@@ -417,7 +446,7 @@ fn the_release_workflow_uploads_the_binary_sbom_only_after_the_task_passes() {
             .collect();
         assert!(!uploads.is_empty(), "something uploads {reads}");
         for index in uploads {
-            assert!(index > at, "the upload follows the inventory step");
+            assert!(index > decide, "the upload follows the check step");
             let condition = field(&steps[index], "if");
             assert!(
                 !condition.contains("always()") && !condition.contains("failure()"),
