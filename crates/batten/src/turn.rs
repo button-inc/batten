@@ -298,6 +298,13 @@ fn nth_field(text: &str, field: usize) -> Option<String> {
     Some(value.to_owned())
 }
 
+/// A value that cannot be a column: empty, or carrying a tab or newline that
+/// would forge a column or a line. No host registers such a name, so it is
+/// recorded as `-`.
+fn forged(value: &str) -> bool {
+    value.is_empty() || value.contains(['\t', '\n'])
+}
+
 /// The record a module reads: `turns`, `cited`, then one `call` line per call.
 ///
 /// `call<TAB><name><TAB><key|-><TAB><column|->`. The column is resolved here
@@ -311,9 +318,6 @@ pub fn render(turn: &Turn, columns: &dyn Fn(&str) -> String) -> String {
     body.push_str(if turn.cited { "true" } else { "false" });
     body.push('\n');
     for call in &turn.calls {
-        // A tab or newline inside a name or key would forge a column or a line;
-        // no host registers such a name, so it is recorded as `-`.
-        let forged = |value: &str| value.is_empty() || value.contains(['\t', '\n']);
         let key: &str = if forged(&call.key) { "-" } else { &call.key };
         let column = if key == "-" {
             "-".to_owned()

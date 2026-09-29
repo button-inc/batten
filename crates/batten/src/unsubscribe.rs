@@ -221,11 +221,7 @@ pub fn drop_subscription(
     let Some(session) = session(host) else {
         return give_up(out, pr, "no session on this host");
     };
-    let Some(token_file) = host
-        .token_env
-        .as_deref()
-        .and_then(|name| std::env::var_os(name))
-    else {
+    let Some(token_file) = host.token_env.as_deref().and_then(std::env::var_os) else {
         return give_up(out, pr, "no credential file declared");
     };
     let Ok(token) = std::fs::read_to_string(&token_file) else {
