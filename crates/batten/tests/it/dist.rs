@@ -117,7 +117,9 @@ fn dist(bench: &Bench, args: &[&str], env: &[(&str, &str)]) -> Output {
         .env("PATH", std::env::join_paths(paths).unwrap())
         .env("STUB_LOG", &bench.log)
         .env("STUB_METADATA", bench.stubs.join("metadata.json"))
-        .env("STUB_TARGET", bench.root.join("target"));
+        .env("STUB_TARGET", bench.root.join("target"))
+        // An ambient builder (a release leg's own) must not pick the case's.
+        .env_remove("DIST_BUILD_TOOL");
     for (name, value) in env {
         command.env(name, value);
     }
@@ -290,6 +292,73 @@ fn an_unknown_build_tool_is_refused_before_anything_runs() {
         stderr(&output)
     );
     assert!(calls(&bench).is_empty(), "nothing ran: {:?}", calls(&bench));
+}
+
+/// The retired program read its builder ONLY from `DIST_BUILD_TOOL`, and the
+/// suite exercised exactly that spelling; the verb still honours it when no flag
+/// names one, and refuses an unknown one before anything runs.
+#[test]
+fn the_environment_names_the_builder_when_no_flag_does() {
+    if !cfg!(unix) {
+        return;
+    }
+    let refused_bench = bench("env-bogus", "1.2.3", &["widget"]);
+    let refused = dist(
+        &refused_bench,
+        &["x86_64-unknown-linux-gnu"],
+        &[("DIST_BUILD_TOOL", "bogus")],
+    );
+    assert_eq!(refused.status.code(), Some(ExitCode::Usage.code()));
+    assert!(
+        stderr(&refused).contains("must be cargo, cross, or zigbuild"),
+        "{}",
+        stderr(&refused)
+    );
+    assert!(
+        calls(&refused_bench).is_empty(),
+        "nothing ran: {:?}",
+        calls(&refused_bench)
+    );
+
+    let honoured_bench = bench("env-cross", "1.2.3", &["widget"]);
+    let honoured = dist(
+        &honoured_bench,
+        &["aarch64-unknown-linux-musl"],
+        &[("DIST_BUILD_TOOL", "cross")],
+    );
+    assert_eq!(
+        honoured.status.code(),
+        Some(ExitCode::Success.code()),
+        "{}",
+        stderr(&honoured)
+    );
+    assert!(
+        calls(&honoured_bench)
+            .iter()
+            .any(|call| call.starts_with("cross build --locked")),
+        "the environment's builder ran: {:?}",
+        calls(&honoured_bench)
+    );
+
+    let flagged_bench = bench("env-flag", "1.2.3", &["widget"]);
+    let flagged = dist(
+        &flagged_bench,
+        &["x86_64-unknown-linux-gnu", "--build-tool", "cargo"],
+        &[("DIST_BUILD_TOOL", "cross")],
+    );
+    assert_eq!(
+        flagged.status.code(),
+        Some(ExitCode::Success.code()),
+        "{}",
+        stderr(&flagged)
+    );
+    assert!(
+        !calls(&flagged_bench)
+            .iter()
+            .any(|call| call.starts_with("cross ")),
+        "the flag outranks the environment: {:?}",
+        calls(&flagged_bench)
+    );
 }
 
 #[test]

@@ -296,21 +296,42 @@ fn ran(dir: &Path, argv: &[String], err: &mut dyn Write) -> Result<bool> {
     Ok(false)
 }
 
-/// `batten dist <target> [--stem] [--build-tool cargo|cross|zigbuild]`.
+/// The environment variable naming the builder when `--build-tool` is absent.
+///
+/// The retired `dist.sh` read ONLY this (`${DIST_BUILD_TOOL:-cargo}`), and a
+/// maintainer's `DIST_BUILD_TOOL=zigbuild mise run dist <target>` must keep
+/// meaning what it meant rather than silently building with plain cargo.
+pub const BUILD_TOOL_ENV: &str = "DIST_BUILD_TOOL";
+
+/// The builder a request names: the flag, else a non-empty
+/// [`BUILD_TOOL_ENV`], else nothing (which [`BuildTool::parse`] reads as cargo).
+///
+/// Empty counts as unset, exactly as the shell's `:-` expansion did.
+#[must_use]
+pub fn named_build_tool(flag: Option<&str>, env: Option<&str>) -> Option<String> {
+    flag.or_else(|| env.filter(|value| !value.is_empty()))
+        .map(str::to_owned)
+}
+
+/// `batten dist <target> [--stem] [--build-tool cargo|cross|zigbuild]`, the
+/// builder falling back to [`BUILD_TOOL_ENV`] when the flag is absent.
 ///
 /// # Errors
 ///
-/// A [`UsageError`] (→ exit `1`) for a build tool outside the three, refused
-/// before anything is read or compiled. Every other failure — a workspace
+/// A [`UsageError`] (→ exit `1`) for a build tool outside the three, whether the
+/// flag or the environment named it, refused before anything is read or
+/// compiled. Every other failure — a workspace
 /// `cargo metadata` cannot read, a package no archive can be named for, a build
 /// that fails or writes no binary, an archiver that fails — is `Internal`
 /// (exit `3`) with its pointer on `err`, and never a partial answer on `out`.
 pub fn run(request: &DistRequest, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
     let target = request.target.as_str();
-    let Some(tool) = BuildTool::parse(request.build_tool.as_deref()) else {
+    let from_env = std::env::var(BUILD_TOOL_ENV).ok();
+    let named = named_build_tool(request.build_tool.as_deref(), from_env.as_deref());
+    let Some(tool) = BuildTool::parse(named.as_deref()) else {
         return Err(UsageError::raise(format!(
-            "dist: --build-tool must be cargo, cross, or zigbuild, got '{}'",
-            request.build_tool.as_deref().unwrap_or_default()
+            "dist: --build-tool (or {BUILD_TOOL_ENV}) must be cargo, cross, or zigbuild, got '{}'",
+            named.as_deref().unwrap_or_default()
         )));
     };
 
@@ -514,6 +535,20 @@ mod tests {
             Some(BuildTool::Zigbuild)
         );
         assert_eq!(BuildTool::parse(Some("bogus")), None);
+    }
+
+    #[test]
+    fn the_flag_outranks_the_environment_and_an_empty_one_is_unset() {
+        assert_eq!(
+            named_build_tool(Some("cross"), Some("zigbuild")).as_deref(),
+            Some("cross")
+        );
+        assert_eq!(
+            named_build_tool(None, Some("zigbuild")).as_deref(),
+            Some("zigbuild")
+        );
+        assert_eq!(named_build_tool(None, Some("")), None);
+        assert_eq!(named_build_tool(None, None), None);
     }
 
     #[test]

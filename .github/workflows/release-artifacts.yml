@@ -206,13 +206,14 @@ jobs:
         id: dist
         shell: bash
         # `dist` emits archive=/binary= KEY=VALUE lines, so the per-target
-        # binary suffix is decided in one place and never re-derived here. The
-        # builder is `batten dist`'s `--build-tool` flag (CLOUD-843); the value
-        # travels through the environment so no matrix field is expanded into
-        # the script text.
+        # binary suffix is decided in one place and never re-derived here.
+        # `batten dist` reads its builder from DIST_BUILD_TOOL when no
+        # `--build-tool` flag names one (CLOUD-843). Both matrix fields travel
+        # through the environment, so neither is expanded into the script text.
         env:
           DIST_BUILD_TOOL: ${{ matrix.build-tool }}
-        run: mise run dist -- "${{ matrix.target }}" --build-tool "$DIST_BUILD_TOOL" >>"$GITHUB_OUTPUT"
+          DIST_TARGET: ${{ matrix.target }}
+        run: mise run dist -- "$DIST_TARGET" >>"$GITHUB_OUTPUT"
       # UPLOAD FIRST, ATTEST SECOND (CLOUD-258). The reverse order shipped, and
       # every release from v0.0.31 to v0.0.36 attached zero binaries: all seven
       # legs built, then died on the attestation with
