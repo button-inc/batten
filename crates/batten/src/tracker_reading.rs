@@ -218,7 +218,7 @@ fn column(keys: &[String]) -> String {
 /// The bytes either side are READ rather than matched, so no expression is
 /// composed out of an id a payload supplied.
 //MUTANT-SUITE crates/batten/tests/it/tracker_hygiene.rs
-//MUTANT prefix-matches-a-longer-id|s@^            && after.is_none_or(|c| !c.is_ascii_digit())$@            \&\& true@|a_prefix_does_not_match_a_longer_id
+//MUTANT prefix-matches-a-longer-id|s@^            && after.is_none_or(not_a_digit)$@            \&\& after.is_none_or(char::is_alphanumeric)@|a_prefix_does_not_match_a_longer_id
 fn names(text: &str, id: &str) -> bool {
     if id.is_empty() {
         return false;
@@ -227,8 +227,16 @@ fn names(text: &str, id: &str) -> bool {
         let before = text[..at].chars().next_back();
         let after = text[at + id.len()..].chars().next();
         before.is_none_or(|c| !c.is_ascii_alphanumeric() && c != '-')
-            && after.is_none_or(|c| !c.is_ascii_digit())
+            && after.is_none_or(not_a_digit)
     })
+}
+
+/// The right-hand bound of [`names`]: a key ends where no digit follows it.
+///
+/// A named function rather than a closure, so the `#MUTANT` row above can name
+/// the call site: `mutate` splits a row on `|`, and a closure's bars would break it.
+fn not_a_digit(c: char) -> bool {
+    !c.is_ascii_digit()
 }
 
 /// `done`: each piped issue's status, and whether a release, the trunk, or
@@ -643,6 +651,20 @@ fn named_in(grammar: &Grammar, text: &str) -> Vec<String> {
         .collect()
 }
 
+/// The body lines the declared hold marker matches.
+///
+/// A loop rather than `filter` with a closure, so the `#MUTANT` row on
+/// [`closing_key`] can name the match line: `mutate` splits a row on `|`.
+fn marker_lines<'a>(hold: &Regex, body: &'a str) -> Vec<&'a str> {
+    let mut held = Vec::new();
+    for line in body.lines() {
+        if hold.is_match(line) {
+            held.push(line);
+        }
+    }
+    held
+}
+
 /// `closing-key`: the key sets a pull request body names and closes, the keys
 /// its branch served, and any declared hold (CLOUD-192, CLOUD-674).
 ///
@@ -654,7 +676,7 @@ fn named_in(grammar: &Grammar, text: &str) -> Vec<String> {
 /// `Refs:` trailer the branch authored since `base` — source 3 alone, so the
 /// subtraction is not circular. Inputs: `hold`, the `[[pattern]]` row naming the
 /// line-anchored marker, and `base`. An empty body is could-not-look.
-//MUTANT marker-anywhere-holds|s@stdin.lines().filter(|line| hold.is_match(line)).collect();$@stdin.lines().filter(|line| line.contains("DO-NOT-CLOSE")).collect();@|the_marker_opts_out_only_when_used_not_when_mentioned
+//MUTANT marker-anywhere-holds|s@^        if hold.is_match(line) {$@        if line.contains("DO-NOT-CLOSE") {@|the_marker_opts_out_only_when_used_not_when_mentioned
 fn closing_key(
     inputs: &BTreeMap<String, String>,
     patterns: &[NamedPattern],
@@ -692,7 +714,7 @@ fn closing_key(
         )),
         None => Vec::new(),
     };
-    let held: Vec<&str> = stdin.lines().filter(|line| hold.is_match(line)).collect();
+    let held = marker_lines(&hold, stdin);
     let hold_column = if held.is_empty() {
         String::from("none")
     } else {

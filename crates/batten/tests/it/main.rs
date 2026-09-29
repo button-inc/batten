@@ -107,7 +107,6 @@ mod claim_race;
 mod claim_receipt;
 mod claimed_keys;
 mod cli;
-#[cfg(unix)]
 mod coderabbit_config;
 mod commit;
 mod commit_admission;
@@ -140,7 +139,6 @@ mod could_not_look_laundered;
 mod dead_capability;
 mod decision_record;
 mod defects;
-#[cfg(unix)]
 mod derived_facts;
 mod design_audit;
 mod dev_profile;
@@ -150,10 +148,7 @@ mod doctor_session;
 mod doctor_target;
 mod document_facts;
 mod document_read_count;
-#[cfg(unix)]
 mod done_not_landed;
-#[cfg(unix)]
-#[cfg(unix)]
 mod durable_write;
 mod egress_fencing;
 mod emission_census;
@@ -399,6 +394,7 @@ mod timeout_drift;
 mod todo_promotion;
 mod tool_selector;
 mod tool_verdict_facts;
+#[cfg(unix)]
 mod tracker_hygiene;
 mod transcript_corpus;
 mod transcript_stop_reason;
