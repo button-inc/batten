@@ -137,6 +137,67 @@ fn the_skip_says_why_rather_than_only_that() {
     assert!(said.contains("Nothing measured."), "{said}");
 }
 
+/// `perf measure` builds the repository it was asked about, and no other
+/// (CLOUD-2025).
+///
+/// The fixture carries no `Cargo.toml` and lives under `target/tmp`, INSIDE this
+/// checkout. Without `--manifest-path`, cargo walked up from it and built this
+/// checkout's release binary instead — 634 CPU-seconds of `rustc` inside
+/// `pointer_only`'s sweep on a lap whose prune had evicted `target/release`, and
+/// then a bail anyway, because the binary landed in the enclosing tree's
+/// `target/` rather than the fixture's. A stub `cargo` first on `PATH` records the
+/// argv and refuses, so this case builds nothing either way.
+#[cfg(unix)]
+#[test]
+fn a_measurement_builds_the_repository_it_was_asked_about() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let repo = repo("perf-measure-confined");
+    let bin = repo.join("stub-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let recorded = repo.join("cargo-argv");
+    let stub = bin.join("cargo");
+    std::fs::write(
+        &stub,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{}'\nexit 1\n",
+            recorded.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+
+    let output = common::batten()
+        .args(["perf", "measure"])
+        .current_dir(&repo)
+        .env("PATH", path)
+        .output()
+        .expect("run perf measure");
+    assert!(
+        !output.status.success(),
+        "a build that failed is could-not-look, never a measurement"
+    );
+
+    let argv = std::fs::read_to_string(&recorded).expect("perf measure ran cargo");
+    let argv: Vec<&str> = argv.lines().collect();
+    let manifest = repo
+        .canonicalize()
+        .unwrap()
+        .join("Cargo.toml")
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        argv.windows(2)
+            .any(|pair| pair[0] == "--manifest-path" && pair[1] == manifest),
+        "the build must name the measured repository's own manifest ({manifest}), or cargo \
+         walks up and builds whatever workspace encloses it: {argv:?}"
+    );
+}
+
 #[test]
 fn the_verb_is_reachable_and_declares_its_flag() {
     // The surface half: a verb nothing can invoke is the same as no verb, and

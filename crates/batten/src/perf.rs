@@ -712,12 +712,24 @@ const PAIR_PROFILE_CONFIG: [&str; 4] = [
     "profile.perf-arm.codegen-units=256",
 ];
 
-/// The cargo arguments [`build`] runs under `profile`.
-fn build_args(profile: &str) -> Vec<String> {
+/// The cargo arguments [`build`] runs under `profile`, in `dir`.
+///
+/// **`--manifest-path` CONFINES THE BUILD TO `dir` (CLOUD-2025).** Without it cargo
+/// discovers a manifest by walking UP from the working directory, so a repository
+/// with no `Cargo.toml` of its own, nested inside another workspace, built that
+/// ENCLOSING workspace and measured a tree it was never asked about. Every test
+/// fixture is nested so, under `target/tmp`: `pointer_only`'s `perf measure` arm
+/// built this checkout's release binary into the real `target/release` — 634
+/// CPU-seconds of `rustc` inside one case on a lap whose prune had evicted it. A
+/// missing manifest now fails the build here, which is `build`'s could-not-look.
+//MUTANT build-escapes-to-enclosing-workspace|s@    args.push(String::from("--manifest-path"));@    let _ = "--manifest-path";@|a_measurement_builds_the_repository_it_was_asked_about
+fn build_args(profile: &str, dir: &Path) -> Vec<String> {
     let mut args: Vec<String> = ["build", "--profile", profile, "-p", "batten"]
         .iter()
         .map(|a| (*a).to_owned())
         .collect();
+    args.push(String::from("--manifest-path"));
+    args.push(dir.join("Cargo.toml").to_string_lossy().into_owned());
     if profile == PAIR_PROFILE {
         for setting in PAIR_PROFILE_CONFIG {
             args.push(String::from("--config"));
@@ -754,7 +766,7 @@ fn out_dir(repo: &Path) -> Result<PathBuf> {
 /// Cargo's progress goes to stderr, so nothing changes for `perf-gate.sh`, which
 /// redirects this command's STDOUT to a file and greps `^arm=`.
 fn build(dir: &Path, target_dir: Option<&Path>, what: &str, profile: &str) -> Result<()> {
-    let args = build_args(profile);
+    let args = build_args(profile, dir);
     let env: Vec<(String, String)> = target_dir
         .map(|dir| {
             vec![(
@@ -3092,7 +3104,7 @@ mod tests {
     /// profile its tree does not declare, and this case goes red.
     #[test]
     fn the_pair_profile_is_defined_on_the_command_line() {
-        let pair = build_args(PAIR_PROFILE);
+        let pair = build_args(PAIR_PROFILE, Path::new("repo"));
         for setting in PAIR_PROFILE_CONFIG {
             assert!(
                 pair.windows(2)
@@ -3101,7 +3113,11 @@ mod tests {
             );
         }
         assert!(pair.iter().any(|a| a.contains("inherits=\"release\"")));
-        assert!(!build_args("release").iter().any(|a| a == "--config"));
+        assert!(
+            !build_args("release", Path::new("repo"))
+                .iter()
+                .any(|a| a == "--config")
+        );
     }
 
     /// A commit touching nothing under the three built trees keeps the base key.
