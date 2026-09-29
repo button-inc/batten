@@ -161,7 +161,8 @@ const DECLARED: [&str; 13] = [
     // Claude Code delivers no advisory, so its finding was dropped every turn.
     // CLOUD-843 folded it into this one row: both halves are `batten mcp
     // posture`, so the sibling `mcp-allow-check` row would have run the same verb
-    // twice, and its commit-scoped half is `policy/mcp-allow.rego`.
+    // twice, and its commit-scoped half is the `claude-code-cloud` preset's
+    // `mcp-grants-are-honoured.rego`.
     "mcp-attach-check",
     "session-census",
 ];

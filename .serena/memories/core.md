@@ -182,12 +182,14 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   (CLOUD-843 P5, retiring `connector-allow-resolve`, `mcp-attach-check` and
   `mcp-allow-check --session`). `grant` maps a renamed server key to a governed
   name by endpoint (`[mcp] permission_aliases` + `endpoint_contains`, matched
-  raw or percent-decoded by `mcp::endpoint_carries`), then applies the committed
+  on the WHOLE address by `mcp::endpoint_names`, never the dispatch selector's
+  substring; the pair is compared by `mcp-permission-alias-removed`), then applies the committed
   deny before allow; every degradation is silence. The bare `mcp__<server>`
   rule is honoured on the owner's answer, isolated in `mcp::is_bare_server_rule`.
   `posture` is `mcp::bound_in`'s first production caller (CLOUD-765 count) plus
   the attach check over the host log tree (`hook::Harness::mcp_logs`) and the
-  spawn ledger (`mcp::spawn_ledger`). The commit half is `policy/mcp-allow.rego`.
+  spawn ledger (`mcp::spawn_ledger`). The commit half is the
+  `claude-code-cloud` preset's tree module `mcp-grants-are-honoured.rego`.
 - `preflight.rs` — `batten doctor forge` (CLOUD-843, retiring `gh-preflight`):
   GETs each committed `[[forge.probe]]` row through `rest::get`, names the claim
   a 403's `X-Accepted-GitHub-Permissions` asks for, marks the table stale when it

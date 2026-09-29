@@ -14,8 +14,8 @@
 //!   `mcp spawn` writes telling a launch that never happened from one that hung.
 //!
 //! The commit-scoped half of the retired gate — the predicates that are pure
-//! functions of committed files — is `policy/mcp-allow.rego`, which runs where
-//! every other tree rule runs.
+//! functions of committed files — is the `claude-code-cloud` preset's
+//! `mcp-grants-are-honoured.rego`, which runs where every other tree rule runs.
 //!
 //! # Silence is the pass
 //!

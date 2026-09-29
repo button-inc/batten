@@ -1,41 +1,44 @@
 //! `grant check other` — no MCP permission rule is silently skipped by the host
-//! — over the compiled binary (CLOUD-843). The module is `policy/mcp-allow.rego`,
-//! `include_str!`d so this suite cannot drift from the predicate that ships; its
-//! own `test_` rules pin the predicate, and this tier pins that the ENGINE builds
-//! the three documents it reads: a dotfile, a JSON project file and the authority
-//! itself.
+//! — over the compiled binary (CLOUD-843). The module is the `claude-code-cloud`
+//! preset's tree half, `mcp-grants-are-honoured.rego`, reached exactly as a
+//! consumer reaches it: a `preset = "claude-code-cloud"` row at `scope = "tree"`
+//! in a scratch repository that is not this one, with the classes coming from
+//! the manifest rather than from a `[[verdict]]` row the fixture wrote. Its own
+//! `test_` rules pin the predicate; this tier pins that the ENGINE builds the
+//! three documents it reads — a dotfile, a JSON project file and the authority,
+//! found by shape wherever the consumer keeps it.
 //!
 //! The world-scoped half of the retired gate — the grants a connector would
 //! still prompt for — is `batten mcp posture`, asserted in `mcp_attach.rs`.
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
-// carried: mise-tasks/mcp-allow-check.sh policy/mcp-allow.rego crates/batten/tests/it/mcp_allow.rs
-// carried: tests/mcp-allow-check.bats policy/mcp-allow.rego crates/batten/tests/it/mcp_allow.rs
-// carried: "this repo's own settings pass the gate today" policy/mcp-allow.rego
-// carried: "a bare server rule with no connector companion passes — that is not this gate's claim" policy/mcp-allow.rego
-// carried: "both spellings present is also fine" policy/mcp-allow.rego
-// carried: "a connector-only allowlist needs no companion of its own" policy/mcp-allow.rego
-// carried: "a glob in the server segment is reported, not accepted" policy/mcp-allow.rego
-// carried: "a bare unanchored allow glob is reported" policy/mcp-allow.rego
-// carried: "non-MCP allow rules are none of this gate's business" policy/mcp-allow.rego
-// carried: "deny rules may glob freely — only allow rules are judged" policy/mcp-allow.rego
-// carried: "output is a pointer — it names rules, never settings content at large" policy/mcp-allow.rego
-// carried: "an enabled server that no allow rule names is reported" policy/mcp-allow.rego
-// carried: "an enabled server granted by a tool-name glob passes" policy/mcp-allow.rego
-// carried: "an enabled server granted tool by tool passes" policy/mcp-allow.rego
-// carried: "a bare server-level rule grants an enabled server" policy/mcp-allow.rego
-// carried: "every enabled server needs its own grant, not just one of them" policy/mcp-allow.rego
-// carried: "an absent enabledMcpjsonServers leaves the predicate nothing to say" policy/mcp-allow.rego
-// carried: "enabledMcpjsonServers set to true is not an enumerable list" policy/mcp-allow.rego
-// changed: "unparseable settings exit 2, distinct from a failing allowlist" policy/mcp-allow.rego still distinct from a failing allowlist, but as a verdict of its own: the engine reports the unparsed document on `input.tree.missing` and the module raises `grant read unread`, so `batten check` exits 2 naming the file rather than the task exiting 2 as a usage error
-// carried: "a missing settings file is not a failure this gate invents" policy/mcp-allow.rego
-// carried: "a deny on a host-supplied connector with no guard coverage fails" policy/mcp-allow.rego
-// changed: "a deny whose suffix the mediated rows cover passes under any server spelling" policy/mcp-allow.rego the covered suffixes are read from the committed `batten.toml` as a document — every `mediated_call` row's `tool` — rather than spawned out of `batten policy tools` over the resolved config; the committed rows are the ones a deny may rest on, and the retired guard `--covers` probe is withdrawn because no `*-guard.sh` exists
-// changed: "COULD NOT LOOK: an unavailable engine skips the coverage predicate rather than reporting it" policy/mcp-allow.rego there is no engine to be unavailable — the module runs inside it. The arm that survives is an authority the engine could not read, which skips the coverage predicate the same way (`test_an_unread_authority_skips_the_coverage_predicate`)
-// carried: "a deny on a server the repo itself declares needs no guard" policy/mcp-allow.rego
-// carried: "an under-matching ALLOW is deliberately not failed" policy/mcp-allow.rego
-// carried: "a non-MCP deny is not this predicate's business" policy/mcp-allow.rego
+// carried: mise-tasks/mcp-allow-check.sh crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego crates/batten/tests/it/mcp_allow.rs
+// carried: tests/mcp-allow-check.bats crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego crates/batten/tests/it/mcp_allow.rs
+// carried: "this repo's own settings pass the gate today" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego
+// carried: "a bare server rule with no connector companion passes — that is not this gate's claim" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego
+// carried: "both spellings present is also fine" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego
+// carried: "a connector-only allowlist needs no companion of its own" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego
+// carried: "a glob in the server segment is reported, not accepted" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego
+// carried: "a bare unanchored allow glob is reported" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego
+// carried: "non-MCP allow rules are none of this gate's business" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego
+// carried: "deny rules may glob freely — only allow rules are judged" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego
+// carried: "output is a pointer — it names rules, never settings content at large" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego
+// carried: "an enabled server that no allow rule names is reported" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego
+// carried: "an enabled server granted by a tool-name glob passes" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego
+// carried: "an enabled server granted tool by tool passes" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego
+// carried: "a bare server-level rule grants an enabled server" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego
+// carried: "every enabled server needs its own grant, not just one of them" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego
+// carried: "an absent enabledMcpjsonServers leaves the predicate nothing to say" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego
+// carried: "enabledMcpjsonServers set to true is not an enumerable list" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego
+// changed: "unparseable settings exit 2, distinct from a failing allowlist" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego still distinct from a failing allowlist, but as a verdict of its own: the engine reports the unparsed document on `input.tree.missing` and the module raises `grant read unread`, so `batten check` exits 2 naming the file rather than the task exiting 2 as a usage error
+// carried: "a missing settings file is not a failure this gate invents" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego
+// carried: "a deny on a host-supplied connector with no guard coverage fails" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego
+// changed: "a deny whose suffix the mediated rows cover passes under any server spelling" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego the covered suffixes are read from the committed `batten.toml` as a document — every `mediated_call` row's `tool` — rather than spawned out of `batten policy tools` over the resolved config; the committed rows are the ones a deny may rest on, and the retired guard `--covers` probe is withdrawn because no `*-guard.sh` exists
+// changed: "COULD NOT LOOK: an unavailable engine skips the coverage predicate rather than reporting it" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego there is no engine to be unavailable — the module runs inside it. The arm that survives is an authority the engine could not read, which skips the coverage predicate the same way (`test_an_unread_authority_skips_the_coverage_predicate`)
+// carried: "a deny on a server the repo itself declares needs no guard" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego
+// carried: "an under-matching ALLOW is deliberately not failed" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego
+// carried: "a non-MCP deny is not this predicate's business" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego
 // carried: "an allow rule whose tool the connector allows passes" crates/batten/src/mcp_posture.rs kind:verb
 // carried: "an allow rule whose tool the connector sets to ask is unenforceable" crates/batten/src/mcp_posture.rs kind:verb
 // carried: "a deny on the same tool is never reported" crates/batten/src/mcp_posture.rs kind:verb
@@ -45,7 +48,7 @@
 // changed: "one finding per alias, with a count" crates/batten/src/mcp_posture.rs kind:verb still one finding per governed name with a count; the bare `mcp__<server>` allow rule now counts as one rule when any declared tool asks, on the owner's recorded answer (2026-09-28) to honour the bare grant, so this repository's own finding reads 3 rules where the retired count read 2
 // carried: "no generated config means no verdict — the predicate is skipped, not assumed" crates/batten/src/mcp_posture.rs kind:verb
 // changed: "without --session the connector control is not consulted" crates/batten/src/mcp_posture.rs kind:verb the split is structural now rather than a flag: `batten check` runs the tree module, which cannot read the injected wiring at all, and `batten mcp posture` is the session half
-// changed: "an enabled server with no grant keeps its own verdict" policy/mcp-allow.rego that verdict is the tree module's `grant name missing`, raised wherever `batten check` runs; `mcp posture` does not repeat it
+// changed: "an enabled server with no grant keeps its own verdict" crates/batten/src/policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego that verdict is the tree module's `grant name missing`, raised wherever `batten check` runs; `mcp posture` does not repeat it
 // changed: "CLOUD-790: a pre-approved suffix the connector sets to ask is refused" crates/batten/src/mcp_posture.rs kind:verb withdrawn with the `--covers-allow` probe: no `*-guard.sh` exists and the engine has no allow arm to publish (`connector_verbs.rs`), so the set the arm judged is empty by construction
 // changed: "CLOUD-790: a pre-approved suffix the connector allows is silent" crates/batten/src/mcp_posture.rs kind:verb withdrawn with the probe it judged; see the row above
 // changed: "CLOUD-790: a suffix on a server that is NOT the toolbox is judged too" crates/batten/src/mcp_posture.rs kind:verb withdrawn with the probe it judged
@@ -65,20 +68,19 @@ use std::process::Output;
 
 use common::{batten, git_in, scratch, stderr, stdout, write};
 
-/// The shipped predicate, never a copy of it.
-const MODULE: &str = include_str!("../../../../policy/mcp-allow.rego");
-
-/// The row under test, the four classes it raises, and ONE mediated-call row
-/// whose `tool` covers `send_later` — the coverage the deny predicate reads out of
-/// this very file as a document.
+/// A consumer that is NOT this repository enabling the preset's tree half, and
+/// ONE mediated-call row whose `tool` covers `send_later` — the coverage the deny
+/// predicate reads out of this very file as a document. No module file and no
+/// `[[verdict]]` row: both arrive with the preset, and a fixture copy of either
+/// would test the copy.
 const CONFIG: &str = r#"version = 1
 
 [[rule]]
 id = "grant check other"
 kind = "policy"
 scope = "tree"
+preset = "claude-code-cloud"
 documents = [".claude/settings.json", ".mcp.json", "batten.toml"]
-module = "mcp-allow.rego"
 severity = "deny"
 
 [[rule]]
@@ -88,56 +90,15 @@ scope = "mediated_call"
 severity = "deny"
 tool = "send_later"
 reason = "a fixture row: its only job is to cover the send_later suffix"
-
-[[verdict]]
-id = "grant spelling wrong"
-gloss = "an MCP allow rule the host skips"
-class = "A fixture copy of the shipped class; the registry's own row is in batten.toml."
-
-[[verdict.route]]
-id = "rule fix first"
-kind = "document"
-target = "mcp-allow.rego"
-
-[[verdict]]
-id = "grant name missing"
-gloss = "an enabled MCP server no allow rule names"
-class = "A fixture copy of the shipped class; the registry's own row is in batten.toml."
-
-[[verdict.route]]
-id = "grant add first"
-kind = "document"
-target = "mcp-allow.rego"
-
-[[verdict]]
-id = "connector deny loose"
-gloss = "a deny spelled with one host-supplied server name"
-class = "A fixture copy of the shipped class; the registry's own row is in batten.toml."
-
-[[verdict.route]]
-id = "rule cover first"
-kind = "document"
-target = "mcp-allow.rego"
-
-[[verdict]]
-id = "grant read unread"
-gloss = "a declared permission or project file would not parse"
-class = "A fixture copy of the shipped class; the registry's own row is in batten.toml."
-
-[[verdict.route]]
-id = "path fix first"
-kind = "document"
-target = "mcp-allow.rego"
 "#;
 
-/// A repository carrying the module, the config above, and — where given — a
-/// settings file and a project file. Tracked, because a consumer's settings are
-/// committed and a suite judging only an untracked one would not be asking this
-/// repository's question.
+/// A repository carrying the config above and — where given — a settings file
+/// and a project file. Tracked, because a consumer's settings are committed and
+/// a suite judging only an untracked one would not be asking a consumer's
+/// question.
 fn fixture(name: &str, settings: Option<&str>, project: Option<&str>) -> PathBuf {
     let repo = scratch(&format!("mcp-allow-{name}"));
     write(&repo, "batten.toml", CONFIG);
-    write(&repo, "mcp-allow.rego", MODULE);
     if let Some(settings) = settings {
         write(&repo, ".claude/settings.json", settings);
     }

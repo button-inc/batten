@@ -435,10 +435,23 @@ value is what does the work, and it is a boolean rather than the string `true`."
     // is refused, and a read — or a `batten` lifecycle verb outside plan mode —
     // is pre-approved. Claude Code's tool names and plan-file path are the
     // host's vocabulary, which a vendor preset may carry and the core may not.
+    //
+    // VERSION 2 (CLOUD-843): the preset gained its TREE half, whether the host
+    // honours the committed MCP permission rules at all. The settings file, the
+    // project file and the rule grammar are the same host vocabulary; the
+    // coverage it reads is the consumer's own authority, found by shape.
     Manifest {
         name: "claude-code-cloud",
-        version: 1,
+        version: 2,
         modules: &[
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:claude-code-cloud>/mcp-grants-are-honoured.rego",
+                source: include_str!(
+                    "policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego"
+                ),
+            },
             PresetModule {
                 scope: RuleScope::MediatedCall,
                 provider: None,
@@ -464,16 +477,74 @@ value is what does the work, and it is a boolean rather than the string `true`."
                 ),
             },
         ],
-        verdicts: &[VendoredVerdict {
-            id: "plan write refused",
-            gloss: "a call that is not a read was made while the host is in plan mode",
-            class: "Plan mode is a promise that nothing changes until the plan is approved. The \
+        verdicts: &[
+            VendoredVerdict {
+                id: "plan write refused",
+                gloss: "a call that is not a read was made while the host is in plan mode",
+                class: "Plan mode is a promise that nothing changes until the plan is approved. The \
 host enforces it by asking the operator, and a session halted on a prompt is the failure this \
 preset exists to remove — so the call is refused instead, and nobody has to answer anything. A \
 read, the plan file itself, and leaving plan mode are never refused.",
-            routes: &[run("plan run first", "ExitPlanMode, then make the call")],
-            applicability: crate::verdict::Applicability::Advice,
-        }],
+                routes: &[run("plan run first", "ExitPlanMode, then make the call")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "grant spelling wrong",
+                gloss: "an MCP allow rule the host skips, so it grants nothing",
+                class: "The host matches an MCP permission rule by server name, and a glob in the \
+server segment, or a bare `*`, is not a name: the rule is skipped with a warning and grants \
+nothing. Its only symptom is an approval prompt on every call, which reads as harness behaviour \
+rather than as a settings bug.",
+                routes: &[run(
+                    "rule fix first",
+                    "name the server literally in `.claude/settings.json` (`mcp__<server>` or \
+`mcp__<server>__<tool>`); a tool-segment glob after a literal server is fine",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "grant name missing",
+                gloss: "an enabled MCP server no allow rule names, so every call to it prompts",
+                class: "`enabledMcpjsonServers` turns a project server on, and turning it on grants \
+none of its tools. A server enabled with no allow rule naming it is attached and unusable \
+unattended: every call stops for a human. Measured on one consumer, whose code-navigation server \
+shipped exactly that way.",
+                routes: &[run(
+                    "grant add first",
+                    "add an allow rule naming the server in `.claude/settings.json`, or stop \
+enabling it",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "connector deny loose",
+                gloss: "a deny spelled with one host-supplied server name, which the host renames away",
+                class: "A host-supplied connector's exposed name is chosen per registration \
+episode — the same connector was measured under three prefixes. A deny rule naming one of those \
+spellings reads as a prohibition and enforces nothing the moment the connector comes back under \
+another. What survives the rename is a `mediated_call` row keyed on the tool's own name, which \
+matches the tool segment whatever the server is called.",
+                routes: &[run(
+                    "rule cover first",
+                    "add a `mediated_call` `[[rule]]` whose `tool` is the denied tool's suffix, \
+so the refusal holds under any server spelling",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "grant read unread",
+                gloss: "a permission or project file was declared and would not parse, so nothing in it was judged",
+                class: "Could-not-look, and never a clean tree. An absent settings or project file \
+is a repository with nothing to check; one that exists and will not parse is a file the gate \
+tried to read and could not, and reading that as \"no defects\" is the vacuous pass every \
+could-not-look arm exists to refuse.",
+                routes: &[run(
+                    "path fix first",
+                    "make the named file parse as JSON again, then re-run `batten check`",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+        ],
         patterns: &[],
     },
     Manifest {

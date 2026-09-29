@@ -1,9 +1,17 @@
 # No MCP permission rule in `.claude/settings.json` is silently skipped by the
 # host (CLOUD-843, retiring `[tasks.mcp-allow-check]`'s commit-scoped half).
 #
+# A PRESET MODULE, because nothing here is one repository's fact. The settings
+# file, the project file and the `mcp__<server>__<tool>` rule grammar are Claude
+# Code's own vocabulary, which this vendor preset may carry and the core may not
+# (non-negotiable rule 1), and the coverage it reads is whatever `mediated_call`
+# rows the consumer's own authority declares. A consumer enables it with a
+# `scope = "tree"` row naming the documents; the row decides which files those
+# are, and this module finds the authority among them by SHAPE, never by name.
+#
 # A rule that grants nothing is silent by construction: its only symptom is an
 # approval prompt, which reads as harness behaviour rather than as a settings
-# bug. This repository shipped exactly that — `mcp__Linear` allowed, Linear
+# bug. One consumer shipped exactly that — a server allowed under one name,
 # arriving under another prefix, no rule matching either way. Three predicates
 # are pure functions of the committed files, so they are a TREE module and run
 # wherever `batten check` runs, the commit gate and CI included:
@@ -27,7 +35,8 @@
 # COVERAGE IS READ FROM THE AUTHORITY AS A DOCUMENT, and that is the one change
 # of source. The retired body spawned `batten policy tools`, which lists the
 # `tool` of every `mediated_call` row in the RESOLVED config; this reads the same
-# rows out of the committed `batten.toml`. The committed rows are the ones a deny
+# rows out of the committed authority — whichever declared document carries a
+# `rule` array. The committed rows are the ones a deny
 # may rely on — a local layer can raise, never be what a committed rule rests
 # on — so reading the committed set is the stricter of the two. The retired
 # guard `--covers` probe is withdrawn: no `*-guard.sh` exists, so it answered
@@ -40,18 +49,17 @@
 #MUTANT server-glob-accepted|s@^\tcontains(server_of(rule), "\*")$@\tfalse@|a_glob_in_the_server_segment_is_reported
 #MUTANT enabled-grant-unchecked|s@^\tnot granted_servers\[server\]$@\tfalse@|an_enabled_server_that_no_allow_rule_names_is_reported
 #MUTANT deny-coverage-unread|s@^\tnot covered\[suffix\]$@\ttrue@|a_deny_whose_suffix_the_mediated_rows_cover_passes_under_any_server_spelling
+#MUTANT authority-shape-unread|s@^\tis_array(doc.rule)$@\tfalse@|a_deny_on_a_host_supplied_connector_with_no_coverage_fails
 #MUTANT declared-server-unread|s@^\tnot declared\[server\]$@\ttrue@|a_deny_on_a_declared_or_non_mcp_server_is_not_this_predicates
 
 # METADATA
 # description: |
-#   Bound to the TREE surface: `scope = "tree"`, so it reads the tree document
-#   and never the mediated `{call, facts}` shape.
-#   THE BRACKETS ARE NOT STYLE: the schema file carries a hyphen, so the dotted
-#   form is a parse error reported as `invalid schema reference`.
+#   Bound to the TREE surface: reads `input.tree.documents` and
+#   `input.tree.missing`, never the mediated `{call, facts}` shape. The other
+#   modules in this preset are mediated; the manifest declares a scope per
+#   module, so a tree row compiles this one alone.
 #   THIS BLOCK IS YAML AND MUST STAY THE LAST COMMENT BLOCK BEFORE `package`.
-# schemas:
-#   - input: schema["policy-input.schema"]
-package batten.mcp_allow
+package batten.claude_code_mcp_grants
 
 import rego.v1
 
@@ -65,11 +73,18 @@ rules contains "grant read unread"
 
 # --- the three documents ------------------------------------------------------
 
+# The host's own paths: Claude Code reads its project permissions and its
+# project servers from exactly these, whatever repository it runs in.
 settings_path := ".claude/settings.json"
 
 project_path := ".mcp.json"
 
-authority_path := "batten.toml"
+# The consumer's authority, found by SHAPE: a declared document carrying a
+# `rule` array. Its path is the consumer's, and a preset may not name it.
+authorities contains doc if {
+	some _, doc in input.tree.documents
+	is_array(doc.rule)
+}
 
 settings := input.tree.documents[settings_path]
 
@@ -124,7 +139,8 @@ declared := enabled | project_servers
 # its `tool`, matched by `__`-delimited segment (CLOUD-178). Read from the
 # committed authority as a document.
 covered := {tool |
-	some row in input.tree.documents[authority_path].rule
+	some doc in authorities
+	some row in doc.rule
 	row.scope == "mediated_call"
 	tool := row.tool
 	is_string(tool)
@@ -133,7 +149,7 @@ covered := {tool |
 # Whether the authority was read at all. Without it coverage is unknown, and the
 # deny predicate abstains rather than reporting every deny as uncovered — the
 # retired gate's "deny coverage not judged" arm.
-authority_read if is_object(input.tree.documents[authority_path])
+authority_read if count(authorities) > 0
 
 # --- the refusals --------------------------------------------------------------
 
@@ -285,6 +301,22 @@ test_a_deny_on_a_host_supplied_connector_with_no_coverage_fails if {
 test_a_deny_whose_suffix_a_mediated_row_covers_passes_under_any_spelling if {
 	rules := ["mcp__Claude_Code_Remote__send_later", "mcp__bf7c680d__send_later"]
 	count(violation) == 0 with input as tree(denies_doc(rules), no_project, timer_row)
+}
+
+# THE AUTHORITY IS FOUND BY SHAPE, so a consumer keeping it anywhere is read: a
+# preset naming this repository's filename would decide nothing for any other.
+elsewhere(rows) := {"tree": {
+	"documents": {
+		".claude/settings.json": denies_doc(["mcp__Claude_Code_Remote__send_later"]),
+		"config/policy.toml": {"rule": rows},
+	},
+	"missing": {},
+}}
+
+test_an_authority_at_any_path_is_read_by_shape if {
+	count(violation) == 0 with input as elsewhere(timer_row)
+	found := violation with input as elsewhere([])
+	verdicts(found) == {"connector deny loose"}
 }
 
 # A TREE-SCOPED ROW NAMING THE SAME TOOL IS NOT COVERAGE: only a mediated-call

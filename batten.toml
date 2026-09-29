@@ -9054,17 +9054,26 @@ reason = "a `[[mcp.result]]` reduction decides nothing while the raw tool is gra
 # `batten check` runs; the hk step that spawned the task is gone with it, and the
 # world-scoped half is `batten mcp posture` at session start.
 #
+# THE `claude-code-cloud` PRESET'S TREE HALF, and consumer #1 enabling it. Nothing
+# the predicates decide is this repository's: the settings file, the project file
+# and the rule grammar are the host's, and the coverage is whatever
+# `mediated_call` rows the authority declares. So it ships to every consumer of
+# the preset, and this row is what enables it here, as `plan write refused`
+# enables the mediated half.
+#
 # THREE DOCUMENTS, each for one predicate. The settings file carries the rules;
 # `.mcp.json` declares the project's own servers, whose names the host cannot
 # rename away; and the authority itself carries the `mediated_call` rows whose
 # `tool` covers a deny under any server spelling — the set `batten policy tools`
-# listed for the retired body, read here as the committed rows it rests on.
+# listed for the retired body, read here as the committed rows it rests on. The
+# module finds the authority by shape, so this list is where this consumer says
+# which file it is.
 [[rule]]
 id = "grant check other"
 kind = "policy"
 scope = "tree"
+preset = "claude-code-cloud"
 documents = [".claude/settings.json", ".mcp.json", "batten.toml"]
-module = "policy/mcp-allow.rego"
 severity = "deny"
 reason = "an MCP permission rule the host skips grants or refuses nothing, and its only symptom is a prompt that reads as harness behaviour: a glob in the server segment or a bare `*` is skipped with a warning, an enabled server no allow rule names prompts on every call, and a deny spelled with one host-supplied server name enforces nothing once the host renames it (CLOUD-178). Fix the rule in `.claude/settings.json`, or cover the denied tool with a `mediated_call` row keyed on its `tool`."
 
@@ -12042,7 +12051,8 @@ expires = "2027-02-28"
 # --session` ran as its own row beside this one; both halves read the session's
 # world, so both are `batten mcp posture` and one row dispatches it. The id stays
 # this row's, and the sibling row is removed rather than kept to run the same verb
-# twice. The commit-scoped half is `policy/mcp-allow.rego` under `batten check`.
+# twice. The commit-scoped half is the `claude-code-cloud` preset's
+# `mcp-grants-are-honoured.rego` under `batten check`.
 #
 # IT SPOKE TO NOBODY ON `user-prompt-submit` (CLOUD-1946), measured 2026-09-28:
 # the connector-ask finding reached the advisory buffer on every prompt and
@@ -13654,68 +13664,13 @@ id = "task run first"
 kind = "command"
 target = "remove the raw connector entry from `permissions.allow` in .claude/settings.json and reach the row through `batten mcp call`"
 
-# --- MCP permission rules the host skips (CLOUD-843, `policy/mcp-allow.rego`) --
-
-[[verdict]]
-id = "grant spelling wrong"
-gloss = "an MCP allow rule the host skips, so it grants nothing"
-class = """
-The host matches an MCP permission rule by server name, and a glob in the \
-server segment, or a bare `*`, is not a name: the rule is skipped with a warning \
-and grants nothing. Its only symptom is an approval prompt on every call, which \
-reads as harness behaviour rather than as a settings bug.
-"""
-
-[[verdict.route]]
-id = "rule fix first"
-kind = "command"
-target = "name the server literally in `.claude/settings.json` (`mcp__<server>` or `mcp__<server>__<tool>`); a tool-segment glob after a literal server is fine"
-
-[[verdict]]
-id = "grant name missing"
-gloss = "an enabled MCP server no allow rule names, so every call to it prompts"
-class = """
-`enabledMcpjsonServers` turns a project server on, and turning it on grants \
-none of its tools. A server enabled with no allow rule naming it is attached and \
-unusable unattended: every call stops for a human. Serena shipped that way.
-"""
-
-[[verdict.route]]
-id = "grant add first"
-kind = "command"
-target = "add an allow rule naming the server in `.claude/settings.json`, or stop enabling it"
-
-[[verdict]]
-id = "connector deny loose"
-gloss = "a deny spelled with one host-supplied server name, which the host renames away"
-class = """
-A host-supplied connector's exposed name is chosen per registration episode — \
-the same connector was measured under three prefixes (CLOUD-178). A deny rule \
-naming one of those spellings reads as a prohibition and enforces nothing the \
-moment the connector comes back under another. What survives the rename is a \
-`mediated_call` row keyed on the tool's own name, which matches the tool \
-segment whatever the server is called.
-"""
-
-[[verdict.route]]
-id = "rule cover first"
-kind = "command"
-target = "add a `mediated_call` `[[rule]]` whose `tool` is the denied tool's suffix, so the refusal holds under any server spelling"
-
-[[verdict]]
-id = "grant read unread"
-gloss = "a permission or project file was declared and would not parse, so nothing in it was judged"
-class = """
-Could-not-look, and never a clean tree. An absent settings or project file is a \
-repository with nothing to check; one that exists and will not parse is a file \
-the gate tried to read and could not, and reading that as "no defects" is the \
-vacuous pass every could-not-look arm exists to refuse.
-"""
-
-[[verdict.route]]
-id = "path fix first"
-kind = "command"
-target = "make the named file parse as JSON again, then re-run `batten check`"
+# --- MCP permission rules the host skips (CLOUD-843) ---------------------------
+#
+# `grant spelling wrong`, `grant name missing`, `connector deny loose` and
+# `grant read unread` are the `claude-code-cloud` preset's own classes now,
+# declared in its manifest beside the module that raises them, so no row here
+# restates them: a consumer row carrying the same id would collide with the
+# vendored one at load.
 
 # --- the committed half of the same grant (CLOUD-1247, inverted by CLOUD-1379) -
 
