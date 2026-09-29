@@ -693,7 +693,7 @@ jobs:
       # step's. Read from the pinned binary rather than assumed:
       # `windows_default_inline_shell_args` is "cmd /c", against
       # "sh -c -o errexit" on unix. `[tasks."test:cargo"]` declares no `shell`
-      # and its body is bash — `if [ "$(mise run -q step-receipt check …)" …`
+      # and its body is bash — `if [ "$(cargo run … step check …)" …`
       # — so under cmd the task dies before cargo is ever reached.
       #
       # Set here rather than in mise.toml because this is the only job in the

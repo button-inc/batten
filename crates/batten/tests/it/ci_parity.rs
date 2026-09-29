@@ -675,7 +675,7 @@ fn a_task_yielding_no_cargo_invocation_is_refused() {
         "mise.toml",
         &MANIFEST.replace(
             "if ! cargo nextest run --workspace; then exit 1; fi",
-            "mise run -q step-receipt check test:cargo",
+            "cargo run --quiet -p batten -- step check test:cargo",
         ),
     );
     let found = verdicts_raised(&root);

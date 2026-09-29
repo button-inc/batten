@@ -7928,7 +7928,7 @@ node = "tasks"
 # declared `Surface::Check` is dropped by the surface table before projection, so
 # the module silently sees nothing. A payload on stdin is a payload something
 # read, which is context re-sent every turn — the channel `ready lint` and
-# `claim check` were both moved off. And the step-receipt key does not include
+# `claim check` were both moved off. And the `batten step` key does not include
 # stdin, so two runs over different payloads on one unchanged tree hit one
 # receipt and skip, which is a false green.
 #
@@ -11672,8 +11672,8 @@ expires = "2027-02-28"
 #
 # MEASURED BEFORE IT WAS WIRED, 2026-09-09: the handler returns in 224ms because
 # the type-check is detached, and the check it launches costs 1.0s on a tree that
-# changed no Rust (the `step-receipt` hit) against 54s when it must re-derive. So
-# the tax is a second on the turns that need nothing and a minute of BACKGROUND
+# changed no Rust (a step-cache hit, measured under the task `batten step`
+# retired) against 54s when it must re-derive. So the tax is a second on the turns that need nothing and a minute of BACKGROUND
 # work on the turns that do.
 #
 # IT IS NOT A SECOND `verify` AND MUST NOT BECOME ONE. `verify` stays the
@@ -17993,3 +17993,141 @@ id = "mediator-matches-the-tree"
 gloss = "the engine adjudicating this tree was built from it, so a declared gate is not silently dropped"
 check = ["batten", "doctor", "mediator"]
 repair = ["mise", "run", "install:local"]
+
+# THE STEP CACHE'S TABLE (CLOUD-424), retiring `[tasks.step-receipt]`'s hard-coded
+# `case` under CLOUD-843. Each row is a step a task brackets with `batten step`:
+# `inputs` are the pathspecs whose INDEX entries key its receipt, `tools` the argvs
+# whose answers do — a toolchain's version, or `mise tasks info <task> --json`
+# where the step's command is a shell body `batten step run` cannot see as argv.
+# A `step run` caller's command IS its argv, and the verb keys it. A step no row
+# declares is a miss that records nothing, so a name drifting between a task and
+# this table costs the economy and never a verdict; `step_receipt.rs` holds every
+# name a task passes against this table anyway.
+#
+# `batten.toml` rides in every Rust row's inputs because the committed config
+# steers the `the_committed_*` cases (CLOUD-59). A row that compiles the TEST
+# targets (`lint:clippy`, `cross-check`) also lists `policy` and `bench`: suites
+# under `crates/batten/tests` `include_str!` modules and `RESULTS.md` from both,
+# so an edit there changes what `--all-targets` compiles.
+#
+# `.` — the whole tracked tree — is the honest set wherever the step READS the
+# repository at run time rather than compiling it. `test:bats`: its suites read
+# `mise.toml`, `hk.pkl`, workflows and fixture trees everywhere. `test:cargo`: its
+# tiers read `mise.toml`, `policy/`, `.github`, `hk.pkl` and `rules/` from the
+# checkout, well past `crates`. The row itself is key material too, so narrowing
+# any row's set is a miss rather than a receipt earned under the wider one
+# answering for the narrower.
+#
+# A ROW KEYS ONLY WHAT IT CAN NAME: index entries, tool answers, arguments. A
+# step whose verdict reads anything else has no honest row. `batten-check` is
+# GONE from the table for that reason (CLOUD-843 review): `enforce` reads the
+# record and capture stores under the git directory (`input.tree.records`), so a
+# record flipping to a deny value with no tracked change hit a `.`-keyed receipt
+# and skipped the gate. The retired table carried the same hole.
+#
+# A caller whose shell computes an `--arg` (`semver`, `darwin-link`) also keys
+# its own task declaration, so an edit to that shell misses even where the
+# computed values come out byte-identical, as the retired table's `mise tasks
+# info` of every step did.
+#
+# `lint:fmt` and `zizmor` are GONE from the table rather than carried: both steps
+# cost a second or two, the cache is an engine build, and the first runs at commit
+# while the second runs in a CI job that compiles nothing.
+[[step]]
+id = "lint:clippy"
+inputs = [
+  "crates",
+  "Cargo.toml",
+  "Cargo.lock",
+  "batten.toml",
+  "clippy.toml",
+  ".clippy.toml",
+  "policy",
+  "bench",
+]
+tools = [["cargo", "clippy", "--version"], ["rustc", "--version"]]
+
+[[step]]
+id = "test:cargo"
+inputs = ["."]
+tools = [
+  ["rustc", "--version"],
+  ["cargo", "--version"],
+  ["mise", "tasks", "info", "test:cargo", "--json"],
+]
+
+[[step]]
+id = "cross-check"
+inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml", "policy", "bench"]
+tools = [
+  ["rustc", "--version"],
+  ["cargo", "--version"],
+  ["mise", "tasks", "info", "cross-check", "--json"],
+]
+
+# The probe build `evaluator-io-record` skips on a hit. The retired table keyed it
+# on `mise tasks info evaluator-io-check`, a task that no longer exists, so the
+# key never formed and the step never hit; the body it caches is
+# `evaluator-io-record`'s, which is what this row names.
+[[step]]
+id = "evaluator-io-check"
+inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml"]
+tools = [
+  ["rustc", "--version"],
+  ["cargo", "--version"],
+  ["mise", "tasks", "info", "evaluator-io-record", "--json"],
+]
+
+[[step]]
+id = "darwin-link"
+inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml"]
+tools = [
+  ["cargo-zigbuild", "--version"],
+  ["zig", "version"],
+  ["rustc", "--version"],
+  ["mise", "tasks", "info", "darwin-link", "--json"],
+]
+
+[[step]]
+id = "deny"
+inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml", "deny.toml"]
+tools = [["cargo", "deny", "--version"]]
+
+[[step]]
+id = "test:bats"
+inputs = ["."]
+tools = [["bats", "--version"], ["mise", "tasks", "info", "test:bats", "--json"]]
+
+# CLOUD-1891: keyed on BOTH sides of the comparison. This tree's crates are the
+# inputs; the baseline's tree ids and the branch's commit messages arrive as
+# `--arg`s from the task, because neither is a path in this tree.
+# The BASELINE is part of the key: `semver` compares against `origin/main`, so a
+# receipt must not answer once the baseline moves. The three tree ids and the
+# digest of the branch's messages the retired body passed as `--arg`s are these
+# four answers now (CLOUD-1991, CLOUD-843). A baseline that cannot be read, or an
+# empty answer (a branch with no commit ahead of `main`), is no key
+# (`step.rs` `material`), so the step runs rather than hitting.
+[[step]]
+id = "semver"
+inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml"]
+tools = [
+  ["cargo", "semver-checks", "--version"],
+  ["rustc", "--version"],
+  ["mise", "tasks", "info", "semver", "--json"],
+  ["git", "rev-parse", "-q", "--verify", "origin/main:crates"],
+  ["git", "rev-parse", "-q", "--verify", "origin/main:Cargo.toml"],
+  ["git", "rev-parse", "-q", "--verify", "origin/main:Cargo.lock"],
+  ["git", "log", "--format=%B", "origin/main..HEAD"],
+]
+
+# The three validator records are a function of committed bytes, so one run
+# answers for all (CLOUD-1891). The task's forge arm stays outside the key.
+[[step]]
+id = "record-verdicts"
+inputs = ["hk.pkl", "renovate.json5", "mise.toml"]
+tools = [
+  ["pkl", "--version"],
+  ["renovate-config-validator", "--version"],
+  ["hk", "--version"],
+  ["mise", "tasks", "info", "record-verdicts", "--json"],
+]

@@ -1545,6 +1545,17 @@ pub const CENSUS: &[FieldCoverage] = &[
         ]),
     },
     FieldCoverage {
+        field: "steps",
+        coverage: Coverage::NotPolicyBearing(
+            "the step cache's key table (CLOUD-843): which files and tool answers key a \
+             step's LOCAL receipt. It decides no finding and sets no bar a verdict is read \
+             against — a hit only spares a local re-run, and under CI the cache is off \
+             entirely, so every step whose verdict a landing depends on is re-derived there \
+             whatever this table says. An override cannot reach it either: `batten step` \
+             reads it from the committed authority alone",
+        ),
+    },
+    FieldCoverage {
         field: "provisions",
         coverage: Coverage::Compared(&[WeakeningKind::ProvisionRemoved]),
     },

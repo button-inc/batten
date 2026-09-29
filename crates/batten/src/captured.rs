@@ -16,7 +16,7 @@
 //! * **A payload on stdin is a payload something read**, which is context re-sent
 //!   every turn. `ready lint` and `claim check` were both moved off that channel
 //!   for this reason; re-introducing it here would undo two migrations.
-//! * **The step-receipt key does not include stdin.** Two runs with different
+//! * **The `batten step` key does not include stdin.** Two runs with different
 //!   piped payloads over one unchanged tree hit the same receipt and skip — a
 //!   false green, which is the exact failure this repository exists to prevent.
 //!

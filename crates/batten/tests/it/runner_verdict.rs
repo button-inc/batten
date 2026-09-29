@@ -54,6 +54,19 @@ fn batten_check_body() -> String {
     task_body("batten-check")
 }
 
+/// The `run` entries of `[tasks.batten-check]`, parsed: the body is an argv
+/// chain, so each entry is one command mise runs in order and stops on.
+fn batten_check_entries() -> Vec<String> {
+    let block = common::task_block("batten-check").expect("batten-check is a declared task");
+    let parsed: toml::Value = toml::from_str(&block).expect("a task block is a TOML table");
+    parsed["tasks"]["batten-check"]["run"]
+        .as_array()
+        .expect("batten-check's `run` is an argv chain")
+        .iter()
+        .map(|entry| entry.as_str().expect("each entry is a string").to_owned())
+        .collect()
+}
+
 /// ANTI-VACUITY, and it is not ceremony: every assertion below is over a string
 /// this file located by scanning, so a rename of the table or of the literal
 /// delimiter would leave them all passing over an empty body.
@@ -64,9 +77,26 @@ fn the_batten_check_body_was_found_at_all() {
         body.contains("enforce"),
         "the batten-check body invokes the engine"
     );
+}
+
+/// NOT RECEIPT-GATED, and the reason is what `enforce` reads (CLOUD-843 review).
+///
+/// CHANGED WITH CLOUD-843: the retired body skipped `enforce` on a
+/// `step-receipt` hit keyed to the tracked tree. But `enforce` also reads state
+/// no pathspec names: the record stores under the git directory
+/// (`input.tree.records`), captures, the forge's recorded answers. A record
+/// flipping to a deny value with no tracked change hit the receipt and skipped
+/// the gate. A `[[step]]` row can key only index entries, tool answers and
+/// arguments, so the honest cache for this step is none.
+#[test]
+fn the_engine_is_never_answered_from_a_step_receipt() {
+    let body = batten_check_body();
     assert!(
-        body.contains("step-receipt check"),
-        "the batten-check body is receipt-gated"
+        !body.contains("step run batten-check")
+            && !body.contains("step check batten-check")
+            && !body.contains("step-receipt"),
+        "batten-check must not be receipt-gated: `enforce` reads record and capture \
+         stores outside the tracked tree, which no `[[step]]` row can key"
     );
 }
 
@@ -91,39 +121,24 @@ fn the_engine_invocation_is_not_wrapped_in_a_replacing_guard() {
 }
 
 /// The positive half, and it is what stops the assertion above being satisfiable by
-/// deleting the invocation. The status is captured and re-exited with the SAME
-/// value — a body that captured it and exited `1` would pass a mere "captures `$?`"
-/// test while keeping the defect.
+/// deleting the invocation.
+///
+/// CHANGED WITH CLOUD-843: the capture-and-re-exit (`verdict=$?` / `exit
+/// "$verdict"`) existed only so a receipt could be written after a zero exit.
+/// With no receipt, the engine is the chain's TERMINATING entry, so its code is
+/// the task's with nothing after it to replace one.
 #[test]
-fn the_engine_status_is_captured_and_re_exited_unchanged() {
+fn the_engine_status_is_the_chains_last_entry_so_it_passes_through_unchanged() {
+    let entries = batten_check_entries();
+    assert_eq!(
+        entries.last().map(String::as_str),
+        Some("cargo run --quiet -p batten -- enforce"),
+        "`enforce` must be the last entry, bare, so its code is the task's: {entries:?}"
+    );
     let body = batten_check_body();
     assert!(
-        body.contains("verdict=$?"),
-        "the batten-check body captures the engine's exit status"
-    );
-    assert!(
-        body.contains(r#"exit "$verdict""#),
-        "the batten-check body exits with the status it captured, unchanged"
-    );
-
-    // ORDER IS THE PROPERTY, not mere presence: a capture that is never tested, or
-    // tested after the receipt is written, leaves the defect in place. mise task
-    // bodies do not run under `set -e`, so nothing else enforces this.
-    let capture = body.find("verdict=$?").expect("the capture is present");
-    let propagate = body
-        .find(r#"exit "$verdict""#)
-        .expect("the exit is present");
-    let record = body
-        .find("step-receipt record")
-        .expect("the receipt write is present");
-    assert!(
-        capture < propagate,
-        "the status is captured before it is propagated"
-    );
-    assert!(
-        propagate < record,
-        "a non-zero verdict exits before the receipt is written — a denied run must \
-         leave no receipt, or the next run answers from a cache of the failure"
+        !body.contains("verdict=$?") && !body.contains("|| true"),
+        "no shell remains between the engine and the task's exit to replace its code"
     );
 }
 

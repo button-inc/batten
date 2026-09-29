@@ -25,7 +25,7 @@
 //! these bytes is a hash comparison no better-shaped prose can satisfy, because
 //! the prose is the input to the hash.
 //!
-//! # Spawn on miss, read on hit — `step-receipt`'s pattern, not a new one
+//! # Spawn on miss, read on hit — `batten step`'s pattern, not a new one
 //!
 //! A review costs minutes and tokens, and `check` runs every landing lap, so
 //! resolving it unconditionally would be unaffordable and the gate would be

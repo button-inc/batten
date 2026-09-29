@@ -1245,7 +1245,7 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   a stdin-fed fact declared `Surface::Check` is not admitted, so the module
   silently sees nothing; a payload on stdin is context re-sent every turn, the
   channel `ready lint` and `claim check` were both moved off; and the
-  step-receipt key does not include stdin, so two runs over different payloads on
+  `batten step` key does not include stdin, so two runs over different payloads on
   one tree hit one receipt and skip. `capture::list` is sorted by handle rather
   than by time, so a reduction is a pure function of the store's bytes — the byte
   stability `Surface::Check` requires. **The reduction is part of the FACT**: a
@@ -1625,7 +1625,7 @@ transcript CONTENT needs 1029 first, and nothing landed authorises one.
   no code, no case file and no `#MUTANT` row to reach. A hash comparison is what
   better-shaped prose cannot satisfy, because the prose is the input to the hash.
   **Spawn on miss, read on hit**, keyed by (prompt digest, subject digest) —
-  `step-receipt`'s pattern, so the agent runs once per unique subject rather than
+  `batten step`'s pattern, so the agent runs once per unique subject rather than
   once per landing lap, and editing the ticket body or pushing a commit leaves
   the record under a name nothing looks up. The keying is the anti-staleness
   property, not an optimisation.
@@ -2908,6 +2908,25 @@ record nonverdict` classifies failed required jobs by their failed steps and
   format is the retired bodies' (FLOOR rank, text-compared instants), kept so
   recorded windows stay comparable. Could-not-look REMOVES the stale record and
   exits 3; a window read in part is recorded with `unreadable` counted.
+- `step.rs` — the step cache (CLOUD-424), retiring `[tasks.step-receipt]`
+  (CLOUD-843): `batten step check|record|run <step> [--arg V]...`. A `[[step]]`
+  row (`id`, `inputs` as git pathspecs, `tools` as argvs) keys a LOCAL receipt on
+  the index entries under the specs (`git::index_facts`, no spawn), each tool
+  argv's stdout, every `--arg` in order and, under `run`, the command. Fail
+  closed: an undeclared step, a silent tool, an empty set, a diverged or
+  untracked path is no key, so the step runs. `check` files the key under
+  `step-pending`; `record` recomputes and refuses (exit 2) on any mismatch, so no
+  receipt attests bytes the run never judged; a hit never blanks pending (twin
+  runs). `run` spawns through `exec::run` (child's code passes through) and tools
+  through `exec::piped_argv`, so the module spawns nothing itself. Off under `CI`
+  or `BATTEN_STEP_RECEIPT_BYPASS`. The table is read from the committed authority
+  alone; the retired `BATTEN_STEP_SPECS`/`BATTEN_STEP_TOOLS` overrides did not
+  survive, because a caller naming its own inputs could key a receipt to files
+  the step never read. The row type and its load-time validator are the leaf
+  `step_table.rs` (`error` + `git` only), so `config` never reaches `step` and
+  through it `resolve`. A row keys only index entries, tool stdout and args, so
+  a step reading state outside the tree (`enforce`: record/capture stores under
+  the git dir) has no row — `batten-check` runs uncached.
 - `severity.rs` — the severity taxonomy (CLOUD-168): one rank table plus the
   adapter across the three axes — `RuleSeverity` (config, CLOUD-61),
   `AdvisoryTier` (the one _stored_ severity, CLOUD-80/78), `ReportLevel`

@@ -653,7 +653,7 @@ pub enum Fact {
     /// stdin-fed fact declared `Surface::Check` is dropped by
     /// [`Surface::admits`] before projection, so the module silently sees
     /// nothing. A payload on stdin is a payload something read, which is context
-    /// re-sent every turn. And the step-receipt key does not include stdin, so
+    /// re-sent every turn. And the `batten step` key does not include stdin, so
     /// two runs over different payloads on one tree hit one receipt and skip.
     ///
     /// [`crate::capture::list`] is sorted by handle rather than by time, so this

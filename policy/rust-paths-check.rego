@@ -24,7 +24,7 @@
 #   decides whether the committed filter honours them: paths a change to which must
 #   re-run these jobs, and paths a change to which must not. Adding a job with a new
 #   input means adding its probe here, in the same commit, which is the same bargain
-#   the step-receipt spec table makes.
+#   the `[[step]]` table in `batten.toml` makes.
 #
 #   THE MATCHER REFUSES WHAT IT CANNOT DECIDE rather than guessing. A `?`, a
 #   bracketed class, a `*` in the middle and a leading negation all change selection

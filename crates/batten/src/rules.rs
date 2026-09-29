@@ -2520,7 +2520,7 @@ pub struct Rule {
     ///
     /// **The store, never stdin**: a stdin-fed fact is dropped by the surface
     /// table before projection, is context re-sent every turn, and is invisible to
-    /// the step-receipt key — three independent refusals, any one of which is
+    /// the `batten step` key — three independent refusals, any one of which is
     /// enough.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub captured: Vec<crate::facts::CaptureQuery>,

@@ -173,6 +173,15 @@ const FAULTS: &[(&str, &str, &str)] = &[
          [[startup]]\nid = \"twice\"\ngloss = \"g\"\ncheck = [\"true\"]\n\
          [[startup]]\nid = \"twice\"\ngloss = \"g\"\ncheck = [\"true\"]\n",
     ),
+    (
+        // CLOUD-843. A step keying NO file: it parses, and it would answer `hit`
+        // for any tree once one pass recorded — the receipt attesting bytes
+        // nobody checked, which is the table's own worst case.
+        "step declare refused",
+        "step",
+        "version = 1\n\
+         [[step]]\nid = \"unkeyed\"\ninputs = []\ntools = [[\"rustc\", \"--version\"]]\n",
+    ),
     // NOT a `Config` table: a remedy is resolved across the redirect, verb and
     // rule tables at once, which is why it is a call at the load rather than a
     // validator over one field — and why CLOUD-1189 could not declare a class

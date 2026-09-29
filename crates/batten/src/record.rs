@@ -1318,6 +1318,26 @@ fn keyed_path(git_dir: &Path, family: &str, key: &str) -> PathBuf {
         .join(crate::tools::digest(key.as_bytes()))
 }
 
+/// One keyed record's value, or `None` where it is absent or unreadable.
+///
+/// **The in-process door onto the store `record keyed`/`record show` spell on
+/// argv** (CLOUD-843). `batten step` keys its receipts here, and composing the
+/// path a second time beside [`keyed_path`] would be a second spelling of the key
+/// the two verbs share. `family` must already be a single path component.
+pub(crate) fn keyed_read(git_dir: &Path, family: &str, key: &str) -> Option<String> {
+    std::fs::read_to_string(keyed_path(git_dir, family, key)).ok()
+}
+
+/// Write one keyed record's value whole, through the same store as
+/// [`run_keyed`]. `family` must already be a single path component.
+///
+/// # Errors
+///
+/// An internal error when the store cannot be written.
+pub(crate) fn keyed_write(git_dir: &Path, family: &str, key: &str, value: &str) -> Result<()> {
+    store(&keyed_path(git_dir, family, key), value)
+}
+
 /// Put one value into the keyed family, read from stdin.
 ///
 /// # Errors

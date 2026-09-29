@@ -719,6 +719,27 @@ declared_modules := {
 	# once-per-boot mark. It decides nothing a gate reads, so its `rules` and
 	# `hook` edges are forbidden below for `forge_query`'s reason.
 	"reclaim",
+	# `step` arrived with CLOUD-843, retiring `[tasks.step-receipt]`, and is
+	# `record`'s class: a cache over the keyed store. It reaches `git` for the
+	# index entries it hashes, `exec` for the one placed boundary its tool argvs
+	# and command run through (it spawns nothing of its own), `record` for the
+	# store, `resolve` for the committed step table and `task` for the phase it
+	# announces. IT DECIDES NOTHING -- a hit spares a re-run and never mints a
+	# `Finding` -- so its edges into the engine that decides are forbidden below,
+	# and a mediated call must not reach a verb that runs a consumer's command.
+	"step",
+	# `step_table` is the `[[step]]` row and its load-time validator, split out
+	# of `step` in review (CLOUD-843). With the type in `step`, `config` reached
+	# `step` and `step` reached `resolve`, so `config -> step -> resolve -> config`
+	# closed a cycle through the `config -> resolve` edge the table forbids --
+	# the one-hop route this file's own standard refuses (CLOUD-1260). Its OWN
+	# edges are `error` for the refusal and `git` for the pathspec predicate
+	# `rules` already shares, neither of them a loader. That is a claim about
+	# DIRECT edges, which is all this table decides: `git -> rules -> config`
+	# still reaches the loader two hops out, through the `config <-> rules`
+	# cycle that predates this row and that the split neither adds to nor
+	# removes. The same holds for `step -> git -> rules` below.
+	"step_table",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
@@ -783,9 +804,14 @@ forbidden[from] contains to if {
 		# `forge_query` joins for `rest`'s reason one hop further out (CLOUD-843):
 		# it reaches `rest`, so a mediated call able to reach it reaches the
 		# network by the route the `rest` entry refuses, one name later.
+		# `step` joins for the reason `repair`'s row below states (CLOUD-843):
+		# its `run` arm executes a command the caller names and writes a
+		# receipt, and a mediated call adjudicates cached state -- it never runs
+		# a step. `repair` carries the same entry, since it inherits this set.
 		"hook": {
 			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
 			"pr_watch", "fast_forward", "main_watch", "forge_query", "ci_signal", "sbom",
+			"step",
 		},
 		# `repair` RUNS A CONSUMER'S DECLARED COMMAND ON THE MEDIATED PATH
 		# (CLOUD-1639), so it inherits `hook`'s set entire and for the same
@@ -809,6 +835,7 @@ forbidden[from] contains to if {
 		"repair": {
 			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
 			"pr_watch", "fast_forward", "main_watch", "forge_query", "ci_signal", "sbom",
+			"step",
 		},
 		# `check` NAMES NO MODULE TODAY, so this row is INERT — and that is worth
 		# stating rather than leaving a reader to infer enforcement from a table
@@ -833,7 +860,10 @@ forbidden[from] contains to if {
 		"mcp": {"hook"},
 		"surface": {"cli", "lib"},
 		"cli": {"lib", "journal"},
-		"config": {"resolve", "trust", "lint", "epoch"},
+		# `config -> step` joins the chain for `step_table`'s reason (CLOUD-843):
+		# `step` reaches `resolve`, so the edge is `config -> resolve` one hop
+		# further out. The loader names the row through the leaf instead.
+		"config": {"resolve", "trust", "lint", "epoch", "step"},
 		"resolve": {"trust", "lint", "epoch"},
 		"trust": {"lint", "epoch"},
 		"lint": {"epoch"},
@@ -933,6 +963,20 @@ forbidden[from] contains to if {
 		# is a sensor, and one that reached the engine adjudicating a call would
 		# be a measurement able to decide over what it measures (CLOUD-843).
 		"reclaim": {"rules", "hook"},
+		# `step -> {rules, hook}`, the same pair for the same reason: a cache that
+		# reached the engine deciding over the step it caches would be a receipt
+		# that knew which verdict it was standing in for (CLOUD-843). DIRECT
+		# edges only, stated rather than implied: `step -> git -> rules` remains,
+		# since `index_facts` walks with `rules::tree_files`. What crosses that
+		# hop is a file list, never a verdict; forbidding `step -> git` would
+		# forbid the index read that is the cache's whole key.
+		"step": {"rules", "hook"},
+		# `step_table -> {step, resolve, config, rules, hook}`: the loader's leaf
+		# must name nothing that loads a config or decides, or the cycle it was
+		# split out to break comes back one name later (CLOUD-843). Direct edges,
+		# like every row here; the two-hop `git -> rules -> config` route is the
+		# pre-existing `config <-> rules` cycle, stated at `declared_modules`.
+		"step_table": {"step", "resolve", "config", "rules", "hook"},
 	}
 	some to in targets
 }
@@ -1249,6 +1293,92 @@ test_the_reclaim_census_reaches_what_it_composes if {
 	count(violation) == 0 with input as judging(
 		"crates/batten/src/record.rs",
 		[internal("reclaim", 20)],
+	)
+}
+
+# CLOUD-843's step cache, both directions. The mediated call must not reach a
+# verb that runs a consumer's command and writes a receipt, and the cache must
+# not reach the engine that decides over the step it stands in for.
+test_the_mediated_path_must_not_reach_the_step_cache if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("step", 31)],
+	)
+
+	# `repair` inherits `hook`'s set entire, so the edge is refused there too.
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/repair.rs",
+		[internal("step", 32)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/step.rs",
+		[internal("rules", 12)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/step.rs",
+		[internal("hook", 13)],
+	)
+}
+
+# THE CYCLE THE REVIEW FOUND, closed at both ends (CLOUD-843). The loader must
+# not reach the cache (which reaches `resolve`), and the leaf holding the row
+# must not reach anything that loads a config.
+test_the_loader_must_not_reach_the_step_cache if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/config.rs",
+		[internal("step", 765)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/step_table.rs",
+		[internal("resolve", 11)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/step_table.rs",
+		[internal("config", 12)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/step_table.rs",
+		[internal("step", 13)],
+	)
+}
+
+# AND THE ARRANGEMENT THAT REPLACES IT: the loader names the row through the
+# leaf, the leaf reaches only `error` and `git`, and the cache reads the row.
+test_the_loader_reaches_the_step_row_through_the_leaf if {
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/config.rs",
+		[internal("step_table", 765)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/step_table.rs",
+		[internal("error", 17), internal("git", 60)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/step.rs",
+		[internal("step_table", 83)],
+	)
+}
+
+# AND THE ARRANGEMENT: the cache composes the index, the placed spawn boundary,
+# the keyed store, the committed table and the task registry, and the verb
+# dispatch reaches it. A table that banned the module outright would satisfy the
+# case above.
+test_the_step_cache_reaches_what_it_composes if {
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/step.rs",
+		[internal("git", 10), internal("exec", 11), internal("record", 12), internal("resolve", 13), internal("task", 14)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/lib.rs",
+		[internal("step", 20)],
 	)
 }
 
