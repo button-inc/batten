@@ -5178,10 +5178,15 @@ node = "mcpServers"
 Linear = "mcp.linear.app"
 # THE SESSION TOOLBOX, by the upstream address its wrapper URL carries ENCODED
 # in a query parameter (CLOUD-843). The address was a constant in the retired
-# `connector-allow-resolve` body; it is the consumer's fact, so it lives here,
-# and `mcp::endpoint_carries` decodes the wrapper before comparing. The path
-# segment is what keeps it from also matching every other server behind the
-# same proxy host, which would be `Ambiguous`.
+# `connector-allow-resolve` body; it is the consumer's fact, so it lives here.
+# ONE VALUE, TWO MATCHERS. The permission alias `[mcp] permission_aliases` names
+# is translated only where `mcp::endpoint_names` finds this address EQUAL to the
+# endpoint or to a whole percent-decoded query value (scheme, query, fragment
+# and trailing `/` set aside), so an address that merely extends it names another server and
+# gets no grant. Dispatch (`mcp call`) selects with the looser
+# `mcp::endpoint_carries` substring, where the path segment is what keeps it
+# from also matching every other server behind the same proxy host, which would
+# be `Ambiguous`.
 Claude_Code_Remote = "api.anthropic.com/v1/code/mcp/meta"
 
 [mcp.source.credential]
