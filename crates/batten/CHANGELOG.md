@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.190](https://github.com/button-inc/batten/compare/v0.0.189...v0.0.190) - 2026-09-29
+
+### Other
+
+- *(shell-retirement)* bound the cost case in allocations, not wall time
+- *(harness)* a state redirect no longer moves mise's installs
+- *(lease)* assert the push economy over a fixture, not the checkout's history
+
 ## [0.0.189](https://github.com/button-inc/batten/compare/v0.0.188...v0.0.189) - 2026-09-29
 
 ### Added
