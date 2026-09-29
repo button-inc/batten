@@ -1677,8 +1677,10 @@ pub enum RecordCommand {
     /// the reading is whatever wrote to the pipe; this takes the producer's raw
     /// input and applies a reading the engine owns and tests.
     ///
-    /// The effects stay in the task: the document arrives on stdin and this
-    /// spawns nothing (house-style §5).
+    /// The effects stay in the task: the document arrives on stdin (house-style
+    /// §5). The one exception is a graph-reading family handed
+    /// `--input resolve=<triple|any>`, which resolves its own `cargo metadata`
+    /// document through the placed `exec` adapter (CLOUD-1991).
     Derive {
         /// The record family, which selects the reading and is the key a module
         /// reads the result under.

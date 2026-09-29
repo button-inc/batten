@@ -17,8 +17,10 @@
 //! the validator stays a command on PATH — §9's prior-art disposition. What moves
 //! in here is not the run but the RECORDING of what it said: a `mise` task or a CI
 //! step runs the tool, reduces its answer to `<name> <token>` lines, and pipes
-//! them here. Nothing in this module spawns anything, and
-//! `evaluator-io-check` stays the gate on that.
+//! them here. Nothing in this module spawns a VALIDATOR, and
+//! `evaluator-io-check` stays the gate on that. The one child it can start is
+//! `cargo metadata`, for a graph-reading family asked to `resolve` its own graph
+//! (CLOUD-1991), and that goes through the placed `exec` adapter.
 //!
 //! # The caller cannot supply a digest, because there is no argument for one
 //!
@@ -723,17 +725,82 @@ fn graph_on_stdin(family: &str) -> Result<crate::cargo_graph::Graph> {
     Ok(crate::cargo_graph::Graph::from_metadata(&meta))
 }
 
+/// The `cargo metadata` document a graph-reading family reads: on stdin, or
+/// resolved here when the caller names `resolve` (CLOUD-1991).
+///
+/// # Why the resolution moved in
+///
+/// The two producer tasks were a `cargo metadata` spawn piped into this verb,
+/// behind a fixture switch — shell whose only job was to connect one argv's
+/// stdout to another's stdin. `resolve=<triple>` resolves the graph for that
+/// platform (`--filter-platform`), and `resolve=any` for every platform, which
+/// are the two questions the two families ask. Omitting it keeps the stdin
+/// route, which is how a recorded graph still reaches the walk.
+///
+/// ALWAYS `--locked`: the question is about the COMMITTED resolution, and a
+/// producer allowed to update the lockfile answers "what would upstream give me
+/// today". The spawn is `crate::exec::piped_argv`'s, the placed adapter, so
+/// the inventory does not grow; `cargo` is the toolchain's own name and names no
+/// consumer.
+///
+/// COULD-NOT-LOOK IS AN INTERNAL ERROR (exit `3`), never an empty graph: a
+/// resolution that failed or answered something unparseable writes nothing, so
+/// the module reads an absent record as "the producer did not run".
+fn graph_for(inputs: &BTreeMap<String, String>, family: &str) -> Result<crate::cargo_graph::Graph> {
+    let Some(platform) = inputs.get("resolve") else {
+        return graph_on_stdin(family);
+    };
+    if platform.trim().is_empty() {
+        return Err(UsageError::raise(format!(
+            "record derive {family}: `--input resolve=` names no platform; a target triple, or `any`"
+        )));
+    }
+    let mut argv: Vec<String> = ["cargo", "metadata", "--locked", "--format-version", "1"]
+        .iter()
+        .map(|word| (*word).to_owned())
+        .collect();
+    if platform != "any" {
+        argv.push("--filter-platform".to_owned());
+        argv.push(platform.clone());
+    }
+    let Some((0, raw)) = crate::exec::piped_argv(
+        Path::new("."),
+        &argv,
+        "",
+        crate::exec::Diagnostics::Drop,
+        &[],
+    ) else {
+        return Err(anyhow::anyhow!(
+            "record derive {family}: could not look: `cargo metadata` did not resolve the graph; nothing recorded"
+        ));
+    };
+    let meta: serde_json::Value = serde_json::from_str(&raw).map_err(|_| {
+        anyhow::anyhow!(
+            "record derive {family}: could not look: `cargo metadata` answered no document; nothing recorded"
+        )
+    })?;
+    Ok(crate::cargo_graph::Graph::from_metadata(&meta))
+}
+
+// The resolution's mutation rows. Each is caught by the compiled case it names,
+// which drives a scratch crate through the real `cargo`.
+//MUTANT-SUITE crates/batten/tests/it/evaluator_closure.rs
+//MUTANT resolve-unlocked|s@\["cargo", "metadata", "--locked", "--format-version", "1"\]@["cargo", "metadata", "--format-version", "1"]@|a_resolution_that_would_rewrite_the_lockfile_is_could_not_look
+//MUTANT resolve-ignored|s@^    let Some(platform) = inputs.get("resolve") else {$@    let Some(platform) = inputs.get("no-such-input") else {@|the_engine_resolves_a_locked_crate_itself
+
 /// Derive one family's record from its input and write it.
 ///
 /// The engine applies the READING; the effects that produced the input stay in
-/// the producer task (house-style §5), so nothing here spawns.
+/// the producer task (house-style §5), with one exception a family opts into:
+/// `--input resolve=` asks a graph-reading family to resolve its own
+/// `cargo metadata` document (CLOUD-1991).
 ///
 /// # Errors
 ///
 /// A [`UsageError`] for an unknown family, a malformed or missing input, a
 /// family that is not a single path component, a repository with no branch to
 /// key on, or a tree that is not a repository; an internal error when the store
-/// cannot be written.
+/// cannot be written, or when a requested resolution could not look.
 pub fn run_derive(
     family: &str,
     inputs: &[String],
@@ -751,8 +818,9 @@ pub fn run_derive(
 ///
 /// Split out of [`run_derive`] because the two halves grow at different rates:
 /// this one gains an arm per producer, and the store-and-emit tail below it is
-/// fixed. Nothing here spawns — house-style §5 keeps a producer's effects in the
-/// task, and what arrives is already a reading's worth of input.
+/// fixed. Nothing here spawns except the one resolution `graph_for` owns —
+/// house-style §5 keeps a producer's effects in the task, and what arrives is
+/// otherwise already a reading's worth of input.
 ///
 /// # Errors
 ///
@@ -850,13 +918,14 @@ fn derive_reading(
 /// # Errors
 ///
 /// A [`UsageError`] for a missing or unaccepted input, an undeclared
-/// `[[pattern]]` row, or stdin that is not a `cargo metadata` document.
+/// `[[pattern]]` row, or stdin that is not a `cargo metadata` document; an
+/// internal error when a `resolve` the engine ran could not look.
 fn evaluator_closure_reading(
     inputs: &BTreeMap<String, String>,
     family: &str,
     overrides: &Overrides,
 ) -> Result<String> {
-    only_these_inputs(inputs, family, &["roots", "bears"])?;
+    only_these_inputs(inputs, family, &["roots", "bears", "resolve"])?;
     let config = resolve::resolve(Path::new("."), overrides)?;
     let evaluator = declared_pattern(
         &config.patterns,
@@ -868,7 +937,7 @@ fn evaluator_closure_reading(
         family,
         required_input(inputs, family, "bears")?,
     )?;
-    let graph = graph_on_stdin(family)?;
+    let graph = graph_for(inputs, family)?;
 
     // THE SCOPE IS THE EVALUATOR'S SUB-CLOSURE, NOT THE WORKSPACE'S, and
     // that was measured before it was written because the obvious
@@ -913,13 +982,14 @@ fn evaluator_closure_reading(
 /// # Errors
 ///
 /// A [`UsageError`] for an unaccepted input, an undeclared `[[pattern]]` row, or
-/// stdin that is not a `cargo metadata` document.
+/// stdin that is not a `cargo metadata` document; an internal error when a
+/// `resolve` the engine ran could not look.
 fn macos_link_reading(
     inputs: &BTreeMap<String, String>,
     family: &str,
     overrides: &Overrides,
 ) -> Result<String> {
-    only_these_inputs(inputs, family, &["framework", "vendored"])?;
+    only_these_inputs(inputs, family, &["framework", "vendored", "resolve"])?;
     let config = resolve::resolve(Path::new("."), overrides)?;
     let framework = declared_pattern(
         &config.patterns,
@@ -931,7 +1001,7 @@ fn macos_link_reading(
         family,
         required_input(inputs, family, "vendored")?,
     )?;
-    let graph = graph_on_stdin(family)?;
+    let graph = graph_for(inputs, family)?;
 
     // THE WALK STARTS AT THE WORKSPACE MEMBERS, because the question is
     // about everything this tree builds — unlike `evaluator-closure`,

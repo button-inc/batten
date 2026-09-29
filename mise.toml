@@ -655,7 +655,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,land-divergence,macos-link,task-mcp-allow-check,nonverdict,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,docs-tree-absent,ripcord-untracked,hk-pin-agreement"
+MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,land-divergence,macos-link,task-mcp-allow-check,nonverdict,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,docs-tree-absent,ripcord-untracked,hk-pin-agreement,engine-record"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -2830,10 +2830,10 @@ cargo run --quiet -p batten -- record named timeout-drift <"$census"
 # which is a property of the world rather than of this commit — the exact split
 # `lock-complete` was carved out of `lock-check` to fix.
 #
-# `BATTEN_EVALUATOR_METADATA` substitutes a recorded graph and exists so the gate
-# can be shown able to FAIL (CLOUD-418): the live tree is clean by construction,
-# which is the point of the gate, so a suite that could only run against it would
-# assert a pass and never a refusal.
+# A recorded graph on stdin (with no `resolve` input) is how the gate is shown
+# able to FAIL (CLOUD-418): the live tree is clean by construction, which is the
+# point of the gate, so a suite that could only run against it would assert a
+# pass and never a refusal.
 #
 # NOTHING IS WRITTEN WHEN THE GRAPH WILL NOT RESOLVE. That is the record
 # contract: an absent record is "the producer did not run", and the module reads
@@ -2851,7 +2851,7 @@ cargo run --quiet -p batten -- record named timeout-drift <"$census"
 # about every platform this crate ships to, so narrowing would let an IO crate
 # arrive behind a `cfg` for a platform the gate does not run on.)
 #
-# `BATTEN_LINK_CHECK_METADATA` substitutes a recorded graph so the filter can be
+# A recorded graph on stdin, with no `resolve` input, is how the filter is
 # shown able to FAIL: the live tree is clean by construction, which is the point
 # of the gate.
 #
@@ -3121,24 +3121,17 @@ run = 'cargo run --quiet -p batten -- record derive transcript-corpus --input "r
 
 [tasks.macos-link-record]
 description = "Effect: record the built macOS graph's links-declaring and framework-linking crates, for `workspace carry unsafe`"
-shell = "bash -c"
-run = """
-if [ -n "${BATTEN_LINK_CHECK_METADATA:-}" ]; then
-  metadata=$(cat "$BATTEN_LINK_CHECK_METADATA") || { echo "::error:: macos-link-record: the metadata fixture will not read. Nothing recorded." >&2; exit 2; }
-else
-  # COULD-NOT-LOOK IS EXIT 2, NEVER 0: a producer that exits clean having
-  # recorded nothing leaves the module reading an absent record as silence, so
-  # a caller running this then `check` passed without looking.
-  metadata=$(cargo metadata --format-version 1 --filter-platform aarch64-apple-darwin 2>/dev/null) || { echo "::error:: macos-link-record: cargo metadata failed, so the graph is unread. Nothing recorded." >&2; exit 2; }
-fi
-# THE SPAWN STAYS HERE (§5) and the WALK is the engine's: one activated-edge
-# reading in `crates/batten/src/cargo_graph.rs`, shared with the other caller
-# so the two cannot drift, and the crate names it looks for are `[[pattern]]`
-# rows rather than constants in a repo-agnostic core (CLOUD-1717).
-printf '%s' "$metadata" \
-  | cargo run --quiet -p batten -- record derive macos-link \
-    --input framework=sdk-framework-crate --input vendored=vendored-links-crate
-"""
+# ONE ARGV SINCE CLOUD-1991: the RESOLUTION moved into the verb, beside the
+# walk it feeds. `resolve=aarch64-apple-darwin` is the `--filter-platform` the
+# spawn carried — the question, not an optimisation — and the verb resolves
+# `--locked`, so a stale lockfile is could-not-look (exit 3) rather than a graph
+# nobody committed. COULD-NOT-LOOK IS NEVER 0 and records nothing, which the
+# body's `exit 2` held and the verb's internal-error code now holds. The crate
+# names the walk looks for stay `[[pattern]]` rows rather than constants in a
+# repo-agnostic core (CLOUD-1717). The `BATTEN_LINK_CHECK_METADATA` fixture
+# switch is gone: a recorded graph reaches the same walk on stdin, with no
+# `resolve`, which is how `macos_link.rs` already drives it.
+run = "cargo run --quiet -p batten -- record derive macos-link --input framework=sdk-framework-crate --input vendored=vendored-links-crate --input resolve=aarch64-apple-darwin"
 
 # The macOS link gate as hk's `macos-link-check` step runs it (CLOUD-1991). The
 # step's `check` was a `&&` pair — produce, then decide — which made it the one
@@ -3153,23 +3146,13 @@ run = "cargo run --quiet -p batten -- check --rule 'workspace carry unsafe'"
 
 [tasks.evaluator-closure-record]
 description = "Effect: record the evaluator's activated sub-closure and any IO-bearing crate in it, for `layer reach unsafe`"
-shell = "bash -c"
-run = """
-if [ -n "${BATTEN_EVALUATOR_METADATA:-}" ]; then
-  metadata=$(cat "$BATTEN_EVALUATOR_METADATA") || { echo "::error:: evaluator-closure-record: the metadata fixture will not read. Nothing recorded." >&2; exit 2; }
-else
-  # COULD-NOT-LOOK IS EXIT 2, NEVER 0 — `--locked` fails on a stale lockfile, and
-  # exiting clean there let the IO-closure gate pass without looking.
-  metadata=$(cargo metadata --locked --format-version 1 2>/dev/null) || { echo "::error:: evaluator-closure-record: cargo metadata failed, so the closure is unread. Nothing recorded." >&2; exit 2; }
-fi
-# THE SPAWN STAYS HERE (§5) and the WALK is the engine's: one activated-edge
-# reading in `crates/batten/src/cargo_graph.rs`, shared with the other caller
-# so the two cannot drift, and the crate names it looks for are `[[pattern]]`
-# rows rather than constants in a repo-agnostic core (CLOUD-1717).
-printf '%s' "$metadata" \
-  | cargo run --quiet -p batten -- record derive evaluator-closure \
-    --input roots=evaluator-package --input bears=evaluator-io-crate
-"""
+# ONE ARGV SINCE CLOUD-1991, `macos-link-record`'s shape: the verb resolves the
+# graph itself, `--locked` as this body always did, and `resolve=any` because
+# the pin is a claim about every platform this crate ships to. COULD-NOT-LOOK
+# IS NEVER 0 and records nothing — the verb's exit 3 where the body's was 2. The
+# `BATTEN_EVALUATOR_METADATA` switch is gone: a recorded graph reaches the same
+# walk on stdin, which is how `evaluator_closure.rs` shows the gate able to FAIL.
+run = "cargo run --quiet -p batten -- record derive evaluator-closure --input roots=evaluator-package --input bears=evaluator-io-crate --input resolve=any"
 
 [tasks.branch-age-record]
 description = "Effect: record every remote branch's age in days and which names head more than one merged PR (CLOUD-349)"
