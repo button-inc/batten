@@ -12,11 +12,17 @@
 //! * the step table is `[[step]]` rows in the fixture's committed `batten.toml`,
 //!   where the task's `BATTEN_STEP_SPECS`/`BATTEN_STEP_TOOLS` overrides were the
 //!   lever — a caller naming its own inputs could key a receipt to files the step
-//!   never read, so the override did not survive;
+//!   never read, so the override did not survive, and the verb's own
+//!   `--config-in`/`--config-from` do not reach the table either;
 //! * the task body's key component (`mise tasks info`) is a declared TOOL argv
 //!   whose stdout is keyed, and under `step run` the command's own argv is keyed;
 //! * a `record` refusal is exit 2 (a statement about the tree, `EXITS_VERDICT`)
 //!   where the task's was exit 1.
+//!
+//! The ledger below is the retired suite's cases. The cases after it that no arm
+//! names are new with the verb, which reads a config the task never did: the
+//! table is the keyed tree's own whatever `--config-in` names, an edited row is a
+//! miss, and an authority that will not load runs the step (CLOUD-843 review).
 //!
 // ported: mise-tasks/step-receipt.sh subject:mise.toml crates/batten/tests/it/step_receipt.rs
 // ported: tests/step-receipt.bats subject:mise.toml crates/batten/tests/it/step_receipt.rs
@@ -65,6 +71,13 @@ const OK: &str = "#!/bin/sh\necho ran >>bin/ran.log\n";
 /// A step command that fails with the code the case chooses.
 const FAIL: &str = "#!/bin/sh\nexit \"${STUB_CODE:-2}\"\n";
 
+/// A step command that PASSES after leaving the committed authority unloadable,
+/// so the record after it cannot recompute the key.
+const BREAK: &str = "#!/bin/sh\necho ran >>bin/ran.log\nprintf 'version = [\\n' >batten.toml\n";
+
+/// A committed authority that will not parse.
+const UNLOADABLE: &str = "version = [\n";
+
 /// The fixture's committed step table.
 const TABLE: &str = r#"version = 1
 
@@ -104,6 +117,7 @@ impl Repo {
             ("bin/decl", DECL),
             ("bin/ok", OK),
             ("bin/fail", FAIL),
+            ("bin/break", BREAK),
         ] {
             common::write(&dir, file, body);
             #[cfg(unix)]
@@ -567,6 +581,98 @@ fn an_undeclared_step_still_runs_its_command_and_records_nothing() {
     let out = repo.run_step(&["never-declared"], &["ok"], &[]);
     assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
     assert_eq!(repo.runs(), 1);
+    assert!(repo.receipts().is_empty(), "{:?}", repo.receipts());
+}
+
+// --- the table is the keyed tree's own, and a failure to read it runs the step -
+
+#[test]
+fn a_config_source_override_does_not_reach_the_step_table() {
+    // `--config-in` moves where a POLICY is read from; this table is a claim
+    // about the tree being keyed. A directory declaring `mystep` over a file the
+    // step never reads must not mint a receipt that survives an input change.
+    let repo = Repo::new("config-in");
+    let elsewhere = common::scratch("step-receipt-config-in-elsewhere");
+    common::write(
+        &elsewhere,
+        "batten.toml",
+        "version = 1\n\n[[step]]\nid = \"mystep\"\ninputs = [\".gitignore\"]\ntools = [[\"toolv\"]]\n",
+    );
+    let there = elsewhere.to_str().expect("a UTF-8 scratch path");
+    let env = [("BATTEN_CONFIG_IN", there)];
+    assert_eq!(repo.check_with(&["mystep"], &env), "miss");
+    assert_eq!(repo.record_with(&["mystep"], &env).status.code(), Some(0));
+    assert_eq!(repo.check_with(&["mystep"], &env), "hit", "the premise");
+    repo.stage("two\n");
+    assert_eq!(
+        repo.check_with(&["mystep"], &env),
+        "miss",
+        "the tree's own row keys `input.txt`, whatever directory the flag names"
+    );
+}
+
+#[test]
+fn an_edited_row_is_a_miss() {
+    // A receipt earned under one declaration never answers under another, even
+    // where the index entries it selects are the same bytes.
+    let repo = Repo::new("row-edit");
+    repo.pass_once();
+    assert_eq!(repo.check(&["mystep"]), "hit", "the premise");
+    let widened = TABLE.replacen(
+        "inputs = [\"input.txt\"]",
+        "inputs = [\"input.txt\", \"absent-*.txt\"]",
+        1,
+    );
+    assert_ne!(widened, TABLE, "the edit landed");
+    common::write(&repo.dir, "batten.toml", &widened);
+    assert_eq!(repo.check(&["mystep"]), "miss");
+}
+
+#[test]
+fn an_authority_that_will_not_load_still_runs_the_step() {
+    // Fail closed: a config the verb cannot read is no key, and no key runs the
+    // step -- never a usage error standing where the step's verdict belongs.
+    let repo = Repo::new("unloadable");
+    common::write(&repo.dir, "batten.toml", UNLOADABLE);
+    let checked = repo.batten(&["step", "check", "mystep"], &[]);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "{}",
+        common::stderr(&checked)
+    );
+    assert!(
+        common::stdout(&checked).contains("no key"),
+        "{}",
+        common::stdout(&checked)
+    );
+    let ran = repo.run_step(&["mystep"], &["ok"], &[]);
+    assert_eq!(ran.status.code(), Some(0), "{}", common::stderr(&ran));
+    assert_eq!(repo.runs(), 1, "the command ran");
+    assert!(repo.receipts().is_empty(), "{:?}", repo.receipts());
+    let failed = repo.run_step(&["mystep"], &["fail"], &[("STUB_CODE", "2")]);
+    assert_eq!(
+        failed.status.code(),
+        Some(2),
+        "the step's own code, not a config error's: {}",
+        common::stderr(&failed)
+    );
+}
+
+#[test]
+fn a_passing_step_whose_record_refuses_stays_green() {
+    // The record after a pass is an economy: here the command itself leaves the
+    // authority unloadable, so the record cannot recompute the key and refuses.
+    // The step passed, and exits 0.
+    let repo = Repo::new("record-refuses");
+    let out = repo.run_step(&["mystep"], &["break"], &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    assert_eq!(repo.runs(), 1);
+    assert!(
+        common::stderr(&out).contains("Not recording"),
+        "{}",
+        common::stderr(&out)
+    );
     assert!(repo.receipts().is_empty(), "{:?}", repo.receipts());
 }
 

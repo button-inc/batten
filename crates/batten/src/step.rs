@@ -5,7 +5,7 @@
 //! re-runs every step; this keys each step on its declared inputs instead — the
 //! INDEX blob ids under the step's pathspecs, the stdout of each declared tool
 //! argv (a version, or the declaration of the step's own command), every `--arg`
-//! in order, and, under `step run`, the command itself.
+//! in order, the declaring row itself, and, under `step run`, the command.
 //!
 //! NOT test-impact selection, which this repository refused and still refuses:
 //! nothing infers what a change "could" affect. The claim is the one a receipt
@@ -16,18 +16,28 @@
 //!
 //! Which steps exist, what each reads and which tools it trusts are facts about a
 //! repository, so they are `[[step]]` rows in its committed `batten.toml`, read
-//! from the committed authority alone (`crate::resolve::committed`). A caller
-//! cannot hand the verb its own input list: a caller that could would key a
-//! receipt to files the step never read. The retired task's `BATTEN_STEP_SPECS`
-//! and `BATTEN_STEP_TOOLS` overrides were exactly that door, and they did not
-//! survive the port.
+//! from the committed authority alone (`crate::resolve::committed`), and from
+//! the authority of THE TREE BEING KEYED: the working directory's own
+//! `batten.toml`, never the `--config-from` ref or `--config-in` directory a
+//! global flag (or its `BATTEN_CONFIG_*` env form) would point the rest of the
+//! run at. Those flags move where a policy is read from while the subject stays
+//! put, and for this table the policy IS a claim about the subject: a row read
+//! from anywhere else could declare a narrower `inputs` and key a receipt to
+//! files the step never read. So the verb takes no source override at all, and
+//! the retired task's `BATTEN_STEP_SPECS` and `BATTEN_STEP_TOOLS` overrides —
+//! the same door — did not survive the port either. What remains is the tree's
+//! own committed row, and the row itself is key material: narrowing its
+//! `inputs` or `tools` is a miss, so a receipt minted under one declaration
+//! never answers under another.
 //!
 //! # Fail closed, everywhere
 //!
-//! A key that cannot be computed — an undeclared step, a tool that will not
-//! answer, a pathspec resolving to nothing, a worktree disagreeing with the index
-//! over the set, an untracked file inside it — is "run the step", never "assume
-//! unchanged". An unreadable store reads as a miss and refuses a record.
+//! A key that cannot be computed — an authority that will not load, an
+//! undeclared step, a tool that will not answer, a pathspec resolving to
+//! nothing, a worktree disagreeing with the index over the set, an untracked
+//! file inside it — is "run the step", never "assume unchanged" and never an
+//! error in the step's place. An unreadable store reads as a miss and refuses a
+//! record.
 //!
 //! # Check and record are a pair
 //!
@@ -103,6 +113,12 @@ const SHOWN: usize = 12;
 //MUTANT ci-caches|s@^    if bypassed() {$@    if false {@|under_ci_the_cache_neither_hits_nor_records
 //MUTANT failure-recorded|s@^    let passed = matches!(ran, Ok(ExitCode::Success));$@    let passed = true;@|a_failing_command_passes_its_code_through_and_records_nothing
 //MUTANT hit-runs-anyway|s@^    if answer.is_hit() {$@    if false {@|a_hit_does_not_run_the_command
+// And the three the review added: the row as key material, the table read from
+// the keyed tree alone, and no key running the step rather than skipping it.
+//MUTANT row-not-keyed|s@^    lines.push(format!("row {}", serde_json::to_string(row).ok()?));$@    let _ = row;@|an_edited_row_is_a_miss
+//MUTANT config-source-honoured|s@&Overrides::default()).ok()?;$@\&{ let mut o = Overrides::default(); o.config_in = std::env::var("BATTEN_CONFIG_IN").ok(); o }).ok()?;@|a_config_source_override_does_not_reach_the_step_table
+//MUTANT no-key-skips|s@^    if answer.is_hit() {$@    if !matches!(answer, Answer::Miss(_)) {@|an_authority_that_will_not_load_still_runs_the_step
+//MUTANT record-refusal-fails-step|s@^        let _ = record(step, args, Some(command), &mut recorded, &mut refused);$@        if !matches!(record(step, args, Some(command), \&mut recorded, \&mut refused), Ok(ExitCode::Success)) { return Ok(ExitCode::Violation); }@|a_passing_step_whose_record_refuses_stays_green
 
 /// One declared step: what its verdict depends on.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
@@ -254,10 +270,16 @@ fn announce(step: &str) {
     );
 }
 
-/// The committed row declaring `step`, if any.
-fn declared(step: &str, overrides: &Overrides) -> Result<Option<Step>> {
-    let config = crate::resolve::committed(Path::new("."), overrides)?;
-    Ok(config.steps.into_iter().find(|row| row.id == step))
+/// The row the keyed tree's own committed `batten.toml` declares for `step`.
+///
+/// `None` for an undeclared step AND for an authority that will not load: both
+/// are "no key", which runs the step (fail closed) rather than standing an error
+/// in the step's verdict. No source override reaches this read — see the module
+/// doc — so the default [`Overrides`] is passed deliberately, not for want of
+/// the run's own.
+fn declared(step: &str) -> Option<Step> {
+    let config = crate::resolve::committed(Path::new("."), &Overrides::default()).ok()?;
+    config.steps.into_iter().find(|row| row.id == step)
 }
 
 /// Everything the key hashes, or `None` where any part cannot be read.
@@ -267,6 +289,9 @@ fn declared(step: &str, overrides: &Overrides) -> Result<Option<Step>> {
 fn material(row: &Step, args: &[String], command: Option<&[String]>) -> Option<String> {
     let root = Path::new(".");
     let mut lines: Vec<String> = vec![format!("step {}", serde_json::to_string(&row.id).ok()?)];
+    // The declaration itself: a receipt earned under one `inputs`/`tools` set
+    // never answers under a narrower one.
+    lines.push(format!("row {}", serde_json::to_string(row).ok()?));
     lines.extend(args.iter().map(|arg| format!("arg {}", quoted(arg))));
     if let Some(command) = command {
         lines.push(format!("command {}", serde_json::to_string(command).ok()?));
@@ -353,17 +378,16 @@ fn read_key(git_dir: Option<&Path>, family: &str, step: &str) -> Option<String> 
 }
 
 /// Decide hit or miss, filing the pending key on a miss.
-fn check(
-    step: &str,
-    args: &[String],
-    command: Option<&[String]>,
-    overrides: &Overrides,
-) -> Result<Answer> {
+///
+/// Infallible by construction: every way a key can fail to form — an authority
+/// that will not load included — is [`Answer::NoKey`], so no caller can be made
+/// to report an error where the step's own verdict belongs.
+fn check(step: &str, args: &[String], command: Option<&[String]>) -> Answer {
     announce(step);
     if bypassed() {
-        return Ok(Answer::Off);
+        return Answer::Off;
     }
-    let row = declared(step, overrides)?;
+    let row = declared(step);
     let git_dir = crate::git::git_dir(Path::new(".")).ok();
     let key = row
         .as_ref()
@@ -376,18 +400,18 @@ fn check(
         if let Some(git_dir) = &git_dir {
             let _ = crate::record::keyed_write(git_dir, PENDING, step, "\n");
         }
-        return Ok(Answer::NoKey);
+        return Answer::NoKey;
     };
     let stored = read_key(git_dir.as_deref(), RECEIPTS, step);
     if stored.as_deref() == Some(key.as_str()) {
-        return Ok(Answer::Hit(key));
+        return Answer::Hit(key);
     }
     // The pending key is what a later `record` must match. A store that will not
     // take it costs the economy, never the verdict: `record` then refuses.
     if let Some(git_dir) = &git_dir {
         let _ = crate::record::keyed_write(git_dir, PENDING, step, &format!("{key}\n"));
     }
-    Ok(Answer::Miss(key))
+    Answer::Miss(key)
 }
 
 /// Record the step's receipt, refusing when the key moved since the check.
@@ -397,7 +421,6 @@ fn record(
     step: &str,
     args: &[String],
     command: Option<&[String]>,
-    overrides: &Overrides,
     said: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -412,15 +435,18 @@ fn record(
         )?;
         return Ok(ExitCode::Violation);
     };
-    let key = declared(step, overrides)?
+    // An authority that will not load is no key, and no key never matches: the
+    // record refuses below rather than erroring in a passed step's place.
+    let key = declared(step)
         .as_ref()
         .and_then(|row| material(row, args, command))
         .map(|material| key_of(&material));
     if key.as_deref() != Some(expected.as_str()) {
         writeln!(
             err,
-            "step record: {step} — the inputs changed while the step ran; a receipt \
-             now would attest bytes the run never judged. Not recording"
+            "step record: {step} — the key moved while the step ran (changed inputs, or \
+             a row or authority that no longer reads); a receipt now would attest bytes \
+             the run never judged. Not recording"
         )?;
         return Ok(ExitCode::Violation);
     }
@@ -444,17 +470,14 @@ fn record(
 
 /// `batten step check <step> [--arg V]...`: `hit` or `miss`, in words, at exit 0.
 ///
+/// Always exit 0: every way a key fails to form, an authority that will not load
+/// included, is a `miss` that runs the step.
+///
 /// # Errors
 ///
-/// A [`UsageError`] when the committed authority cannot be loaded, and an I/O
-/// error when the answer cannot be written.
-pub fn run_check(
-    step: &str,
-    args: &[String],
-    overrides: &Overrides,
-    out: &mut dyn Write,
-) -> Result<ExitCode> {
-    let answer = check(step, args, None, overrides)?;
+/// An I/O error when the answer cannot be written.
+pub fn run_check(step: &str, args: &[String], out: &mut dyn Write) -> Result<ExitCode> {
+    let answer = check(step, args, None);
     writeln!(out, "{}", answer.line(step))?;
     Ok(ExitCode::Success)
 }
@@ -463,21 +486,20 @@ pub fn run_check(
 /// made possible.
 ///
 /// Exit 2 when it refuses — no pending key, or the key moved while the step ran
-/// — because that is a statement about the tree, not the invocation; exit 3 when
-/// the store will not take the write.
+/// (an authority that no longer loads is such a move) — because that is a
+/// statement about the tree, not the invocation; exit 3 when the store will not
+/// take the write.
 ///
 /// # Errors
 ///
-/// A [`UsageError`] when the committed authority cannot be loaded, and an I/O
-/// error when a line cannot be written.
+/// An I/O error when a line cannot be written.
 pub fn run_record(
     step: &str,
     args: &[String],
-    overrides: &Overrides,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    record(step, args, None, overrides, out, err)
+    record(step, args, None, out, err)
 }
 
 /// `batten step run <step> [--arg V]... -- <command...>`: the pair composed.
@@ -487,41 +509,39 @@ pub fn run_record(
 /// and records only after a zero exit. The check's words and the record's note
 /// go to `err`, because stdout belongs to the child.
 ///
+/// THE STEP'S VERDICT IS THE COMMAND'S, AND NOTHING ELSE'S. The cache's own
+/// lines are best-effort — a stderr that will not take them never stops the
+/// command running and never turns its code into another — and the record after
+/// a pass is an economy whose every failure is swallowed.
+///
 /// # Errors
 ///
-/// A [`crate::Passthrough`] carrying the command's non-zero code, a
-/// [`UsageError`] when the command cannot be started or the committed authority
-/// cannot be loaded, and an I/O error when a line cannot be written.
+/// A [`crate::Passthrough`] carrying the command's non-zero code, and a
+/// [`UsageError`] when the command cannot be started — each
+/// [`crate::exec::run`]'s own, passed through unchanged.
 pub fn run_step(
     step: &str,
     args: &[String],
     command: &[String],
-    overrides: &Overrides,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let answer = check(step, args, Some(command), overrides)?;
-    writeln!(err, "{}", answer.line(step))?;
+    let answer = check(step, args, Some(command));
+    let _ = writeln!(err, "{}", answer.line(step));
     if answer.is_hit() {
         return Ok(ExitCode::Success);
     }
     let ran = crate::exec::run(command);
     let passed = matches!(ran, Ok(ExitCode::Success));
     if passed && matches!(answer, Answer::Miss(_)) {
-        // THE STEP'S VERDICT IS THE RUN'S. A record that refuses here — the
-        // inputs moved while the command ran — costs the next run a re-derive,
-        // and says so on stderr; it never turns a passing step into a failure.
+        // A record that refuses or fails here — the inputs moved while the
+        // command ran, the store would not take the write — costs the next run
+        // a re-derive and says so on stderr. Its `Result` is discarded, never
+        // `?`-propagated: a passing step stays a passing step.
         let mut recorded = Vec::new();
         let mut refused = Vec::new();
-        let _ = record(
-            step,
-            args,
-            Some(command),
-            overrides,
-            &mut recorded,
-            &mut refused,
-        )?;
-        err.write_all(&recorded)?;
-        err.write_all(&refused)?;
+        let _ = record(step, args, Some(command), &mut recorded, &mut refused);
+        let _ = err.write_all(&recorded);
+        let _ = err.write_all(&refused);
     }
     ran
 }

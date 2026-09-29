@@ -447,22 +447,21 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // CLOUD-843's foundation surface: the arguments are final, and each body
         // lands with the package that retires the shell it replaces. Until then
         // the verb is could-not-look, never a pass.
-        // The step table is read from the committed authority alone
-        // (`resolve::committed`): which files key a receipt is not a question a
-        // local layer may answer, because a narrower set is a receipt that
-        // answers for bytes nobody checked.
+        // The step table is read from the keyed tree's own committed authority
+        // alone, so the verb takes no `overrides`: which files key a receipt is
+        // not a question a local layer, a `--config-from` ref or a `--config-in`
+        // directory may answer, because a narrower set is a receipt that answers
+        // for bytes nobody checked.
         Some(Command::Step { command }) => match command {
-            cli::StepCommand::Check { step, args } => {
-                crate::step::run_check(&step, &args, &overrides, out)
-            }
+            cli::StepCommand::Check { step, args } => crate::step::run_check(&step, &args, out),
             cli::StepCommand::Record { step, args } => {
-                crate::step::run_record(&step, &args, &overrides, out, err)
+                crate::step::run_record(&step, &args, out, err)
             }
             cli::StepCommand::Run {
                 step,
                 args,
                 command,
-            } => crate::step::run_step(&step, &args, &command, &overrides, err),
+            } => crate::step::run_step(&step, &args, &command, err),
         },
         Some(Command::Sbom(_)) => unimplemented("sbom"),
         Some(Command::Dist(_)) => unimplemented("dist"),

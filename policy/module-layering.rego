@@ -760,9 +760,10 @@ forbidden[from] contains to if {
 		# `forge_query` joins for `rest`'s reason one hop further out (CLOUD-843):
 		# it reaches `rest`, so a mediated call able to reach it reaches the
 		# network by the route the `rest` entry refuses, one name later.
-		# `step` joins for `repair`'s reason below (CLOUD-843): its `run` arm
-		# executes a command the caller names and writes a receipt, and a
-		# mediated call adjudicates cached state -- it never runs a step.
+		# `step` joins for the reason `repair`'s row below states (CLOUD-843):
+		# its `run` arm executes a command the caller names and writes a
+		# receipt, and a mediated call adjudicates cached state -- it never runs
+		# a step. `repair` carries the same entry, since it inherits this set.
 		"hook": {
 			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
 			"pr_watch", "fast_forward", "main_watch", "forge_query",
@@ -790,6 +791,7 @@ forbidden[from] contains to if {
 		"repair": {
 			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
 			"pr_watch", "fast_forward", "main_watch", "forge_query",
+			"step",
 		},
 		# `check` NAMES NO MODULE TODAY, so this row is INERT — and that is worth
 		# stating rather than leaving a reader to infer enforcement from a table
@@ -1164,6 +1166,12 @@ test_the_mediated_path_must_not_reach_the_step_cache if {
 	count(violation) == 1 with input as judging(
 		"crates/batten/src/hook.rs",
 		[internal("step", 31)],
+	)
+
+	# `repair` inherits `hook`'s set entire, so the edge is refused there too.
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/repair.rs",
+		[internal("step", 32)],
 	)
 
 	count(violation) == 1 with input as judging(

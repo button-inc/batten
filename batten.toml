@@ -18058,21 +18058,40 @@ repair = ["mise", "run", "install:local"]
 # name a task passes against this table anyway.
 #
 # `batten.toml` rides in every Rust row's inputs because the committed config
-# steers the `the_committed_*` cases (CLOUD-59). `test:bats` declares `.`: its
-# suites read `mise.toml`, `hk.pkl`, workflows and fixture trees all over the
-# repository, so the honest input set is the whole tracked tree.
+# steers the `the_committed_*` cases (CLOUD-59). A row that compiles the TEST
+# targets (`lint:clippy`, `cross-check`) also lists `policy` and `bench`: suites
+# under `crates/batten/tests` `include_str!` modules and `RESULTS.md` from both,
+# so an edit there changes what `--all-targets` compiles.
+#
+# `.` — the whole tracked tree — is the honest set wherever the step READS the
+# repository at run time rather than compiling it. `test:bats`: its suites read
+# `mise.toml`, `hk.pkl`, workflows and fixture trees everywhere. `test:cargo`: its
+# tiers read `mise.toml`, `policy/`, `.github`, `hk.pkl` and `rules/` from the
+# checkout, well past `crates`. `batten-check`: `enforce` evaluates every
+# committed rule, whose globs cover the tree (hk selects it on `**`). The row
+# itself is key material too, so narrowing any row's set is a miss rather than a
+# receipt earned under the wider one answering for the narrower.
 #
 # `lint:fmt` and `zizmor` are GONE from the table rather than carried: both steps
 # cost a second or two, the cache is an engine build, and the first runs at commit
 # while the second runs in a CI job that compiles nothing.
 [[step]]
 id = "lint:clippy"
-inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml", "clippy.toml", ".clippy.toml"]
+inputs = [
+  "crates",
+  "Cargo.toml",
+  "Cargo.lock",
+  "batten.toml",
+  "clippy.toml",
+  ".clippy.toml",
+  "policy",
+  "bench",
+]
 tools = [["cargo", "clippy", "--version"], ["rustc", "--version"]]
 
 [[step]]
 id = "test:cargo"
-inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml"]
+inputs = ["."]
 tools = [
   ["rustc", "--version"],
   ["cargo", "--version"],
@@ -18081,7 +18100,7 @@ tools = [
 
 [[step]]
 id = "cross-check"
-inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml"]
+inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml", "policy", "bench"]
 tools = [
   ["rustc", "--version"],
   ["cargo", "--version"],
@@ -18113,17 +18132,7 @@ tools = [["cargo", "deny", "--version"]]
 
 [[step]]
 id = "batten-check"
-inputs = [
-  "batten.toml",
-  "crates",
-  "Cargo.toml",
-  "Cargo.lock",
-  "mise.toml",
-  ".github",
-  "tests",
-  "AGENTS.md",
-  ".serena/project.yml",
-]
+inputs = ["."]
 tools = [["rustc", "--version"], ["cargo", "--version"]]
 
 [[step]]
