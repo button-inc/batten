@@ -25,6 +25,28 @@
 //! - **`--refs`**: every clause citation IN the tree names a clause its issue
 //!   actually carries (CLOUD-809) — the other direction of the same join.
 //!
+//! # This module READS; the `tracker-hygiene` preset DECIDES
+//!
+//! The migration's rule puts a generic decision in a preset bundle and only the
+//! mechanism in the engine, and this module is held to it. What is here is
+//! acquisition and extraction: parsing the payload set, normalising a row's
+//! column onto the consumer's `[board]` words, asking the one definition of
+//! Ready about a row, running the declared `[[pattern]]` expressions over a
+//! body, and reading the tracked tree and its history. Each question's answer
+//! is a READING — one tab-separated line per fact, the record shape the preset
+//! already reads — and every verdict over it is a module in
+//! `crates/batten/src/policy/presets/tracker-hygiene/`, evaluated in process:
+//! which column claim is false, whether the relation is cyclic, which blocker
+//! holds a row off the frontier, whether a marked path was deleted, whether a
+//! cited clause is carried. `policy/duplicate-close.rego` was the precedent
+//! that refuted the earlier revision's claim that no module could read a
+//! payload set.
+//!
+//! A reading field names a fact and never judges it: `settles` says the row's
+//! status TYPE is one the consumer declared settling, and the preset decides
+//! that the review column settles too; `found` says a corpus file carries a
+//! token, and the preset decides that its absence is a refusal.
+//!
 //! # The refinement gate is ASKED, never re-derived
 //!
 //! A ready-queue row is judged by [`crate::ready::lint`] over its own payload —
@@ -44,37 +66,30 @@
 //! undeclared one is could-not-look, NAMED, never a default: a
 //! default would put one tracker's vocabulary back in the engine and make the
 //! dead path byte-identical to the working one, which is the failure
-//! `crate::board` exists to refuse.
+//! `crate::board` exists to refuse. The preset reads only the reading, whose
+//! column field is already normalised onto `ready`, `in-progress`, `review` and
+//! `other`, so no module names a consumer's column either.
 //!
 //! # Three channels, and they never collapse
 //!
 //! A line on stderr is `<id> <rule>` — a report (the board is lying, exit `2`),
 //! an unjudged gap (the caller did not pipe enough to judge, exit `3`), or a note
-//! (an honest frontier exclusion, exit unmoved). A gap outranks a report in the
-//! graph, because a verdict over a set only partly read is not a verdict: the
-//! caller's next action is a re-fetch, after which more violations may appear.
-//! Both report sets print before the exit either way, so one never hides the
-//! other.
+//! (an honest frontier exclusion, exit unmoved). The first two are the preset's
+//! `violation`s, told apart by their declared class; a note is its `board_notes`
+//! set and the frontier its `board_frontier` set, because neither is a refusal
+//! and the registry holds refusals. A gap outranks a report in the graph,
+//! because a verdict over a set only partly read is not a verdict: the caller's
+//! next action is a re-fetch, after which more violations may appear. Both
+//! report sets print before the exit either way, so one never hides the other.
 //!
 //! # Pointer-only (non-negotiable rule 4)
 //!
 //! An id, a rule, a column word, a path and line, a count — never a byte of an
-//! issue body and never a line of a source file. Bodies carry customer detail.
-//!
-//! # The decisions here are OWED to a preset, and this is not their home
-//!
-//! The migration's rule puts a generic decision in a preset bundle and only the
-//! mechanism in the engine; this package's row named the `tracker-hygiene`
-//! bundle. An earlier revision of this header argued that no Rego module could
-//! read a payload set, and that is refuted in this tree: `duplicate-close-check`
-//! records piped payloads as facts and decides over them in
-//! `policy/duplicate-close.rego`. So the predicates below — the column claims,
-//! the `blockedBy` graph, the frontier, the citation joins — are a port still
-//! owed, recorded as a blocker on CLOUD-1221 rather than defended as a design.
-//! Every vocabulary they decide with is already the consumer's, which is the
-//! half of the move that is done.
+//! issue body and never a line of a source file. Bodies carry customer detail,
+//! and the reading carries none of them either: a claim is its key and column,
+//! a citation its token or path.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
 
@@ -85,6 +100,7 @@ use crate::Result;
 use crate::board::Board;
 use crate::error::UsageError;
 use crate::exit::ExitCode;
+use crate::facts::Look;
 use crate::pattern::NamedPattern;
 use crate::ready::Grammar;
 
@@ -105,12 +121,33 @@ const CLAUSE_CITATION: &str = "board-clause-citation";
 /// `--refs`: a clause tag a Ready block declares.
 const CLAUSE_TAG: &str = "ready-clause-tag";
 
-/// The pseudo-id a property of the whole piped SET is reported under.
-///
-/// Set-keyed deliberately: a reader asking about one row greps `^<id> <rule>`,
-/// and a per-row line for a property of the closure would turn every row of a
-/// thin fetch into a refusal of that row.
-const SET: &str = "graph";
+/// The preset whose modules decide every question below.
+const PRESET: &str = "tracker-hygiene";
+
+/// The record family each question's reading is handed to the preset under.
+/// One per question, so a module deciding one never reads another's facts.
+const GRAPH: &str = "board-graph";
+/// See [`GRAPH`].
+const CITES: &str = "board-cites";
+/// See [`GRAPH`].
+const REFS: &str = "board-refs";
+
+/// The preset's set of non-refusal lines: frontier exclusions, forwarded Ready
+/// pointers and prospective citations.
+const NOTES: &str = "board_notes";
+/// The preset's set of ready-frontier ids.
+const FRONTIER: &str = "board_frontier";
+
+/// The graph's report lane: the board is signalling falsely.
+const GRAPH_REPORT: &str = "issue state wrong";
+/// The graph's gap lane: the piped set cannot answer.
+const GRAPH_GAP: &str = "issue judge partial";
+/// `--cites`'s refusal: a citation the tree does not carry.
+const CITE_REFUSED: &str = "path point missing";
+/// `--refs`'s refusal: a clause citation its issue does not carry.
+const REF_REFUSED: &str = "source point wrong";
+/// `--refs`'s gap: a cited issue the set did not carry.
+const REF_GAP: &str = "source point unread";
 
 /// A code span or a quoted phrase NAMES a claim rather than making one, so both
 /// are neutralised before the status scan — the reason this gate does not fail
@@ -180,8 +217,14 @@ pub fn run(
     let mut unjudged = false;
     if ask.cites {
         let cites = Cites::resolve(declared)?;
-        match cites.judge(&set, declared) {
-            Ok(tally) => refused |= tally.render(out, err)?,
+        match cites
+            .read(&set, declared)
+            .and_then(|reading| decide(CITES, &reading.lines).map(|decided| (reading, decided)))
+        {
+            Ok((reading, decided)) => match render_cites(&reading, &decided, out, err)? {
+                Some(proven) => refused |= proven,
+                None => unjudged = true,
+            },
             Err(why) => {
                 writeln!(err, "::error:: board check --cites: {why}")?;
                 unjudged = true;
@@ -190,12 +233,17 @@ pub fn run(
     }
     if ask.refs {
         let refs = Refs::resolve(declared)?;
-        match refs.judge(&set, declared) {
-            Ok(found) => {
-                let (proven, gaps) = found.render(out, err)?;
-                refused |= proven;
-                unjudged |= gaps;
-            }
+        match refs
+            .read(&set, declared)
+            .and_then(|reading| decide(REFS, &reading.lines).map(|decided| (reading, decided)))
+        {
+            Ok((reading, decided)) => match render_refs(&reading, &decided, out, err)? {
+                Some((proven, gaps)) => {
+                    refused |= proven;
+                    unjudged |= gaps;
+                }
+                None => unjudged = true,
+            },
             Err(why) => {
                 writeln!(err, "::error:: board check --refs: {why}")?;
                 unjudged = true;
@@ -255,6 +303,18 @@ fn sort_ids(ids: &mut [String]) {
     ids.sort_by(|left, right| by_num(left).cmp(&by_num(right)));
 }
 
+/// One reading field. A tab or a line break inside a value would shift every
+/// column after it, so each becomes a space: the report still names the value,
+/// and the line still has the arity its kind declares.
+fn field(value: &str) -> String {
+    value.replace(['\t', '\n', '\r'], " ")
+}
+
+/// A boolean fact as the reading spells it.
+const fn yes(flag: bool) -> &'static str {
+    if flag { "yes" } else { "no" }
+}
+
 /// One `[[pattern]]` row, compiled, or could-not-look naming it.
 fn declared_row(patterns: &[NamedPattern], id: &str) -> Result<Regex> {
     let row = patterns.iter().find(|row| row.id == id).ok_or_else(|| {
@@ -312,6 +372,107 @@ fn corpus_paths(
         .collect())
 }
 
+// --- the preset, asked in process ----------------------------------------------
+
+/// What the preset decided over one reading.
+#[derive(Debug, Default)]
+pub struct Decided {
+    /// Each `violation`: its declared class, and its subjects rendered as the
+    /// pointer line a reader greps (`<id> <rule>`).
+    pub findings: Vec<(String, String)>,
+    /// The non-refusal lines, `board_notes`.
+    pub notes: Vec<String>,
+    /// The ready frontier, `board_frontier`, in byte-stable order.
+    pub frontier: Vec<String>,
+}
+
+impl Decided {
+    /// Every finding of one class, as pointer lines, in byte-stable order.
+    fn lines_of(&self, verdict: &str) -> Vec<String> {
+        let mut lines: Vec<String> = self
+            .findings
+            .iter()
+            .filter(|(class, _)| class == verdict)
+            .map(|(_, line)| line.clone())
+            .collect();
+        sort_lines(&mut lines);
+        lines
+    }
+
+    /// A class this verb does not render — a module speaking a dialect the
+    /// verb has no lane for, which is could-not-look rather than a silent drop.
+    fn unknown(&self, known: &[&str]) -> Option<&str> {
+        self.findings
+            .iter()
+            .map(|(class, _)| class.as_str())
+            .find(|class| !known.contains(class))
+    }
+}
+
+/// Order pointer lines by their leading id, [`by_num`], then whole.
+fn sort_lines(lines: &mut [String]) {
+    lines.sort_by(|left, right| {
+        let key = |line: &str| line.split(' ').next().unwrap_or_default().to_owned();
+        let (left_key, right_key) = (key(left), key(right));
+        by_num(&left_key)
+            .cmp(&by_num(&right_key))
+            .then_with(|| left.cmp(right))
+    });
+}
+
+/// Hand one reading to the preset and read back what it decided.
+///
+/// The preset is compiled from this build's own manifest, so the decision a
+/// consumer gets is the one the binary ships — the same bytes a `[[rule]]` row
+/// enabling `tracker-hygiene` would load. The reading is the tree document's
+/// `records` shape, keyed by `family`, which is what every module in the bundle
+/// reads; a module deciding another family's record reads nothing here.
+///
+/// `Err` is could-not-look: the preset is missing from the build, will not
+/// compile, or faulted over the reading.
+fn decide(family: &str, lines: &[String]) -> std::result::Result<Decided, String> {
+    let manifest = crate::preset::MANIFESTS
+        .iter()
+        .find(|manifest| manifest.name == PRESET)
+        .ok_or_else(|| format!("this build ships no `{PRESET}` preset to decide with"))?;
+    let sources = manifest.modules_at(crate::rules::RuleScope::Tree);
+    let bundle = crate::policy::compile(PRESET, &sources, &Value::Object(serde_json::Map::new()))
+        .map_err(|_| format!("the `{PRESET}` preset does not compile"))?;
+    let mut records = serde_json::Map::new();
+    records.insert(family.to_owned(), Value::from(lines.to_vec()));
+    let mut tree = serde_json::Map::new();
+    tree.insert("records".to_owned(), Value::Object(records));
+    let mut document = serde_json::Map::new();
+    document.insert("tree".to_owned(), Value::Object(tree));
+    let input = Value::Object(document).to_string();
+    let faulted = || format!("the `{PRESET}` preset could not decide over the {family} reading");
+    let violations = match crate::policy::deny(&bundle, &input) {
+        Look::Is(found) => found,
+        Look::IsNot | Look::CouldNotLook => return Err(faulted()),
+    };
+    let strings = |rule: &str| match crate::policy::strings(&bundle, &input, rule) {
+        Look::Is(found) => Ok(found),
+        Look::IsNot | Look::CouldNotLook => Err(faulted()),
+    };
+    let mut frontier = strings(FRONTIER)?;
+    sort_ids(&mut frontier);
+    let mut notes = strings(NOTES)?;
+    sort_lines(&mut notes);
+    Ok(Decided {
+        findings: violations
+            .iter()
+            .map(|violation| {
+                (
+                    violation.verdict.clone(),
+                    crate::verdict::render_subjects(&violation.subjects),
+                )
+            })
+            .collect(),
+        notes,
+        frontier,
+    })
+}
+
 // --- the graph ----------------------------------------------------------------
 
 /// The board's words, each proven declared.
@@ -326,7 +487,7 @@ pub struct Vocabulary {
 }
 
 impl Vocabulary {
-    /// Resolve every word the graph decides with.
+    /// Resolve every word the graph's reading normalises with.
     ///
     /// # Errors
     ///
@@ -355,10 +516,18 @@ impl Vocabulary {
         })
     }
 
-    /// A column that claims the row is at least pullable — the ready queue, the
-    /// pulled column and the landed one (CLOUD-771).
-    fn started(&self, status: &str) -> bool {
-        status == self.ready || status == self.in_progress || status == self.review
+    /// A status, normalised onto the four words the preset decides with. The
+    /// consumer's column names stop here: the preset never reads one.
+    fn column(&self, status: &str) -> &'static str {
+        if status == self.ready {
+            "ready"
+        } else if status == self.in_progress {
+            "in-progress"
+        } else if status == self.review {
+            "review"
+        } else {
+            "other"
+        }
     }
 }
 
@@ -370,6 +539,17 @@ enum Presence {
     Absent,
     Empty,
     Set,
+}
+
+impl Presence {
+    /// The reading's token.
+    const fn token(self) -> &'static str {
+        match self {
+            Self::Absent => "absent",
+            Self::Empty => "empty",
+            Self::Set => "set",
+        }
+    }
 }
 
 /// One payload, read once.
@@ -448,49 +628,11 @@ impl<'a> Row<'a> {
         })
     }
 
-    fn milestoned(&self) -> bool {
-        self.milestone == Presence::Set
-    }
-
-    /// Whether the payload carried the milestone key at all, empty or not.
-    fn carries_milestone_key(&self) -> bool {
-        self.milestone != Presence::Absent
-    }
-}
-
-/// What the graph decided, in the order it was decided.
-#[derive(Debug, Default)]
-pub struct Judgement {
-    /// The stderr pointer lines, in emission order: `<id> <rule>`.
-    pub lines: Vec<String>,
-    /// How many say the board is signalling falsely.
-    pub violations: usize,
-    /// How many say the set could not answer.
-    pub unjudgeable: usize,
-    /// How many rows sit in the pulled column.
-    pub wip: usize,
-    /// The ready frontier, in byte-stable order.
-    pub frontier: Vec<String>,
-    /// Every row judged, in byte-stable order.
-    pub ids: Vec<String>,
-}
-
-impl Judgement {
-    /// The board is signalling falsely.
-    fn report(&mut self, id: &str, rule: &str) {
-        self.lines.push(format!("{id} {rule}"));
-        self.violations += 1;
-    }
-
-    /// An honest frontier exclusion: attributed, and the exit code unmoved.
-    fn note(&mut self, id: &str, rule: &str) {
-        self.lines.push(format!("{id} {rule}"));
-    }
-
-    /// The caller did not pipe enough to judge.
-    fn unjudged(&mut self, id: &str, rule: &str) {
-        self.note(id, rule);
-        self.unjudgeable += 1;
+    /// Whether this row's status TYPE is one of `types`.
+    fn typed(&self, types: &[String]) -> bool {
+        self.status_type
+            .as_deref()
+            .is_some_and(|kind| types.iter().any(|declared| declared == kind))
     }
 }
 
@@ -502,6 +644,17 @@ enum Readiness {
     Unready(Vec<String>),
     /// The gate could not read it, or could not cross-check it.
     Unjudgeable,
+}
+
+impl Readiness {
+    /// The reading's token.
+    const fn token(&self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Unready(_) => "unready",
+            Self::Unjudgeable => "unjudgeable",
+        }
+    }
 }
 
 /// Ask the one definition of Ready about one payload.
@@ -543,83 +696,57 @@ fn readiness(grammar: &Grammar, value: &Value, root: &Path) -> (Readiness, Optio
     (Readiness::Ready, bump)
 }
 
-/// The piped set, indexed once (CLOUD-634).
-#[derive(Debug)]
-struct Closure<'a> {
-    rows: Vec<Row<'a>>,
-    index: BTreeMap<String, usize>,
-    grammar: &'a Grammar,
-    vocabulary: &'a Vocabulary,
-    root: &'a Path,
+/// The graph's reading, and the two counts the verb prints itself.
+#[derive(Debug, Default)]
+pub struct Reading {
+    /// One tab-separated fact per line, the record the preset reads.
+    pub lines: Vec<String>,
+    /// Every row read, in byte-stable order — the ids a coherent board mints
+    /// a receipt for.
+    pub ids: Vec<String>,
+    /// How many rows sit in the pulled column: a measurement, not a verdict.
+    pub wip: usize,
 }
 
-impl Closure<'_> {
-    /// The FIRST row carrying `id`, or `None` when the set does not carry it —
-    /// and that `None` is load-bearing: "I was not given this row" is never
-    /// "this row has not completed" (CLOUD-678).
-    fn row(&self, id: &str) -> Option<&Row<'_>> {
-        self.index.get(id).and_then(|at| self.rows.get(*at))
-    }
-
-    /// Does a blocker no longer hold its dependent back? (CLOUD-477.)
-    ///
-    /// A settled TYPE — completed, or retired for good — or the review column by
-    /// NAME, since landed code is on the trunk and a dependent can build on it.
-    fn settled(&self, blocker: &Row<'_>) -> bool {
-        let typed = blocker
-            .status_type
-            .as_deref()
-            .is_some_and(|kind| self.vocabulary.settled_types.iter().any(|t| t == kind));
-        if typed {
-            return true;
-        }
-        blocker.status == self.vocabulary.review
-    }
-
-    /// Whether a settled blocker settled by being RETIRED rather than completed.
-    fn retired(&self, blocker: &Row<'_>) -> bool {
-        blocker
-            .status_type
-            .as_deref()
-            .is_some_and(|kind| self.vocabulary.retired_types.iter().any(|t| t == kind))
-    }
-}
-
-// THE DECLARED MUTATIONS, beside the predicates they unmake. One suite serves
-// every row in this file, because `batten mutate` reads the FIRST
-// `MUTANT-SUITE` line of a source — so the graph, citation and clause-reference
-// tiers live in one compiled suite, as three inner modules. No pattern or case
-// here carries a `|`: the row is split on it, and a closure's pipes would shift
-// every field after them. That is why the lines they target are written without
-// closures.
+// THE DECLARED MUTATIONS, beside the extraction they unmake. Every VERDICT's
+// mutations moved with it into the preset's modules; what stays here is the
+// reading, and a mutation of the reading is caught by the same compiled tier —
+// a fact the preset never sees is a verdict it never reaches. One suite serves
+// every row in this file, because `batten mutate` reads the FIRST `MUTANT-SUITE`
+// line of a source. No pattern or case here carries a `|`: the row is split on
+// it.
 //MUTANT-SUITE crates/batten/tests/it/board_check.rs
-//MUTANT in-progress-unassigned-passes|s@^    if row.status == vocabulary.in_progress && !row.assigned {$@    if false {@|an_unassigned_in_progress_issue_is_reported
-//MUTANT in-review-none-not-exempt|s@^        if row.prs == 0 && !declares_none {$@        if row.prs == 0 {@|an_in_review_row_declaring_no_commit_is_exempt_from_in_review_no_pr
-//MUTANT declared-none-with-pr-passes|s@^        if row.prs != 0 && declares_none {$@        if false {@|a_row_declaring_no_commit_that_carries_a_pr_is_refused_for_the_contradiction
-//MUTANT milestone-refusal-is-a-note|s@^                judgement.report(&row.id, &format!("unmilestoned ({})", row.status));$@                judgement.note(\&row.id, \&format!("unmilestoned ({})", row.status));@|a_todo_issue_with_no_milestone_in_a_set_where_others_carry_one_is_refused
-//MUTANT child-refusal-is-a-note|s@^                judgement.report(&row.id, &format!("child-unmilestoned (parent {parent})"));$@                judgement.note(\&row.id, \&format!("child-unmilestoned (parent {parent})"));@|a_child_with_no_milestone_under_a_milestoned_parent_is_refused
-//MUTANT declared-rephase-refused|s@^            Some(found) if found.milestoned() && !row.milestoned() => {$@            Some(found) if found.milestoned() => {@|a_child_carrying_a_different_milestone_is_the_declared_rephase_and_passes
-//MUTANT absent-milestone-key-judged|s@^    if closure.rows.iter().any(Row::carries_milestone_key) {$@    if true {@|a_set_with_the_field_absent_everywhere_is_unjudgeable_not_a_wall_of_violations
-//MUTANT absent-blocker-reads-as-resolved|s@^            let Some(blocker) = closure.row(to) else {$@            let Some(blocker) = closure.row(to).or(Some(row)) else {@|a_blocker_outside_the_piped_set_is_unjudgeable_not_resolved
-//MUTANT settled-type-ignored|s@^        if typed {$@        if false {@|a_todo_row_whose_only_blocker_is_canceled_reaches_the_frontier
-//MUTANT in-review-loses-its-name-arm|s@^        blocker.status == self.vocabulary.review$@        false@|a_blocker_in_review_still_resolves_since_its_type_is_started
-//MUTANT retirement-is-silent|s@^            if !retired.is_empty() {$@            if false {@|a_frontier_row_over_a_retired_blocker_says_so
-//MUTANT todo-refusal-is-a-note|s@^                judgement.report(&row.id, "todo-not-ready");$@                judgement.note(\&row.id, "todo-not-ready");@|a_todo_issue_with_no_ready_block_is_refused
-//MUTANT cycle-unseen|s@^        if node == start {$@        if false {@|a_blocked_by_cycle_is_reported_with_its_members
-//MUTANT unscannable-refusal-is-a-note|s@^                judgement.unjudged(SET, &unscannable);$@                judgement.note(SET, \&unscannable);@|a_claim_naming_a_column_no_piped_issue_occupies_is_refused_not_ignored
-//MUTANT claim-disagreement-passes|s@^                    Some(actual) if actual.status != claimed => {$@                    Some(actual) if false \&\& actual.status != claimed => {@|a_body_claiming_a_column_the_board_contradicts_is_reported
+//MUTANT blocker-edges-unread|s@^            lines.push(format!("edge\\t{}\\t{}\\t{}", from, field(to), by_num(to).0));$@            let _ = to;@|a_blocked_by_cycle_is_reported_with_its_members
+//MUTANT claim-scan-unread|s@^                        "claim\\t{}\\t{}\\t{}",$@                        "unread\\t{}\\t{}\\t{}",@|a_body_claiming_a_column_the_board_contradicts_is_reported
+//MUTANT readiness-unread|s@^        if \["ready", "review"\].contains(.column) {$@        if false {@|a_todo_issue_with_no_ready_block_is_refused
 
-/// Judge the graph over a payload set.
+/// Read the graph over a payload set.
 ///
 /// `None` is an input refusal: an empty set, or a payload carrying no `id` or no
 /// `status`.
+///
+/// ONE ROW PER ID, THE FIRST: the preset indexes rows by id, and two payloads
+/// for one key are one row fetched twice — the index this replaced already
+/// answered every lookup from the first.
+///
+/// The lines, one kind per first field, each of fixed arity:
+///
+/// ```text
+/// row       <ordinal> <id> <status> <column> <assigned> <prs> <milestone> <parent|-> <edges> <settles> <retires> <described>
+/// edge      <from> <to> <the target's ordinal>
+/// ready     <id> <ready|unready|unjudgeable> <the §6 bump|->
+/// forward   <id> <the Ready gate's own pointer line>
+/// claim     <row> <cited> <column>
+/// asserted  <row> <cited> <span>
+/// scan      broken
+/// ```
 #[must_use]
-pub fn judge(
+pub fn read_graph(
     set: &[Value],
     grammar: &Grammar,
     vocabulary: &Vocabulary,
     root: &Path,
-) -> Option<Judgement> {
+) -> Option<Reading> {
     if set.is_empty() {
         return None;
     }
@@ -628,200 +755,61 @@ pub fn judge(
         rows.push(Row::read(value)?);
     }
     rows.sort_by(|left, right| by_num(&left.id).cmp(&by_num(&right.id)));
-    let mut index = BTreeMap::new();
-    for (at, row) in rows.iter().enumerate() {
-        index.entry(row.id.clone()).or_insert(at);
-    }
-    let closure = Closure {
-        rows,
-        index,
-        grammar,
-        vocabulary,
-        root,
-    };
-    let mut judgement = Judgement::default();
-    let milestones_judgeable = milestone_presence(&closure, &mut judgement);
-    for row in &closure.rows {
-        judge_row(&closure, row, milestones_judgeable, &mut judgement);
-    }
-    let edges = judge_edges(&closure, &mut judgement);
-    judge_claims(&closure, &mut judgement);
-    judge_frontier(&closure, &edges, &mut judgement);
-    judgement.wip = closure
-        .rows
-        .iter()
-        .filter(|row| row.status == vocabulary.in_progress)
-        .count();
-    judgement.ids = closure.rows.iter().map(|row| row.id.clone()).collect();
-    Some(judgement)
-}
-
-/// The milestone claim's anti-vacuity arm (CLOUD-695, widened by CLOUD-771).
-///
-/// The tracker OMITS a null milestone, so per row "no milestone" and "the caller
-/// projected the field away" are the same bytes. The discriminator is the SET:
-/// if no row anywhere carries the key, the caller projected it away. The honest
-/// limit — a set in which every row is genuinely unphased reads as projected
-/// away — is the could-not-look direction, and the remedy is one re-fetch.
-fn milestone_presence(closure: &Closure<'_>, judgement: &mut Judgement) -> bool {
-    let started: Vec<&str> = closure
-        .rows
-        .iter()
-        .filter(|row| closure.vocabulary.started(&row.status))
-        .map(|row| row.id.as_str())
-        .collect();
-    if started.is_empty() {
-        return true;
-    }
-    if closure.rows.iter().any(Row::carries_milestone_key) {
-        return true;
-    }
-    judgement.unjudged(
-        SET,
-        &format!("unjudgeable-milestone ({})", started.join(" ")),
-    );
-    false
-}
-
-/// The per-row column claims.
-///
-/// - `in-progress-unassigned`: pulled means somebody has it.
-/// - `in-review-no-pr`: landed means a pull request is attached — a deliberate
-///   approximation checkable from the payload alone — unless the row DECLARES
-///   it lands no commit (CLOUD-735), and `declares-no-commit-with-pr` refuses
-///   the row that declares that AND carries one, so `none` never becomes the
-///   cheapest way past the gate.
-/// - `unmilestoned (<column>)`: an unparented started row names its phase.
-/// - `child-unmilestoned`: a child of a phased parent carries a phase of its
-///   own — the parent's, or a different one DECLARED (CLOUD-599). Carrying none
-///   is the refusal; a parent outside the set is unjudgeable.
-fn judge_row(
-    closure: &Closure<'_>,
-    row: &Row<'_>,
-    milestones_judgeable: bool,
-    judgement: &mut Judgement,
-) {
-    let vocabulary = closure.vocabulary;
-    if row.status == vocabulary.in_progress && !row.assigned {
-        judgement.report(&row.id, "in-progress-unassigned");
-    }
-    if row.status == vocabulary.review {
-        let (_, bump) = readiness(closure.grammar, row.value, closure.root);
-        let declares_none = bump.as_deref() == Some("none");
-        if row.prs == 0 && !declares_none {
-            judgement.report(&row.id, "in-review-no-pr");
+    let mut seen = BTreeSet::new();
+    rows.retain(|row| seen.insert(row.id.clone()));
+    let mut lines = Vec::new();
+    for row in &rows {
+        let column = vocabulary.column(&row.status);
+        lines.push(format!(
+            "row\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            by_num(&row.id).0,
+            field(&row.id),
+            field(&row.status),
+            column,
+            yes(row.assigned),
+            row.prs,
+            row.milestone.token(),
+            row.parent.as_deref().map_or_else(|| "-".to_owned(), field),
+            if row.edges_declared {
+                "declared"
+            } else {
+                "absent"
+            },
+            yes(row.typed(&vocabulary.settled_types)),
+            yes(row.typed(&vocabulary.retired_types)),
+            yes(row.description.is_some()),
+        ));
+        let from = field(&row.id);
+        for to in &row.blocked_by {
+            lines.push(format!("edge\t{}\t{}\t{}", from, field(to), by_num(to).0));
         }
-        if row.prs != 0 && declares_none {
-            judgement.report(&row.id, "declares-no-commit-with-pr");
-        }
-    }
-    if !milestones_judgeable {
-        return;
-    }
-    match &row.parent {
-        None => {
-            if vocabulary.started(&row.status) && !row.milestoned() {
-                judgement.report(&row.id, &format!("unmilestoned ({})", row.status));
+        if ["ready", "review"].contains(&column) {
+            let (verdict, bump) = readiness(grammar, row.value, root);
+            lines.push(format!(
+                "ready\t{from}\t{}\t{}",
+                verdict.token(),
+                bump.as_deref().map_or_else(|| "-".to_owned(), field)
+            ));
+            if let Readiness::Unready(forwarded) = &verdict {
+                for line in forwarded {
+                    lines.push(format!("forward\t{from}\t{}", field(line)));
+                }
             }
         }
-        Some(parent) => match closure.row(parent) {
-            None => judgement.unjudged(
-                &row.id,
-                &format!("child-milestone-unjudgeable (parent {parent} not in the set)"),
-            ),
-            Some(found) if found.milestoned() && !row.milestoned() => {
-                judgement.report(&row.id, &format!("child-unmilestoned (parent {parent})"));
-            }
-            Some(_) => {}
-        },
     }
+    read_claims(&rows, grammar, vocabulary, &mut lines);
+    Some(Reading {
+        lines,
+        ids: rows.iter().map(|row| row.id.clone()).collect(),
+        wip: rows
+            .iter()
+            .filter(|row| row.status == vocabulary.in_progress)
+            .count(),
+    })
 }
 
-/// Graph coherence: the relation key is present, every blocker is in the set,
-/// and the relation is acyclic. Returns the edges, byte-stably ordered.
-///
-/// `dangling-blocker` is UNJUDGED and set-keyed (CLOUD-678), never a violation:
-/// the tracker keeps `blockedBy` after the blocker completes, so an active-only
-/// closure carries an edge to a done ancestor for every landed blocker, and a
-/// violation that fires on correct input trains readers to ignore it.
-fn judge_edges(closure: &Closure<'_>, judgement: &mut Judgement) -> Vec<(String, String)> {
-    let keyless: Vec<&str> = closure
-        .rows
-        .iter()
-        .filter(|row| !row.edges_declared)
-        .map(|row| row.id.as_str())
-        .collect();
-    if !keyless.is_empty() {
-        judgement.unjudged(
-            SET,
-            &format!("unjudgeable-blockedby ({})", keyless.join(" ")),
-        );
-    }
-    let mut edges: Vec<(String, String)> = closure
-        .rows
-        .iter()
-        .flat_map(|row| row.blocked_by.iter().map(|to| (row.id.clone(), to.clone())))
-        .collect();
-    edges.sort_by(|left, right| {
-        by_num(&left.0)
-            .cmp(&by_num(&right.0))
-            .then_with(|| left.1.cmp(&right.1))
-    });
-    let mut outside: Vec<String> = edges
-        .iter()
-        .filter(|(_, to)| closure.row(to).is_none())
-        .map(|(_, to)| to.clone())
-        .collect();
-    sort_ids(&mut outside);
-    outside.dedup();
-    if !outside.is_empty() {
-        judgement.unjudged(SET, &format!("dangling-blocker ({})", outside.join(" ")));
-    }
-    let members = cycle_members(&edges);
-    if !members.is_empty() {
-        judgement.report(SET, &format!("blockedby-cycle ({})", members.join(" ")));
-    }
-    edges
-}
-
-/// Every id on a `blockedBy` cycle, byte-stably ordered.
-///
-/// A self-edge is not a cycle, which is `tsort`'s reading of a pair naming one
-/// item twice: it declares the item and orders nothing.
-fn cycle_members(edges: &[(String, String)]) -> Vec<String> {
-    let mut next: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for (from, to) in edges {
-        if from != to {
-            next.entry(from.as_str()).or_default().push(to.as_str());
-        }
-    }
-    let mut members: Vec<String> = next
-        .keys()
-        .filter(|start| returns_to(&next, start))
-        .map(|start| (*start).to_owned())
-        .collect();
-    sort_ids(&mut members);
-    members
-}
-
-/// Whether a walk from `start` along the relation comes back to it.
-fn returns_to(next: &BTreeMap<&str, Vec<&str>>, start: &str) -> bool {
-    let mut seen: BTreeSet<&str> = BTreeSet::new();
-    let mut stack: Vec<&str> = next.get(start).cloned().unwrap_or_default();
-    while let Some(node) = stack.pop() {
-        if node == start {
-            return true;
-        }
-        if seen.insert(node)
-            && let Some(more) = next.get(node)
-        {
-            stack.extend(more.iter().copied());
-        }
-    }
-    false
-}
-
-/// Status claims: prose is not a second authority for a column (CLOUD-234).
+/// Status claims, extracted: every id-first span the declared connective allows
+/// between a key and a column word (CLOUD-234, CLOUD-838).
 ///
 /// THE VOCABULARY IS THE PIPED SET'S OCCUPIED STATUSES, never a second copy of
 /// the board's list. A claim is an id-first span whose connective is
@@ -830,43 +818,53 @@ fn returns_to(next: &BTreeMap<&str, Vec<&str>>, start: &str) -> bool {
 /// word — because no blocklist of narration verbs ends. Case-sensitive, since
 /// the columns are proper nouns the payload spells exactly.
 ///
-/// THE ALPHABET'S OWN ANTI-VACUITY ARM (CLOUD-838): a claim naming a column no
-/// piped row occupies never matched the scan above, so a row that LEFT a column
-/// was invisible exactly where a stale claim is likeliest. With the connective
-/// REQUIRED, a capitalised span that is not in the alphabet is reported
-/// could-not-look, keyed to the set; the gloss form of such a claim stays
-/// uncovered, because telling `— **Shipped**` from `— **Batten**` needs the
-/// second authority over the column list this gate must not hold.
-fn judge_claims(closure: &Closure<'_>, judgement: &mut Judgement) {
-    let undescribed: Vec<&str> = closure
-        .rows
-        .iter()
-        .filter(|row| row.description.is_none())
-        .map(|row| row.id.as_str())
-        .collect();
-    if !undescribed.is_empty() {
-        judgement.unjudged(
-            SET,
-            &format!("unjudgeable-description ({})", undescribed.join(" ")),
-        );
-    }
-    // A scan whose expressions will not compose judged nothing, which is not the
-    // same as finding nothing: it says so, keyed to the set, rather than going
-    // quiet.
-    let Some(scan) = Scan::build(closure) else {
-        judgement.unjudged(
-            SET,
-            "status-claim-unscannable (the declared expressions do not compose)",
-        );
+/// Two kinds come out: a `claim` naming a column the set occupies, and an
+/// `asserted` capitalised span behind a REQUIRED connective, whatever it names.
+/// Whether the first disagrees with the board, and whether the second names a
+/// column nobody occupies, is the preset's to decide. A scan whose expressions
+/// will not compose extracted nothing, which is not the same as finding nothing,
+/// so it says `scan broken`.
+fn read_claims(
+    rows: &[Row<'_>],
+    grammar: &Grammar,
+    vocabulary: &Vocabulary,
+    lines: &mut Vec<String>,
+) {
+    let Some(scan) = Scan::build(rows, grammar, &vocabulary.connective) else {
+        lines.push("scan\tbroken".to_owned());
         return;
     };
-    for row in &closure.rows {
+    for row in rows {
         let Some(description) = row.description else {
             continue;
         };
-        let prose = scan.neutralised(closure.grammar, description);
-        scan.against_the_board(closure, row, &prose, judgement);
-        scan.outside_the_alphabet(row, &prose, judgement);
+        let prose = scan.neutralised(grammar, description);
+        for line in prose.lines() {
+            for found in scan.claim.captures_iter(line) {
+                let cited = found.name("key").map_or("", |m| m.as_str());
+                let claimed = found.name("column").map_or("", |m| m.as_str());
+                if !cited.is_empty() {
+                    lines.push(format!(
+                        "claim\t{}\t{}\t{}",
+                        field(&row.id),
+                        field(cited),
+                        field(claimed)
+                    ));
+                }
+            }
+            for found in scan.asserted.captures_iter(line) {
+                let cited = found.name("key").map_or("", |m| m.as_str());
+                let span = found.name("span").map_or("", |m| m.as_str());
+                if !cited.is_empty() && !span.is_empty() {
+                    lines.push(format!(
+                        "asserted\t{}\t{}\t{}",
+                        field(&row.id),
+                        field(cited),
+                        field(span)
+                    ));
+                }
+            }
+        }
     }
 }
 
@@ -875,17 +873,15 @@ fn judge_claims(closure: &Closure<'_>, judgement: &mut Judgement) {
 struct Scan {
     claim: Regex,
     asserted: Regex,
-    alphabet: Regex,
     code_span: Regex,
     quoted: Regex,
 }
 
 impl Scan {
     /// `None` only when an expression composed from the declared rows will not
-    /// compile — the caller reports that as could-not-look.
-    fn build(closure: &Closure<'_>) -> Option<Self> {
-        let mut columns: Vec<String> = closure
-            .rows
+    /// compile — the reading says so, and the preset reports it as a gap.
+    fn build(rows: &[Row<'_>], grammar: &Grammar, connective: &str) -> Option<Self> {
+        let mut columns: Vec<String> = rows
             .iter()
             .map(|row| row.status.clone())
             .filter(|status| !status.is_empty())
@@ -900,8 +896,7 @@ impl Scan {
             .map(|column| regex::escape(column.as_str()))
             .collect::<Vec<_>>()
             .join("|");
-        let key = closure.grammar.key_expression();
-        let connective = &closure.vocabulary.connective;
+        let key = grammar.key_expression();
         let filler = r"[^[:alnum:]\\]*";
         Some(Self {
             claim: composed(&format!(
@@ -912,7 +907,6 @@ impl Scan {
                 "(?P<key>{key}){filler}(?:{connective}){filler}(?P<span>{CAPITALISED})"
             ))
             .ok()?,
-            alphabet: composed(&format!("^(?:{alternation})$")).ok()?,
             code_span: composed(CODE_SPAN).ok()?,
             quoted: composed(QUOTED).ok()?,
         })
@@ -925,131 +919,9 @@ impl Scan {
         let spans = self.code_span.replace_all(&plain, "CODESPAN");
         self.quoted.replace_all(&spans, "QUOTED").into_owned()
     }
-
-    /// Every claim the alphabet can spell, compared against the board.
-    fn against_the_board(
-        &self,
-        closure: &Closure<'_>,
-        row: &Row<'_>,
-        prose: &str,
-        judgement: &mut Judgement,
-    ) {
-        for line in prose.lines() {
-            for found in self.claim.captures_iter(line) {
-                let cited = found.name("key").map_or("", |m| m.as_str());
-                let claimed = found.name("column").map_or("", |m| m.as_str());
-                match closure.row(cited) {
-                    // Keyed to the SET: which closure was piped is the caller's
-                    // choice, not this row's dishonesty.
-                    None => judgement.unjudged(
-                        SET,
-                        &format!(
-                            "status-claim-unjudgeable ({} claims {cited}, not in the piped set)",
-                            row.id
-                        ),
-                    ),
-                    Some(actual) if actual.status != claimed => {
-                        judgement.report(
-                            &row.id,
-                            &format!(
-                                "status-claim-disagrees ({cited} claimed {claimed}, board says {})",
-                                actual.status
-                            ),
-                        );
-                    }
-                    Some(_) => {}
-                }
-            }
-        }
-    }
-
-    /// Every asserted claim naming a word outside the alphabet.
-    fn outside_the_alphabet(&self, row: &Row<'_>, prose: &str, judgement: &mut Judgement) {
-        for line in prose.lines() {
-            for found in self.asserted.captures_iter(line) {
-                let token = found.name("span").map_or("", |m| m.as_str());
-                // In the alphabet: the scan above already judged it, and one claim
-                // gets one rule id, never two.
-                if token.is_empty() || self.alphabet.is_match(token) {
-                    continue;
-                }
-                let cited = found.name("key").map_or("", |m| m.as_str());
-                let unscannable = format!(
-                    "status-claim-unscannable ({} claims {cited} is {token}, which no piped issue \
-                     occupies — pipe one that does)",
-                    row.id
-                );
-                judgement.unjudged(SET, &unscannable);
-            }
-        }
-    }
 }
 
-/// The frontier and every exclusion from it, each attributed (CLOUD-251).
-///
-/// A ready-queue row is on the frontier iff its own payload passes the Ready gate
-/// and every blocker in the set is settled. The three arms end in three places:
-/// an unready row is `todo-not-ready`, a violation (CLOUD-375 — the queue is
-/// lying); a row the gate could not read is unjudged; an unsettled blocker is a
-/// note, because that is scheduling and the row is not claiming otherwise. A
-/// blocker outside the set is unjudged and never a note (CLOUD-678): "excluded"
-/// reads exactly like a legitimate block, and an empty frontier reads as
-/// "nothing is ready".
-fn judge_frontier(closure: &Closure<'_>, edges: &[(String, String)], judgement: &mut Judgement) {
-    for row in &closure.rows {
-        if row.status != closure.vocabulary.ready {
-            continue;
-        }
-        match readiness(closure.grammar, row.value, closure.root).0 {
-            Readiness::Ready => {}
-            Readiness::Unready(lines) => {
-                judgement.report(&row.id, "todo-not-ready");
-                judgement.lines.extend(lines);
-                continue;
-            }
-            Readiness::Unjudgeable => {
-                judgement.unjudged(&row.id, "excluded (unjudgeable-ready-block)");
-                continue;
-            }
-        }
-        let mut blocking = String::new();
-        let mut unknown = String::new();
-        let mut retired = String::new();
-        for (_, to) in edges.iter().filter(|(from, _)| *from == row.id) {
-            let Some(blocker) = closure.row(to) else {
-                unknown.push(' ');
-                unknown.push_str(to);
-                continue;
-            };
-            if closure.settled(blocker) {
-                if closure.retired(blocker) {
-                    retired.push(' ');
-                    retired.push_str(to);
-                }
-            } else {
-                blocking.push(' ');
-                blocking.push_str(to);
-            }
-        }
-        if unknown.is_empty() && blocking.is_empty() {
-            judgement.frontier.push(row.id.clone());
-            // CLOUD-477's second decision: schedulable, AND the reason on the
-            // record — a cancelled blocker may have taken the premise with it.
-            if !retired.is_empty() {
-                judgement.note(&row.id, &format!("frontier-over-retired-blocker{retired}"));
-            }
-        } else if unknown.is_empty() {
-            judgement.note(&row.id, &format!("excluded (blocked-by{blocking})"));
-        } else {
-            judgement.unjudged(
-                &row.id,
-                &format!("excluded (unjudgeable-blocker{unknown}{blocking})"),
-            );
-        }
-    }
-}
-
-/// Render the graph's judgement, and mint the move receipts on a coherent board.
+/// Render the graph's decision, and mint the move receipts on a coherent board.
 fn graph(
     set: &[Value],
     declared: &Declared<'_>,
@@ -1058,46 +930,69 @@ fn graph(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let vocabulary = Vocabulary::resolve(declared.board, declared.patterns)?;
-    let Some(judgement) = judge(set, declared.grammar, &vocabulary, declared.root) else {
+    let Some(reading) = read_graph(set, declared.grammar, &vocabulary, declared.root) else {
         writeln!(
             err,
             "::error:: board check: stdin is not a set of get_issue payloads (need id and status per issue)"
         )?;
         return Ok(ExitCode::Internal);
     };
-    for line in &judgement.lines {
+    let decided = match decide(GRAPH, &reading.lines) {
+        Ok(decided) => decided,
+        Err(why) => {
+            writeln!(err, "::error:: board check: {why}")?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    if let Some(class) = decided.unknown(&[GRAPH_REPORT, GRAPH_GAP]) {
+        writeln!(
+            err,
+            "::error:: board check: the preset raised `{class}`, which the graph has no lane for"
+        )?;
+        return Ok(ExitCode::Internal);
+    }
+    let reports = decided.lines_of(GRAPH_REPORT);
+    let gaps = decided.lines_of(GRAPH_GAP);
+    let mut lines: Vec<String> = reports
+        .iter()
+        .chain(&gaps)
+        .chain(&decided.notes)
+        .cloned()
+        .collect();
+    sort_lines(&mut lines);
+    for line in &lines {
         writeln!(err, "{line}")?;
     }
-    writeln!(out, "wip {}", judgement.wip)?;
-    for id in &judgement.frontier {
+    writeln!(out, "wip {}", reading.wip)?;
+    for id in &decided.frontier {
         writeln!(out, "frontier {id}")?;
     }
-    if judgement.violations > 0 {
+    if !reports.is_empty() {
         writeln!(
             err,
             "::error:: board check: {} violation(s) — the board is signalling falsely",
-            judgement.violations
+            reports.len()
         )?;
     }
     // COULD-NOT-LOOK OUTRANKS A VIOLATION HERE (CLOUD-251): a verdict over a set
     // this could only partly read is not a verdict.
-    if judgement.unjudgeable > 0 {
+    if !gaps.is_empty() {
         writeln!(
             err,
             "::error:: board check: {} payload(s) could not be judged — re-fetch with the \
              relations, attachments, milestones and descriptions included",
-            judgement.unjudgeable
+            gaps.len()
         )?;
         return Ok(ExitCode::Internal);
     }
-    if judgement.violations > 0 {
+    if !reports.is_empty() {
         return Ok(ExitCode::Violation);
     }
-    mint_receipts(declared, &judgement.ids, now);
+    mint_receipts(declared, &reading.ids, now);
     writeln!(
         out,
         "board check: board coherent ({} issues)",
-        judgement.ids.len()
+        reading.ids.len()
     )?;
     Ok(ExitCode::Success)
 }
@@ -1153,21 +1048,17 @@ struct Cites {
     prospective: Option<String>,
 }
 
-/// What `--cites` found.
+/// The citation reading, and the one clone property the verb prints itself.
 #[derive(Debug, Default)]
-struct Tally {
-    findings: Vec<String>,
-    notes: Vec<String>,
+struct CiteReading {
+    lines: Vec<String>,
     cited: usize,
-    resolved: usize,
-    prospective: usize,
     history: bool,
 }
 
 //MUTANT fixtures-satisfy-a-citation|s@^        let drop = &self.exclude;$@        let drop: \&[crate::rules::Selector] = \&[];@|a_citation_that_resolves_only_in_a_fixture_and_nowhere_else_is_refused
 //MUTANT superseded-block-is-judged|s@^            start = Some(at);$@            start = start.or(Some(at));@|the_last_opener_is_the_live_block_and_an_earlier_one_is_history
-//MUTANT marker-not-required|s@^            if marked {$@            if true {@|an_unmarked_absent_path_is_still_refused
-//MUTANT marker-outranks-history|s@^                if deleted == Some(true) {$@                if false {@|a_marker_on_a_deleted_path_is_refused_not_believed
+//MUTANT marker-never-read|s@^                Some(marker) => text.contains(.format!("`{path}` {marker}")),$@                Some(_) => false,@|a_citation_the_block_marks_new_is_prospective_not_fatal
 
 impl Cites {
     fn resolve(declared: &Declared<'_>) -> Result<Self> {
@@ -1185,11 +1076,20 @@ impl Cites {
         })
     }
 
-    /// Judge every payload's LIVE Ready block against the tree.
+    /// Read every payload's LIVE Ready block against the tree.
+    ///
+    /// ```text
+    /// test  <key> <token> <found>
+    /// path  <key> <path> <exists> <marked> <deleted: yes|no|unknown>
+    /// ```
     ///
     /// `Err` is could-not-look: a set that is not payloads carrying a body, or a
     /// tree that cannot be enumerated or holds nothing to resolve against.
-    fn judge(&self, set: &[Value], declared: &Declared<'_>) -> std::result::Result<Tally, String> {
+    fn read(
+        &self,
+        set: &[Value],
+        declared: &Declared<'_>,
+    ) -> std::result::Result<CiteReading, String> {
         let well_formed = !set.is_empty()
             && set.iter().all(|value| {
                 value
@@ -1215,10 +1115,8 @@ impl Cites {
             .filter_map(|path| std::fs::read(declared.root.join(path)).ok())
             .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
             .collect();
-        let mut tally = Tally {
-            history: !crate::git::is_shallow(declared.root).unwrap_or(true),
-            ..Tally::default()
-        };
+        let history = !crate::git::is_shallow(declared.root).unwrap_or(true);
+        let mut lines = BTreeSet::new();
         for value in set {
             let Some(key) = value.get("id").filter(|id| present(id)).map(scalar) else {
                 continue;
@@ -1237,25 +1135,27 @@ impl Cites {
                 &block,
                 declared.grammar.clause_label(),
                 &contents,
-                &mut tally,
+                &mut lines,
             );
-            self.paths_in(&key, &block, declared.root, &mut tally);
+            self.paths_in(&key, &block, declared.root, history, &mut lines);
         }
-        tally.findings.sort();
-        tally.notes.sort();
-        Ok(tally)
+        Ok(CiteReading {
+            cited: lines.len(),
+            lines: lines.into_iter().collect(),
+            history,
+        })
     }
 
     /// Cited test names, inside the obligations clause only — a greedier span
     /// would read an unrelated backticked symbol in a later clause as an
-    /// obligation.
+    /// obligation — and whether any corpus file carries each.
     fn tests_in(
         &self,
         key: &str,
         block: &[&str],
         clause: &Regex,
         contents: &[String],
-        tally: &mut Tally,
+        lines: &mut BTreeSet<String>,
     ) {
         let Some(start) = block
             .iter()
@@ -1275,20 +1175,31 @@ impl Cites {
             .map(|found| found.as_str().trim_matches('`'))
             .collect();
         for token in tokens {
-            tally.cited += 1;
-            if contents.iter().any(|text| text.contains(token)) {
-                tally.resolved += 1;
-            } else {
-                tally
-                    .findings
-                    .push(format!("{key} {token} absent-cited-test"));
-            }
+            let found = contents.iter().any(|text| text.contains(token));
+            lines.insert(format!(
+                "test\t{}\t{}\t{}",
+                field(key),
+                field(token),
+                yes(found)
+            ));
         }
     }
 
-    /// Cited paths, anywhere in the live block — three answers, not two
-    /// (CLOUD-920): it exists, it is marked prospective, or it is refused.
-    fn paths_in(&self, key: &str, block: &[&str], root: &Path, tally: &mut Tally) {
+    /// Cited paths, anywhere in the live block: whether each exists, whether the
+    /// block marks it prospective, and — for a marked one on a full clone —
+    /// whether an ancestor deleted it (CLOUD-920).
+    ///
+    /// The marker is read WITH its path, so one marker elsewhere in the block
+    /// cannot excuse every citation in it. History is asked only about a marked
+    /// absent path, and a shallow clone answers `unknown`, never `no`.
+    fn paths_in(
+        &self,
+        key: &str,
+        block: &[&str],
+        root: &Path,
+        history: bool,
+        lines: &mut BTreeSet<String>,
+    ) {
         let text = block.join("\n");
         let paths: BTreeSet<&str> = self
             .cited_path
@@ -1297,40 +1208,27 @@ impl Cites {
             .filter(|path| path.contains('/'))
             .collect();
         for path in paths {
-            tally.cited += 1;
-            if root.join(path).exists() {
-                tally.resolved += 1;
-                continue;
-            }
-            // The marker is matched WITH its path, so one marker elsewhere in the
-            // block cannot excuse every citation in it.
-            let marked = self
-                .prospective
-                .as_deref()
-                .is_some_and(|marker| text.contains(&format!("`{path}` {marker}")));
-            if marked {
-                // THE ANTI-FORGERY TERM: history may REFUTE a marker — a path an
-                // ancestor deleted was present — and is never asked to grant one.
-                let deleted = if tally.history {
-                    crate::git::path_was_deleted(root, path).ok().flatten()
-                } else {
-                    None
-                };
-                if deleted == Some(true) {
-                    tally
-                        .findings
-                        .push(format!("{key} {path} stale-cited-path"));
-                } else {
-                    tally.prospective += 1;
-                    tally
-                        .notes
-                        .push(format!("{key} {path} prospective-cited-path"));
-                }
+            let exists = root.join(path).exists();
+            let marked = match self.prospective.as_deref() {
+                Some(marker) => text.contains(&format!("`{path}` {marker}")),
+                None => false,
+            };
+            let deleted = if exists || !marked || !history {
+                "unknown"
             } else {
-                tally
-                    .findings
-                    .push(format!("{key} {path} absent-cited-path"));
-            }
+                match crate::git::path_was_deleted(root, path) {
+                    Ok(Some(true)) => "yes",
+                    Ok(Some(false)) => "no",
+                    Ok(None) | Err(_) => "unknown",
+                }
+            };
+            lines.insert(format!(
+                "path\t{}\t{}\t{}\t{}\t{deleted}",
+                field(key),
+                field(path),
+                yes(exists),
+                yes(marked)
+            ));
         }
     }
 }
@@ -1353,60 +1251,73 @@ fn live_block<'a>(opener: &Regex, body: &'a str) -> Option<Vec<&'a str>> {
     Some(lines.get(start?..).unwrap_or_default().to_vec())
 }
 
-impl Tally {
-    /// Render, and say whether a citation was refused.
-    ///
-    /// Notes print before the verdict and on stderr either way: a prospective
-    /// citation is information about a correct block and must neither move the
-    /// exit code nor be buried under a refusal after it.
-    fn render(&self, out: &mut dyn Write, err: &mut dyn Write) -> Result<bool> {
-        for note in &self.notes {
-            writeln!(err, "  {note}")?;
-        }
-        if !self.notes.is_empty() && !self.history {
-            writeln!(
-                err,
-                "::notice:: board check --cites: {} prospective citation(s) above, and this clone is \
-                 SHALLOW — so a prospective marker could not be checked against history. A marker on \
-                 a path that was deleted rather than never written is not detectable here; a full \
-                 clone can check it.",
-                self.prospective
-            )?;
-        }
-        if !self.findings.is_empty() {
-            writeln!(
-                err,
-                "::error:: board check --cites: a Ready block cites something the tree does not \
-                 carry. This checks EXISTENCE, never relevance — whether a test that exists is the \
-                 right test is not computable (CLOUD-93). A citation resolving only in an excluded \
-                 path is refused, because a fixture quoting the citation is not the thing cited:"
-            )?;
-            for finding in &self.findings {
-                writeln!(err, "  {finding}")?;
-            }
-            writeln!(
-                err,
-                "::error:: board check --cites: {} of {} citation(s) resolve nothing",
-                self.findings.len(),
-                self.cited
-            )?;
-            return Ok(true);
-        }
-        if self.prospective > 0 {
-            writeln!(
-                out,
-                "board check --cites: {} of {} citation(s) resolve against the tree; {} prospective",
-                self.resolved, self.cited, self.prospective
-            )?;
-        } else {
-            writeln!(
-                out,
-                "board check --cites: {} of {} citation(s) resolve against the tree",
-                self.resolved, self.cited
-            )?;
-        }
-        Ok(false)
+/// Render `--cites`, and say whether a citation was refused — `None` when the
+/// preset raised a class this direction has no lane for.
+///
+/// Notes print before the verdict and on stderr either way: a prospective
+/// citation is information about a correct block and must neither move the
+/// exit code nor be buried under a refusal after it.
+fn render_cites(
+    reading: &CiteReading,
+    decided: &Decided,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<Option<bool>> {
+    if let Some(class) = decided.unknown(&[CITE_REFUSED]) {
+        writeln!(
+            err,
+            "::error:: board check --cites: the preset raised `{class}`, which this direction has no lane for"
+        )?;
+        return Ok(None);
     }
+    let findings = decided.lines_of(CITE_REFUSED);
+    let prospective = decided.notes.len();
+    for note in &decided.notes {
+        writeln!(err, "  {note}")?;
+    }
+    if !decided.notes.is_empty() && !reading.history {
+        writeln!(
+            err,
+            "::notice:: board check --cites: {prospective} prospective citation(s) above, and this clone is \
+             SHALLOW — so a prospective marker could not be checked against history. A marker on \
+             a path that was deleted rather than never written is not detectable here; a full \
+             clone can check it."
+        )?;
+    }
+    if !findings.is_empty() {
+        writeln!(
+            err,
+            "::error:: board check --cites: a Ready block cites something the tree does not \
+             carry. This checks EXISTENCE, never relevance — whether a test that exists is the \
+             right test is not computable (CLOUD-93). A citation resolving only in an excluded \
+             path is refused, because a fixture quoting the citation is not the thing cited:"
+        )?;
+        for finding in &findings {
+            writeln!(err, "  {finding}")?;
+        }
+        writeln!(
+            err,
+            "::error:: board check --cites: {} of {} citation(s) resolve nothing",
+            findings.len(),
+            reading.cited
+        )?;
+        return Ok(Some(true));
+    }
+    let resolved = reading.cited.saturating_sub(findings.len() + prospective);
+    if prospective > 0 {
+        writeln!(
+            out,
+            "board check --cites: {resolved} of {} citation(s) resolve against the tree; {prospective} prospective",
+            reading.cited
+        )?;
+    } else {
+        writeln!(
+            out,
+            "board check --cites: {resolved} of {} citation(s) resolve against the tree",
+            reading.cited
+        )?;
+    }
+    Ok(Some(false))
 }
 
 // --- the tree's clause citations against the payloads (`--refs`) --------------
@@ -1422,16 +1333,12 @@ struct Refs {
 /// One clause citation in the tree: where, which issue, which clause.
 type Hit = (String, usize, String, String);
 
-/// What `--refs` found.
+/// The clause-citation reading, and how many citations it holds.
 #[derive(Debug, Default)]
-struct Found {
-    findings: Vec<String>,
-    gaps: Vec<String>,
+struct RefReading {
+    lines: Vec<String>,
     hits: usize,
 }
-
-//MUTANT clause-always-present|s@^            } else if !carried.contains(clause.as_str()) {$@            } else if false {@|a_citation_naming_a_clause_the_issue_does_not_carry_is_reported_with_its_pointer
-//MUTANT unfetched-issue-passes|s@^            if body.is_empty() {$@            if false {@|a_cited_issue_absent_from_the_payload_set_is_could_not_look_never_a_silent_pass
 
 impl Refs {
     fn resolve(declared: &Declared<'_>) -> Result<Self> {
@@ -1480,12 +1387,21 @@ impl Refs {
         Ok(hits)
     }
 
-    /// Judge every clause citation in the tree against the piped bodies.
+    /// Read every clause citation in the tree, and what the piped bodies carry.
     ///
-    /// REFUTES, NEVER CONFIRMS: a sparse clause set is not a defect, a citation
-    /// of a clause that is not there is. A cited issue absent from the set is a
-    /// GAP, never a pass — an unfetched issue looks exactly like a clean one.
-    fn judge(&self, set: &[Value], declared: &Declared<'_>) -> std::result::Result<Found, String> {
+    /// ```text
+    /// hit     <path> <line> <key> <clause>
+    /// issue   <key>                 — a cited key whose body the set carries
+    /// clause  <key> <clause>        — a clause that body DECLARES
+    /// ```
+    ///
+    /// Only the cited keys' bodies are read, and only for their clause labels:
+    /// the reading carries a key and a number, never a line of a body.
+    fn read(
+        &self,
+        set: &[Value],
+        declared: &Declared<'_>,
+    ) -> std::result::Result<RefReading, String> {
         let well_formed = !set.is_empty()
             && set.iter().all(|value| {
                 value
@@ -1499,28 +1415,38 @@ impl Refs {
             );
         }
         let grammar = declared.grammar;
-        let mut found = Found::default();
-        for (path, line, key, clause) in self.hits(declared.root)? {
-            found.hits += 1;
+        let hits = self.hits(declared.root)?;
+        let mut lines = Vec::with_capacity(hits.len());
+        let mut cited: BTreeSet<&str> = BTreeSet::new();
+        for (path, line, key, clause) in &hits {
+            lines.push(format!(
+                "hit\t{}\t{line}\t{}\t{}",
+                field(path),
+                field(key),
+                field(clause)
+            ));
+            cited.insert(key.as_str());
+        }
+        for key in cited {
             let body = set
                 .iter()
-                .find(|value| value.get("id").map(scalar).as_deref() == Some(key.as_str()))
+                .find(|value| value.get("id").map(scalar).as_deref() == Some(key))
                 .and_then(|value| value.get("description"))
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            let body_lines: Vec<&str> = body.lines().collect();
-            let carried = declared_clauses(&body_lines, grammar, &self.tag);
             if body.is_empty() {
-                found
-                    .gaps
-                    .push(format!("{path}:{line} {key} unjudgeable-issue"));
-            } else if !carried.contains(clause.as_str()) {
-                found
-                    .findings
-                    .push(format!("{path}:{line} {key} §{clause} absent-issue-clause"));
+                continue;
+            }
+            lines.push(format!("issue\t{}", field(key)));
+            let body_lines: Vec<&str> = body.lines().collect();
+            for clause in declared_clauses(&body_lines, grammar, &self.tag) {
+                lines.push(format!("clause\t{}\t{}", field(key), field(clause)));
             }
         }
-        Ok(found)
+        Ok(RefReading {
+            lines,
+            hits: hits.len(),
+        })
     }
 }
 
@@ -1539,45 +1465,58 @@ fn declared_clauses<'a>(lines: &[&'a str], grammar: &Grammar, tag: &Regex) -> BT
         .collect()
 }
 
-impl Found {
-    /// Render, and say (refused, could-not-look).
-    fn render(&self, out: &mut dyn Write, err: &mut dyn Write) -> Result<(bool, bool)> {
-        if !self.gaps.is_empty() {
-            writeln!(
-                err,
-                "::error:: board check --refs: cited issues are absent from the piped payload set, \
-                 so their citations could not be judged. Fetch them and pipe again — an unfetched \
-                 issue looks exactly like a clean one (CLOUD-189):"
-            )?;
-            for gap in &self.gaps {
-                writeln!(err, "  {gap}")?;
-            }
-        }
-        if !self.findings.is_empty() {
-            writeln!(
-                err,
-                "::error:: board check --refs: citations name a clause their issue does not carry. \
-                 Cite the clause that holds the content, or the issue's own clause if it moved \
-                 (CLOUD-809):"
-            )?;
-            for finding in &self.findings {
-                writeln!(err, "  {finding}")?;
-            }
-        }
-        if self.gaps.is_empty() && self.findings.is_empty() {
-            writeln!(
-                out,
-                "board check --refs: every clause citation in the tree resolves ({} checked)",
-                self.hits
-            )?;
-        }
-        Ok((!self.findings.is_empty(), !self.gaps.is_empty()))
+/// Render `--refs`, and say (refused, could-not-look) — `None` when the preset
+/// raised a class this direction has no lane for.
+fn render_refs(
+    reading: &RefReading,
+    decided: &Decided,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<Option<(bool, bool)>> {
+    if let Some(class) = decided.unknown(&[REF_REFUSED, REF_GAP]) {
+        writeln!(
+            err,
+            "::error:: board check --refs: the preset raised `{class}`, which this direction has no lane for"
+        )?;
+        return Ok(None);
     }
+    let gaps = decided.lines_of(REF_GAP);
+    let findings = decided.lines_of(REF_REFUSED);
+    if !gaps.is_empty() {
+        writeln!(
+            err,
+            "::error:: board check --refs: cited issues are absent from the piped payload set, \
+             so their citations could not be judged. Fetch them and pipe again — an unfetched \
+             issue looks exactly like a clean one (CLOUD-189):"
+        )?;
+        for gap in &gaps {
+            writeln!(err, "  {gap}")?;
+        }
+    }
+    if !findings.is_empty() {
+        writeln!(
+            err,
+            "::error:: board check --refs: citations name a clause their issue does not carry. \
+             Cite the clause that holds the content, or the issue's own clause if it moved \
+             (CLOUD-809):"
+        )?;
+        for finding in &findings {
+            writeln!(err, "  {finding}")?;
+        }
+    }
+    if gaps.is_empty() && findings.is_empty() {
+        writeln!(
+            out,
+            "board check --refs: every clause citation in the tree resolves ({} checked)",
+            reading.hits
+        )?;
+    }
+    Ok(Some((!findings.is_empty(), !gaps.is_empty())))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{by_num, cycle_members, payload_set};
+    use super::{by_num, field, payload_set, sort_lines};
 
     #[test]
     fn an_array_and_a_stream_are_one_set() {
@@ -1600,12 +1539,26 @@ mod tests {
     }
 
     #[test]
-    fn a_cycle_names_its_members_and_a_self_edge_is_not_one() {
-        let edge = |from: &str, to: &str| (from.to_owned(), to.to_owned());
+    fn pointer_lines_order_by_their_leading_id_numerically() {
+        let mut lines = vec![
+            "A-10 todo-not-ready".to_owned(),
+            "graph dangling-blocker (A-99)".to_owned(),
+            "A-9 in-review-no-pr".to_owned(),
+        ];
+        sort_lines(&mut lines);
         assert_eq!(
-            cycle_members(&[edge("A-1", "A-2"), edge("A-2", "A-1"), edge("A-3", "A-1")]),
-            ["A-1", "A-2"]
+            lines,
+            [
+                "graph dangling-blocker (A-99)",
+                "A-9 in-review-no-pr",
+                "A-10 todo-not-ready"
+            ]
         );
-        assert!(cycle_members(&[edge("A-1", "A-1"), edge("A-2", "A-1")]).is_empty());
+    }
+
+    #[test]
+    fn a_field_never_carries_a_separator_into_the_reading() {
+        assert_eq!(field("In\tReview\nnow"), "In Review now");
+        assert_eq!(field("plain"), "plain");
     }
 }

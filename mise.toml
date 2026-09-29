@@ -655,7 +655,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,land-divergence,task-linear-check,macos-link,task-mcp-allow-check,nonverdict,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,engine-board-check"
+MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,land-divergence,task-linear-check,macos-link,task-mcp-allow-check,nonverdict,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,engine-board-check,tracker-hygiene"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -5482,8 +5482,8 @@ fi
 #MUTANT hold-ignored|s@^\tif \[\[ "\$status" = "In Review" \]\] .*HOLD_MARKER.*; then$@\tif false; then@|an_issue_holding_itself_open_is_held
 #MUTANT gate-verdict-dropped|s@^\t\[\[ "\$status" != "In Review" \]\] @\ttrue @|an_in_review_issue_with_no_pr_is_refused_by_rule
 #MUTANT commit-path-dropped|s@^\tby_commit="\$by_commit \$id"$@\t:@|a_commit_the_tag_contains_is_a_second_way_in
-#MUTANT unrun-gate-passes|s@^\*) judged=0 ;;$@*) judged=1 ;;@|a_board_check_that_did_not_run_is_could_not_look
-#MUTANT unimplemented-verb-passes|s@^3) judged=.*$@3) judged=1 ;;@|a_board_check_that_did_not_run_is_could_not_look
+#MUTANT unrun-gate-passes|s@^if \[\[ "\$gate_status" != \[02\] \]\]@if [[ "$gate_status" = 99 ]]@|a_board_check_that_did_not_run_is_could_not_look
+#MUTANT unimplemented-verb-passes|s@ && grep -q 'payload(s) could not be judged' <<<"\$gate_report"; }@; }@|a_board_check_that_did_not_run_is_could_not_look
 #MUTANT earlier-tag-reshipped|s@^\t\t! git merge-base --is-ancestor "\$sha" "\$prev" 2>/dev/null @\t\ttrue @|a_commit_an_earlier_tag_shipped_is_not_new
 description = "Which CLOUD-* issues did a release tag ship? Resolves refs from the tag's commit range; cross-checks piped board payloads for the ones still In Review"
 shell = "bash -c"
@@ -5556,13 +5556,9 @@ gate_report=$(batten --config-in "$(dirname -- "$manifest")" board check <<<"$is
 # the graph's gap verdict, which names itself. Everything else is a gate that did
 # not run — 1 (an undeclared vocabulary), 126/127 (no engine), 101 (a panic), or
 # a 3 without that verdict (an engine whose verb is still `unimplemented`) — and
-# an empty report read as "nothing refused" would pass every shipped row.
-case "$gate_status" in
-0 | 2) judged=1 ;;
-3) judged=$(grep -c 'payload(s) could not be judged' <<<"$gate_report" || true) ;;
-*) judged=0 ;;
-esac
-if [[ "$judged" = 0 ]]; then
+# an empty report read as "nothing refused" would pass every shipped row. As many
+# lines as the executable test it replaced: the inline count may not rise.
+if [[ "$gate_status" != [02] ]] && ! { [[ "$gate_status" = 3 ]] && grep -q 'payload(s) could not be judged' <<<"$gate_report"; }; then
 	echo "::error:: batten board check could not run (exit $gate_status). A gate that cannot run is not a pass — the sweep needs it, so this is 'could not look'." >&2
 	exit 2
 fi
@@ -5642,8 +5638,10 @@ fi
 # without that `dir`, or through `-C`, the task runs in the manifest's directory
 # and would judge the wrong repository. A gate that became an ENGINE VERB — the
 # graph and the clause references, `batten board check` and its `--refs` since
-# CLOUD-1221 — runs through `run_verb`, which folds the engine's exit table onto
-# this one: the two tables are inverse on the byte they share.
+# CLOUD-1221 — is an argv task like any other (`board-check`, `board-check-refs`)
+# whose call site names the exit it refuses with, `refuses=2`: the engine's table
+# and the corpus's are inverse on the byte they share, and every exit a call site
+# does not name as a refusal stays could-not-look.
 #
 # COULD-NOT-LOOK OUTRANKS A REFUSAL, AND A REFUSAL OUTRANKS AN ABSTENTION
 # (CLOUD-921). Board-scoped `unjudgeable` (a gate exited 2 over the payload set,
@@ -5659,10 +5657,9 @@ fi
 #MUTANT gate-two-laundered|s@^\t\tunjudgeable=@\t\trefusals=@|a_gate_exiting_2_is_not_laundered_into_the_refusal_lane
 #MUTANT drain-not-invoked|s@^run_gate in-progress-drain@true in-progress-drain@|a_landed_but_in_progress_row_is_named_by_in_progress_drain
 #MUTANT released-fed-nothing|s@^\trun_gate released "\$tag" <<<"\$issues"@\trun_gate released "$tag" </dev/null@|a_payload_set_reaches_board_check_behind_released
-#MUTANT board-check-not-a-leaf|s@^run_verb board-check board check@true board-check@|a_tag_less_clone_still_gets_a_board_check_verdict
-#MUTANT verb-violation-laundered|s@^\t2) status=1 ;;$@\t2) status=2 ;;@|a_tag_less_clone_reaches_the_ready_gate_through_board_check
-#MUTANT verb-blind-spot-passes|s@^\t\*) status=2 ;;$@\t*) status=0 ;;@|a_board_check_that_could_not_look_is_not_a_clean_board
-#MUTANT refs-not-run|s@^run_verb board-check-refs @true @|a_clean_board_exits_0_and_every_gate_is_reached_and_named
+#MUTANT board-check-not-a-leaf|s@^refuses=2 run_gate board-check @true @|a_tag_less_clone_still_gets_a_board_check_verdict
+#MUTANT verb-violation-laundered|s@^\t"\${refuses:-1}")$@\t1)@|a_tag_less_clone_reaches_the_ready_gate_through_board_check
+#MUTANT refs-not-run|s@^refuses=2 run_gate board-check-refs @true @|a_clean_board_exits_0_and_every_gate_is_reached_and_named
 #MUTANT abstention-laundered|s@^\tabstained=@\tunjudgeable=@|an_abstention_and_a_not_judged_sweep_are_different_exit_codes
 #MUTANT refusal-loses-to-abstention|s@^if \[\[ "\$refusals" -gt 0 \]\]; then$@if [[ "$refusals" -gt 99 ]]; then@|a_refusal_outranks_a_clone_scoped_abstention
 description = "Gate: run every board gate over one payload set and report the set of refusals (reads get_issue payloads on stdin or from BOARD_PAYLOADS_DIR) — CLOUD-825"
@@ -5731,13 +5728,21 @@ gate() { # gate <name> [args...]
 # Pointer-only: the gate's name and its verdict. Both streams, because the gates
 # disagree on which one carries a finding (`released` puts its verdicts on
 # stdout), and a composer reading one throws half the report away.
-verdict_of() { # verdict_of <name> <status on the gates' table> <report>
-	local name=$1 status=$2 report=$3
+#
+# `refuses` names the exit a gate refuses with, and the corpus's `1` when unset.
+# An engine verb answers on the ENGINE's table (§7: 0 clean, 2 a violation, 1 and
+# 3 could not look), the inverse of the corpus's on the byte they share, so its
+# call site says `refuses=2` and every other exit stays could-not-look — a verb's
+# violation is never read as a blind spot, nor a blind spot as a refusal.
+run_gate() { # [refuses=<exit>] run_gate <name> [args...]
+	local name=$1 report status
+	report=$(gate "$@" 2>&1)
+	status=$?
 	case "$status" in
 	0)
 		echo "  $name ok"
 		;;
-	1)
+	"${refuses:-1}")
 		refusals=$((refusals + 1))
 		echo "  $name REFUSED"
 		[[ -z "$report" ]] || printf '%s\n' "$report" >&2
@@ -5751,30 +5756,8 @@ verdict_of() { # verdict_of <name> <status on the gates' table> <report>
 		;;
 	esac
 }
-run_gate() { # run_gate <name> [args...]
-	local report status
-	report=$(gate "$@" 2>&1)
-	status=$?
-	verdict_of "$1" "$status" "$report"
-}
-# An engine verb answers on the ENGINE's table (§7: 0 clean, 2 a violation, 1
-# and 3 could not look), the inverse of the gates' one on the byte they share.
-# Folded here and nowhere else, so a verb's violation is never read as a blind
-# spot, nor a blind spot as a refusal. The manifest's own config is the authority.
-run_verb() { # run_verb <name> <batten args...>
-	local name=$1 report status
-	shift
-	report=$(batten --config-in "$(dirname -- "$manifest")" "$@" 2>&1)
-	status=$?
-	case "$status" in
-	0) ;;
-	2) status=1 ;;
-	*) status=2 ;;
-	esac
-	verdict_of "$name" "$status" "$report"
-}
 echo "board-sweep: $count issue(s)"
-run_verb board-check board check <<<"$issues"
+refuses=2 run_gate board-check <<<"$issues"
 run_gate duplicate-close-check <<<"$issues"
 if [[ -z "$tag" ]]; then
 	tag=$(git tag --list 'v[0-9]*' --sort=-version:refname | head -n1) || tag=""
@@ -5804,7 +5787,7 @@ else
 	with_pulls=$(jq -c --argjson pulls "$pulls" 'map(. + {pulls: $pulls})' <<<"$issues")
 	run_gate done-pr-check <<<"$with_pulls"
 fi
-run_verb board-check-refs board check --refs <<<"$issues"
+refuses=2 run_gate board-check-refs <<<"$issues"
 if [[ "$unjudgeable" -gt 0 ]]; then
 	echo "board-sweep: $unjudgeable gate(s) could not look — the board has not been judged" >&2
 	exit 2
@@ -5820,6 +5803,25 @@ fi
 echo "board-sweep: every gate ran and none names dissonance ($count issue(s))"
 {% endraw %}
 '''
+
+# The board graph as a gate `board-sweep` resolves by name (CLOUD-1221, which
+# retired `mise-tasks/graph-check.sh` into the verb and the `tracker-hygiene`
+# preset). Argv and nothing else: the verb reads the payloads on stdin, judges
+# the CALLER's clone (`dir`), and takes this manifest's `batten.toml` as its
+# authority. It answers on the ENGINE's exit table, which is why the sweep calls
+# it with `refuses=2`.
+[tasks.board-check]
+description = "Gate: the board's columns, blockedBy graph and status glosses tell the truth (reads get_issue payloads on stdin; prints the ready frontier)"
+dir = "{{cwd}}"
+run = "batten --config-in {{config_root}} board check"
+
+# The tree's clause citations against the piped payloads, the `--refs` arm of the
+# same verb (CLOUD-1221, which retired `mise-tasks/spec-ref-check.sh`). Argv, for
+# `board-check`'s reason.
+[tasks.board-check-refs]
+description = "Gate: every clause citation in the tree names a clause its issue carries (reads get_issue payloads on stdin)"
+dir = "{{cwd}}"
+run = "batten --config-in {{config_root}} board check --refs"
 
 # CLOUD-829's reading half, ported off `mise-tasks/duplicate-close-check.sh` under
 # CLOUD-1752. The decision is `policy/duplicate-close.rego`. This reads the piped

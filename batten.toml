@@ -11285,44 +11285,37 @@ review = "In Review"
 # sitting there is `DO-NOT-CLOSE` working, and refusing it would make the marker
 # unwritable.
 started = ["In Progress", "In Review", "Done"]
-#
-# ─── PENDING THE SCHEMA REGENERATION, AND ONLY THAT (CLOUD-1221) ───────────────
-#
-# The seven keys below are `board check`'s vocabulary and they are this table's,
-# declared by `crates/batten/src/board.rs`. They are written commented because
-# `schema/batten.schema.json` is GENERATED from that struct and the package that
-# added the fields was not permitted to compile, so the committed schema still
-# refuses them at the commit gate. The integration build regenerates the schema
-# with the repository's own task and then removes the leading `# ` from each of
-# the seven lines — the compiled tiers read this table and go red until it does.
+
+# THE BOARD CHECK'S VOCABULARY (CLOUD-1221), read by `batten board check` and
+# declared by `crates/batten/src/board.rs`. Each is this consumer's word for a
+# fact the `tracker-hygiene` preset decides with; the preset itself names none.
 #
 # The status TYPES that settle a blocker, so its dependent may reach the ready
-# frontier (`batten board check`, CLOUD-477). Measured over the live board on
-# 2026-08-23: `Canceled` is `canceled` and `Duplicate` is `duplicate` — two
-# distinct values, not one shared canceled type — so a rule naming only one of
-# them would have left the other's dependents starving. `In Review` settles by
-# NAME on top of this set: its type is `started`, which `In Progress` shares.
-# settled_types = ["completed", "canceled", "duplicate"]
+# frontier (CLOUD-477). Measured over the live board on 2026-08-23: `Canceled` is
+# `canceled` and `Duplicate` is `duplicate` — two distinct values, not one shared
+# canceled type — so a rule naming only one of them would have left the other's
+# dependents starving. `In Review` settles by NAME on top of this set: its type
+# is `started`, which `In Progress` shares.
+settled_types = ["completed", "canceled", "duplicate"]
 # The settled types that RETIRE a blocker rather than complete it. A dependent
 # over one still reaches the frontier, with the reason noted: its premise may
 # have gone with the blocker.
-# retired_types = ["canceled", "duplicate"]
+retired_types = ["canceled", "duplicate"]
 # The receipt a coherent `batten board check` mints, one file per judged key —
 # the `board-move` check the In Review move guard reads (CLOUD-512).
-# move_receipt = "board-move"
+move_receipt = "board-move"
 # Where a Ready block's citations resolve (CLOUD-826): tracked sources and tests,
 # MINUS the fixtures, because a fixture quoting a citation is not the thing cited.
-# cites_corpus = ["crates/**", "tests/**"]
-# cites_exclude = ["tests/fixtures/**"]
+cites_corpus = ["crates/**", "tests/**"]
+cites_exclude = ["tests/fixtures/**"]
 # The marker after a backticked path that declares it not written YET (CLOUD-920).
-# cites_prospective = "(new)"
-# Tracked paths `board check --refs` does not scan (CLOUD-809): a file quoting a
-# known-bad clause citation as its own regression witness. EMPTY BY MEASUREMENT,
-# not by default: the retired `spec-ref-check` excluded only itself and its suite,
-# both deleted with it, and no tracked file carries a literal witness today — the
-# `board_check` tier builds its citations at run time. A witness added later is
-# named here, one glob, rather than widening the corpus rule.
-# refs_exclude = []
+cites_prospective = "(new)"
+# `refs_exclude` — tracked paths `board check --refs` does not scan (CLOUD-809) —
+# is NOT declared, and that is a measurement rather than a default: the retired
+# `spec-ref-check` excluded only itself and its suite, both deleted with it, and
+# no tracked file carries a literal witness today, because the `board_check` tier
+# builds its citations at run time. A witness added later is named here, one
+# glob, rather than widening the corpus rule.
 
 # ACCEPTED INVOCATION-LATENCY REGRESSIONS (CLOUD-1163 unit 10), transcribed
 # verbatim off the `EXEMPT` heredoc of the retired `mise-tasks/perf-compare.sh`.

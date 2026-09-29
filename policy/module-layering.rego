@@ -690,13 +690,14 @@ declared_modules := {
 	# is what keeps the verb on the derived read-only allowlist.
 	"census",
 	# `board_check` arrived with CLOUD-1221, retiring the three board gates. It
-	# sits ABOVE the Ready grammar it composes: it asks `ready` for the one
-	# definition of Ready, reads `board` for the column vocabulary, `landed` for
-	# its one reading of a pull-request URL, `git` for the tracked tree and a
-	# deleted path, and `rules` for the one glob semantics the crate has. It decides over a PAYLOAD SET, which no mediated call carries,
-	# so its `hook` edge is forbidden below — a mediated call reaching a verb that
-	# reads the whole tracked tree is the per-call cost CLOUD-689's ceiling
-	# refuses.
+	# READS and does not decide: it asks `ready` for the one definition of Ready,
+	# reads `board` for the column vocabulary, `landed` for its one reading of a
+	# pull-request URL, `git` for the tracked tree and a deleted path, and `rules`
+	# for the one glob semantics the crate has — then hands that reading to the
+	# `tracker-hygiene` preset through `preset` and `policy`, which is where every
+	# verdict lives. It reads a PAYLOAD SET, which no mediated call carries, so its
+	# `hook` edge is forbidden below — a mediated call reaching a verb that reads
+	# the whole tracked tree is the per-call cost CLOUD-689's ceiling refuses.
 	"board_check",
 }
 
@@ -1167,7 +1168,10 @@ test_the_board_check_must_not_reach_the_mediated_call if {
 test_the_board_check_reaches_what_it_composes if {
 	count(violation) == 0 with input as judging(
 		"crates/batten/src/board_check.rs",
-		[internal("ready", 80), internal("board", 76), internal("git", 290), internal("rules", 285)],
+		[
+			internal("ready", 80), internal("board", 76), internal("git", 290), internal("rules", 285),
+			internal("policy", 400), internal("preset", 395),
+		],
 	)
 }
 

@@ -23,7 +23,7 @@
 // changed: "a tag-less clone still gets a graph-check verdict, and the sweep says so" mise.toml the leaf verdict is board-check's since CLOUD-1221
 // carried: "an abstention and a not-judged sweep are different exit codes" mise.toml kind:mechanism
 // carried: "a refusal outranks a clone-scoped abstention, so reachability buys no weaker verdict" mise.toml kind:mechanism
-// changed: "a tag-less clone reaches ready-lint, which is graph-check's own leaf" mise.toml the Ready gate is asked in process by board check, and its refusal arrives through run_verb's fold
+// changed: "a tag-less clone reaches ready-lint, which is graph-check's own leaf" mise.toml the Ready gate is asked in process by board check, and its refusal arrives on the engine's exit 2, which the call site's `refuses=2` reads as the refusal lane
 // carried: "the report carries no issue body" mise.toml kind:mechanism
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
@@ -300,7 +300,8 @@ fn a_refusal_outranks_a_clone_scoped_abstention() {
 }
 
 /// The engine's violation (exit 2) is the sweep's refusal (1), never its
-/// could-not-look (2): `run_verb`'s fold, on the byte the two tables share.
+/// could-not-look (2): the call site's `refuses=2`, on the byte the two tables
+/// share.
 #[test]
 fn a_tag_less_clone_reaches_the_ready_gate_through_board_check() {
     let board = Board::new("ready-lint");

@@ -115,12 +115,17 @@ err)` takes **both** channels and the resolved `Mode`, so a verb can write a
   selects — so "is this a ladder flag" is a column rather than a naming
   convention, and the ladder's totality is a census test.
 - `board_check.rs` — `batten board check` (CLOUD-1221), retiring `graph-check`,
-  `ready-cites-check` and `spec-ref-check` in one delta. Over ONE reading of a
-  payload set it judges the graph (column claims, `blockedBy` acyclicity, status
-  glosses, milestones) and prints the ready frontier, asking `ready::lint` for the
-  one definition of Ready rather than spawning a second; `--cites` judges each
-  live Ready block's citations against the tracked tree, `--refs` the tree's
-  clause citations against the payloads. Every vocabulary is `batten.toml`'s:
+  `ready-cites-check` and `spec-ref-check` in one delta. It READS and the
+  `tracker-hygiene` preset's `board-*` modules DECIDE: the verb turns a payload
+  set into a tab-separated reading (`board-graph`, `board-cites`, `board-refs`
+  record families — columns normalised to `ready|in-progress|review|other`,
+  `ready::lint`'s verdict per queue row, extracted status claims, citation
+  existence facts), compiles the preset from `preset::MANIFESTS` and evaluates it
+  in process (`policy::deny` for refusals and gaps, `policy::strings` for the
+  frontier and notes), then renders `<id> <rule>` lines. The graph covers column
+  claims, `blockedBy` acyclicity, status glosses and milestones and prints the
+  ready frontier; `--cites` judges each live Ready block's citations against the
+  tracked tree, `--refs` the tree's clause citations against the payloads. Every vocabulary is `batten.toml`'s:
   columns, settled/retired status types, the move receipt and the citation
   corpus in `[board]`, expressions in `[[pattern]]`. `write`, because a coherent
   graph mints one `board-move.<key>` receipt per judged id (CLOUD-512). Exits:

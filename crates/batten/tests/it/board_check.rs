@@ -2,13 +2,20 @@
 //! the Ready blocks' citations against the tree, and the tree's clause citations
 //! against the payloads — ported off `tests/graph-check.bats`,
 //! `tests/ready-cites-check.bats` and `tests/spec-ref-check.bats`, whose
-//! programs retired into `crates/batten/src/board_check.rs` in the same delta.
+//! programs retired in the same delta: their DECISIONS into the
+//! `tracker-hygiene` preset's `board-*` modules, their reading into
+//! `crates/batten/src/board_check.rs`, which evaluates that preset in process.
+//!
+//! **This is the tier that proves the engine builds the reading the modules
+//! decide over.** The modules' own `test_` rules pin each predicate over a
+//! fabricated reading; only a case here shows the verb writes the lines those
+//! predicates parse, so every `#MUTANT` row in a `board-*` module names a case
+//! in this file, beside the rows `board_check.rs` keeps for its reading.
 //!
 //! **One suite, three inner modules, because `batten mutate` reads the FIRST
-//! `MUTANT-SUITE` line of a source**: every `//MUTANT` row in `board_check.rs`
-//! names a case in this file. The modules are named for the gates they carry, so
-//! a filter of `graph_check`, `ready_cites` or `spec_ref` selects one gate's
-//! cases.
+//! `MUTANT-SUITE` line of a source**. The modules are named for the gates they
+//! carry, so a filter of `graph_check`, `ready_cites` or `spec_ref` selects one
+//! gate's cases.
 //!
 //! # THE EXIT CODES MOVED, UNIFORMLY, AND IT IS ONE DECISION
 //!
@@ -29,12 +36,12 @@
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
-// carried: mise-tasks/graph-check.sh crates/batten/src/board_check.rs kind:verb crates/batten/tests/it/board_check.rs
-// carried: tests/graph-check.bats crates/batten/src/board_check.rs kind:verb crates/batten/tests/it/board_check.rs
-// carried: mise-tasks/ready-cites-check.sh crates/batten/src/board_check.rs kind:verb crates/batten/tests/it/board_check.rs
-// carried: tests/ready-cites-check.bats crates/batten/src/board_check.rs kind:verb crates/batten/tests/it/board_check.rs
-// carried: mise-tasks/spec-ref-check.sh crates/batten/src/board_check.rs kind:verb crates/batten/tests/it/board_check.rs
-// carried: tests/spec-ref-check.bats crates/batten/src/board_check.rs kind:verb crates/batten/tests/it/board_check.rs
+// carried: mise-tasks/graph-check.sh crates/batten/src/policy/presets/tracker-hygiene/board-columns-tell-the-truth.rego crates/batten/tests/it/board_check.rs
+// carried: tests/graph-check.bats crates/batten/src/policy/presets/tracker-hygiene/board-frontier-is-ready.rego crates/batten/tests/it/board_check.rs
+// carried: mise-tasks/ready-cites-check.sh crates/batten/src/policy/presets/tracker-hygiene/board-citations-resolve.rego crates/batten/tests/it/board_check.rs
+// carried: tests/ready-cites-check.bats crates/batten/src/policy/presets/tracker-hygiene/board-citations-resolve.rego crates/batten/tests/it/board_check.rs
+// carried: mise-tasks/spec-ref-check.sh crates/batten/src/policy/presets/tracker-hygiene/board-citations-resolve.rego crates/batten/tests/it/board_check.rs
+// carried: tests/spec-ref-check.bats crates/batten/src/policy/presets/tracker-hygiene/board-citations-resolve.rego crates/batten/tests/it/board_check.rs
 //!
 //! # RETIREMENT LEDGER — `tests/graph-check.bats`
 //!

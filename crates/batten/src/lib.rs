@@ -4866,7 +4866,8 @@ fn board_grammar(overrides: &Overrides) -> Result<ready::Grammar> {
 /// The payloads come from stdin, or — under `--issue` — out of the capture store,
 /// which hands over the bytes the tracker returned rather than text somebody
 /// re-typed. Everything the verb decides with is the consumer's declaration,
-/// resolved here once; [`board_check`] holds the predicate.
+/// resolved here once; [`board_check`] reads the set and the `tracker-hygiene`
+/// preset it evaluates holds every predicate.
 ///
 /// # Errors
 ///
