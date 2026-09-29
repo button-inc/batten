@@ -403,11 +403,11 @@ fn the_landings_own_stop_note_is_still_declared() {
         "the declared note must still mark a landing's own stop: {}",
         declared[0]
     );
-    // AND ITS PAIR, the beat the lap's own `Heartbeat` writes per renewal the
-    // remote took (CLOUD-843, `note_beat`). A stop with no beats before it can
-    // only ever answer "stopped on purpose", which is how the census's positive
-    // reading was unreachable in production. This pins the DECLARATION; the
-    // engine's spawn of it is `a_beat_is_noted_only_when_the_renewal_was_taken`.
+    // AND ITS PAIR, the beat that opens the landing's census window (CLOUD-843,
+    // `land_census_window`). A stop with no beat before it can only ever answer
+    // "stopped on purpose", which is how the census's positive reading was
+    // unreachable in production. This pins the DECLARATION; the engine's spawn
+    // of it is `a_landing_notes_its_start_and_every_chosen_end`.
     let beats: Vec<&str> = manifest
         .lines()
         .filter(|line| line.trim_start().starts_with("LEASE_BEAT_NOTE"))

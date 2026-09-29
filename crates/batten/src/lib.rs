@@ -8371,11 +8371,14 @@ fn run_land_lap(
 /// to rule out. Here the landing has returned — landed, stopped, refused, stood
 /// down or out of laps — so nothing this process does follows the stop.
 ///
-/// **THE BEAT OPENS THE WINDOW**, because the lap's heartbeat beats only inside
-/// `Step::Wait`: a landing that followed an earlier landing's `x` under the same
-/// boot would otherwise read as idle through its whole replay, verify, lease,
-/// push and ready. The beat says a landing is in flight; the heartbeat's later
-/// beats say it still is.
+/// **THE BEAT OPENS THE WINDOW, AND IS ITS ONLY BEAT** (CLOUD-843, round-3
+/// review). It is written before any lease is held and before any lap, so a
+/// landing that followed an earlier landing's `x` under the same boot reads as in
+/// flight from its first instruction. Nothing after it and before the stop can
+/// change the census verdict — `reclaim::classify` reads only the kind of the
+/// last record under the boot — so the lap's [`Heartbeat`] writes no census note
+/// at all; one there would also fire in the hand-stepping `land wait`, which has
+/// no window to close it.
 ///
 /// Never on an exit path (CLOUD-491): a kill never returns from `laps`, so it
 /// reaches neither note after the first, and the last record stays a beat. An
@@ -11467,9 +11470,6 @@ struct Heartbeat<'clone> {
     /// different places and the whole point is that the request crosses between
     /// them.
     stood_down: std::sync::Mutex<Option<String>>,
-    /// The consumer's reclaim-census beat (`$LEASE_BEAT_NOTE`), read once; empty
-    /// spawns nothing. See [`note_beat`].
-    beat_note: String,
 }
 
 impl<'clone> Heartbeat<'clone> {
@@ -11481,7 +11481,6 @@ impl<'clone> Heartbeat<'clone> {
             pid: std::process::id(),
             last: std::sync::atomic::AtomicI64::new(0),
             stood_down: std::sync::Mutex::new(None),
-            beat_note: std::env::var("LEASE_BEAT_NOTE").unwrap_or_default(),
         }
     }
 
@@ -11523,21 +11522,18 @@ impl<'clone> Heartbeat<'clone> {
     /// landing becomes unstealable again, which is the defect this row exists to
     /// close. The tick answers *is the loop going round*; the lease is asking *is
     /// the world moving*.
+    ///
+    /// # IT WRITES NO RECLAIM-CENSUS NOTE (CLOUD-843, round-3 review)
+    ///
+    /// The census's window is [`land_census_window`]'s: a beat before the first
+    /// lap, a stop where the landing returns, and nothing in between can change
+    /// its verdict — `reclaim::classify` reads only the KIND of the last record
+    /// under the boot, and inside the window that is already a beat. A beat here
+    /// was therefore redundant inside a landing and WRONG outside one: the
+    /// hand-stepping `land wait` builds this heartbeat with no window around it,
+    /// so a beat it wrote was never followed by a stop and the next container read
+    /// a finished wait as *a landing was in flight*.
     fn beat(&self, observed: u64) {
-        self.beat_with(observed, lease::beat);
-    }
-
-    /// [`Heartbeat::beat`] with the renewal passed in — the seam that lets the
-    /// census beat's CALL be pinned offline (CLOUD-843, round-2 review). The
-    /// renewal needs a live lease remote, which no offline seam exists for
-    /// (`tests/it/lease_health.rs`), so while the note sat after an inline
-    /// `lease::beat` its deletion survived every tier. Everything a beat does
-    /// after the renewal answers is here, and only the renewal is swapped.
-    fn beat_with(
-        &self,
-        observed: u64,
-        renew: impl FnOnce(&Path, &lease::Terms, Option<&str>, i64) -> lease::Beat,
-    ) {
         let Some(terms) = self.terms.as_ref() else {
             return;
         };
@@ -11560,12 +11556,8 @@ impl<'clone> Heartbeat<'clone> {
         // that looks at the lease every few seconds. Latched here and honoured at
         // the lap boundary — never here, where a release would drop the lease
         // inside this holder's own matrix and let a second lander start.
-        let beat = renew(self.root, terms, progress.as_deref(), now);
-        // THE CENSUS BEAT, on THIS path because it is the one a landing runs
-        // (CLOUD-843): `lease hold` is unreached, so a beat written only there
-        // left every reclaim under a landing UNOBSERVED.
-        note_beat(self.root, &beat, &self.beat_note);
-        if let lease::Beat::StandDown(from) = beat
+        if let lease::Beat::StandDown(from) =
+            lease::beat(self.root, terms, progress.as_deref(), now)
             && let Ok(mut asked) = self.stood_down.lock()
         {
             asked.get_or_insert(from);
@@ -12626,22 +12618,6 @@ fn note_declared(root: &Path, declared: &str) {
     let _ = exec::piped_argv(root, &argv, "", exec::Diagnostics::Keep, &[]);
 }
 
-//MUTANT heartbeat-beat-unnoted|s@^        note_beat(self.root, &beat, &self.beat_note);$@@|a_heartbeat_notes_the_beat_it_took_and_latches_a_stand_down
-//MUTANT beat-unnoted|s@^    if !matches!(beat, lease::Beat::Quiet) {$@    if false {@|a_beat_is_noted_only_when_the_renewal_was_taken
-//MUTANT quiet-beat-noted|s@^    if !matches!(beat, lease::Beat::Quiet) {$@    if true {@|a_beat_is_noted_only_when_the_renewal_was_taken
-/// The census beat for one heartbeat: `beat_note` iff the renewal was TAKEN.
-///
-/// [`lease::Beat::Renewed`] and [`lease::Beat::StandDown`] both renewed; only
-/// [`lease::Beat::Quiet`] did not, and a beat after a refused swap would claim a
-/// hold this clone may no longer have. The lap's [`Heartbeat::beat_with`] calls
-/// it on every beat; its one argv is the consumer's, for [`note_release`]'s
-/// reason.
-fn note_beat(root: &Path, beat: &lease::Beat, beat_note: &str) {
-    if !matches!(beat, lease::Beat::Quiet) {
-        note_declared(root, beat_note);
-    }
-}
-
 //MUTANT renewal-writes-no-beat|s@^    note_declared(root, beat_note);$@@|an_applied_renewal_writes_its_receipt_and_the_declared_beat
 /// `lease hold`'s renewal that applied: its receipt, then the consumer's
 /// reclaim-census beat (`$LEASE_BEAT_NOTE`, read once by the hold loop and
@@ -12649,10 +12625,10 @@ fn note_beat(root: &Path, beat: &lease::Beat, beat_note: &str) {
 /// remote refused.
 ///
 /// **This is the UNREACHED holder's half** — nothing in the tree runs `lease
-/// hold` today. The landing's own heartbeat is [`Heartbeat::beat_with`], whose beat is
-/// [`note_beat`]; that is the path that makes the census's positive reading, *a
-/// landing was in flight when the container went*, reachable (CLOUD-843). Both
-/// are kept so the verb and the lap cannot disagree about what a beat records.
+/// hold` today. What makes the census's positive reading, *a landing was in
+/// flight when the container went*, reachable for a landing is
+/// [`land_census_window`]'s opening beat (CLOUD-843); the lap's own heartbeat
+/// notes nothing, since no beat inside that window can change the verdict.
 ///
 /// The argv is the consumer's for [`note_release`]'s reason: the beat and the
 /// stop are one census, and only the consumer knows it keeps one. The hold's stop
@@ -22122,33 +22098,6 @@ mod tests {
         (root, marker)
     }
 
-    /// THE PRODUCTION BEAT (CLOUD-843, round-1 review): the lap's `Heartbeat`
-    /// writes the census beat through `note_beat`, and only for a beat whose
-    /// renewal the remote TOOK. `Renewed` and `StandDown` both renewed; `Quiet`
-    /// wrote nothing, and a beat after it would claim a hold this clone may not
-    /// have. The CALL inside `Heartbeat::beat` needs a live lease remote to reach,
-    /// which no offline seam exists for (`tests/it/lease_health.rs`).
-    #[cfg(unix)]
-    #[test]
-    fn a_beat_is_noted_only_when_the_renewal_was_taken() {
-        let (root, marker) = census_scratch("beat");
-        let note = format!("touch {}", marker.display());
-        for taken in [
-            lease::Beat::Renewed,
-            lease::Beat::StandDown(String::from("peer")),
-        ] {
-            note_beat(&root, &taken, &note);
-            assert!(marker.exists(), "{taken:?} renewed, so it is a beat");
-            std::fs::remove_file(&marker).unwrap();
-        }
-        note_beat(&root, &lease::Beat::Quiet, &note);
-        assert!(!marker.exists(), "a quiet beat renewed nothing");
-        // And a consumer that declares no beat gets nothing spawned.
-        note_beat(&root, &lease::Beat::Renewed, "");
-        assert!(!marker.exists());
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
     /// THE PRODUCTION STOP (CLOUD-843, round-2 review): the landing writes its
     /// stop where it RETURNS, never where a lap hands its lease back — a lap that
     /// laps is a landing still running, and a stop written there read as *stopped
@@ -22213,39 +22162,6 @@ mod tests {
         assert!(!marker.exists(), "a dead lander is not a chosen stop");
         lease_hold_bail(&root, &terms, "someone", 42, HoldEnd::Stalled, &note);
         assert!(marker.exists(), "stopping a stalled lander is");
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    /// THE CALL, not only the decision (CLOUD-843, round-2 review): the lap's
-    /// heartbeat notes the beat its renewal took and latches a stand-down, with
-    /// the renewal swapped for one that answers offline. Deleting the
-    /// `note_beat` call used to survive every tier, because the only route to it
-    /// ran through a live lease remote.
-    #[cfg(unix)]
-    #[test]
-    fn a_heartbeat_notes_the_beat_it_took_and_latches_a_stand_down() {
-        let (root, marker) = census_scratch("heartbeat");
-        let heart = Heartbeat {
-            root: &root,
-            terms: Some(lease::Terms::default()),
-            git_dir: None,
-            pid: std::process::id(),
-            last: std::sync::atomic::AtomicI64::new(0),
-            stood_down: std::sync::Mutex::new(None),
-            beat_note: format!("touch {}", marker.display()),
-        };
-        heart.beat_with(1, |_, _, _, _| lease::Beat::StandDown(String::from("peer")));
-        assert!(
-            marker.exists(),
-            "a renewal the remote took is a census beat"
-        );
-        assert_eq!(heart.was_asked_to_stand_down().as_deref(), Some("peer"));
-        std::fs::remove_file(&marker).unwrap();
-        // A quiet renewal took nothing, so it notes nothing. `last` is reset so
-        // the interval does not answer for it.
-        heart.last.store(0, std::sync::atomic::Ordering::Relaxed);
-        heart.beat_with(2, |_, _, _, _| lease::Beat::Quiet);
-        assert!(!marker.exists(), "a quiet beat is not a census beat");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

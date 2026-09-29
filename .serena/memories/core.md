@@ -181,16 +181,20 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
 - `reclaim.rs` — `record census note|record-boot|report|tally`, the reclaim
   census (CLOUD-451) retired off `[tasks.reclaim-census]` and
   `[tasks."session:census"]` by CLOUD-843. Two journal families
-  (`reclaim-beats`, `reclaim-boots`) through `journal::append_line`/`fold_lines`;
+  (`reclaim-beats`, `reclaim-boots`) through
+  `journal::append_line_healing`/`fold_lines`;
   `boot_time()` is `BATTEN_BOOT_TIME` (malformed = could-not-look) then
   `/proc/stat`. `classify`/`previous`/`tally` are pure. `report --once` records,
   reads, and writes the per-boot mark itself. `report` folds onto §7 via
   `ExitCode::combine`: in flight 2, stopped 0, unobserved/could-not-look 3. The
-  beat opens `land_census_window` and is the lap `Heartbeat`'s (`note_beat`, per
-  renewal taken, via the consumer's `$LEASE_BEAT_NOTE`); the stop
+  landing's ONE beat (`$LEASE_BEAT_NOTE`) opens `land_census_window`; its stop
   (`$LEASE_STOP_NOTE`) is where the landing RETURNS, never a lap's hand-back
   (`lease_hand_back` notes nothing), and `lease hold`'s stall bail only — never
-  an exit path (CLOUD-491). `journal::append_line` drops a torn tail first.
+  an exit path (CLOUD-491). The lap `Heartbeat` notes nothing: `classify` reads
+  only the last record's kind, and `land wait` has no window to close a beat.
+  Only the census families heal a torn tail on append
+  (`journal::append_line_healing`); `append_line` does not, its shards being
+  shared by concurrent hook processes.
 - `claim.rs` — whether an issue is pullable, and the receipt that records the
   pull (CLOUD-272, CLOUD-431; ported off `mise-tasks/claim-check.sh` by
   CLOUD-1121). The tracker's automation fires on the PR event — the END of the

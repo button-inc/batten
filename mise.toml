@@ -516,10 +516,11 @@ LAND_ANSWER_ASKS = "120"
 #
 # Both are ARGV for the engine's own `record census note` (CLOUD-843, retiring
 # `[tasks.reclaim-census]`), decoded as `LAND_BODY_GATES` is and never a shell.
-# The beat is the half that never existed: the lap's heartbeat renewed without
-# writing one, so the census's positive reading was unreachable. It runs when a
-# landing starts and once per beat whose renewal the remote took, so a beat never
-# claims a refused hold.
+# The beat is the half that never existed, so the census's positive reading was
+# unreachable. It runs ONCE, when `land lap` starts, before any lap or lease: the
+# stop follows only where the landing returns, and the census reads only the kind
+# of the last record, so no later beat inside that window could change a verdict.
+# `lease hold`, unreached today, also writes it per renewal it applied.
 LEASE_STOP_NOTE = "batten record census note x land-stopped"
 LEASE_BEAT_NOTE = "batten record census note h"
 # The subset of that roster for which ABSENCE — no check-run at all, as opposed
