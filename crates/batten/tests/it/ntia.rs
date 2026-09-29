@@ -1,8 +1,8 @@
 //! `manifest cover other` over the compiled binary and the REAL producer
 //! (CLOUD-580, CLOUD-631, CLOUD-666, CLOUD-1717).
 //!
-//! `[tasks.ntia-record]` and `[tasks.ntia-check]` are read out of `mise.toml` and
-//! run against a stubbed SBOM producer (`NTIA_SBOM`) and a stubbed checker
+//! `[tasks.ntia-record]` and `[tasks.ntia-check]` are read out of `mise.toml` —
+//! the second as the argv sequence it has been since CLOUD-1991 — and run against a stubbed SBOM producer (`NTIA_SBOM`) and a stubbed checker
 //! (`SBOMCHECK`) whose exit code and report are set INDEPENDENTLY — the negative
 //! self-test needs a checker that disagrees with itself, which no honest tool
 //! does. The engine then decides over what the producer recorded. A finding is
@@ -14,7 +14,7 @@
 // carried: mise-tasks/ntia-check.sh policy/ntia.rego kind:mechanism crates/batten/tests/it/ntia.rs
 // carried: tests/ntia-check.bats policy/ntia.rego kind:mechanism crates/batten/tests/it/ntia.rs
 // carried: "a conformant document passes and records the SHA-keyed receipt" policy/ntia.rego kind:mechanism
-// carried: "a receipt that cannot be written is reported, never a nonconformance" mise.toml kind:mechanism
+// changed: "a receipt that cannot be written is reported, never a nonconformance" mise.toml `[tasks.ntia-check]` is an argv sequence since CLOUD-1991, so a refused write fails the task with the write's own `1`; the decision entry before it has already passed, so it is still never read as a nonconformance, and `receipt record` reports an unreadable transcript rather than refusing (CLOUD-819)
 // carried: "a nonconformant document fails, and leaves NO receipt" policy/ntia.rego kind:mechanism
 // carried: "THE NEGATIVE SELF-TEST: a conformant-looking report with a non-zero exit still fails" policy/ntia.rego kind:mechanism
 // changed: "the failure carries counts, which are the message and not the decision" mise.toml the counts are recorded on the standard's line of the `ntia` record, beside the exit code the module decides on; the finding carries the pointer alone, since only the first subject is a pointer
@@ -329,37 +329,74 @@ fn a_record_missing_a_reading_is_torn() {
     assert!(said(&decided).contains("ntia#torn"));
 }
 
-// --- the wrapper: record, decide, then the receipt that is never a verdict ----
+// --- the sequence: record, decide, then the receipt ---------------------------
 
-/// A `batten` that delegates to the real binary, logs every receipt call, and can
-/// refuse one — the state of a runner with no readable transcript.
+/// `[tasks.ntia-check]`'s argv sequence, read out of the committed manifest.
+///
+/// AN ARRAY SINCE CLOUD-1991, so there is no body to hand `bash`: mise runs the
+/// entries in order and stops at the first that fails, with its code. The
+/// wrapper below replays exactly that, which is the property these cases assert.
+fn check_sequence() -> Vec<String> {
+    let manifest = std::fs::read_to_string(at_root("mise.toml")).expect("the manifest");
+    let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
+    parsed["tasks"]["ntia-check"]["run"]
+        .as_array()
+        .expect("[tasks.ntia-check] is an argv sequence")
+        .iter()
+        .map(|entry| entry.as_str().expect("a string entry").to_owned())
+        .collect()
+}
+
+/// Run the sequence the way mise does, with `cargo run -p batten --` resolving the
+/// engine under test and logging every receipt call, which can be made to fail —
+/// the state of a store that refuses the write.
 fn wrapper(dir: &Path, knobs: &[(&str, &str)]) -> Output {
-    let stubs = dir.join(".stubs");
+    // THE PRODUCER FIRST, and before the stubs exist: `task_command` puts `bin/`
+    // first on its PATH too, and the producer must reach the real tools.
+    let produced = run_task(dir, "ntia-record", knobs);
+    assert!(produced.status.success(), "{}", said(&produced));
     let real = env!("CARGO_BIN_EXE_batten");
+    // `bin/` is first on `task_bash`'s PATH. `cargo run --quiet -p batten --`
+    // is five words, dropped before the engine sees its own argv.
     executable(
-        &stubs,
-        "batten",
+        dir,
+        "bin/cargo",
         &format!(
-            "#!/usr/bin/env bash\nif [[ \"$1\" == receipt ]]; then echo \"$*\" >>\"{log}\"; \
+            "#!/usr/bin/env bash\nshift 5\nif [[ \"$1\" == receipt ]]; then echo \"$*\" >>\"{log}\"; \
              [[ -z \"${{STUB_RECEIPT_FAILS:-}}\" ]] || exit 1; exit 0; fi\nexec \"{real}\" \"$@\"\n",
             log = dir.join(".receipts").display(),
         ),
     );
-    // `mise run ntia-record` is the producer the cases above already run.
-    executable(&stubs, "mise", "#!/usr/bin/env bash\nexit 0\n");
-    let produced = run_task(dir, "ntia-record", knobs);
-    assert!(produced.status.success(), "{}", said(&produced));
-    let path = format!(
-        "{}:{}",
-        stubs.display(),
-        std::env::var("PATH").unwrap_or_default()
+    // `mise run ntia-record` is the producer, already run above.
+    executable(dir, "bin/mise", "#!/usr/bin/env bash\nexit 0\n");
+    let mut last = None;
+    for entry in check_sequence() {
+        let mut command = common::task_bash(dir, &entry);
+        command.stdin(Stdio::null());
+        for (name, value) in knobs {
+            command.env(name, value);
+        }
+        let out = command.output().expect("run one entry");
+        let failed = !out.status.success();
+        last = Some(out);
+        if failed {
+            break;
+        }
+    }
+    last.expect("the sequence carries at least one entry")
+}
+
+#[test]
+fn the_sequence_records_then_decides_then_writes_the_receipt() {
+    assert_eq!(
+        check_sequence(),
+        [
+            "mise run ntia-record",
+            "cargo run --quiet -p batten -- check --rule 'manifest cover other'",
+            "cargo run --quiet -p batten -- receipt record sbom-ntia",
+        ],
+        "the receipt must follow the decision, so a refusal stops the array before it"
     );
-    let mut all: Vec<(&str, &str)> = knobs.to_vec();
-    let batten = stubs.join("batten");
-    let batten = batten.to_str().unwrap();
-    all.push(("BATTEN_BIN", batten));
-    all.push(("PATH", &path));
-    run_task(dir, "ntia-check", &all)
 }
 
 #[test]
@@ -372,15 +409,14 @@ fn a_conformant_document_records_the_receipt() {
 }
 
 #[test]
-fn a_receipt_that_cannot_be_written_is_reported_never_a_nonconformance() {
+fn a_receipt_that_cannot_be_written_fails_the_task_and_is_not_a_nonconformance() {
     let dir = repo("wrap-receipt");
     let out = wrapper(&dir, &[("STUB_RECEIPT_FAILS", "1")]);
-    assert_eq!(out.status.code(), Some(0), "{}", said(&out));
-    assert!(
-        said(&out).contains("not a verdict about the document"),
-        "{}",
-        said(&out)
-    );
+    // The write's own code, `1`, and never the policy verdict `2`: the document
+    // conformed, and the decision entry before it said so.
+    assert_eq!(out.status.code(), Some(1), "{}", said(&out));
+    let decided = common::run(&dir, &["check", "--rule", RULE]);
+    assert_eq!(decided.status.code(), Some(0), "{}", said(&decided));
 }
 
 #[test]

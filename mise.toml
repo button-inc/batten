@@ -846,13 +846,17 @@ description = "Clippy with warnings denied"
 # flags live in one place. The workspace lints only mean anything if every
 # target is checked and a warning fails.
 # Receipt-gated (CLOUD-424): unchanged sources under an unchanged clippy are a
-# verdict already held.
-run = '''
-if [ "$(mise run -q step-receipt check lint:clippy | cut -c1-3)" = hit ]; then exit 0; fi
-if ! cargo clippy --all-targets --all-features -- -D warnings; then exit 1; fi
-mise run -q step-receipt record lint:clippy || true
-'''
-# ITS OWN BUILD DIRECTORY, and the cargo statement above stays byte-identical so
+# verdict already held. `batten step run` is the whole bracket — a hit exits 0,
+# a miss runs the command and records only on a zero exit — and its key is the
+# `[[step]]` row `lint:clippy` in `batten.toml` plus this exact argv.
+#
+# THE CACHE'S OWN BUILD SHARES THE ORDINARY TARGET DIRECTORY, and `env` below is
+# why. The isolation this task needs is CLIPPY's (the paragraph under the run
+# line), so the variable rides the step's own argv rather than the task's `env`,
+# where it would also send the engine's `cargo run` into `target/clippy` and pay
+# a second full debug build of it there.
+run = "cargo run --quiet -p batten -- step run lint:clippy -- env CARGO_TARGET_DIR=target/clippy cargo clippy --all-targets --all-features -- -D warnings"
+# ITS OWN BUILD DIRECTORY, and the clippy argv above keeps its flags unchanged so
 # no CI parity reading moves. `verify` runs this beside `test:cargo`, the narrow
 # nextest lanes and the cross builds, all in `target/`, and clippy's
 # `--all-targets --all-features` check build shares dependency units with them.
@@ -862,19 +866,19 @@ mise run -q step-receipt record lint:clippy || true
 # never once when run alone. The cost is one extra check-mode build of the
 # dependency graph, paid once and then cached; the alternative was a gate that
 # failed by timing. CLOUD-1913 records the investigation.
-env = { CARGO_TARGET_DIR = "target/clippy" }
 
 [tasks."lint:fmt"]
 description = "rustfmt in check mode"
 # Safe as the single definition: hk's `cargo-fmt` builtin already checks the
 # whole workspace (`--manifest-path {{workspace_indicator}}`), not file by file,
 # so routing it here costs no scoping.
-# Receipt-gated (CLOUD-424), same shape as lint:clippy.
-run = '''
-if [ "$(mise run -q step-receipt check lint:fmt | cut -c1-3)" = hit ]; then exit 0; fi
-if ! cargo fmt --all --check; then exit 1; fi
-mise run -q step-receipt record lint:fmt || true
-'''
+# NOT receipt-gated any more (CLOUD-843), and the arithmetic is the reason.
+# `cargo fmt --all --check` costs about a second; the retired receipt paid two
+# mise parses (~0.75s each) around it, so the cache cost more than the step. And
+# hk's `cargo-fmt` runs at COMMIT, outside the `slow` tier: a cache reached
+# through `cargo run -p batten` would put an engine build on every commit, which
+# CLOUD-1397 took off it.
+run = "cargo fmt --all --check"
 
 [tasks."lint:toml"]
 description = "taplo: TOML syntax, duplicate keys, schema bindings, and formatting"
@@ -1122,7 +1126,6 @@ run = "cargo run --quiet -p batten -- exec --tee --tracked '*.rego' -- mise exec
 
 [tasks.coverage]
 description = "Report: line/region coverage of the Rust suite. A REPORT, never a gate — deliberately not in `verify` and not a required check"
-shell = "bash -c"
 # WHY THIS IS NOT A GATE, and must not become one. A coverage-percentage
 # threshold rewards line-touching over behaviour assertion: the cheapest way to
 # move the number is a test that executes code and asserts nothing, which is
@@ -1143,32 +1146,30 @@ shell = "bash -c"
 # here, on demand, and only when missing — the same "don't mutate the toolchain
 # on the common path" reasoning the retired `[tasks.msrv]` used (CLOUD-593).
 #
-# Task bodies do not run under `set -e`, and a report built from a half-run
-# suite is a misleading number rather than a missing one, so the body opts in.
-run = '''
-set -euo pipefail
-# THE PRODUCER IS READ FIRST, never piped into `grep -q` (review of #928).
-# Under `set -o pipefail` a matching `grep -q` exits on the first hit, the
-# producer takes SIGPIPE, and the PIPELINE's status becomes that signal — so the
-# `if !` reads a successful match as "not installed" and reinstalls. The retired
-# `landed-check.sh` carried this same note at its own call site.
-installed_components=$(rustup component list --installed)
-if ! grep -qx 'llvm-tools-preview' <<<"$installed_components"; then
-	if ! rustup component add llvm-tools-preview; then
-		echo "::error:: coverage: could not install llvm-tools-preview, so no report was produced." >&2
-		exit 1
-	fi
-fi
-mkdir -p "${COVERAGE_OUT_DIR:-target/coverage}"
+# A report built from a half-run suite is a misleading number rather than a
+# missing one, so the first failing step ends it — which an argv sequence does
+# by construction (CLOUD-843, CLOUD-1991), where the body had to opt into
+# `set -e`.
+#
+# `rustup component add` IS THE "ONLY WHEN MISSING" GUARD. On an installed
+# component it answers "up to date" and exits 0 without touching the toolchain,
+# so the list-then-grep probe in front of it — and the SIGPIPE hazard that probe
+# carried (review of #928) — bought nothing the tool does not already do. A
+# component that will not install fails the entry, and nothing is reported.
+#
 # Two artifacts from one instrumented run: lcov for tooling that consumes it,
 # and a summary a human reads. `--workspace` matches what `test:cargo` runs.
-cargo llvm-cov --workspace --lcov --output-path "${COVERAGE_OUT_DIR:-target/coverage}/lcov.info"
-cargo llvm-cov report --summary-only
-'''
+# `COVERAGE_OUT_DIR` still moves both, through the template rather than a
+# `${…:-}` expansion.
+run = [
+  "rustup component add llvm-tools-preview",
+  "mkdir -p {% if env.COVERAGE_OUT_DIR %}{{env.COVERAGE_OUT_DIR}}{% else %}target/coverage{% endif %}",
+  "cargo llvm-cov --workspace --lcov --output-path {% if env.COVERAGE_OUT_DIR %}{{env.COVERAGE_OUT_DIR}}{% else %}target/coverage{% endif %}/lcov.info",
+  "cargo llvm-cov report --summary-only",
+]
 
 [tasks.scorecard]
 description = "Report: OSSF scorecard over this repository. A REPORT, never a gate — deliberately not in `verify` and not a required check"
-shell = "bash -c"
 # WHY THIS IS NOT A GATE, and must not become one. Measured 2026-08-13 at
 # aggregate 5.2/10, and three of the four zero-scores are scorecard disagreeing
 # with decisions this repository made deliberately: `Code-Review: 0` counts
@@ -1188,27 +1189,21 @@ shell = "bash -c"
 # `GITHUB_AUTH_TOKEN`; nothing here mints or stores one, and a missing token is
 # scorecard's own error rather than a silent partial score.
 #
-# Task bodies do not run under `set -e`, and a report built from a half-run
-# scan is a misleading number rather than a missing one, so the body opts in.
-run = '''
-set -euo pipefail
-: "${GITHUB_AUTH_TOKEN:=${GH_TOKEN:-${GITHUB_TOKEN:-}}}"
-export GITHUB_AUTH_TOKEN
-if [ -z "$GITHUB_AUTH_TOKEN" ]; then
-	echo "::error:: scorecard: no GITHUB_AUTH_TOKEN/GH_TOKEN/GITHUB_TOKEN in the environment, so no report was produced." >&2
-	exit 1
-fi
-# The repository is named from the origin remote, never hardcoded: the same
-# reason `[epoch] tracked` is config — a consumer's coordinates are theirs.
-remote=$(git remote get-url origin)
-slug=${remote#*github.com[:/]}
-slug=${slug%.git}
-scorecard --repo="github.com/${slug}" "$@"
-'''
+# ONE ARGV, NO BODY (CLOUD-843, CLOUD-1991). The token fallback is the task's
+# `env`, templated in the order the body's `:=` chain read it; a missing token
+# is scorecard's own refusal, which is the "no silent partial score" the body's
+# guard restated. The repository is never hardcoded — a consumer's coordinates
+# are theirs — and it is named by the caller now rather than cut out of the
+# origin URL: the `[repo]` argument, else `GH_REPO` (the forge client's own
+# override), else `GITHUB_REPOSITORY`, which every Actions runner sets. The
+# URL-trimming it replaces also misread a proxied remote, whose URL carries no
+# `github.com` at all.
+env = { GITHUB_AUTH_TOKEN = "{% if env.GITHUB_AUTH_TOKEN %}{{env.GITHUB_AUTH_TOKEN}}{% elif env.GH_TOKEN %}{{env.GH_TOKEN}}{% elif env.GITHUB_TOKEN %}{{env.GITHUB_TOKEN}}{% endif %}" }
+usage = 'arg "[repo]" default="" help="owner/name on github.com; GH_REPO, then GITHUB_REPOSITORY, when omitted"'
+run = "scorecard --repo=github.com/{% if usage.repo %}{{usage.repo}}{% elif env.GH_REPO %}{{env.GH_REPO}}{% else %}{{env.GITHUB_REPOSITORY}}{% endif %}"
 
 [tasks.fuzz]
 description = "Report: search the hook-envelope and config parsers for inputs that break a property (CLOUD-112)"
-shell = "bash -c"
 # A SEARCH, never a gate — the same split `lock-check` draws and `coverage`
 # follows. A bounded fuzz run is a property of the WORLD: nondeterministic, and
 # green proves only that this seed found nothing this time. So it is deliberately
@@ -1227,33 +1222,37 @@ shell = "bash -c"
 # the retired `[tasks.msrv]` (CLOUD-593), which drove rustup directly for its own documented
 # reasons.
 #
-# Body opts into `set -e`: a search that half-ran is a misleading all-clear
-# rather than a missing one.
-run = '''
-set -euo pipefail
-# Read first for the reason the coverage task above records: a matching
-# `grep -q` under `pipefail` makes the pipeline exit with the producer's SIGPIPE.
-installed_toolchains=$(rustup toolchain list)
-if ! grep -q '^nightly' <<<"$installed_toolchains"; then
-	if ! rustup toolchain install nightly --profile minimal; then
-		echo "::error:: fuzz: could not install the nightly toolchain libFuzzer requires, so nothing was searched." >&2
-		exit 1
-	fi
-fi
-# Version-pinned and only when missing. Built with +nightly deliberately:
-# cargo-fuzz 0.13.2's dependencies require rustc 1.91, so the pinned stable
-# cannot compile it — see the [tools] note on why this is not a `[tools]` entry.
-if ! cargo +nightly fuzz --version >/dev/null 2>&1; then
-	if ! cargo +nightly install cargo-fuzz --version "${CARGO_FUZZ_VERSION:-0.13.2}" --locked; then
-		echo "::error:: fuzz: could not install cargo-fuzz, so nothing was searched." >&2
-		exit 1
-	fi
-fi
-# One target and one input reproduces a saved crash; no argument searches both.
-if [ "$#" -gt 0 ]; then
-	cargo +nightly fuzz run "$@"
-	exit 0
-fi
+# A search that half-ran is a misleading all-clear rather than a missing one, so
+# the first failing entry ends it — an argv sequence's own semantics (CLOUD-843,
+# CLOUD-1991), where the body had to opt into `set -e`.
+#
+# BOTH INSTALLS ARE IDEMPOTENT IN THE TOOL, which is what retired the probes in
+# front of them. `rustup toolchain install nightly` on a present nightly checks
+# it and exits 0; `cargo install` of the version already installed says so and
+# exits 0. The list-then-grep probes, and the SIGPIPE hazard `coverage` records,
+# bought nothing more. One thing moved: rustup REFRESHES a present nightly to the
+# current one, where the probe left a stale one in place — the scheduled job
+# always ran on a fresh runner, so it is the only cadence this search has had.
+#
+# Version-pinned. Built with +nightly deliberately: cargo-fuzz 0.13.2's
+# dependencies require rustc 1.91, so the pinned stable cannot compile it — see
+# the [tools] note on why this is not a `[tools]` entry.
+#
+# One target and one input reproduces a saved crash; no argument searches both,
+# which is `fuzz:search`. `usage` binds the two by name, so the choice between
+# the modes is the template's and not a `$#` test.
+usage = '''
+arg "[target]" default="" help="the fuzz target a saved reproducer belongs to; omit to search every target"
+arg "[input]" default="" help="the reproducer file to replay against that target"
+'''
+run = [
+  "rustup toolchain install nightly --profile minimal",
+  "cargo +nightly install cargo-fuzz --version {% if env.CARGO_FUZZ_VERSION %}{{env.CARGO_FUZZ_VERSION}}{% else %}0.13.2{% endif %} --locked",
+  "{% if usage.target %}cargo +nightly fuzz run {{usage.target}} {{usage.input}}{% else %}mise run fuzz:search{% endif %}",
+]
+
+[tasks."fuzz:search"]
+description = "Report: the bounded libFuzzer search over both targets, `fuzz`'s no-argument half (CLOUD-112)"
 # TWO corpus directories, and the order is the whole point. libFuzzer writes
 # every coverage-expanding input into the FIRST directory and treats the rest as
 # read-only seeds — so the machine's working set lands in git-ignored
@@ -1262,13 +1261,15 @@ fi
 # tree on every run: unreviewable, and the replay gate's subject would stop being
 # anything anyone chose. A crash still lands in `fuzz/artifacts/`, which IS
 # tracked, because a reproducer is exactly the file worth reviewing.
-for target in hook_decode config_parse; do
-	mkdir -p "fuzz/work/$target"
-	echo "fuzz: searching $target for ${FUZZ_SECONDS:-60}s"
-	cargo +nightly fuzz run "$target" "fuzz/work/$target" "fuzz/corpus/$target" \
-		-- -max_total_time="${FUZZ_SECONDS:-60}"
-done
-'''
+#
+# The two targets are written out rather than looped over: two entries, each
+# stopping the search if it fails, is exactly what the `for` did. `FUZZ_SECONDS`
+# bounds each, 60 when unset.
+run = [
+  "mkdir -p fuzz/work/hook_decode fuzz/work/config_parse",
+  "cargo +nightly fuzz run hook_decode fuzz/work/hook_decode fuzz/corpus/hook_decode -- -max_total_time={% if env.FUZZ_SECONDS %}{{env.FUZZ_SECONDS}}{% else %}60{% endif %}",
+  "cargo +nightly fuzz run config_parse fuzz/work/config_parse fuzz/corpus/config_parse -- -max_total_time={% if env.FUZZ_SECONDS %}{{env.FUZZ_SECONDS}}{% else %}60{% endif %}",
+]
 
 [tasks.test]
 description = "Run every test suite — Rust and shell"
@@ -3755,14 +3756,16 @@ printf '%scensus\t%s\n' "$out" "$counts" | "${batten[@]}" record named release-a
 [tasks.release-assets-check]
 description = "Gate: a release carries one archive per target the dist matrix builds, every uploaded asset, and a covering checksum manifest (CLOUD-258)"
 usage = """
-arg "[tag]" help="the release to check; the latest when omitted or empty"
+arg "[tag]" default="" help="the release to check; the latest when omitted or empty"
 """
-shell = "bash -c"
-run = '''
-set -e
-mise run release-assets-record ${usage_tag:+"$usage_tag"}
-exec cargo run --quiet -p batten -- check --rule 'release grade other'
-'''
+# AN ARGV SEQUENCE, NOT A `set -e` BODY (CLOUD-843, CLOUD-1991). mise stops an
+# array at its first failing entry with that entry's code, which is all `set -e`
+# bought, and an empty tag renders as no argument at all — the `${usage_tag:+…}`
+# expansion's one job — so the producer still reads "the latest" for it.
+run = [
+  "mise run release-assets-record {{usage.tag}}",
+  "cargo run --quiet -p batten -- check --rule 'release grade other'",
+]
 
 # CLOUD-319's reading half, ported off `mise-tasks/release-due.sh` under
 # CLOUD-1717. The decision is `policy/release-due.rego`; the engine has no clock,
@@ -3882,16 +3885,20 @@ printf '%s\n' "$out" | "${batten[@]}" record named ntia
 # a runner whose transcript is unreadable reports the miss and still exits 0.
 [tasks.ntia-check]
 description = "Gate: the SBOM this tree produces meets the NTIA minimum elements — the checker's exit code, never its report"
-shell = "bash -c"
-run = '''
-set -e
-if [[ -n "${BATTEN_BIN:-}" ]]; then batten=("$BATTEN_BIN"); else batten=(cargo run --quiet -p batten --); fi
-mise run ntia-record
-"${batten[@]}" check --rule 'manifest cover other'
-if ! "${batten[@]}" receipt record sbom-ntia; then
-	echo "ntia-check: the document conforms, but the replay receipt could not be recorded; this is not a verdict about the document." >&2
-fi
-'''
+#
+# AN ARGV SEQUENCE SINCE CLOUD-1991. mise stops an array at its first failing
+# entry with that entry's code, so a refusal (`2`) ends the task before the
+# receipt and a conforming document reaches it — `set -e`'s whole job. What
+# changed is the tolerance: a receipt that cannot be WRITTEN now fails the task
+# with the write's own `1`, the `linear-check` shape, and never the `2` a
+# nonconformance carries. An unreadable transcript is not such a failure:
+# `receipt record` reports it and records anyway (CLOUD-819). The `BATTEN_BIN`
+# switch is gone with the body; `cargo run` resolves the tree's engine.
+run = [
+  "mise run ntia-record",
+  "cargo run --quiet -p batten -- check --rule 'manifest cover other'",
+  "cargo run --quiet -p batten -- receipt record sbom-ntia",
+]
 
 [tasks.release-due]
 description = "Gate: may the release PR land now? Debounce — quiet minutes on main, or hours since the last release, whichever comes first"
@@ -7018,11 +7025,7 @@ description = "cargo-deny: licenses, advisories, sources"
 # The advisory DB is a property of the world, and worlds change on a clock, not
 # on this branch: CI still runs the full check on every PR, which is the same
 # split lock-currency already made.
-run = '''
-if [ "$(mise run -q step-receipt check deny | cut -c1-3)" = hit ]; then exit 0; fi
-if ! cargo deny check; then exit 1; fi
-mise run -q step-receipt record deny || true
-'''
+run = "cargo run --quiet -p batten -- step run deny -- cargo deny check"
 
 [tasks."build:release"]
 description = "Build the release binary the hook registrations execute"
@@ -7910,14 +7913,17 @@ description = "Consumer #1: evaluate the committed batten.toml with batten's own
 # `provision apply` keeps its own `exit 1` deliberately. A scanner that could not be
 # installed is a fault of the environment, not a verdict about the tree, and `1` is
 # already what the engine emits for "a `command` rule whose binary cannot run".
-run = '''
-if [ "$(mise run -q step-receipt check batten-check | cut -c1-3)" = hit ]; then exit 0; fi
-if ! cargo run --quiet -p batten -- provision apply; then exit 1; fi
-cargo run --quiet -p batten -- enforce
-verdict=$?
-if [ "$verdict" != 0 ]; then exit "$verdict"; fi
-mise run -q step-receipt record batten-check || true
-'''
+#
+# PROPAGATION IS NOW THE STEP VERB'S, NOT THIS BODY'S (CLOUD-843). `enforce` is
+# the command `batten step run` hands to `exec`, whose child code is the verb's
+# exit unchanged — a `2` stays `2` — and the receipt is written only after a
+# zero exit, so a denied run leaves none. The capture-and-re-exit above was the
+# shell spelling of exactly that. `provision apply` runs first on every pass: a
+# warm cache is a checksum read, and an array entry that fails stops the task.
+run = [
+  "cargo run --quiet -p batten -- provision apply",
+  "cargo run --quiet -p batten -- step run batten-check -- cargo run --quiet -p batten -- enforce",
+]
 
 [tasks.policy-budget]
 description = "Gate: the always-loaded context (AGENTS.md + anything else declared always-load) fits its token budget"
@@ -8041,7 +8047,9 @@ description = "Static-analyse the GitHub Actions workflows (dangerous triggers, 
 # `action.yml` is named alongside `.github/` because the shipped Action (CLOUD-68)
 # is a workflow surface with the same injection and unpinned-uses hazards, and
 # zizmor's directory walk does not reach a repository-root action definition.
-# Receipt-gated (CLOUD-424) on the workflow surface and zizmor's version.
+# NOT receipt-gated any more (CLOUD-843): the cache is an engine verb, and the
+# CI job this task runs in compiles nothing (`zizmor.yml`), so gating it would
+# put a full engine build in front of a seconds-long offline analysis.
 #
 # `--offline` is load-bearing, and it is the lock-check split applied here
 # (CLOUD-410). GH_TOKEN in [env] used to enable zizmor's ONLINE audits, which
@@ -8054,11 +8062,7 @@ description = "Static-analyse the GitHub Actions workflows (dangerous triggers, 
 # THIS COMMIT; whether a pinned action has an advisory today is a question about
 # the world, it changes with no diff, and it belongs on a clock — which is
 # `.github/workflows/zizmor-advisories.yml`, beside lock-currency and ci-drift.
-run = '''
-if [ "$(mise run -q step-receipt check zizmor | cut -c1-3)" = hit ]; then exit 0; fi
-if ! zizmor --offline --min-severity high .github/ action.yml; then exit 1; fi
-mise run -q step-receipt record zizmor || true
-'''
+run = "zizmor --offline --min-severity high .github/ action.yml"
 
 [tasks.zizmor-advisories]
 description = "Currency only: is any pinned action the subject of a published advisory? Runs on a schedule, never on the landing path — it needs the network"
@@ -8071,7 +8075,6 @@ run = "zizmor --min-severity high .github/ action.yml"
 
 [tasks.lock-check]
 description = "Currency only: would regenerating mise.lock change it? Runs on a schedule, never on the landing path — it fetches and it writes"
-shell = "bash -c"
 # What this actually answers is "has upstream changed since this commit", which
 # is a property of the world, not of the branch. It costs a remote round trip
 # per tool and REWRITES the tracked lockfile, so it belongs on a schedule
@@ -8086,28 +8089,28 @@ shell = "bash -c"
 #
 # The old comment also asserted "CI installs with `mise install --locked`".
 # It does not, and never did — no workflow passes --locked.
-run = '''
-# Fails closed: mise task bodies do not run under `set -e`, so an unguarded
-# `mise lock` that failed would leave mise.lock untouched, the diff below clean,
-# and this gate reporting "complete and current" about a file it never
-# regenerated — the same silent false-green class as the fetch in linear-check.
-# The single sanctioned lockfile writer, so it says so. Measured on mise
-# 2026.8.2: `mise lock` writes regardless of `[settings] lockfile`, so this
-# assignment is not what makes the regeneration work — it is the declaration
-# that this task, alone in the repo, is allowed to write the file that
-# `[settings] lockfile = false` denies to everything else (CLOUD-223). It also
-# holds the currency job upright if a later mise gates `lock` on the setting.
-if ! MISE_LOCKFILE=true mise lock; then
-  echo "::error:: \`mise lock\` failed, so the lockfile could not be regenerated and its currency is unverified. Refusing to pass." >&2
-  exit 1
-fi
-if ! git diff --quiet -- mise.lock; then
-  echo "::error:: mise.lock was stale/incomplete — regenerated it. Review and commit the change; CI installs with --locked and needs complete per-platform URLs." >&2
-  git --no-pager diff --stat -- mise.lock >&2
-  exit 1
-fi
-echo "lock-check: mise.lock is complete and current"
-'''
+#
+# Fails closed, and the array is what does it (CLOUD-843, CLOUD-1991): mise
+# stops at the first entry that fails, so a `mise lock` that could not
+# regenerate the file never reaches the diff and cannot report a lockfile it
+# never rewrote as current — the silent false green the guarded body held off.
+# `git diff --stat --exit-code` is the whole second half in one argv: the stat
+# names what moved, and the code is 1 when anything did. Review and commit the
+# regenerated file; CI installs with `--locked` and needs complete per-platform
+# URLs.
+#
+# `MISE_LOCKFILE = "true"` is the task's `env` rather than a `VAR=` prefix. The
+# single sanctioned lockfile writer, so it says so. Measured on mise 2026.8.2:
+# `mise lock` writes regardless of `[settings] lockfile`, so this assignment is
+# not what makes the regeneration work — it is the declaration that this task,
+# alone in the repo, is allowed to write the file that `[settings] lockfile =
+# false` denies to everything else (CLOUD-223). It also holds the currency job
+# upright if a later mise gates `lock` on the setting.
+env = { MISE_LOCKFILE = "true" }
+run = [
+  "mise lock",
+  "git --no-pager diff --stat --exit-code -- mise.lock",
+]
 
 # ONE TURN'S CROSS-TRIPLE TYPE-CHECK, DETACHED (CLOUD-1731).
 #
