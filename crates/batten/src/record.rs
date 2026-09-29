@@ -142,6 +142,20 @@ fn declared(overrides: &Overrides) -> Result<Vec<ToolQuery>> {
 /// line carries no token. An internal error when the store cannot be written.
 pub fn run_tool(id: &str, overrides: &Overrides) -> Result<ExitCode> {
     let text = verdict_lines()?;
+    store_tool(id, &text, overrides)?;
+    Ok(ExitCode::Success)
+}
+
+/// Record `text` under the declared tool row `id`, for an in-process producer.
+///
+/// [`run_tool`]'s body without the stdin read, so a verb that reduced a tool's
+/// output itself (CLOUD-843's `sbom --record`) keys the record the same way the
+/// piped door does — one composition of the key, in one place.
+///
+/// # Errors
+///
+/// As [`run_tool`].
+pub(crate) fn store_tool(id: &str, text: &str, overrides: &Overrides) -> Result<()> {
     let rows = declared(overrides)?;
     let Some(row) = rows.into_iter().find(|row| row.id == id) else {
         return Err(UsageError::raise(format!(
@@ -164,8 +178,7 @@ pub fn run_tool(id: &str, overrides: &Overrides) -> Result<ExitCode> {
 
     let key = tools::record_key(&row, &tools::digest(&bytes));
     let git_dir = git::git_dir(Path::new("."))?;
-    store(&tools::record_path(&git_dir, &key), validated(&text)?)?;
-    Ok(ExitCode::Success)
+    store(&tools::record_path(&git_dir, &key), validated(text)?)
 }
 
 /// Record the forge's verdicts for one commit.

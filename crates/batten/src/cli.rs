@@ -520,6 +520,10 @@ pub struct SbomRequest {
     pub target: Option<String>,
     /// Where to write the documents, instead of the declared directory.
     pub out_dir: Option<String>,
+    /// Derive twice into scratch and record the reduction (CLOUD-843).
+    pub record: bool,
+    /// Derive into scratch and record the checker's answers (CLOUD-843).
+    pub conformance: bool,
 }
 
 /// `dist`'s arguments, as a payload struct for [`SbomRequest`]'s reason.
@@ -2924,6 +2928,8 @@ fn sbom_of(matches: &ArgMatches) -> SbomRequest {
         binary: matches.get_one::<String>("binary").cloned(),
         target: matches.get_one::<String>("target").cloned(),
         out_dir: matches.get_one::<String>("out_dir").cloned(),
+        record: flag(matches, "record"),
+        conformance: flag(matches, "conformance"),
     }
 }
 

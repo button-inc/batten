@@ -12008,7 +12008,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__sbom)
-            opts="-q -v -y -h --names --binary --target --out-dir --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --names --binary --target --out-dir --record --conformance --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

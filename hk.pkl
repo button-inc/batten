@@ -283,6 +283,7 @@ local gate = new Mapping<String, Step> {
         "crates/batten/src/budget.rs",
         "crates/batten/src/capture.rs",
         "crates/batten/src/census.rs",
+        "crates/batten/src/sbom.rs",
         "crates/batten/src/hk.rs",
         "crates/batten/src/outcome.rs",
         "crates/batten/src/hookcost.rs",
@@ -347,7 +348,7 @@ local gate = new Mapping<String, Step> {
     // `slow` tier: two whole-tree `syft scan dir:.` passes.
     profiles = List("slow")
     glob = List("Cargo.lock", ".github/workflows/*")
-    check = "mise run record-sbom"
+    check = "cargo run --quiet -p batten -- sbom --record"
   }
   // The install path resolves a release asset BY NAME from a machine that has
   // never seen this repository, so a rename in `dist` that forgets one of its

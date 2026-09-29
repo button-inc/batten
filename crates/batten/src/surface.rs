@@ -2607,6 +2607,26 @@ const SBOM_OUT_DIR: FlagDecl = FlagDecl::valued(
     "Write the documents under this directory instead of the declared one",
 );
 
+/// `--record` on `sbom`: derive twice into scratch and record the reduction.
+///
+/// The producer half of the inventory gate (retiring `[tasks.record-sbom]`):
+/// two derivations, because stability is one of the counts, and scratch rather
+/// than the declared directory, because a producer that rewrote what it measures
+/// could not measure it twice.
+const SBOM_RECORD: FlagDecl = FlagDecl::switch(
+    "record",
+    "record",
+    "Derive the tree's documents twice into scratch and record their counts under the declared tool row",
+);
+
+/// `--conformance` on `sbom`: derive into scratch and record the checker's exit
+/// code per declared standard (retiring `[tasks.ntia-record]`).
+const SBOM_CONFORMANCE: FlagDecl = FlagDecl::switch(
+    "conformance",
+    "conformance",
+    "Derive the SPDX document into scratch and record the declared checker's exit code per standard",
+);
+
 /// `<target>` on `dist`: the triple to build.
 const DIST_TARGET: FlagDecl = FlagDecl::positional(
     "target",
@@ -6360,7 +6380,14 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Write,
-        flags: &[SBOM_NAMES, SBOM_BINARY, SBOM_TARGET, SBOM_OUT_DIR],
+        flags: &[
+            SBOM_NAMES,
+            SBOM_BINARY,
+            SBOM_TARGET,
+            SBOM_OUT_DIR,
+            SBOM_RECORD,
+            SBOM_CONFORMANCE,
+        ],
     },
     // The release build and archive (retiring `mise-tasks/dist.sh`). Unclassified:
     // a build runs every dependency's build script, and a cross build runs a

@@ -4,7 +4,7 @@
 .SH NAME
 batten\-sbom \- Derive the SPDX and CycloneDX inventories of this tree, or of a built binary, under the names its release assets carry
 .SH SYNOPSIS
-\fBbatten sbom\fR [\fB\-\-names\fR] [\fB\-\-binary\fR] [\fB\-\-target\fR] [\fB\-\-out\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBbatten sbom\fR [\fB\-\-names\fR] [\fB\-\-binary\fR] [\fB\-\-target\fR] [\fB\-\-out\-dir\fR] [\fB\-\-record\fR] [\fB\-\-conformance\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .SH DESCRIPTION
 Derive the SPDX and CycloneDX inventories of this tree, or of a built binary, under the names its release assets carry
 .SH OPTIONS
@@ -20,6 +20,12 @@ The target triple the binary was built for, which names its asset
 .TP
 \fB\-\-out\-dir\fR \fI<out_dir>\fR
 Write the documents under this directory instead of the declared one
+.TP
+\fB\-\-record\fR
+Derive the tree\*(Aqs documents twice into scratch and record their counts under the declared tool row
+.TP
+\fB\-\-conformance\fR
+Derive the SPDX document into scratch and record the declared checker\*(Aqs exit code per standard
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

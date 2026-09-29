@@ -1,13 +1,15 @@
 //! `manifest cover other` over the compiled binary and the REAL producer
-//! (CLOUD-580, CLOUD-631, CLOUD-666, CLOUD-1717).
+//! (CLOUD-580, CLOUD-631, CLOUD-666, CLOUD-1717, CLOUD-843).
 //!
-//! `[tasks.ntia-record]` and `[tasks.ntia-check]` are read out of `mise.toml` and
-//! run against a stubbed SBOM producer (`NTIA_SBOM`) and a stubbed checker
-//! (`SBOMCHECK`) whose exit code and report are set INDEPENDENTLY — the negative
-//! self-test needs a checker that disagrees with itself, which no honest tool
-//! does. The engine then decides over what the producer recorded. A finding is
-//! `check`'s exit 2 now, where the program used 1; could-not-look is the
-//! producer's exit 3, where the program used 2.
+//! `batten sbom --conformance` derives the document through stubbed `syft` and
+//! `cargo` and asks a stubbed checker whose exit code and report are set
+//! INDEPENDENTLY — the negative self-test needs a checker that disagrees with
+//! itself, which no honest tool does. The engine then decides over what the
+//! producer recorded. A finding is `check`'s exit 2; could-not-look is the
+//! producer's exit 3. The producer was `[tasks.ntia-record]`'s inline body until
+//! CLOUD-843 retired it onto the verb; the standards and the checker are
+//! `[sbom.conformance]`'s now, where they were `NTIA_STANDARDS` and `SBOMCHECK`.
+//! `[tasks.ntia-check]`'s own body is run too, for the receipt half only it owns.
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
@@ -17,18 +19,18 @@
 // carried: "a receipt that cannot be written is reported, never a nonconformance" mise.toml kind:mechanism
 // carried: "a nonconformant document fails, and leaves NO receipt" policy/ntia.rego kind:mechanism
 // carried: "THE NEGATIVE SELF-TEST: a conformant-looking report with a non-zero exit still fails" policy/ntia.rego kind:mechanism
-// changed: "the failure carries counts, which are the message and not the decision" mise.toml the counts are recorded on the standard's line of the `ntia` record, beside the exit code the module decides on; the finding carries the pointer alone, since only the first subject is a pointer
-// changed: "a checker that writes no report still reports its exit code" mise.toml the exit code is recorded whether or not a report was written, with `-` for the counts; the case asserts the refusal still lands
+// changed: "the failure carries counts, which are the message and not the decision" crates/batten/src/sbom.rs the counts are recorded on the standard's line of the `ntia` record, beside the exit code the module decides on; the finding carries the pointer alone, since only the first subject is a pointer
+// changed: "a checker that writes no report still reports its exit code" crates/batten/src/sbom.rs the exit code is recorded whether or not a report was written, with `-` for the counts; the case asserts the refusal still lands
 // carried: "output is pointer-only — no component name and no purl reach the log" policy/ntia.rego kind:mechanism
 // changed: "the failure names the published asset, not a scratch path" policy/ntia.rego the pointer is `<asset>#<standard>`, where the program printed `<asset>:0`; still the asset name and never a scratch path
 // carried: "one refusing standard of two fails the whole run" policy/ntia.rego kind:mechanism
-// changed: "an absent checker exits 2 — could not look is not a verdict" mise.toml refused at the producer and never recorded, at exit 3: 2 is `check`'s finding code now
-// changed: "a checker that cannot answer --version exits 2 in precondition mode" mise.toml the same move, and in every mode: the producer asks `--version` before any run it records
-// changed: "a syft that cannot run exits 2 — the document, not the verdict, is missing" mise.toml the same move: an underivable document is the producer's exit 3, nothing recorded
+// changed: "an absent checker exits 2 — could not look is not a verdict" crates/batten/src/sbom.rs refused at the producer and never recorded, at exit 3: 2 is `check`'s finding code now
+// changed: "a checker that cannot answer --version exits 2 in precondition mode" crates/batten/src/sbom.rs the same move, and in every mode: the producer asks `--version` before any run it records
+// changed: "a syft that cannot run exits 2 — the document, not the verdict, is missing" crates/batten/src/sbom.rs the same move: an underivable document is the producer's exit 3, nothing recorded
 // changed: "THE SEVERITY SPLIT: the precondition passes over a nonconformant document" policy/ntia.rego the two command rows collapse into one policy row and both are `deny`; the split survives as two verdicts, and a nonconformant document raises `manifest cover partial` and never `manifest check unread`
 // changed: "the precondition records no receipt — it attests the mechanism, not the SBOM" mise.toml there is no precondition mode left to call; the receipt is written only after `check` passes, which the nonconformant case asserts
-// carried: "ntia-check.bats::the gate leaves the tree it judges unmodified" mise.toml kind:mechanism
-// carried: "the DEFAULT standards set is satisfiable: a conformant document exits 0" mise.toml kind:mechanism
+// carried: "ntia-check.bats::the gate leaves the tree it judges unmodified" crates/batten/src/sbom.rs kind:verb
+// changed: "the DEFAULT standards set is satisfiable: a conformant document exits 0" crates/batten/src/sbom.rs the set is `[sbom.conformance] standards` rather than an `NTIA_STANDARDS` default, and the committed table declares `ntia` alone; the case reads the committed authority's list
 // carried: "dropping the unsatisfiable standard does not disarm the gate" policy/ntia.rego kind:mechanism
 // changed: "THE DURABLE HALF: an spdx3-only standard over an spdx2 document is a PRECONDITION refusal" policy/ntia.rego `manifest check unread`, a finding through `check`, where the program exited 2; still never `manifest cover partial`
 // carried: "the same standard over an spdx3 document is NOT refused" policy/ntia.rego kind:mechanism
@@ -62,17 +64,34 @@ fn executable(dir: &Path, name: &str, body: &str) -> PathBuf {
     path
 }
 
-/// A producer writing `batten.spdx.json` with `STUB_SPDXVER` (`NONE` omits the
-/// key), and printing `spdx=<path>` as `[tasks.sbom]` does.
-const SBOM: &str = r#"#!/usr/bin/env bash
+/// A `syft` writing a one-package SPDX document with `STUB_SPDXVER` (`NONE`
+/// omits the key) wherever `--output spdx-json=` says, and an empty `CycloneDX`.
+const SYFT: &str = r#"#!/usr/bin/env bash
 set -euo pipefail
 [[ -z "${STUB_SBOM_FAILS:-}" ]] || exit 1
-mkdir -p "$SBOM_OUT_DIR"
+spdx="" cdx="" want=0
+for arg in "$@"; do
+	if [[ "$want" == 1 ]]; then
+		case "$arg" in spdx-json=*) spdx="${arg#spdx-json=}" ;; cyclonedx-json=*) cdx="${arg#cyclonedx-json=}" ;; esac
+		want=0
+		continue
+	fi
+	[[ "$arg" != --output ]] || want=1
+done
+mkdir -p "$(dirname "$spdx")" "$(dirname "$cdx")"
 ver="${STUB_SPDXVER:-SPDX-2.3}"
 key="\"spdxVersion\":\"$ver\","
 [[ "$ver" != NONE ]] || key=""
-echo "{$key\"name\":\"batten\",\"packages\":[{\"name\":\"crate0\"}]}" >"$SBOM_OUT_DIR/batten.spdx.json"
-echo "spdx=$SBOM_OUT_DIR/batten.spdx.json"
+echo "{$key\"name\":\"batten\",\"packages\":[{\"SPDXID\":\"p\",\"name\":\"crate0\"}]}" >"$spdx"
+echo '{"components":[]}' >"$cdx"
+"#;
+
+/// A `cargo` whose metadata lists nothing sourced, so the copyright pass reads no
+/// cache.
+const CARGO: &str = r#"#!/usr/bin/env bash
+[[ "${1:-}" != fetch ]] || exit 0
+[[ "${1:-}" == metadata ]] || exit 1
+echo '{"packages":[]}'
 "#;
 
 /// A checker whose exit code (`STUB_FAIL` lists refusing standards) and report
@@ -98,51 +117,68 @@ echo "crate0: no supplier; pkg:cargo/crate0@1.0.0"
 exit "$fail"
 "#;
 
-fn repo(name: &str) -> PathBuf {
-    let dir = scratch(&format!("ntia-{name}"));
-    let module = std::fs::read_to_string(at_root("policy/ntia.rego")).expect("the module");
-    write(&dir, "policy/ntia.rego", &module);
+/// The fixture's authority, asking `standards` of `checker`.
+fn config(standards: &str, checker: &str) -> String {
     let verdict = |id: &str| {
         format!(
             "[[verdict]]\nid = \"{id}\"\ngloss = \"fixture\"\nclass = \"fixture\"\n\n\
              [[verdict.route]]\nid = \"task run first\"\nkind = \"command\"\n\
-             target = \"mise run ntia-record\"\n\n"
+             target = \"batten sbom --conformance\"\n\n"
         )
     };
-    write(
-        &dir,
-        "batten.toml",
-        &format!(
-            "version = 1\nscope = [\"**\"]\n\n{}{}\
-             [[rule]]\nid = \"{RULE}\"\nkind = \"policy\"\nscope = \"tree\"\n\
-             module = \"policy/ntia.rego\"\nseverity = \"deny\"\n\n\
-             [[record]]\nrecord = \"ntia\"\nwriter = \"mise run ntia-record\"\n",
-            verdict("manifest cover partial"),
-            verdict("manifest check unread"),
-        ),
-    );
+    format!(
+        "version = 1\nscope = [\"**\"]\n\n{}{}\
+         [[rule]]\nid = \"{RULE}\"\nkind = \"policy\"\nscope = \"tree\"\n\
+         module = \"policy/ntia.rego\"\nseverity = \"deny\"\n\n\
+         [[record]]\nrecord = \"ntia\"\nwriter = \"batten sbom --conformance\"\n\n\
+         [sbom]\nsubject = \"batten\"\nout_dir = \"sbom\"\nbinary_out_dir = \"dist\"\n\n\
+         [sbom.conformance]\nrecord = \"ntia\"\nchecker = \"{checker}\"\nstandards = [{standards}]\n",
+        verdict("manifest cover partial"),
+        verdict("manifest check unread"),
+    )
+}
+
+fn repo(name: &str) -> PathBuf {
+    let dir = scratch(&format!("ntia-{name}"));
+    let module = std::fs::read_to_string(at_root("policy/ntia.rego")).expect("the module");
+    write(&dir, "policy/ntia.rego", &module);
+    write(&dir, "batten.toml", &config("\"ntia\"", "sbomcheck"));
+    write(&dir, "Cargo.toml", "version = \"9.9.9\"\n");
+    write(&dir, ".gitignore", "bin/\n.receipts\n");
     init_repo(&dir);
     git_in(&dir, &["add", "-A"]);
     git_in(&dir, &["commit", "-qm", "register the module"]);
-    let stubs = dir.join(".stubs");
-    executable(&stubs, "sbom", SBOM);
+    let stubs = dir.join("bin");
+    executable(&stubs, "syft", SYFT);
+    executable(&stubs, "cargo", CARGO);
     executable(&stubs, "sbomcheck", CHECKER);
     dir
 }
 
-/// Run one of the two task bodies in `dir` with the stubs injected.
-fn run_task(dir: &Path, task: &str, knobs: &[(&str, &str)]) -> Output {
-    let mut command = common::task_command(dir, task);
-    let stubs = dir.join(".stubs");
+/// Declare `standards` and `checker` in the fixture's authority.
+fn declare(dir: &Path, standards: &str, checker: &str) {
+    write(dir, "batten.toml", &config(standards, checker));
+}
+
+/// A `PATH` with the fixture's stubs first.
+fn stubbed_path(dir: &Path) -> std::ffi::OsString {
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    std::env::join_paths(std::iter::once(dir.join("bin")).chain(std::env::split_paths(&inherited)))
+        .expect("a PATH entry carries no separator")
+}
+
+/// The producer, in `dir`, with the stubs first and `knobs` set.
+fn produce(dir: &Path, knobs: &[(&str, &str)]) -> Output {
+    let mut command = common::batten();
     command
-        .env("NTIA_SBOM", stubs.join("sbom"))
-        .env("SBOMCHECK", stubs.join("sbomcheck"))
-        .env("NTIA_STANDARDS", "ntia")
+        .args(["sbom", "--conformance"])
+        .current_dir(dir)
+        .env("PATH", stubbed_path(dir))
         .stdin(Stdio::null());
     for (name, value) in knobs {
         command.env(name, value);
     }
-    command.output().expect("run the task")
+    command.output().expect("run the producer")
 }
 
 fn said(output: &Output) -> String {
@@ -154,16 +190,19 @@ fn said(output: &Output) -> String {
 }
 
 /// Produce, assert it recorded, then decide: the exit code and what was said.
-fn verdict(name: &str, knobs: &[(&str, &str)]) -> (Option<i32>, String) {
-    let dir = repo(name);
-    let produced = run_task(&dir, "ntia-record", knobs);
+fn decide(dir: &Path, knobs: &[(&str, &str)]) -> (Option<i32>, String) {
+    let produced = produce(dir, knobs);
     assert!(
         produced.status.success(),
         "the producer records: {}",
         said(&produced)
     );
-    let decided = common::run(&dir, &["check", "--json", "--rule", RULE]);
+    let decided = common::run(dir, &["check", "--json", "--rule", RULE]);
     (decided.status.code(), said(&decided))
+}
+
+fn verdict(name: &str, knobs: &[(&str, &str)]) -> (Option<i32>, String) {
+    decide(&repo(name), knobs)
 }
 
 #[test]
@@ -174,19 +213,20 @@ fn a_conformant_document_passes() {
 
 #[test]
 fn the_default_standards_set_is_satisfiable() {
+    // The committed authority's list, read rather than restated: it must not ask
+    // the SPDX-3-only standard a 2.3 document can never satisfy.
+    let committed = std::fs::read_to_string(at_root("batten.toml")).expect("the authority");
+    let parsed: toml::Value = toml::from_str(&committed).expect("batten.toml parses");
+    let standards: Vec<String> = parsed["sbom"]["conformance"]["standards"]
+        .as_array()
+        .expect("[sbom.conformance] standards")
+        .iter()
+        .map(|s| format!("\"{}\"", s.as_str().unwrap()))
+        .collect();
     let dir = repo("default");
-    // Unset is the default, `ntia` alone: a refusing `fsct3-min` is never asked.
-    let produced = common::task_command(&dir, "ntia-record")
-        .env("NTIA_SBOM", dir.join(".stubs/sbom"))
-        .env("SBOMCHECK", dir.join(".stubs/sbomcheck"))
-        .env_remove("NTIA_STANDARDS")
-        .env("STUB_FAIL", "fsct3-min")
-        .stdin(Stdio::null())
-        .output()
-        .expect("run the producer");
-    assert!(produced.status.success(), "{}", said(&produced));
-    let decided = common::run(&dir, &["check", "--rule", RULE]);
-    assert_eq!(decided.status.code(), Some(0), "{}", said(&decided));
+    declare(&dir, &standards.join(", "), "sbomcheck");
+    let (code, text) = decide(&dir, &[("STUB_FAIL", "fsct3-min")]);
+    assert_eq!(code, Some(0), "{text}");
 }
 
 #[test]
@@ -213,9 +253,45 @@ fn a_checker_that_writes_no_report_still_refuses() {
 }
 
 #[test]
+fn the_failure_carries_counts_on_the_record_and_never_in_a_finding() {
+    let dir = repo("counts");
+    let produced = produce(&dir, &[("STUB_FAIL", "ntia")]);
+    assert!(produced.status.success(), "{}", said(&produced));
+    let decided = common::run(&dir, &["check", "--json", "--rule", RULE]);
+    assert!(
+        !said(&decided).contains("no-supplier"),
+        "{}",
+        said(&decided)
+    );
+    let text = recorded(&dir.join(".git")).expect("the named record");
+    assert_eq!(
+        text,
+        "document\tbatten.spdx.json\nspdx-version\tSPDX-2.3\n\
+         standard\tntia\t1\tcomponents=3 no-supplier=2 no-license=0 no-copyright=0\n"
+    );
+}
+
+/// The one record under `dir` a conformance run wrote, found by its first line.
+fn recorded(dir: &Path) -> Option<String> {
+    for entry in std::fs::read_dir(dir).ok()?.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = recorded(&path) {
+                return Some(found);
+            }
+        } else if let Ok(text) = std::fs::read_to_string(&path)
+            && text.starts_with("document\t")
+        {
+            return Some(text);
+        }
+    }
+    None
+}
+
+#[test]
 fn output_is_pointer_only_and_never_a_scratch_path() {
     let dir = repo("pointer");
-    let produced = run_task(&dir, "ntia-record", &[("STUB_FAIL", "ntia")]);
+    let produced = produce(&dir, &[("STUB_FAIL", "ntia")]);
     let decided = common::run(&dir, &["check", "--rule", RULE]);
     for text in [said(&produced), said(&decided)] {
         assert!(!text.contains("crate0"), "{text}");
@@ -227,13 +303,11 @@ fn output_is_pointer_only_and_never_a_scratch_path() {
 
 #[test]
 fn one_refusing_standard_of_two_fails_the_whole_run() {
-    let (code, text) = verdict(
-        "two",
-        &[
-            ("NTIA_STANDARDS", "ntia fsct3-min"),
-            ("STUB_SPDXVER", "SPDX-3.0.1"),
-            ("STUB_FAIL", "fsct3-min"),
-        ],
+    let dir = repo("two");
+    declare(&dir, "\"ntia\", \"fsct3-min\"", "sbomcheck");
+    let (code, text) = decide(
+        &dir,
+        &[("STUB_SPDXVER", "SPDX-3.0.1"), ("STUB_FAIL", "fsct3-min")],
     );
     assert_eq!(code, Some(2), "{text}");
     assert!(text.contains("batten.spdx.json#fsct3-min"), "{text}");
@@ -242,7 +316,9 @@ fn one_refusing_standard_of_two_fails_the_whole_run() {
 
 #[test]
 fn an_spdx3_only_standard_over_an_spdx2_document_is_unread() {
-    let (code, text) = verdict("durable", &[("NTIA_STANDARDS", "ntia fsct3-min")]);
+    let dir = repo("durable");
+    declare(&dir, "\"ntia\", \"fsct3-min\"", "sbomcheck");
+    let (code, text) = decide(&dir, &[]);
     assert_eq!(code, Some(2), "{text}");
     // `manifest check unread`, never `manifest cover partial`: the checker passed.
     assert!(
@@ -254,13 +330,9 @@ fn an_spdx3_only_standard_over_an_spdx2_document_is_unread() {
 
 #[test]
 fn the_same_standard_over_an_spdx3_document_is_askable() {
-    let (code, text) = verdict(
-        "spdx3",
-        &[
-            ("NTIA_STANDARDS", "ntia fsct3-min"),
-            ("STUB_SPDXVER", "SPDX-3.0.1"),
-        ],
-    );
+    let dir = repo("spdx3");
+    declare(&dir, "\"ntia\", \"fsct3-min\"", "sbomcheck");
+    let (code, text) = decide(&dir, &[("STUB_SPDXVER", "SPDX-3.0.1")]);
     assert_eq!(code, Some(0), "{text}");
 }
 
@@ -286,21 +358,21 @@ fn an_unclassifiable_spdx_version_is_unread() {
 
 #[test]
 fn every_mechanism_the_producer_cannot_use_is_exit_3_and_records_nothing() {
-    for (name, knobs) in [
-        ("no-checker", vec![("SBOMCHECK", "/nonexistent/sbomcheck")]),
-        ("no-version", vec![("STUB_NOVERSION", "1")]),
-        ("no-sbom", vec![("STUB_SBOM_FAILS", "1")]),
-        ("no-producer", vec![("NTIA_SBOM", "/nonexistent/sbom")]),
+    for (name, checker, knobs) in [
+        ("no-checker", "/nonexistent/sbomcheck", vec![]),
+        ("no-version", "sbomcheck", vec![("STUB_NOVERSION", "1")]),
+        ("no-sbom", "sbomcheck", vec![("STUB_SBOM_FAILS", "1")]),
     ] {
         let dir = repo(&format!("refuse-{name}"));
-        let produced = run_task(&dir, "ntia-record", &knobs);
+        declare(&dir, "\"ntia\"", checker);
+        let produced = produce(&dir, &knobs);
         assert_eq!(
             produced.status.code(),
             Some(3),
             "{name}: {}",
             said(&produced)
         );
-        assert!(said(&produced).contains("::error::"), "{name}: loud");
+        assert!(said(&produced).contains("could not look"), "{name}: loud");
         let after = common::run(&dir, &["check", "--rule", RULE]);
         assert_eq!(after.status.code(), Some(0), "{name}: nothing recorded");
     }
@@ -310,7 +382,7 @@ fn every_mechanism_the_producer_cannot_use_is_exit_3_and_records_nothing() {
 fn the_gate_leaves_the_tree_it_judges_unmodified() {
     let dir = repo("unmodified");
     let before = git_in(&dir, &["status", "--porcelain"]);
-    let produced = run_task(&dir, "ntia-record", &[("STUB_FAIL", "ntia")]);
+    let produced = produce(&dir, &[("STUB_FAIL", "ntia")]);
     assert!(produced.status.success(), "{}", said(&produced));
     assert_eq!(git_in(&dir, &["status", "--porcelain"]), before);
 }
@@ -331,10 +403,11 @@ fn a_record_missing_a_reading_is_torn() {
 
 // --- the wrapper: record, decide, then the receipt that is never a verdict ----
 
-/// A `batten` that delegates to the real binary, logs every receipt call, and can
-/// refuse one — the state of a runner with no readable transcript.
+/// `[tasks.ntia-check]`'s body over a `batten` that delegates to the real binary,
+/// logs every receipt call, and can refuse one — the state of a runner with no
+/// readable transcript.
 fn wrapper(dir: &Path, knobs: &[(&str, &str)]) -> Output {
-    let stubs = dir.join(".stubs");
+    let stubs = dir.join("bin");
     let real = env!("CARGO_BIN_EXE_batten");
     executable(
         &stubs,
@@ -345,21 +418,14 @@ fn wrapper(dir: &Path, knobs: &[(&str, &str)]) -> Output {
             log = dir.join(".receipts").display(),
         ),
     );
-    // `mise run ntia-record` is the producer the cases above already run.
-    executable(&stubs, "mise", "#!/usr/bin/env bash\nexit 0\n");
-    let produced = run_task(dir, "ntia-record", knobs);
-    assert!(produced.status.success(), "{}", said(&produced));
-    let path = format!(
-        "{}:{}",
-        stubs.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
-    let mut all: Vec<(&str, &str)> = knobs.to_vec();
-    let batten = stubs.join("batten");
-    let batten = batten.to_str().unwrap();
-    all.push(("BATTEN_BIN", batten));
-    all.push(("PATH", &path));
-    run_task(dir, "ntia-check", &all)
+    let mut command = common::task_command(dir, "ntia-check");
+    command
+        .env("BATTEN_BIN", stubs.join("batten"))
+        .stdin(Stdio::null());
+    for (name, value) in knobs {
+        command.env(name, value);
+    }
+    command.output().expect("run the task")
 }
 
 #[test]

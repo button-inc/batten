@@ -752,6 +752,16 @@ pub struct Config {
     /// reading are [`crate::census`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub census: Option<crate::census::Census>,
+    /// What `batten sbom` inventories and under which names (CLOUD-843).
+    /// Absent means the verb has no subject to name, which it refuses rather
+    /// than guessing one.
+    ///
+    /// Consumer-specific for `census`'s reason: the subject's name, where its
+    /// documents land, which paths a scan skips and where its licence table
+    /// lives are somebody's layout. The derivation is the engine's; the type and
+    /// the reading are [`crate::sbom`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sbom: Option<crate::sbom::Declared>,
 }
 
 /// The `[perf]` table: accepted invocation-latency regressions (CLOUD-1163
@@ -2149,6 +2159,12 @@ fn validate_sections(config: &Config) -> Result<()> {
         .and_then(|census| census.shell.as_ref())
     {
         shell.validate()?;
+    }
+    // An `[sbom]` table whose subject or record names could not be a path
+    // component would fail at the first write, after a minute of scanning; it is
+    // refused at load, where the key is named (CLOUD-843).
+    if let Some(sbom) = &config.sbom {
+        sbom.validate()?;
     }
     // `[transcript]` is a table too, so the census does not reach it either; the
     // guarded failure is a `path` key present and blank, which would resolve to
@@ -3787,6 +3803,8 @@ impl Config {
             // An authority declaring no census declares nowhere shell lives; the
             // verb says so rather than counting a tree it was told nothing about.
             census: None,
+            // No subject declared, so `batten sbom` has nothing to name.
+            sbom: None,
         }
     }
 }

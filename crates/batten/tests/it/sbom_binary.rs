@@ -1,30 +1,34 @@
 //! `cargo list other` over the compiled binary and the REAL producer (CLOUD-263,
-//! CLOUD-1717).
+//! CLOUD-1717, CLOUD-843).
 //!
-//! `[tasks.sbom-binary-record]` is read out of `mise.toml` and run against a
-//! stubbed `syft` that recovers a chosen count — the real tool cannot be made to,
-//! so nothing else would prove the bar is `>= 2` rather than `>= 0`. The engine
-//! then decides over what was recorded, and `[tasks.sbom-binary]`'s own body is
-//! run too, with `mise` stubbed to the producer, for the half only the wrapper
-//! owns: a refused inventory leaves no asset, and a clean one prints its pointers.
+//! `batten sbom --binary` is run against a stubbed `syft` that recovers a chosen
+//! count — the real tool cannot be made to, so nothing else would prove the bar
+//! is `>= 2` rather than `>= 0`. The engine then decides over what was recorded,
+//! through the vendored `supply-chain` preset the fixture enables by name — the
+//! decision moved out of this repository's `policy/sbom-binary.rego` under CLOUD-843,
+//! so this is also the scratch-repo tier proving the bundle decides for a consumer
+//! that is not this one.
+//! The producer was `[tasks.sbom-binary-record]`'s inline body until CLOUD-843
+//! retired it onto the verb; `[tasks.sbom-binary]` is argv glue now, produce and
+//! then the one rule, and its shape is asserted at the foot of this file.
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
-// carried: mise-tasks/sbom-binary.sh policy/sbom-binary.rego kind:mechanism crates/batten/tests/it/sbom_binary.rs
-// carried: tests/sbom-binary.bats policy/sbom-binary.rego kind:mechanism crates/batten/tests/it/sbom_binary.rs
-// carried: "a binary whose crates are all in the lockfile passes, and writes the asset" policy/sbom-binary.rego kind:mechanism
-// changed: "THE NEGATIVE SELF-TEST: an empty inventory must not report green" policy/sbom-binary.rego refused as `cargo list empty` through `check`, exit 2 rather than 1; the `(0 rust-crate` sentence was the program's prose, and the count is the finding's second subject
-// carried: "ONE package is the other vacuous shape, and also fails" policy/sbom-binary.rego kind:mechanism
-// carried: "the count is filtered to rust-crate, so a self-artifact cannot pad it" mise.toml kind:mechanism
-// carried: "a refused inventory leaves no asset behind" mise.toml kind:mechanism
-// changed: "a crate absent from Cargo.lock fails, naming counts and not the crate" policy/sbom-binary.rego refused as `cargo list wrong` through `check`; the count of foreign crates is the finding's subject where the program printed `1 of 2`, and the crate's name is still never printed
-// carried: "SUBSET, NOT EQUALITY: a lockfile larger than the recovery passes" policy/sbom-binary.rego kind:mechanism
-// carried: "the asset name comes from dist's stem rule, so seven legs cannot race" mise.toml kind:mechanism
+// carried: mise-tasks/sbom-binary.sh crates/batten/src/policy/presets/supply-chain/binary-inventory-is-lockfile-bound.rego kind:mechanism crates/batten/tests/it/sbom_binary.rs
+// carried: tests/sbom-binary.bats crates/batten/src/policy/presets/supply-chain/binary-inventory-is-lockfile-bound.rego kind:mechanism crates/batten/tests/it/sbom_binary.rs
+// carried: "a binary whose crates are all in the lockfile passes, and writes the asset" crates/batten/src/policy/presets/supply-chain/binary-inventory-is-lockfile-bound.rego kind:mechanism
+// changed: "THE NEGATIVE SELF-TEST: an empty inventory must not report green" crates/batten/src/policy/presets/supply-chain/binary-inventory-is-lockfile-bound.rego refused as `cargo list empty` through `check`, exit 2 rather than 1; the `(0 rust-crate` sentence was the program's prose, and the count is the finding's second subject
+// carried: "ONE package is the other vacuous shape, and also fails" crates/batten/src/policy/presets/supply-chain/binary-inventory-is-lockfile-bound.rego kind:mechanism
+// carried: "the count is filtered to rust-crate, so a self-artifact cannot pad it" crates/batten/src/sbom.rs kind:verb
+// changed: "a refused inventory leaves no asset behind" mise.toml `[tasks.sbom-binary]` is argv now — produce, then `check` — so a refusal fails the step with the asset still on the runner's disk; it is the workflow's last step before the upload, and a failed step publishes nothing. `the_binary_task_produces_then_decides` asserts the order the property now rests on
+// changed: "a crate absent from Cargo.lock fails, naming counts and not the crate" crates/batten/src/policy/presets/supply-chain/binary-inventory-is-lockfile-bound.rego refused as `cargo list wrong` through `check`; the count of foreign crates is the finding's subject where the program printed `1 of 2`, and the crate's name is still never printed
+// carried: "SUBSET, NOT EQUALITY: a lockfile larger than the recovery passes" crates/batten/src/policy/presets/supply-chain/binary-inventory-is-lockfile-bound.rego kind:mechanism
+// changed: "the asset name comes from dist's stem rule, so seven legs cannot race" crates/batten/src/sbom.rs the stem is `sbom::archive_stem` — `<subject>-v<version>-<target>`, the naming contract `dist.sh --stem` spells — computed in-process rather than by spawning the program, which the engine does not run
 // "output is pointer-only — no document body reaches the log" shares its title with a case already ledgered in `sbom_inventory.rs`; a title owes exactly one arm, so that row answers for both suites.
-// carried: "a syft that cannot run is exit 2 — could not look is not a verdict" mise.toml kind:mechanism
-// carried: "a missing binary is exit 2, not a refusal of the release" mise.toml kind:mechanism
-// carried: "a missing Cargo.lock is exit 2 — there is nothing to hold the crates against" mise.toml kind:mechanism
-// carried: "no target is a usage error, never a pass" mise.toml kind:mechanism
+// changed: "a syft that cannot run is exit 2 — could not look is not a verdict" crates/batten/src/sbom.rs could-not-look is exit 3 under the engine's one exit table, and the half-written asset is removed
+// changed: "a missing binary is exit 2, not a refusal of the release" crates/batten/src/sbom.rs the same move, to exit 3
+// changed: "a missing Cargo.lock is exit 2 — there is nothing to hold the crates against" crates/batten/src/sbom.rs the same move, to exit 3
+// changed: "no target is a usage error, never a pass" crates/batten/src/sbom.rs a usage error is exit 1 under the engine's one exit table, where the body exited 2
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -80,30 +84,6 @@ echo "{\"SPDXID\":\"SPDXRef-DOCUMENT\",\"name\":\"batten\",\"packages\":[]}" >"$
 echo "{\"artifacts\":[$artifacts]}" >"$scan"
 "#;
 
-/// A `mise` answering only `run sbom-binary-record -- <binary> <target>`, by
-/// running the producer's committed body.
-const MISE: &str = r#"#!/usr/bin/env bash
-set -euo pipefail
-[ "$1 $2" = "run sbom-binary-record" ] || exit 97
-shift 2
-[ "${1:-}" != "--" ] || shift
-export usage_binary="${1:-}" usage_target="${2:-}"
-cd "$PRODUCER_CWD"
-exec bash "$FIXTURE/record.sh"
-"#;
-
-fn body(task: &str) -> String {
-    let manifest = fs::read_to_string(at_root("mise.toml")).expect("the manifest");
-    let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
-    parsed["tasks"][task]["run"]
-        .as_str()
-        .unwrap_or_else(|| panic!("[tasks.{task}] declares a run body"))
-        .lines()
-        .filter(|line| !line.contains("{% raw %}") && !line.contains("{% endraw %}"))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 fn executable(path: &Path, text: &str) {
     fs::write(path, text).expect("write stub");
     #[cfg(unix)]
@@ -117,27 +97,17 @@ fn executable(path: &Path, text: &str) {
 
 fn repo(name: &str) -> PathBuf {
     let dir = scratch(&format!("sbom-binary-{name}"));
-    let module = fs::read_to_string(at_root("policy/sbom-binary.rego")).expect("the module");
-    write(&dir, "policy/sbom-binary.rego", &module);
-    let verdict = |id: &str| {
-        format!(
-            "[[verdict]]\nid = \"{id}\"\ngloss = \"fixture\"\nclass = \"fixture\"\n\n\
-             [[verdict.route]]\nid = \"task run first\"\nkind = \"command\"\n\
-             target = \"mise run sbom-binary-record\"\n\n"
-        )
-    };
+    // A CONSUMER THAT IS NOT THIS REPOSITORY: no module of its own and no
+    // `[[verdict]]` row, only the vendored `supply-chain` preset enabled by name.
     write(
         &dir,
         "batten.toml",
-        &format!(
-            "version = 1\nscope = [\"**\"]\n\n{}{}\
-             [[rule]]\nid = \"cargo list other\"\nkind = \"policy\"\nscope = \"tree\"\n\
-             module = \"policy/sbom-binary.rego\"\nline_sources = [\"Cargo.lock\"]\n\
-             severity = \"deny\"\n\n\
-             [[record]]\nrecord = \"sbom-binary\"\nwriter = \"mise run sbom-binary-record\"\n",
-            verdict("cargo list empty"),
-            verdict("cargo list wrong"),
-        ),
+        "version = 1\nscope = [\"**\"]\n\n\
+         [[rule]]\nid = \"cargo list other\"\nkind = \"policy\"\nscope = \"tree\"\n\
+         preset = \"supply-chain\"\nline_sources = [\"Cargo.lock\"]\n\
+         severity = \"deny\"\n\n\
+         [[record]]\nrecord = \"sbom-binary\"\nwriter = \"batten sbom --binary <binary> --target <triple>\"\n\n\
+         [sbom]\nsubject = \"batten\"\nout_dir = \"sbom\"\nbinary_out_dir = \"dist\"\n",
     );
     write(&dir, "Cargo.toml", "version = \"9.9.9\"\n");
     // The lockfile declares the crates the stub recovers plus one it does not.
@@ -150,50 +120,39 @@ fn repo(name: &str) -> PathBuf {
     );
     write(&dir, "batten", "binary bytes\n");
     write(&dir, "count", "2\n");
-    executable(&dir.join("syft"), SYFT);
+    write(&dir, ".gitignore", "bin/\ndist/\ncount\nsyft.*\n");
     fs::create_dir_all(dir.join("bin")).expect("bin");
-    executable(&dir.join("bin/mise"), MISE);
-    write(&dir, "record.sh", &body("sbom-binary-record"));
+    executable(&dir.join("bin/syft"), SYFT);
     init_repo(&dir);
     git_in(&dir, &["add", "-A"]);
     git_in(&dir, &["commit", "-qm", "register the module"]);
     dir
 }
 
-/// `[tasks.<task>]` over this fixture, run from `cwd`: the shared task-body spawn
-/// with the fixture's `bin/` first on `PATH`, plus the readings this tier injects.
-fn run(dir: &Path, task: &str, binary: &str, target: Option<&str>, cwd: &Path) -> Output {
-    let mut command = common::task_command(dir, task);
-    command
-        .current_dir(cwd)
-        .env("FIXTURE", dir)
-        .env("PRODUCER_CWD", at_root("."))
-        .env("SBOM_BINARY_ROOT", dir)
-        .env("SBOM_BINARY_SYFT", dir.join("syft"))
-        .env_remove("SBOM_BINARY_OUT_DIR")
-        .env("usage_binary", binary)
-        .stdin(Stdio::null());
-    match target {
-        Some(target) => command.env("usage_target", target),
-        None => command.env_remove("usage_target"),
-    };
-    command.output().expect("run the task")
-}
-
-/// The producer alone, run from the repository root as mise runs it.
-fn produce(dir: &Path, binary: &str, target: Option<&str>) -> Output {
-    run(dir, "sbom-binary-record", binary, target, &at_root("."))
-}
-
-/// The wrapper, run from the fixture so its `check` reads the fixture's config.
-fn wrapper(dir: &Path) -> Output {
-    run(
-        dir,
-        "sbom-binary",
-        &dir.join("batten").display().to_string(),
-        Some(TARGET),
-        dir,
+/// The compiled binary in `dir`, with the stubbed `syft` first on `PATH`.
+fn batten(dir: &Path, args: &[&str]) -> Output {
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let path = std::env::join_paths(
+        std::iter::once(dir.join("bin")).chain(std::env::split_paths(&inherited)),
     )
+    .expect("a PATH entry carries no separator");
+    common::batten()
+        .args(args)
+        .current_dir(dir)
+        .env("PATH", path)
+        .env("FIXTURE", dir)
+        .stdin(Stdio::null())
+        .output()
+        .expect("run batten")
+}
+
+/// The producer over `binary`, for `target` when given.
+fn produce(dir: &Path, binary: &str, target: Option<&str>) -> Output {
+    let mut args = vec!["sbom", "--binary", binary];
+    if let Some(target) = target {
+        args.extend(["--target", target]);
+    }
+    batten(dir, &args)
 }
 
 fn said(output: &Output) -> String {
@@ -221,12 +180,14 @@ fn verdict(dir: &Path) -> (Option<i32>, String) {
 #[test]
 fn a_binary_whose_crates_are_all_in_the_lockfile_passes_and_writes_the_asset() {
     let dir = repo("clean");
-    let out = wrapper(&dir);
+    let binary = dir.join("batten").display().to_string();
+    let out = produce(&dir, &binary, Some(TARGET));
     assert!(out.status.success(), "{}", said(&out));
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("packages=2"), "{stdout}");
-    assert!(stdout.contains(&format!("sbom={ASSET}")), "{stdout}");
+    assert_eq!(stdout, format!("sbom={ASSET}\npackages=2\n"));
     assert!(dir.join(ASSET).is_file());
+    let decided = common::run(&dir, &["check", "--rule", "cargo list other"]);
+    assert_eq!(decided.status.code(), Some(0), "{}", said(&decided));
 }
 
 #[test]
@@ -258,24 +219,20 @@ fn the_count_is_filtered_to_rust_crate_so_a_self_artifact_cannot_pad_it() {
     let dir = repo("self-artifact");
     write(&dir, "count", "1\n");
     write(&dir, "syft.file", "");
+    // The count itself, before any decision: a padded count of 2 would turn the
+    // vacuous refusal into a `cargo list wrong` one and still exit 2.
+    let binary = dir.join("batten").display().to_string();
+    let produced = produce(&dir, &binary, Some(TARGET));
+    assert!(
+        String::from_utf8_lossy(&produced.stdout).contains("packages=1\n"),
+        "{}",
+        said(&produced)
+    );
     let (code, text) = verdict(&dir);
     assert_eq!(code, Some(2), "{text}");
     assert!(
         text.contains("batten-v9.9.9-x86_64-unknown-linux-gnu.spdx.json"),
         "{text}"
-    );
-}
-
-#[test]
-fn a_refused_inventory_leaves_no_asset_behind() {
-    let dir = repo("refused");
-    write(&dir, "count", "0\n");
-    let out = wrapper(&dir);
-    assert_eq!(out.status.code(), Some(2), "{}", said(&out));
-    assert!(!dir.join(ASSET).exists(), "the refused asset was removed");
-    assert!(
-        !String::from_utf8_lossy(&out.stdout).contains("sbom="),
-        "no pointer to a refused asset reaches $GITHUB_OUTPUT"
     );
 }
 
@@ -302,13 +259,14 @@ fn subset_not_equality_a_larger_lockfile_passes() {
 #[test]
 fn the_asset_name_comes_from_dists_stem_rule() {
     let dir = repo("names");
-    let out = produce(&dir, "--names", Some("aarch64-apple-darwin"));
+    let out = batten(
+        &dir,
+        &["sbom", "--names", "--target", "aarch64-apple-darwin"],
+    );
     assert!(out.status.success(), "{}", said(&out));
-    assert!(
-        String::from_utf8_lossy(&out.stdout)
-            .contains("batten-v9.9.9-aarch64-apple-darwin.spdx.json"),
-        "{}",
-        said(&out)
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "sbom=dist/batten-v9.9.9-aarch64-apple-darwin.spdx.json\n"
     );
 }
 
@@ -316,14 +274,18 @@ fn the_asset_name_comes_from_dists_stem_rule() {
 fn output_is_pointer_only() {
     let dir = repo("pointer");
     write(&dir, "syft.foreign", "");
-    let out = wrapper(&dir);
-    let text = said(&out);
-    assert!(!text.contains("SPDXRef"), "{text}");
-    assert!(!text.contains("rust-crate\""), "{text}");
+    let binary = dir.join("batten").display().to_string();
+    let produced = produce(&dir, &binary, Some(TARGET));
+    let decided = common::run(&dir, &["check", "--rule", "cargo list other"]);
+    for text in [said(&produced), said(&decided)] {
+        assert!(!text.contains("SPDXRef"), "{text}");
+        assert!(!text.contains("rust-crate"), "{text}");
+        assert!(!text.contains("not-in-the-lockfile"), "{text}");
+    }
 }
 
 #[test]
-fn every_reading_the_producer_cannot_take_is_exit_2_and_records_nothing() {
+fn every_reading_the_producer_cannot_take_is_exit_3_and_records_nothing() {
     for (name, setup, binary, needle) in [
         ("no-syft", "syft.fails", "batten", "unverified"),
         ("no-binary", "", "no-such-binary", "nothing to inventory"),
@@ -343,7 +305,7 @@ fn every_reading_the_producer_cannot_take_is_exit_2_and_records_nothing() {
         let produced = produce(&dir, &dir.join(binary).display().to_string(), Some(TARGET));
         assert_eq!(
             produced.status.code(),
-            Some(2),
+            Some(3),
             "{name}: {}",
             said(&produced)
         );
@@ -353,7 +315,7 @@ fn every_reading_the_producer_cannot_take_is_exit_2_and_records_nothing() {
             said(&produced)
         );
         assert!(
-            !dir.join(ASSET).exists() || name == "no-lock" || name == "no-binary",
+            !dir.join(ASSET).exists(),
             "{name}: no asset from a scan that failed"
         );
         if dir.join("Cargo.lock").exists() {
@@ -368,9 +330,51 @@ fn every_reading_the_producer_cannot_take_is_exit_2_and_records_nothing() {
 }
 
 #[test]
+fn a_scan_that_cannot_look_removes_the_previous_record() {
+    // A stale record answering as the current reading is the one failure a
+    // could-not-look producer must not leave behind.
+    let dir = repo("stale");
+    write(&dir, "count", "0\n");
+    let binary = dir.join("batten").display().to_string();
+    assert!(produce(&dir, &binary, Some(TARGET)).status.success());
+    let refused = common::run(&dir, &["check", "--rule", "cargo list other"]);
+    assert_eq!(refused.status.code(), Some(2), "{}", said(&refused));
+    write(&dir, "syft.fails", "");
+    let produced = produce(&dir, &binary, Some(TARGET));
+    assert_eq!(produced.status.code(), Some(3), "{}", said(&produced));
+    let after = common::run(&dir, &["check", "--rule", "cargo list other"]);
+    assert_eq!(after.status.code(), Some(0), "{}", said(&after));
+}
+
+#[test]
 fn no_target_is_a_usage_error_never_a_pass() {
     let dir = repo("usage");
     let out = produce(&dir, &dir.join("batten").display().to_string(), None);
-    assert_eq!(out.status.code(), Some(2), "{}", said(&out));
+    assert_eq!(out.status.code(), Some(1), "{}", said(&out));
     assert!(said(&out).contains("usage:"), "{}", said(&out));
+    assert!(!dir.join("dist").exists());
+}
+
+#[test]
+fn the_binary_task_produces_then_decides() {
+    // The property "a refused inventory is never published" rests on this order:
+    // the check is the step's last command, so a refusal fails the step before
+    // the workflow's upload can run.
+    let manifest = fs::read_to_string(at_root("mise.toml")).expect("the manifest");
+    let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
+    let run: Vec<&str> = parsed["tasks"]["sbom-binary"]["run"]
+        .as_array()
+        .expect("[tasks.sbom-binary] is argv glue")
+        .iter()
+        .map(|step| step.as_str().expect("a command"))
+        .collect();
+    assert_eq!(run.len(), 2, "{run:?}");
+    assert!(
+        run[0].ends_with("sbom --binary {{usage.binary}} --target {{usage.target}}"),
+        "{run:?}"
+    );
+    assert!(
+        run[1].ends_with("check --rule 'cargo list other'"),
+        "{run:?}"
+    );
 }

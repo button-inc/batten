@@ -4408,6 +4408,8 @@ verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
 complete -c batten -n "__fish_batten_using_subcommand sbom" -l names -d 'Print the asset names as KEY=VALUE lines and exit, without scanning'
+complete -c batten -n "__fish_batten_using_subcommand sbom" -l record -d 'Derive the tree\'s documents twice into scratch and record their counts under the declared tool row'
+complete -c batten -n "__fish_batten_using_subcommand sbom" -l conformance -d 'Derive the SPDX document into scratch and record the declared checker\'s exit code per standard'
 complete -c batten -n "__fish_batten_using_subcommand sbom" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand sbom" -l silent -d 'Say nothing but a verdict or a usage error'
 complete -c batten -n "__fish_batten_using_subcommand sbom" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'

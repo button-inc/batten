@@ -438,6 +438,17 @@
         "$ref": "#/$defs/Rule"
       }
     },
+    "sbom": {
+      "description": "What `batten sbom` inventories and under which names (CLOUD-843).\nAbsent means the verb has no subject to name, which it refuses rather\nthan guessing one.\n\nConsumer-specific for `census`'s reason: the subject's name, where its\ndocuments land, which paths a scan skips and where its licence table\nlives are somebody's layout. The derivation is the engine's; the type and\nthe reading are [`crate::sbom`].",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SbomDeclared"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "scope": {
       "description": "The paths policy applies to, as an **ordered include/exclude list**: a\nplain glob includes, a `!`-prefixed glob excludes, and an exclude beats\nan include (CLOUD-37). Absent or empty means the set is empty — nothing\nis in scope — not \"everything\", because a set that silently defaults to\nuniversal membership is the widening a policy engine must never do.\n\nNot to be confused with [`Rule::scope`] ([`crate::rules::RuleScope`]),\nwhich is a per-rule axis saying *where a rule looks*. The two share a\ntoken and nothing else; their vocabularies never cross, exactly as\nseverity's three axes do not (see [`crate::severity`]).",
       "type": "array",
@@ -4139,6 +4150,7 @@
             "mise",
             "pinned-toolchain",
             "shell-hygiene",
+            "supply-chain",
             "trunk-based"
           ]
         },
@@ -4560,6 +4572,89 @@
           "type": "string",
           "const": "deny"
         }
+      ]
+    },
+    "SbomConformance": {
+      "description": "The `[sbom.conformance]` table.",
+      "type": "object",
+      "properties": {
+        "checker": {
+          "description": "The checker program, run as `<checker> <document> --comply <standard>\n--output json --output-file <report>`.",
+          "type": "string"
+        },
+        "record": {
+          "description": "The record family the checker's answers are written under.",
+          "type": "string"
+        },
+        "standards": {
+          "description": "The standards asked, in order. Never empty.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "record",
+        "checker",
+        "standards"
+      ]
+    },
+    "SbomDeclared": {
+      "description": "The `[sbom]` table (CLOUD-843).",
+      "type": "object",
+      "properties": {
+        "actions": {
+          "description": "The pinned-actions licence table, repository-relative. Absent skips the\nactions pass; declared and unreadable is could-not-look.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "binary_out_dir": {
+          "description": "Where a binary's asset is written, relative to the repository root unless\nabsolute.",
+          "type": "string"
+        },
+        "conformance": {
+          "description": "What `--conformance` runs and where it records.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SbomConformance"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exclude": {
+          "description": "Paths the tree scan skips, passed to the scanner verbatim.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "inventory": {
+          "description": "The `[[rule.tools]]` row `--record` keys its reduction under.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "out_dir": {
+          "description": "Where the tree's two documents are written, relative to the repository\nroot unless absolute.",
+          "type": "string"
+        },
+        "subject": {
+          "description": "The subject's name: the documents' source name, and the stem both the\ntree's documents and a binary's asset are named from.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "subject",
+        "out_dir",
+        "binary_out_dir"
       ]
     },
     "ShellCensus": {

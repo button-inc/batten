@@ -689,6 +689,15 @@ declared_modules := {
 	# mints no `Finding` and reaches no decider, and it starts no program, which
 	# is what keeps the verb on the derived read-only allowlist.
 	"census",
+	# `sbom` arrived with CLOUD-843 and is a PRODUCER in `record`'s class, the
+	# `forge_query` sibling for documents rather than forge reads: it runs the
+	# consumer's inventory tools, rewrites their documents and writes through
+	# `record`'s stores, reaching `resolve` for the committed `[sbom]` table and
+	# `git` for the root. IT DECIDES NOTHING — the supply-chain preset and the
+	# consumer's modules read what it records — and it spawns programs that fetch
+	# pinned sources, so its `hook`, `repair` and `check` edges are forbidden below
+	# for `rest`'s reason.
+	"sbom",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
@@ -748,12 +757,14 @@ forbidden[from] contains to if {
 		# credential and makes the call — so `hook -> rest` reached the network
 		# by exactly the route the `fetch` entry refuses, one name later. Found
 		# in review.
+		# `sbom` joins on the same ground: it spawns the consumer's inventory
+		# tools, which fetch pinned sources over the network (CLOUD-843).
 		# `forge_query` joins for `rest`'s reason one hop further out (CLOUD-843):
 		# it reaches `rest`, so a mediated call able to reach it reaches the
 		# network by the route the `rest` entry refuses, one name later.
 		"hook": {
 			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
-			"pr_watch", "fast_forward", "main_watch", "forge_query",
+			"pr_watch", "fast_forward", "main_watch", "forge_query", "sbom",
 		},
 		# `repair` RUNS A CONSUMER'S DECLARED COMMAND ON THE MEDIATED PATH
 		# (CLOUD-1639), so it inherits `hook`'s set entire and for the same
@@ -776,7 +787,7 @@ forbidden[from] contains to if {
 		# `crate::repair`'s header carry the other half.
 		"repair": {
 			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
-			"pr_watch", "fast_forward", "main_watch", "forge_query",
+			"pr_watch", "fast_forward", "main_watch", "forge_query", "sbom",
 		},
 		# `check` NAMES NO MODULE TODAY, so this row is INERT — and that is worth
 		# stating rather than leaving a reader to infer enforcement from a table
@@ -792,7 +803,7 @@ forbidden[from] contains to if {
 		# not fire, which is how a row with no possible subject announces itself.
 		"check": {
 			"lease", "gitwrite", "land",
-			"pr_watch", "fast_forward", "main_watch", "forge_query",
+			"pr_watch", "fast_forward", "main_watch", "forge_query", "sbom",
 		},
 		# And the other direction, which is `symbols`' and `pinned`'s row again: the
 		# dispatcher sits below the engine and must not reach the module that
@@ -892,6 +903,9 @@ forbidden[from] contains to if {
 		# producer that reached the engine deciding over its record would be a
 		# measurement that knew which verdict it was feeding (CLOUD-843).
 		"forge_query": {"rules", "hook"},
+		# `sbom -> {rules, hook}` for the same reason: a producer that reached the
+		# engine deciding over its record would know which verdict it was feeding.
+		"sbom": {"rules", "hook"},
 	}
 	some to in targets
 }
@@ -1137,6 +1151,32 @@ test_the_forge_query_producer_reaches_what_it_composes if {
 	count(violation) == 0 with input as judging(
 		"crates/batten/src/record.rs",
 		[internal("forge_query", 20)],
+	)
+}
+
+# CLOUD-843's SBOM producer, both directions, on `forge_query`'s ground: neither
+# the mediated call nor a repair may reach the tool spawns, and the producer may
+# not reach the engine deciding over its records. And the arrangement it does
+# have — `resolve`, `record`, `git`, `durable` — stays open.
+test_the_sbom_producer_is_bounded_both_ways if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("sbom", 31)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/repair.rs",
+		[internal("sbom", 9)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/sbom.rs",
+		[internal("rules", 12)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/sbom.rs",
+		[internal("resolve", 10), internal("record", 11), internal("git", 12), internal("durable", 13)],
 	)
 }
 

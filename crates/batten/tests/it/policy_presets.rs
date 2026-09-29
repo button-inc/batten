@@ -143,6 +143,7 @@ const PRESET_SCOPES: &[(&str, bool)] = &[
     ("ci-hygiene", true),
     ("landing-loop", true),
     ("claude-code-cloud", false),
+    ("supply-chain", true),
 ];
 
 /// A row enabling `name` at the scope it is really enabled with.
@@ -642,6 +643,54 @@ fn decided(bundle: &policy::Bundle, document: &str) -> Vec<policy::Violation> {
         panic!("the preset answered");
     };
     violations
+}
+
+/// (CLOUD-843) `supply-chain` refuses a vacuous binary inventory and one naming a
+/// crate no lockfile declares, is green over a subset, and judges no family of
+/// another shape — for a consumer with no vocabulary of its own.
+#[test]
+fn the_supply_chain_preset_refuses_a_vacuous_or_foreign_binary_inventory() {
+    let bundle = loaded("supply-chain", tree_preset_row("inventory", "supply-chain"));
+    let tree = |crates: &[&str], extra: &str| {
+        let mut lines = vec![String::from("asset\ttool-v1.0.0-x.spdx.json")];
+        lines.extend(crates.iter().map(|c| format!("crate\t{c}")));
+        format!(
+            r#"{{"tree":{{"records":{{"scan":{}{extra}}},"lines":{{"deps.lock":["[[package]]","name = \"alpha\"","version = \"1.0.0\"","","[[package]]","name = \"beta\"","version = \"2.0.0\"","","[[package]]","name = \"gamma\"","version = \"3.0.0\""]}}}}}}"#,
+            serde_json::to_string(&lines).expect("lines")
+        )
+    };
+    let verdicts = |found: &[policy::Violation]| -> Vec<String> {
+        found.iter().map(|v| v.verdict.clone()).collect()
+    };
+
+    let subset = decided(&bundle, &tree(&["alpha 1.0.0", "beta 2.0.0"], ""));
+    assert!(
+        subset.is_empty(),
+        "a subset of the lockfile passes: {subset:?}"
+    );
+
+    let one = decided(&bundle, &tree(&["alpha 1.0.0"], ""));
+    assert_eq!(
+        verdicts(&one),
+        vec!["cargo list empty"],
+        "one crate is vacuous"
+    );
+
+    let foreign = decided(&bundle, &tree(&["alpha 1.0.0", "delta 4.0.0"], ""));
+    assert_eq!(verdicts(&foreign), vec!["cargo list wrong"]);
+
+    // A release's asset list is not an inventory: many assets, no crate.
+    let other = decided(
+        &bundle,
+        &tree(
+            &["alpha 1.0.0", "beta 2.0.0"],
+            r#","release":["asset\ta.tar.gz","asset\tb.tar.gz"]"#,
+        ),
+    );
+    assert!(
+        other.is_empty(),
+        "another family's shape is not judged: {other:?}"
+    );
 }
 
 /// (CLOUD-1269) `head grade twice` refuses a judged commit and is

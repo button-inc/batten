@@ -888,6 +888,48 @@ asserted rather than tested.",
         ],
         patterns: &[],
     },
+    // CLOUD-843. What a consumer's supply-chain artefacts owe beyond existing: a
+    // released binary's own inventory catalogs something, and only what the
+    // lockfile declares. The records it reads are `batten sbom --binary`'s, the
+    // lockfiles the row's `line_sources`; it names neither a family nor a path.
+    Manifest {
+        name: "supply-chain",
+        version: 1,
+        modules: &[PresetModule {
+            scope: RuleScope::Tree,
+            provider: None,
+            pointer: "<preset:supply-chain>/binary-inventory-is-lockfile-bound.rego",
+            source: include_str!(
+                "policy/presets/supply-chain/binary-inventory-is-lockfile-bound.rego"
+            ),
+        }],
+        verdicts: &[
+            VendoredVerdict {
+                id: "cargo list empty",
+                gloss: "a binary's inventory recovered fewer than two rust-crate packages",
+                class: "0 is a build that lost its `cargo auditable` wrapper, 1 is the binary \
+cataloging only itself; both are an empty document that exits 0, and a gate that checks nothing \
+must not report green. Rebuild the binary through the wrapper and scan it again.",
+                routes: &[run(
+                    "task run first",
+                    "batten sbom --binary <binary> --target <triple>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "cargo list wrong",
+                gloss: "a binary's inventory names a crate the lockfile does not declare",
+                class: "Subset, never equality: the lockfile spans every target's build and dev \
+dependencies. A recovered crate outside it means the binary was not built from this lockfile.",
+                routes: &[run(
+                    "task run first",
+                    "batten sbom --binary <binary> --target <triple>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+        ],
+        patterns: &[],
+    },
     Manifest {
         name: "trunk-based",
         version: 1,

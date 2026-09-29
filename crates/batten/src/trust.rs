@@ -1488,6 +1488,18 @@ pub const CENSUS: &[FieldCoverage] = &[
         ),
     },
     FieldCoverage {
+        field: "sbom",
+        coverage: Coverage::NotPolicyBearing(
+            "the SBOM producer's declarations (CLOUD-843): the subject's name, where \
+             `batten sbom` writes, what a scan skips and which record it writes under. It \
+             PRODUCES and decides nothing. The gates over its output hold the documents to \
+             committed text the producer cannot edit — `Cargo.lock`'s sourced entries and the \
+             licence table's pins are `line_sources` the modules read themselves — so an \
+             exclusion that dropped a component reads as a count that disagrees, never as a \
+             smaller agreement, and the verb reads the table from the committed authority alone",
+        ),
+    },
+    FieldCoverage {
         field: "provisions",
         coverage: Coverage::Compared(&[WeakeningKind::ProvisionRemoved]),
     },
