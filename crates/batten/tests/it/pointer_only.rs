@@ -1787,6 +1787,16 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The derivations' writer (CLOUD-1991). Driven with `--schema` alone, into a
+    // directory of the corpus's own: the verb writes files and says where, one
+    // `<kind>=<path>` line, and reads nothing of the caller's tree to do it — the
+    // schemas are derived from the config TYPES, as `generate schema`'s row says.
+    Verb {
+        path: "artifacts write",
+        args: &["--schema", "artifacts-out"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // CLOUD-1718's fold, and the EASIEST row in this census to justify: the verb
     // emits nothing at all. Its whole answer is the exit code, so there is no
     // content it could republish and no subject it could echo — two integers on

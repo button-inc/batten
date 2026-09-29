@@ -470,6 +470,40 @@ pub enum Command {
         /// The sub-verb selected.
         command: CensusCommand,
     },
+    /// Write the committed derivations of the command surface (CLOUD-1991).
+    ///
+    /// APPENDED LAST, for the reason above.
+    Artifacts {
+        /// The sub-verb selected.
+        command: ArtifactsCommand,
+    },
+}
+
+/// Subcommands of `artifacts` (CLOUD-1991).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ArtifactsCommand {
+    /// Write each derivation the caller names, into the path it names.
+    Write(ArtifactsWrite),
+}
+
+/// Where `artifacts write` puts each derivation.
+///
+/// Every field is optional and `None` writes none of that kind; a request naming
+/// none is a usage error rather than a quiet success. The PATHS are the caller's,
+/// never the engine's: where a consumer commits its completions, pages and
+/// schemas is that consumer's fact (non-negotiable rule 1).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct ArtifactsWrite {
+    /// The directory the three completion scripts are written into.
+    pub completions: Option<String>,
+    /// The directory the man pages are written into, cleared of stale pages.
+    pub man: Option<String>,
+    /// The directory the four JSON Schemas are written into.
+    pub schema: Option<String>,
+    /// The file the markdown CLI reference is written to.
+    pub reference: Option<String>,
 }
 
 /// Subcommands of `step` (CLOUD-424, CLOUD-843).
@@ -2970,6 +3004,19 @@ fn board_of(matches: &ArgMatches) -> Option<BoardCommand> {
 }
 
 /// The `census` sub-verb a parse resolved to (CLOUD-843).
+/// The `artifacts` sub-verb a parse resolved to (CLOUD-1991).
+fn artifacts_of(matches: &ArgMatches) -> Option<ArtifactsCommand> {
+    match matches.subcommand()? {
+        ("write", matches) => Some(ArtifactsCommand::Write(ArtifactsWrite {
+            completions: matches.get_one::<String>("completions").cloned(),
+            man: matches.get_one::<String>("man").cloned(),
+            schema: matches.get_one::<String>("schema").cloned(),
+            reference: matches.get_one::<String>("reference").cloned(),
+        })),
+        _ => None,
+    }
+}
+
 fn census_of(matches: &ArgMatches) -> Option<CensusCommand> {
     match matches.subcommand()? {
         ("shell", matches) => Some(CensusCommand::Shell {
@@ -3204,6 +3251,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "dist" => dist_of(matches).map(Command::Dist),
         "board" => board_of(matches).map(|command| Command::Board { command }),
         "census" => census_of(matches).map(|command| Command::Census { command }),
+        "artifacts" => artifacts_of(matches).map(|command| Command::Artifacts { command }),
         _ => None,
     }
 }

@@ -467,7 +467,144 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
                 census::run_shell(declared, &root, json, out)
             }
         },
+        Some(Command::Artifacts { command }) => run_artifacts(&command, out),
     }
+}
+
+/// `batten artifacts write` (CLOUD-1991): the committed derivations of the
+/// command surface, each written where the caller names.
+///
+/// # A WRITE verb beside `generate`, never a flag on it
+///
+/// `generate` is `read` STRUCTURALLY — every renderer returns bytes and the
+/// redirect that refreshes a committed artifact was the caller's, in a `mise`
+/// task body. That redirect was shell, and the retirement of shell is what
+/// moves it here. A `--out` flag on `generate` would make its effect an argument,
+/// which house-style §5 refuses (an effect is per command, never per invocation),
+/// and would put a writer under a noun on the read-only allowlist. So the writer
+/// is its own noun, declared `write`, and `generate` keeps its promise.
+///
+/// # The same bytes, by construction
+///
+/// Each derivation is the SAME call `generate` makes — `clap_complete::generate`,
+/// [`render::man`], the four schema functions, [`render::markdown`] — so the
+/// committed artifact and the drift gates that diff it against `generate` cannot
+/// disagree. Every file goes through [`crate::durable::replace`], so a failed
+/// write leaves the previous artifact whole rather than truncated.
+///
+/// # Errors
+///
+/// A usage error when nothing is named; otherwise whatever a render, a directory
+/// or a write reports.
+fn run_artifacts(command: &cli::ArtifactsCommand, out: &mut dyn Write) -> Result<ExitCode> {
+    match command {
+        cli::ArtifactsCommand::Write(request) => run_artifacts_write(request, out),
+    }
+}
+
+/// Every command path under `commands`, depth first — the pages `man` owes.
+fn spec_paths(commands: &[spec::CommandSpec], into: &mut Vec<String>) {
+    for command in commands {
+        into.push(command.path.clone());
+        spec_paths(&command.subcommands, into);
+    }
+}
+
+/// The writer behind [`run_artifacts`]; one arm per derivation, in a fixed order
+/// so the pointer lines are byte-stable.
+///
+/// # Errors
+///
+/// As [`run_artifacts`].
+fn run_artifacts_write(request: &cli::ArtifactsWrite, out: &mut dyn Write) -> Result<ExitCode> {
+    if request.completions.is_none()
+        && request.man.is_none()
+        && request.schema.is_none()
+        && request.reference.is_none()
+    {
+        return Err(UsageError::raise(
+            "artifacts write: name at least one of --completions, --man, --schema or \
+             --reference",
+        ));
+    }
+    let root = surface::command();
+
+    if let Some(dir) = request.completions.as_deref() {
+        let dir = Path::new(dir);
+        std::fs::create_dir_all(dir)?;
+        for (shell, name) in [
+            (clap_complete::Shell::Bash, "bash"),
+            (clap_complete::Shell::Zsh, "zsh"),
+            (clap_complete::Shell::Fish, "fish"),
+        ] {
+            let mut script: Vec<u8> = Vec::new();
+            clap_complete::generate(shell, &mut surface::command(), "batten", &mut script);
+            crate::durable::replace(dir.join(format!("batten.{name}")), script)?;
+        }
+        writeln!(out, "completions={}", dir.display())?;
+    }
+
+    if let Some(dir) = request.man.as_deref() {
+        let dir = Path::new(dir);
+        std::fs::create_dir_all(dir)?;
+        // CLEARED FIRST, because the page set SHRINKS when a verb is removed, and
+        // an overwrite-only refresh would leave the removed verb's page installable
+        // and documenting a command that no longer parses. Only `*.1` is removed:
+        // the directory is the caller's, and what else lives there is not ours.
+        for entry in std::fs::read_dir(dir)? {
+            let path = entry?.path();
+            if path.extension().is_some_and(|ext| ext == "1") {
+                std::fs::remove_file(&path)?;
+            }
+        }
+        let program = root.get_name().to_owned();
+        let mut paths: Vec<String> = vec![String::new()];
+        spec_paths(&spec::describe(&root).subcommands, &mut paths);
+        for path in &paths {
+            let selected = (!path.is_empty()).then_some(path.as_str());
+            let page = render::man(&root, selected)?;
+            let name = format!("{}.1", render::page_name(&program, path));
+            crate::durable::replace(dir.join(name), page)?;
+        }
+        writeln!(out, "man={} pages={}", dir.display(), paths.len())?;
+    }
+
+    if let Some(dir) = request.schema.as_deref() {
+        let dir = Path::new(dir);
+        std::fs::create_dir_all(dir)?;
+        for (name, body) in [
+            ("batten.schema.json", config::schema()?),
+            ("batten.local.schema.json", config::override_schema()?),
+            ("policy-input.schema.json", policy::tree_input_schema()?),
+            ("policy-call.schema.json", policy::call_input_schema()?),
+        ] {
+            crate::durable::replace(dir.join(name), format!("{body}\n"))?;
+        }
+        writeln!(out, "schema={}", dir.display())?;
+    }
+
+    if let Some(path) = request.reference.as_deref() {
+        let text = render::markdown(&spec::describe(&root));
+        // AN EMPTY FILE UPLOADS EXACTLY AS WELL AS A FULL ONE, so an empty render
+        // is refused rather than published. Unreachable over a declared surface,
+        // and kept because the publish step downstream cannot tell the difference.
+        if text.trim().is_empty() {
+            return Err(UsageError::raise(
+                "artifacts write: the reference rendered empty; refusing to write a file \
+                 that says nothing",
+            ));
+        }
+        let path = Path::new(path);
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+        crate::durable::replace(path, text)?;
+        writeln!(out, "reference={}", path.display())?;
+    }
+    Ok(ExitCode::Success)
 }
 
 /// A foundation verb whose package has not landed yet (CLOUD-843).

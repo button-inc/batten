@@ -791,6 +791,12 @@ mod tests {
             // stable id stays `hook` — a rename moves the spelling, never the
             // identity.
             "adjudicate".to_owned(),
+            // The committed derivations' writer (CLOUD-1991), retiring the
+            // redirects four task bodies carried in shell. Absent from the
+            // read-only allowlist by construction: the leaf is `write` and the
+            // noun is unclassified, so `generate` stays the one read emitter.
+            "artifacts".to_owned(),
+            "artifacts write".to_owned(),
             "attribution".to_owned(),
             "attribution check".to_owned(),
             "attribution identity".to_owned(),

@@ -1,11 +1,12 @@
-//! `[tasks."render:cli"]` — CLOUD-171's publish-time CLI reference, over the
-//! task's own body (CLOUD-1752).
+//! `[tasks."render:cli"]` — CLOUD-171's publish-time CLI reference (CLOUD-1752,
+//! CLOUD-1991).
 //!
-//! The program moved whole into `mise.toml`: it is an effect with no decision a
-//! module could take — it renders, refuses to publish an empty or failed render,
-//! and names the asset. This tier runs the body the manifest declares, as mise
-//! does (`usage_names` in the environment, the `{% raw %}` fence stripped),
-//! against a stub `cargo` for the failure arms and the real engine for the render.
+//! The program moved whole into `mise.toml` under CLOUD-1752 as a shell body; the
+//! render, the empty-refusal and the atomic move retired onto `batten artifacts
+//! write --reference` under CLOUD-1991, which `artifacts_write.rs` drives over
+//! the compiled binary. What the task still owns is ARGV ASSEMBLY — the asset
+//! path's default and the `--names` short cut — spelled in mise's template, so
+//! this tier asserts the declaration rather than running a body mise renders.
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
@@ -14,139 +15,69 @@
 // carried: "--names answers the asset path" mise.toml kind:mechanism
 // carried: "--names builds nothing and creates nothing" mise.toml kind:mechanism
 // changed: "an unrecognised argument is a usage error, not a silent render" mise.toml the task's `usage` spec declares only `--names`, so mise refuses an undeclared argument before the body runs; the body no longer re-parses `$@`, which is the template-appended text `[tasks.checksums]` measured running as a command
-// carried: "the render writes the reference and names it on stdout" mise.toml kind:mechanism
-// carried: "the KEY=VALUE line is the only thing on stdout" mise.toml kind:mechanism
-// carried: "a render that emits nothing is a failure, not an empty artifact" mise.toml kind:mechanism
-// carried: "a failed render leaves no artifact behind" mise.toml kind:mechanism
-// carried: "the reference is git-ignored, so it cannot be committed by accident" mise.toml kind:mechanism
-// carried: "this repo's surface renders — the task on the real tree" mise.toml kind:mechanism
+// carried: "the render writes the reference and names it on stdout" crates/batten/src/lib.rs kind:verb crates/batten/tests/it/artifacts_write.rs
+// carried: "the KEY=VALUE line is the only thing on stdout" crates/batten/src/lib.rs kind:verb crates/batten/tests/it/artifacts_write.rs
+// changed: "a render that emits nothing is a failure, not an empty artifact" crates/batten/src/lib.rs the refusal moved into `artifacts write` with the render, and it can no longer be DRIVEN: the shell body rendered through a `cargo` a stub could replace, and the verb renders the surface in-process, which is never empty. The refusal is kept in the verb for the publish step's sake; what is withdrawn is the stub-cargo route to it
+// changed: "a failed render leaves no artifact behind" crates/batten/src/durable.rs the scratch-then-`mv` the body spelled is `durable::replace`'s temp-fsync-rename, whose own tier pins that an interrupted write leaves the old bytes or the new ones; the stub-cargo route that failed the render on purpose is withdrawn with the shell it stubbed
+// carried: "the reference is git-ignored, so it cannot be committed by accident" crates/batten/tests/it/render_cli.rs
+// carried: "this repo's surface renders — the task on the real tree" crates/batten/src/lib.rs kind:verb crates/batten/tests/it/artifacts_write.rs
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
 
-use std::path::{Path, PathBuf};
-use std::process::{Output, Stdio};
+use common::{at_root, task_body, task_env};
 
-use common::{at_root, scratch, task_bash, task_body, task_env, write};
-
-/// Run the body in `dir`, with `--names` as the `usage` spec delivers it.
-fn render(dir: &Path, names: bool) -> Output {
-    let mut command = task_bash(dir, &task_body("render:cli"));
-    command
-        .env("RENDER_CLI_OUT_DIR", dir.join("out"))
-        .env("BATTEN_CLI_REFERENCE", task_env("BATTEN_CLI_REFERENCE"))
-        .env("usage_names", if names { "true" } else { "false" })
-        // The real render must not rebuild into a scratch target.
-        .env("CARGO_TARGET_DIR", at_root("target"))
-        .stdin(Stdio::null());
-    command.output().expect("run the task body")
-}
-
-/// A scratch directory whose `bin/cargo` runs `script` and records the call.
-fn with_cargo(name: &str, script: &str) -> PathBuf {
-    let dir = scratch(&format!("render-cli-{name}"));
-    let marker = dir.join("cargo-was-called");
-    write(
-        &dir,
-        "bin/cargo",
-        &format!(
-            "#!/usr/bin/env bash\ntouch '{}'\n{script}\n",
-            marker.display()
-        ),
-    );
-    executable(&dir.join("bin/cargo"));
-    dir
-}
-
-#[cfg_attr(not(unix), allow(unused_variables))]
-fn executable(path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        let mut permissions = std::fs::metadata(path).expect("stat").permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(path, permissions).expect("chmod");
-    }
-}
-
-fn stdout(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stdout).into_owned()
-}
-
-fn said(output: &Output) -> String {
-    format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    )
-}
-
-fn reference(dir: &Path) -> PathBuf {
-    dir.join("out").join(task_env("BATTEN_CLI_REFERENCE"))
+/// The two arms the template selects between: the `--names` echo, and the render.
+fn arms() -> (String, String) {
+    let body = task_body("render:cli");
+    let names = body
+        .strip_prefix("{% if usage.names %}")
+        .expect("the body selects on the `--names` flag first");
+    let split = names
+        .rfind("{% else %}cargo")
+        .expect("the render is the other arm");
+    (names[..split].to_owned(), names[split..].to_owned())
 }
 
 #[test]
 fn names_answers_the_asset_path_and_builds_nothing() {
-    let dir = with_cargo("names", "exit 0");
-    let out = render(&dir, true);
-    assert!(out.status.success(), "{}", said(&out));
-    assert_eq!(
-        stdout(&out),
-        format!("reference={}\n", reference(&dir).display())
+    let (names, _) = arms();
+    assert!(
+        names.starts_with("echo reference="),
+        "the names arm answers the KEY=VALUE line: {names}"
+    );
+    assert!(
+        names.contains("{{env.BATTEN_CLI_REFERENCE}}"),
+        "and names the asset from [env], its one declaration: {names}"
     );
     // The property that makes asking cheap: an answer behind a compile is one
     // its callers would stop asking for.
-    assert!(!dir.join("cargo-was-called").exists(), "--names built");
+    assert!(!names.contains("cargo"), "--names builds nothing: {names}");
+}
+
+#[test]
+fn the_render_is_the_writer_verb_at_the_same_path() {
+    let (names, render) = arms();
     assert!(
-        !dir.join("out").exists(),
-        "--names created the output directory"
+        render.contains("artifacts write --reference"),
+        "the render is `artifacts write`, not a redirect: {render}"
     );
-}
-
-#[test]
-fn an_empty_render_is_a_failure_not_an_empty_artifact() {
-    let dir = with_cargo("empty", "exit 0");
-    let out = render(&dir, false);
-    assert_eq!(out.status.code(), Some(1), "{}", said(&out));
-    assert!(said(&out).contains("rendered empty"), "{}", said(&out));
-    assert!(!reference(&dir).exists(), "an empty file was published");
-}
-
-#[test]
-fn a_failed_render_leaves_the_previous_artifact_untouched() {
-    let dir = with_cargo("failed", "exit 3");
-    write(
-        &dir,
-        &format!("out/{}", task_env("BATTEN_CLI_REFERENCE")),
-        "a previous good render\n",
-    );
-    let out = render(&dir, false);
-    assert_eq!(out.status.code(), Some(1), "{}", said(&out));
+    let path = |arm: &str| -> String {
+        arm.split_once("{% if env.RENDER_CLI_OUT_DIR %}")
+            .map(|(_, rest)| rest.to_owned())
+            .expect("each arm defaults the output directory")
+    };
     assert_eq!(
-        std::fs::read_to_string(reference(&dir)).expect("the previous render"),
-        "a previous good render\n",
-        "a failed render truncated the artifact"
+        path(&names).trim_end_matches("{% endif %}"),
+        path(&render).trim_end_matches("{% endif %}"),
+        "--names answers the path the render writes"
     );
-}
-
-/// The real engine over this repository's surface: it renders, writes a
-/// non-empty file, and says exactly one KEY=VALUE line.
-#[test]
-fn this_repos_surface_renders_to_one_named_file_and_one_line() {
-    let dir = scratch("render-cli-real");
-    let out = render(&dir, false);
-    assert!(out.status.success(), "{}", said(&out));
-    assert_eq!(
-        stdout(&out),
-        format!("reference={}\n", reference(&dir).display()),
-        "the KEY=VALUE line is the only thing on stdout"
+    assert!(
+        !task_env("BATTEN_CLI_REFERENCE").is_empty(),
+        "the asset name is declared"
     );
-    let bytes = std::fs::metadata(reference(&dir))
-        .expect("the reference")
-        .len();
-    assert!(bytes > 0, "the reference is empty");
 }
 
 /// "Never committed" as a property of `.gitignore`, not of anyone's discipline.

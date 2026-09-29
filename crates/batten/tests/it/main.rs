@@ -60,6 +60,7 @@ mod agent_facts;
 mod agentic_record;
 mod ambient_authority;
 mod answer_operator;
+mod artifacts_write;
 mod ask_disposition;
 mod assertion_gates;
 mod attestation;

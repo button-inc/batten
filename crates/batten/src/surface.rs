@@ -6535,7 +6535,98 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[JSON],
     },
+    // The committed derivations' WRITER (CLOUD-1991), retiring the redirects the
+    // `completions`, `man`, `schema` and `render:cli` task bodies carried in
+    // shell. UNCLASSIFIED noun for `hk`'s reason: it dispatches, and a noun on the
+    // read-only allowlist would carry its writer with it for any consumer that
+    // reads an entry as a prefix.
+    CommandDecl {
+        path: "artifacts",
+        id: "artifacts",
+        about: "Write the committed derivations of the command surface",
+        data_channel: false,
+        exits: EXITS_DISPATCHES,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // `write`, declared rather than smuggled into `generate`: `generate` stays
+    // stdout-only, and this writes the same bytes it emits into the paths the
+    // caller names. The pointer is one `<kind>=<path>` line per derivation.
+    CommandDecl {
+        path: "artifacts write",
+        id: "artifacts.write",
+        about: "Write completions, man pages, schemas or the CLI reference where the caller names",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[
+            ARTIFACT_COMPLETIONS,
+            ARTIFACT_MAN,
+            ARTIFACT_SCHEMA,
+            ARTIFACT_REFERENCE,
+        ],
+    },
 ];
+
+/// `--completions <dir>` on `artifacts write` (CLOUD-1991).
+const ARTIFACT_COMPLETIONS: FlagDecl = FlagDecl {
+    id: "completions",
+    long: Some("completions"),
+    short: None,
+    help: "Write the bash, zsh and fish completion scripts into this directory",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--man <dir>` on `artifacts write` (CLOUD-1991).
+const ARTIFACT_MAN: FlagDecl = FlagDecl {
+    id: "man",
+    long: Some("man"),
+    short: None,
+    help: "Write one man page per command into this directory, removing stale pages",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--schema <dir>` on `artifacts write` (CLOUD-1991).
+const ARTIFACT_SCHEMA: FlagDecl = FlagDecl {
+    id: "schema",
+    long: Some("schema"),
+    short: None,
+    help: "Write the config and policy-input JSON Schemas into this directory",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--reference <path>` on `artifacts write` (CLOUD-1991).
+const ARTIFACT_REFERENCE: FlagDecl = FlagDecl {
+    id: "reference",
+    long: Some("reference"),
+    short: None,
+    help: "Write the markdown CLI reference to this file",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
 
 /// The declared command path `arguments` names, and how many of them it spends.
 ///

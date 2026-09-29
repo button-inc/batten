@@ -3265,7 +3265,6 @@ printf '%scensus\tissues=%d\n' "$out" "$n" | "${record[@]}"
 
 [tasks."render:cli"]
 description = "Effect: render the CLI reference from the command surface — the publish-time artifact, never committed (CLOUD-171)"
-shell = "bash -c"
 # CLOUD-171, retired off `mise-tasks/render/cli.sh` under CLOUD-1752. An effect
 # with no decision a module could take: it renders, refuses to publish an empty or
 # failed render, and names the asset. `batten generate markdown` walks the same
@@ -3279,40 +3278,16 @@ shell = "bash -c"
 usage = '''
 flag "--names" help="print the asset path and exit, with no build and no network"
 '''
-run = '''
-{% raw %}
-set -euo pipefail
-# The asset name a consumer downloads, from [env]: `release-assets-record` reads
-# the same variable rather than spelling it a second time.
-readonly REFERENCE="${BATTEN_CLI_REFERENCE:?the reference name is declared in [env]}"
-OUT_DIR="${RENDER_CLI_OUT_DIR:-reference}"
-OUT="${OUT_DIR}/${REFERENCE}"
-# Answered before anything is built, so a gate can ask and pay nothing.
-if [[ "${usage_names:-false}" == "true" ]]; then
-	echo "reference=$OUT"
-	exit 0
-fi
-mkdir -p "$OUT_DIR"
-# Rendered into a scratch file and moved into place only on success: a failed
-# render that had already truncated the target would leave a file every later
-# step treats as the artifact, and the publish step would upload it.
-scratch=$(mktemp)
-trap 'rm -f "$scratch"' EXIT
-# `cargo run`, so the artifact tracks the surface of the tree being published.
-if ! cargo run --quiet -p batten -- generate markdown >"$scratch"; then
-	echo "::error:: render:cli: the binary could not render the reference" >&2
-	exit 1
-fi
-# An empty file uploads exactly as well as a full one.
-if [[ ! -s "$scratch" ]]; then
-	echo "::error:: render:cli: the reference rendered empty; refusing to publish a file that says nothing" >&2
-	exit 1
-fi
-mv "$scratch" "$OUT"
-trap - EXIT
-echo "reference=$OUT"
-{% endraw %}
-'''
+# THE RENDER, THE EMPTY-REFUSAL AND THE ATOMIC MOVE ARE THE ENGINE'S NOW
+# (CLOUD-1991). `artifacts write --reference` renders the same markdown
+# `generate markdown` emits, refuses an empty render, writes through `durable`
+# (temp, fsync, rename) so a failed write leaves the previous artifact whole,
+# and prints the one `reference=<path>` line `release-artifacts.yml` appends to
+# `$GITHUB_OUTPUT`. What is left here is ARGV ASSEMBLY, which the template does:
+# the path defaults `RENDER_CLI_OUT_DIR` to `reference` and names the asset from
+# `[env]`, and `--names` selects an `echo` of that path rather than the render,
+# so asking for the name still builds nothing.
+run = '{% if usage.names %}echo reference={% if env.RENDER_CLI_OUT_DIR %}{{env.RENDER_CLI_OUT_DIR}}{% else %}reference{% endif %}/{{env.BATTEN_CLI_REFERENCE}}{% else %}cargo run --quiet -p batten -- artifacts write --reference {% if env.RENDER_CLI_OUT_DIR %}{{env.RENDER_CLI_OUT_DIR}}{% else %}reference{% endif %}/{{env.BATTEN_CLI_REFERENCE}}{% endif %}'
 
 # CLOUD-278's manifest, moved off `mise-tasks/checksums.sh` under CLOUD-1717. An
 # EFFECT with no decision in it — download a release's own assets, hash them in
@@ -7978,13 +7953,10 @@ description = "Regenerate the committed shell completions from the command surfa
 # and the redirect that refreshes the committed artifact is here, in the caller.
 # `cargo run` rather than an installed binary, so the artifact always tracks the
 # working tree's surface — the pair `crates/batten/tests/surface.rs` then diffs.
-shell = "bash -c"
-run = '''
-for shell in bash zsh fish; do
-  cargo run --quiet -p batten -- generate completions --shell "$shell" >"completions/batten.$shell"
-done
-echo "completions: regenerated for bash, zsh, fish"
-'''
+# THE REDIRECT IS THE ENGINE'S NOW (CLOUD-1991): `artifacts write` writes the
+# bytes `generate completions` emits, into the directory named here, and the
+# loop over three shells that was this body is the verb's.
+run = "cargo run --quiet -p batten -- artifacts write --completions completions"
 
 [tasks.hk-contract]
 description = "Regenerate the committed plan projection from the pinned gate runner (CLOUD-947)"
@@ -8027,29 +7999,11 @@ description = "Regenerate the committed man pages from the command surface"
 # documenting a command that no longer parses. That is the orphan half of
 # `the_committed_artifacts_are_exactly_the_ones_the_surface_declares`; clearing
 # is what makes the documented refresh its remedy.
-shell = "bash -c"
-run = '''
-set -euo pipefail
-mkdir -p man
-rm -f man/*.1
-spec=$(cargo run --quiet -p batten -- spec --format json)
-program=$(jq -r '.path' <<<"$spec")
-if [ -z "$program" ] || [ "$program" = "null" ]; then
-  echo "::error:: man: the spec carries no program name, so no page list can be derived." >&2
-  exit 1
-fi
-cargo run --quiet -p batten -- generate man >"man/$program.1"
-while IFS=$'\t' read -r file path; do
-  [ -n "$file" ] || continue
-  cargo run --quiet -p batten -- generate man "$path" >"$file"
-done < <(jq -r --arg program "$program" '
-  [.subcommands[] | recurse(.subcommands[]?) | .path]
-  | .[]
-  | ["man/" + $program + "-" + (. | gsub(" "; "-")) + ".1", .]
-  | @tsv
-' <<<"$spec")
-echo "man: regenerated $(find man -type f -name '*.1' | wc -l) page(s) from the surface"
-'''
+# THE PAGE LIST, THE CLEAR AND THE REDIRECTS ARE THE ENGINE'S NOW (CLOUD-1991).
+# `artifacts write --man` derives the pages from the same spec this body read
+# with `jq`, clears the directory's `*.1` first for the reason above, and writes
+# each page `generate man` emits under `render::page_name`'s spelling.
+run = "cargo run --quiet -p batten -- artifacts write --man man"
 
 [tasks.schema]
 description = "Regenerate every committed JSON Schema — both config surfaces and both policy-input surfaces — from the types that define them"
@@ -8069,13 +8023,9 @@ description = "Regenerate every committed JSON Schema — both config surfaces a
 # report a disagreement, never prevent one, and CLOUD-845 is what a disagreement
 # there costs. `opa check -s` types the corpus against these, so a stale one is a
 # build-time check answering about a document the engine no longer emits.
-run = '''
-set -eu
-cargo run --quiet -p batten -- generate schema --surface authority >schema/batten.schema.json
-cargo run --quiet -p batten -- generate schema --surface override >schema/batten.local.schema.json
-cargo run --quiet -p batten -- generate schema --surface policy-input >schema/policy-input.schema.json
-cargo run --quiet -p batten -- generate schema --surface policy-call >schema/policy-call.schema.json
-'''
+# The four redirects are `artifacts write --schema`'s since CLOUD-1991: the same
+# four surfaces, written together into the directory named here.
+run = "cargo run --quiet -p batten -- artifacts write --schema schema"
 
 [tasks.zizmor]
 description = "Static-analyse the GitHub Actions workflows (dangerous triggers, unpinned actions, injection sinks)"
