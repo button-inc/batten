@@ -8193,6 +8193,11 @@ id = "config-validator"
 tool = "pkl"
 version = "0.29.1"
 input = "hk.pkl"
+# `batten record validate config-validator` runs this and records its exit code
+# (CLOUD-843). The retired body also chose a `--ca-certificates` bundle for a
+# TLS-intercepting sandbox; pkl reads `~/.pkl/cacerts` itself, and a warm package
+# cache needs no fetch at all (CLOUD-406 owns the cache).
+run = ["pkl", "eval", "hk.pkl"]
 
 # The second validator on this row, and the reason it is a SIBLING rather than a
 # rule of its own: what counts as a clean verdict is the same question for both,
@@ -8208,6 +8213,10 @@ id = "renovate-config"
 tool = "renovate-config-validator"
 version = "44.52.1"
 input = "renovate.json5"
+# `--strict` makes a warning fatal, carried out of the retired body: a producer
+# recording clean while telling the author the config is wrong is a log without a
+# gate (non-negotiable rule 2).
+run = ["renovate-config-validator", "--strict", "renovate.json5"]
 
 # The two-tier hk gate (CLOUD-509), ported off `mise-tasks/hook-profile-check.sh`
 # under CLOUD-1199.
@@ -8229,11 +8238,21 @@ module = "policy/hook-profile.rego"
 line_sources = [".claude/hooks/git-hook.sh"]
 severity = "deny"
 
-[[rule.tools]]
-id = "hk-plan"
-tool = "hk"
-version = "1.56.1"
-input = "hk.pkl"
+# THE TIER IS READ OFF TWO OF HK'S OWN PLANS, acquired at the boundary (CLOUD-843,
+# retiring the `hk-plan` arm of `[tasks.record-verdicts]`). `gate` is `check` as
+# committed and is the SAME query `plan require missing` declares — an identical
+# redeclaration, one acquisition. `gate-fast` is `check` with the slow tier
+# switched off: a step it skips for a missing profile is, by construction, a step
+# that declared the tier, which is the reading the retired `jq` join took.
+[[rule.plan]]
+id = "gate"
+hook = "check"
+required = ["batten-check", "test", "policy-test"]
+
+[[rule.plan]]
+id = "gate-fast"
+hook = "check"
+profile = ["!slow"]
 
 # The published inventory, judged against the tree it claims to describe
 # (CLOUD-262, ported off `mise-tasks/sbom-check.sh` under CLOUD-1318).
@@ -10891,6 +10910,45 @@ names = ["GITHUB_PERSONAL_ACCESS_TOKEN", "BATTEN_GITHUB_TOKEN"]
 # needed" — there is deliberately no fallback in the engine to fall back to.
 [forge]
 credential_names = ["BATTEN_GITHUB_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN"]
+
+# --- the declared forge reads (CLOUD-843) ---------------------------------------
+#
+# Each row is walked by `batten record query <id>` and written as the record
+# family of the same name. The rows carry this repository's facts — which
+# endpoints, which fields, which windows — and the engine carries none of them.
+
+# `timeout-drift`: the workflows the forge knows, keyed by the id the runs
+# endpoint takes.
+[[forge.query]]
+id = "drift-workflows"
+endpoint = "repos/{owner}/{repo}/actions/workflows"
+rows = "workflows"
+per_page = 100
+max_pages = 1
+select = ["id", "path"]
+
+# `branch-age`: the remote's branches, the first hundred, as the retired GraphQL
+# read took them.
+[[forge.query]]
+id = "branch-heads"
+endpoint = "repos/{owner}/{repo}/branches"
+per_page = 100
+max_pages = 1
+select = ["name", "commit.sha"]
+
+# Recently CLOSED pull requests and whether each merged, newest-created first —
+# the order `gh pr list` reads. The pulls endpoint has no merged-only state, so a
+# closed-but-unmerged pull request takes a slot in the window; ten pages are read
+# so that the retired body's population, the 200 most recent MERGED pull requests
+# (`--state merged --limit 200`), fits inside the window, and
+# `policy/branch-age.rego` keeps the first 200 merged rows and no more.
+[[forge.query]]
+id = "branch-merged"
+endpoint = "repos/{owner}/{repo}/pulls"
+params = { state = "closed", sort = "created", direction = "desc" }
+per_page = 100
+max_pages = 10
+select = ["head.ref", "merged_at"]
 
 # --- the scripts the launcher re-arms every spawn (CLOUD-1704) -----------------
 #
