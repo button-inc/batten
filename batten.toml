@@ -2068,6 +2068,13 @@ id = "mise-run-task"
 # as the defined `present`. A trailing `.` (a sentence ending) is not captured.
 regex = 'mise run [a-z][a-z0-9:_-]*(\.[a-z0-9_-]+)*'
 
+# A command line that invokes the engine, bare or through this manifest's
+# `vars.batten` indirection — `policy/sweep-exit-table.rego` reads a task body
+# every one of whose lines matches as answering on the ENGINE's exit table.
+[[pattern]]
+id = "engine-invocation"
+regex = '^(batten|\{\{ *vars\.batten *\}\})( |$)'
+
 [[pattern]]
 id = "mise-tool-reference"
 regex = '^[a-z0-9]+:.+@.+$'
@@ -9212,6 +9219,21 @@ line_sources = [".github/workflows/*.yml", "mise.toml", "hk.pkl"]
 module = "policy/task-callable.rego"
 severity = "deny"
 
+# CLOUD-843 (p6-board review round 3). A `[[board.sweep]]` row's `refuses` is
+# right only relative to the exit table of the program it runs, and that table
+# lives in `mise.toml`: a task moving from a shell body to an engine chain flips
+# it underneath an unchanged row. `config lint` compares two parsed configs and
+# never opens the task, so this is the gate that does. The module's header
+# carries the four launderings and why a file task abstains.
+[[rule]]
+id = "gate table wrong"
+kind = "policy"
+scope = "tree"
+sources = ["batten.toml", "mise.toml"]
+line_sources = ["batten.toml"]
+module = "policy/sweep-exit-table.rego"
+severity = "deny"
+
 # CLOUD-1431. The two pinned-tool surfaces this repository has, compared for the
 # first time: what `release-artifacts.yml` PUBLISHES against what a
 # `[[provision]]` row can RESOLVE.
@@ -11262,9 +11284,13 @@ run = ["batten", "board", "check", "--refs"]
 # would launder the two answers into each other, so the row names `[1]`. When
 # the task moves to the engine table (2 refuses, 1 could not look), this key is
 # deleted in the same change — `[1]` there would read a could-not-look as a
-# refusal. That deletion reads to `config lint` as exit 2 gaining the refusal
-# lane (`board-sweep-refusal-widened`), because two parsed configs cannot see
-# that the task's own table moved underneath the row; it is admitted by answer.
+# refusal. `gate table wrong` (`policy/sweep-exit-table.rego`) is what holds
+# that: it reads the row against the task's body, and refuses `[1]` over an
+# engine chain and the default over a shell body, so the obligation is a gate
+# rather than this comment. The deletion still reads to `config lint` as exit 2
+# gaining the refusal lane (`board-sweep-refusal-widened`), because two parsed
+# configs cannot see that the task's own table moved underneath the row; it is
+# admitted by answer.
 [[board.sweep]]
 name = "duplicate-close-check"
 run = ["mise", "run", "-q", "duplicate-close-check"]
@@ -14500,6 +14526,24 @@ target = "policy/task-callable.rego"
 id = "task list first"
 kind = "command"
 target = "mise tasks ls --all"
+
+[[verdict]]
+id = "gate table wrong"
+gloss = "a board sweep row reads its gate's exits on the other table, so a refusal and a could-not-look trade places"
+class = """
+The engine refuses at 2 and cannot look at 1; the shell corpus inverts that. \
+A `[[board.sweep]]` row's `refuses` names which exits are a refusal, and it is \
+right only for the table of the program the row runs. Named on the wrong one, \
+every could-not-look reads as a refused board or every refusal as a gate that \
+could not look — the two answers a sweep most needs apart. The usual cause is a \
+task retiring its shell body into an engine chain under a row nobody touched: \
+delete the row's `refuses` then, and name `[1]` while the body is still shell.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/sweep-exit-table.rego"
 
 [[verdict]]
 id = "workflow read unread"
