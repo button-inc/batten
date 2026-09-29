@@ -2,42 +2,47 @@
 //!
 //! # What this measures and why a number rather than an edge
 //!
-//! [`crate::module_layering`]'s rego table decides DIRECT edges: a named pair is
+//! `policy/module-layering.rego` decides DIRECT edges: a named pair is
 //! forbidden and the rest are permitted. That is the right shape for a claim the
-//! tree already states in prose, and it is deliberately not an architecture
-//! (`policy/module-layering.rego` says so: *"inventing a rank for all 65 modules
-//! would be declaring an architecture nobody agreed to"*).
+//! tree already states in prose, and it is deliberately not an architecture —
+//! that file says so: *"inventing a rank for all 65 modules would be declaring
+//! an architecture nobody agreed to"*.
 //!
-//! This file asks the question that table cannot: **how entangled is the crate
-//! as a whole, and is it getting worse.** The answer is one number per module —
-//! the size of its transitive `use` closure — and the shape of the distribution
-//! is what a split has to work with. Measured on `main` at the time of writing,
-//! it is not a gradient:
+//! This asks what that table cannot: **how entangled is the crate as a whole,
+//! and is it getting worse.** One number per module — the size of its transitive
+//! `use` closure — and the shape of the distribution is what a workspace split
+//! has to work with.
 //!
-//! * a **rim** of modules whose closure is themselves, reaching nothing; and
-//! * a **hairball** of modules that each reach nearly the whole crate.
+//! # It reads the RESOLVED graph, and that is not a detail
 //!
-//! Nothing in between. A crate boundary can be drawn around the rim today and
-//! around no part of the hairball at any granularity, because Rust forbids
-//! mutually dependent crates. So the rim size and the hairball size are the two
-//! numbers a workspace split moves, and this is the gate that keeps them moving
-//! the right way.
-//!
-//! # It reads the RESOLVED graph, which is the whole reason it is a test
-//!
-//! CLOUD-762 measured a line predicate wrong in two classes in this tree — an
+//! CLOUD-762 measured a line predicate wrong in two classes in this tree: an
 //! edge it cannot see (`use crate::UsageError`, really onto `error`) and one it
-//! invents (`use crate::Result`, really external) — so counting `crate::`
-//! occurrences with a scanner produces a confident wrong distribution. This uses
-//! [`batten::uses`], the same fact `module-layering.rego` decides over, and
-//! [`Origin::Internal`] AFTER [`resolve`] is what makes an edge real.
+//! invents (`use crate::Result`, really external). The second class is the
+//! expensive one here, because it grows with every module that imports
+//! `crate::Result` and every such edge is a false weld.
 //!
-//! # Direction, and why two numbers rather than one
+//! **Measured, by this file's own first version.** A `crate::` scanner put 103
+//! of 119 modules in a single component each reaching ~98 others, and reported
+//! no module between 3 and 97. Run against [`batten::uses`], the largest closure
+//! in the crate is 27 and 64 modules sit at 8 or below. The scanner inflated
+//! closures roughly fourfold and invented a hairball that does not exist. A
+//! split plan was written on those numbers before this test contradicted them.
 //!
-//! `forge` was on the rim and is not any more: it grew one edge between two
-//! measurements sixteen days apart, and nothing reported it. That is the drift
-//! this file exists to catch, and it is why the rim has a floor of its own — a
-//! single "total edges" ceiling would have absorbed that move silently.
+//! # The real shape: two populations with a gap
+//!
+//! * **Plumbing**, 64 modules at closure ≤ 8 — `git` at 2, `capture` and
+//!   `gitwrite` at 4, `exec` and `land` at 7, `pipeline` at 8. Every one of
+//!   these is extractable into its own crate today or nearly so.
+//! * **The decision core**, 55 modules at 24–27 — `rules`, `hook`, `config`,
+//!   `facts`, `policy`, `preset`, `cli`. One cluster, which is what a split
+//!   leaves in the top crate.
+//! * **Nothing between 9 and 23**, which is a real cliff, unlike the one the
+//!   scanner reported in a different place.
+//!
+//! So the gates below are three: the plumbing must not shrink, the core must not
+//! grow, and the gap must stay empty. Each is falsifiable and none is vacuous —
+//! which the first version's hairball assertion was, asking for closure ≥ half
+//! the crate when nothing came within 30 of it, counting zero and passing.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -46,38 +51,45 @@ use crate::common;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use batten::facts::Look;
 use batten::uses::{Origin, resolve, root_exports, use_facts};
 use common::at_root;
 
-/// A module reaching nothing at all has a closure of exactly itself.
+/// The largest closure that still counts as plumbing.
 ///
-/// Stated as a named constant because `1` appears twice below and means the same
-/// thing both times: the module itself, and no one else.
-const REACHES_NOTHING: usize = 1;
+/// Eight, because `pipeline` sits there and the gap above it is fifteen wide.
+/// Any boundary inside the gap would do; this one is the top of the lower
+/// population rather than an arbitrary line through it.
+const PLUMBING_CEILING: usize = 8;
 
-/// The rim: modules whose closure is at most this many modules.
+/// The smallest closure that counts as the decision core.
 ///
-/// Two rather than one so `wiring` — which reaches exactly `environment` and
-/// nothing further — counts as rim. It is extractable with its dependency, which
-/// is the property the rim names.
-const RIM_CEILING: usize = 2;
+/// Twenty-four, the bottom of the upper population. Together with
+/// [`PLUMBING_CEILING`] this brackets the gap that
+/// [`the_gap_between_the_two_populations_stays_empty`] holds open.
+const CORE_FLOOR: usize = 24;
 
-/// Modules whose closure is at most [`RIM_CEILING`] must not fall below this.
+/// Modules at or below [`PLUMBING_CEILING`] must not fall below this.
 ///
-/// A floor rather than an equality: adding a genuinely independent module is
-/// progress and must not redden. Losing one is the `forge` regression, and that
-/// is what this refuses.
-const RIM_FLOOR: usize = 14;
+/// A floor rather than an equality: decoupling a core module down into the
+/// plumbing is the goal and must not redden.
+const PLUMBING_FLOOR: usize = 64;
 
-/// Modules reaching at least half the crate must not exceed this.
+/// Modules at or above [`CORE_FLOOR`] must not exceed this.
 ///
-/// A ceiling for the same reason the rim gets a floor. The two together say
-/// "decouple, do not merely add": a new leaf module raises the rim without
-/// lowering this, and only actual untangling moves it down.
-const HAIRBALL_CEILING: usize = 103;
+/// The other half of the same claim, and the one that makes the pair
+/// non-vacuous: a new leaf module raises the plumbing count without lowering
+/// this, so only actual untangling moves both.
+const CORE_CEILING: usize = 55;
+
+/// No module's closure may exceed this.
+///
+/// The most entangled module reaches 27 of 119. Ratcheting this down is the
+/// split's whole direction, and it is the one number that cannot be improved by
+/// adding modules.
+const DEEPEST_CLOSURE: usize = 27;
 
 /// Every top-level module of the library, mapped to the modules it reaches.
 ///
@@ -101,8 +113,8 @@ fn module_graph() -> BTreeMap<String, BTreeSet<String>> {
 
         let reached = graph.entry(module.clone()).or_default();
         for edge in &file.edges {
-            // `Internal` AFTER resolution is the only class that crosses a
-            // module boundary inside this crate. `RootItem` left unresolved is
+            // `Internal` AFTER resolution is the only class crossing a module
+            // boundary inside this crate. A `RootItem` left unresolved is
             // could-not-look at the edge level, never an edge onto nothing, so
             // it is skipped rather than counted as a reach.
             if edge.origin == Origin::Internal && edge.to != module && !edge.to.is_empty() {
@@ -118,7 +130,7 @@ fn module_graph() -> BTreeMap<String, BTreeSet<String>> {
 /// A directory module contributes every file beneath it under the directory's
 /// own name: `policy/presets/foo.rs` is `policy`, because a crate boundary can
 /// only ever be drawn around the directory as a unit.
-fn module_files(src: &Path) -> Vec<(String, std::path::PathBuf)> {
+fn module_files(src: &Path) -> Vec<(String, PathBuf)> {
     let mut found = Vec::new();
     for entry in fs::read_dir(src).unwrap().flatten() {
         let path = entry.path();
@@ -137,7 +149,7 @@ fn module_files(src: &Path) -> Vec<(String, std::path::PathBuf)> {
     found
 }
 
-fn collect_under(dir: &Path, module: &str, found: &mut Vec<(String, std::path::PathBuf)>) {
+fn collect_under(dir: &Path, module: &str, found: &mut Vec<(String, PathBuf)>) {
     for entry in fs::read_dir(dir).unwrap().flatten() {
         let path = entry.path();
         if path.is_dir() {
@@ -174,40 +186,81 @@ fn distribution(graph: &BTreeMap<String, BTreeSet<String>>) -> Vec<(usize, Strin
 }
 
 #[test]
-fn the_rim_does_not_shrink_and_the_hairball_does_not_grow() {
-    let graph = module_graph();
-    let sizes = distribution(&graph);
-    let total = sizes.len();
+fn the_plumbing_does_not_shrink_and_the_core_does_not_grow() {
+    let sizes = distribution(&module_graph());
 
-    let rim: Vec<&str> = sizes
+    let plumbing: Vec<&str> = sizes
         .iter()
-        .filter(|(size, _)| *size <= RIM_CEILING)
+        .filter(|(size, _)| *size <= PLUMBING_CEILING)
         .map(|(_, module)| module.as_str())
         .collect();
-    let hairball = sizes
+    let core: Vec<&str> = sizes
         .iter()
-        .filter(|(size, _)| *size * 2 >= total)
-        .count();
+        .filter(|(size, _)| *size >= CORE_FLOOR)
+        .map(|(_, module)| module.as_str())
+        .collect();
 
     assert!(
-        rim.len() >= RIM_FLOOR,
-        "the rim shrank to {} modules, below the floor of {RIM_FLOOR}. A module \
-         that reached nothing now reaches something, which is how `forge` left \
-         the rim unreported. Rim now: {rim:?}",
-        rim.len(),
+        plumbing.len() >= PLUMBING_FLOOR,
+        "plumbing fell to {} modules, below the floor of {PLUMBING_FLOOR}: a \
+         module that was extractable no longer is",
+        plumbing.len(),
     );
     assert!(
-        hairball <= HAIRBALL_CEILING,
-        "{hairball} modules now reach at least half the crate, above the ceiling \
-         of {HAIRBALL_CEILING}. A new edge pulled a module into the hairball; \
-         decoupling is what lowers this, adding a leaf module is not.",
+        core.len() <= CORE_CEILING,
+        "the decision core grew to {} modules, above the ceiling of \
+         {CORE_CEILING}: a new edge pulled a module in. Decoupling lowers this; \
+         adding a leaf module does not.",
+        core.len(),
+    );
+}
+
+#[test]
+fn no_module_reaches_deeper_than_the_recorded_worst() {
+    let sizes = distribution(&module_graph());
+    let deepest = sizes.last().expect("the crate has modules");
+
+    assert!(
+        deepest.0 <= DEEPEST_CLOSURE,
+        "`{}` now reaches {} modules, past the recorded worst of \
+         {DEEPEST_CLOSURE}. This is the one number adding modules cannot \
+         improve.",
+        deepest.1,
+        deepest.0,
+    );
+}
+
+#[test]
+fn the_gap_between_the_two_populations_stays_empty() {
+    // The distribution is two populations, not a gradient — but the gap is
+    // between 8 and 24, NOT between the rim and everything else, which is what
+    // a line scan reported and what a split plan was written on. Asserted here
+    // so the shape is a checked claim rather than a remembered one.
+    //
+    // A module landing in the gap is news rather than a defect: something
+    // partially decoupled, and a crate boundary may be drawable where it was
+    // not. Redden so somebody looks.
+    let sizes = distribution(&module_graph());
+
+    let straddling: Vec<&(usize, String)> = sizes
+        .iter()
+        .filter(|(size, _)| *size > PLUMBING_CEILING && *size < CORE_FLOOR)
+        .collect();
+
+    assert!(
+        straddling.is_empty(),
+        "modules now sit between plumbing and core: {straddling:?}. Re-read the \
+         split plan before moving either boundary — this is the shape it rests \
+         on.",
     );
 }
 
 #[test]
 fn print_the_distribution() {
-    let graph = module_graph();
-    let sizes = distribution(&graph);
+    // Not an assertion. The split plan needs the real numbers in front of it,
+    // and a reader asking "what is extractable" gets the answer by running one
+    // test rather than by trusting a figure in a doc comment that ages.
+    let sizes = distribution(&module_graph());
     let mut by_size: BTreeMap<usize, Vec<&str>> = BTreeMap::new();
     for (size, module) in &sizes {
         by_size.entry(*size).or_default().push(module.as_str());
@@ -215,58 +268,5 @@ fn print_the_distribution() {
     println!("total modules: {}", sizes.len());
     for (size, modules) in &by_size {
         println!("  closure {size:3}: {:3} modules  {modules:?}", modules.len());
-    }
-}
-
-#[test]
-#[ignore = "asserts a premise the resolved graph refutes; see print_the_distribution"]
-fn the_distribution_is_a_cliff_rather_than_a_gradient() {
-    // The claim the split plan rests on, asserted rather than remembered: there
-    // is no middle. If a module ever lands between the rim and the hairball,
-    // that is a partial decoupling and the plan's "one extraction, then a
-    // campaign" shape has a third option it did not have before. Redden so
-    // somebody looks, rather than discovering it in a partition that fails.
-    let graph = module_graph();
-    let sizes = distribution(&graph);
-    let total = sizes.len();
-
-    let middle: Vec<&(usize, String)> = sizes
-        .iter()
-        .filter(|(size, _)| *size > RIM_CEILING && *size * 2 < total)
-        .collect();
-
-    assert!(
-        middle.is_empty(),
-        "modules now sit between the rim and the hairball: {middle:?}. This is \
-         news rather than a defect — a crate boundary may now be drawable where \
-         it was not. Re-read the split plan before raising this ceiling.",
-    );
-}
-
-#[test]
-fn every_rim_module_reaches_nothing_or_only_other_rim_modules() {
-    // The rim's defining property, and the one that makes it extractable: it is
-    // CLOSED. A rim module reaching into the hairball would still have a small
-    // closure only by accident of the hairball module being small too, and the
-    // crate drawn around it would not compile.
-    let graph = module_graph();
-    let rim: BTreeSet<String> = distribution(&graph)
-        .into_iter()
-        .filter(|(size, _)| *size <= RIM_CEILING)
-        .map(|(_, module)| module)
-        .collect();
-
-    for module in &rim {
-        let reached = &graph[module];
-        let escaping: Vec<&String> = reached.difference(&rim).collect();
-        assert!(
-            escaping.is_empty(),
-            "rim module `{module}` reaches outside the rim: {escaping:?}",
-        );
-        assert!(
-            reached.len() < REACHES_NOTHING + RIM_CEILING,
-            "rim module `{module}` reaches {} modules directly",
-            reached.len(),
-        );
     }
 }
