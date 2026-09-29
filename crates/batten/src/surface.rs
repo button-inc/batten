@@ -3839,6 +3839,21 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[JSON],
     },
+    // WHETHER THE FORGE CREDENTIAL CARRIES THE CLAIMS THE TASKS NEED (CLOUD-843,
+    // retiring `gh-preflight`). `read`: it issues GETs against the endpoints the
+    // committed `[[forge.probe]]` rows name and never a write — a row declaring
+    // a write claim is reported as declared and never called. `doctor *`'s exit
+    // set, for its siblings' reason: a missing claim is a failed diagnosis, and a
+    // diagnosis renders no policy verdict, so it cannot mint a `2`.
+    CommandDecl {
+        path: "doctor forge",
+        id: "doctor.forge",
+        about: "Diagnose whether the forge credential carries the claims this repository's tasks declare",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[],
+    },
     // THE ONE SUB-VERB THAT IS ALSO A ROW IN THE BARE REPORT (CLOUD-1398), and
     // the asymmetry with the two rows above it is the decision rather than an
     // oversight. `doctor mediator` and `doctor egress` are outside the report

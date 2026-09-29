@@ -192,9 +192,10 @@ config instead of opening the file that records what happened:
 
 - `~/.cache/claude-cli-nodejs/<cwd with / as ->/mcp-logs-<server>/*.jsonl`, newest
   file. `Successfully connected` = attached. `Connection failed (…)` = the launch
-  lost, and the parenthesised code says how. `mise run mcp-attach-check` is this
-  read with an exit code, and it fires on `UserPromptSubmit` so a lost server is
-  reported in the session's first turn.
+  lost, and the parenthesised code says how. `batten mcp posture` (the
+  `mcp:posture` task, CLOUD-843) is this read with an exit code, and the
+  `mcp-attach-check` handler row runs it at `session-start` (CLOUD-1946) so a lost
+  server is reported before the first turn.
 - Two record shapes mislead, both measured: an `error` **key** usually carries
   routine `Server stderr: INFO …` chatter on a healthy launch, and the failure
   code is **not** fixed at `-32000` — the next real occurrence was
@@ -283,8 +284,8 @@ start is no longer a race.
 ### When Serena does not attach, read the spawn ledger first (CLOUD-714)
 
 `$GIT_DIR/batten-mcp-spawns`, one tab-separated line per launch:
-`<epoch> <server> <pid> <loadavg-1min> <sibling-count>`. `mise run
-mcp-attach-check` compares its newest entry against the connection attempt and
+`<epoch> <server> <pid> <loadavg-1min> <sibling-count>`. `batten mcp posture`
+(`mcp::spawn_ledger`) compares its newest entry against the connection attempt and
 reports one of three things, and the third is the one that keeps the other two
 honest:
 

@@ -994,6 +994,23 @@ pub enum WeakeningKind {
     /// raises only over lines it finds there, so a renamed family passes with
     /// nothing judged. Appended, as above.
     SbomRecordChanged,
+    /// A server the base ref's permission file governed under any exposed name
+    /// is no longer governed: its `[mcp] permission_aliases` entry is gone, or no
+    /// `[[mcp.source]]` row's `endpoint_contains` declares it any more, or the
+    /// address that selects it changed (CLOUD-843).
+    ///
+    /// **A silence, not a refusal**, `ForgeCredentialsRemoved`'s shape: `mcp
+    /// grant --guard` refuses a committed deny under a renamed key only while
+    /// the name resolves, so dropping it turns every translated deny into a call
+    /// the pre-tool guard waves through at exit 0, and nothing reports it. A
+    /// CHANGED address is the same loss, because the old key's endpoint stops
+    /// matching; whether the new one governs the right server is not something
+    /// two parsed configs can settle.
+    ///
+    /// The REMOVED direction only: a name added is a translation gained, and the
+    /// key is absent from `OverrideConfig`, so no local file can add one.
+    /// Appended, for this enum's `Ord` reason.
+    McpPermissionAliasRemoved,
 }
 
 impl WeakeningKind {
@@ -1071,6 +1088,7 @@ impl WeakeningKind {
         WeakeningKind::SbomStandardRemoved,
         WeakeningKind::SbomInventoryChanged,
         WeakeningKind::SbomRecordChanged,
+        WeakeningKind::McpPermissionAliasRemoved,
     ];
 
     /// The stable, lowercase identifier used in machine output (§6).
@@ -1099,6 +1117,7 @@ impl WeakeningKind {
             WeakeningKind::SbomStandardRemoved => "sbom-standard-removed",
             WeakeningKind::SbomInventoryChanged => "sbom-inventory-changed",
             WeakeningKind::SbomRecordChanged => "sbom-record-changed",
+            WeakeningKind::McpPermissionAliasRemoved => "mcp-permission-alias-removed",
             WeakeningKind::ReadyCutoverRelaxed => "ready-cutover-relaxed",
             WeakeningKind::PerfExemptionAdded => "perf-exemption-added",
             WeakeningKind::VerbRemoved => "verb-removed",
@@ -1384,21 +1403,18 @@ pub const CENSUS: &[FieldCoverage] = &[
              `exec_pattern`, which is compared on its own row",
         ),
     },
+    // COMPARED SINCE CLOUD-843, and only by the one key a gate's verdict reads.
+    // `permission_aliases`, with the `endpoint_contains` selector that resolves
+    // each name, is what lets `mcp grant --guard` refuse a committed deny under a
+    // renamed key, so losing either is a silence. The rest of the table is still
+    // not policy-bearing, for the reason this row used to give whole: a
+    // `[[mcp.source]]` row names the file an endpoint and its headers are
+    // resolved from, and a `[[mcp.result]]` row decides what reaches the CALLER
+    // of `mcp call` — no gate reads either, and the authority they are read from
+    // is guarded structurally, the key being absent from `OverrideConfig`.
     FieldCoverage {
         field: "mcp",
-        coverage: Coverage::NotPolicyBearing(
-            "where a harness keeps its MCP wiring, and what a dispatched method hands back \
-             instead of its payload (CLOUD-1260). No rule's verdict reads it: a `[[mcp.source]]` \
-             row names the file an endpoint and its headers are resolved from, and a \
-             `[[mcp.result]]` row decides what reaches the CALLER of `mcp call` — neither is \
-             read by any gate, so widening a field list produces no finding and narrowing one \
-             suppresses none. What DOES need guarding is the authority the table is read from, \
-             and that is guarded structurally rather than here: the key is absent from \
-             `OverrideConfig`, so an uncommitted file cannot repoint the dispatch at an endpoint \
-             of its own or widen a reduction back to the payload. A weakening row would be the \
-             wrong instrument for that — it reports a direction, where the answer needed is that \
-             the layer cannot speak at all",
-        ),
+        coverage: Coverage::Compared(&[WeakeningKind::McpPermissionAliasRemoved]),
     },
     FieldCoverage {
         field: "capture",
@@ -2579,7 +2595,60 @@ fn scalar_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     ));
 
     found.extend(transcript_weakenings(base, working));
+    found.extend(mcp_weakenings(base.mcp.as_ref(), working.mcp.as_ref()));
 
+    found
+}
+
+/// Each server `config` governs under any exposed name, with the addresses that
+/// select it: a `permission_aliases` entry some `endpoint_contains` row declares.
+fn governed_aliases(
+    config: Option<&crate::mcp::McpConfig>,
+) -> std::collections::BTreeMap<String, BTreeSet<String>> {
+    let mut governed = std::collections::BTreeMap::new();
+    let Some(config) = config else {
+        return governed;
+    };
+    for alias in &config.permission_aliases {
+        let needles: BTreeSet<String> = config
+            .sources
+            .iter()
+            .filter_map(|source| source.endpoint_contains.get(alias).cloned())
+            .collect();
+        if !needles.is_empty() {
+            governed.insert(alias.clone(), needles);
+        }
+    }
+    governed
+}
+
+/// A governed MCP name the base ref resolved and the working tree does not, or
+/// resolves by a different address (CLOUD-843).
+///
+/// Keyed on the effective governed set rather than on the list, so deleting the
+/// alias, deleting its selector and deleting `[mcp]` report the same key: each
+/// leaves `mcp grant --guard` silent on a renamed key the base ref refused.
+//MUTANT-SUITE crates/batten/src/trust.rs
+//MUTANT mcp-alias-loss-unseen|s@^    for (alias, needles) in governed_aliases(base) {$@    for (alias, needles) in governed_aliases(None) {@|losing_a_governed_mcp_name_is_a_weakening
+fn mcp_weakenings(
+    base: Option<&crate::mcp::McpConfig>,
+    working: Option<&crate::mcp::McpConfig>,
+) -> Vec<Weakening> {
+    let now = governed_aliases(working);
+    let mut found = Vec::new();
+    for (alias, needles) in governed_aliases(base) {
+        let after = match now.get(&alias) {
+            None => "absent",
+            Some(current) if *current != needles => "changed",
+            Some(_) => continue,
+        };
+        found.push(Weakening::new(
+            WeakeningKind::McpPermissionAliasRemoved,
+            format!("mcp.permission_aliases[{alias}]"),
+            "present",
+            after,
+        ));
+    }
     found
 }
 
@@ -5503,6 +5572,38 @@ mod tests {
             weakenings(&config(""), &base).is_empty(),
             "declaring the forge's credentials is a strengthening, never a weakening"
         );
+    }
+
+    /// CLOUD-843: a governed MCP name is what lets `mcp grant --guard` refuse a
+    /// committed deny under a renamed key, so losing it — by the list, by the
+    /// selector, or by the whole table — is a silence the comparison must name.
+    #[test]
+    fn losing_a_governed_mcp_name_is_a_weakening() {
+        let table = |aliases: &str, needle: &str| {
+            config(&format!(
+                "[mcp]\npermission_aliases = [{aliases}]\n\n[[mcp.source]]\nid = \"s\"\n\
+                 path = \"m.json\"\nnode = \"mcpServers\"\n\n[mcp.source.endpoint_contains]\n\
+                 Box = \"{needle}\"\n"
+            ))
+        };
+        let base = table("\"Box\"", "upstream.test/v1/meta");
+        let lost = Weakening::new(
+            WeakeningKind::McpPermissionAliasRemoved,
+            "mcp.permission_aliases[Box]",
+            "present",
+            "absent",
+        );
+        assert_eq!(only(&base, &table("", "upstream.test/v1/meta")), lost);
+        assert_eq!(only(&base, &config("")), lost);
+        // A changed address stops the old key's endpoint matching: the same loss.
+        assert_eq!(
+            only(&base, &table("\"Box\"", "upstream.test/v2/meta")).working,
+            "changed"
+        );
+        // ANTI-VACUITY: declaring the name is the edit that closes the seam, and
+        // an unchanged table is silent.
+        assert!(weakenings(&table("", "upstream.test/v1/meta"), &base).is_empty());
+        assert!(weakenings(&base, &base).is_empty());
     }
 
     #[test]

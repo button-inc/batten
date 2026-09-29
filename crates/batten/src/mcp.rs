@@ -100,6 +100,24 @@ pub struct McpConfig {
     /// A method with no row here is dispatched and returned whole.
     #[serde(default, rename = "result", skip_serializing_if = "Vec::is_empty")]
     pub results: Vec<ResultRow>,
+    /// Server names whose committed permission rules apply under WHATEVER key the
+    /// host exposes the server as this session (CLOUD-191, CLOUD-843).
+    ///
+    /// Each is a name some `[[mcp.source]]` row's `endpoint_contains` declares,
+    /// because the endpoint is the only thing that identifies a renamed server:
+    /// `mcp grant` finds the exposed key's endpoint, matches it to one of these
+    /// names, and applies the committed `permissions` rules written for that name.
+    /// `mcp posture` reads the same list for the grants a connector would still
+    /// prompt for.
+    ///
+    /// **A LIST, and deliberately not every `endpoint_contains` name.** A name here
+    /// turns a committed allow rule into a pre-approval under a key nobody
+    /// committed. A server the host authorises at its own connector layer must not
+    /// be translated, or the translation grants what the host did not — so the
+    /// consumer states which servers its permission file governs, rather than the
+    /// engine inferring it from a selector written for dispatch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permission_aliases: Vec<String>,
 }
 
 /// One `[[mcp.source]]` row: a file that carries a server's transport, endpoint
@@ -605,6 +623,22 @@ pub fn validate(config: &McpConfig) -> Result<()> {
         validate_credential(source)?;
         seen.push(&source.id);
     }
+    // A PERMISSION ALIAS NO SELECTOR DECLARES CAN NEVER RESOLVE, so it would read
+    // as a governed server while translating nothing — refused here rather than
+    // discovered as a prompt that never went away.
+    for alias in &config.permission_aliases {
+        if !config
+            .sources
+            .iter()
+            .any(|source| source.endpoint_contains.contains_key(alias))
+        {
+            return Err(UsageError::raise(format!(
+                "mcp: `permission_aliases` names {alias:?}, which no `[[mcp.source]]` row's \
+                 `endpoint_contains` declares; the endpoint is the only thing that identifies a \
+                 renamed server, so this name could never be resolved"
+            )));
+        }
+    }
 
     let mut methods: Vec<&str> = Vec::new();
     for row in &config.results {
@@ -935,7 +969,9 @@ const HEADER_KEY: &str = "headers";
 /// **Extracted so the selector and the dispatcher share ONE authority on which
 /// key is an endpoint** (CLOUD-1264). Two readings of that could disagree, and
 /// then a name would select an entry the dispatcher then declined to dial.
-fn endpoint_of(entry: &Node) -> Option<String> {
+/// `pub(crate)` since CLOUD-843: `mcp grant` resolves a renamed key through the
+/// same reading, for the same reason.
+pub(crate) fn endpoint_of(entry: &Node) -> Option<String> {
     ENDPOINT_KEYS
         .iter()
         .find_map(|key| match entry.at(key) {
@@ -955,6 +991,106 @@ enum Matched<'a> {
     Many(usize),
 }
 
+/// Whether an endpoint carries `needle`, as written or percent-decoded.
+///
+/// **BOTH SPELLINGS, and the decoded one is the reason this exists** (CLOUD-843).
+/// A launcher that wraps the upstream address in its own proxy URL carries the
+/// real one ENCODED in a query parameter, so a needle naming the upstream's path
+/// (`/v1/…`) is written with slashes the wire spells `%2F` and never matches the
+/// raw text. The raw comparison stays so that no selector matching today stops
+/// matching.
+pub(crate) fn endpoint_carries(endpoint: &str, needle: &str) -> bool {
+    endpoint.contains(needle) || percent_decoded(endpoint).contains(needle)
+}
+
+/// `text` with every `%XX` escape decoded, and anything else left as written.
+///
+/// A malformed escape — a `%` not followed by two hex digits — is kept as the
+/// three characters it was, rather than dropped: a selector compared against a
+/// decoding that invented or lost bytes would match an address nobody wrote.
+/// Bytes that do not form UTF-8 are replaced rather than refused, for the same
+/// reason; the result is compared, never dialled.
+pub(crate) fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut at = 0usize;
+    while let Some(&byte) = bytes.get(at) {
+        if byte == b'%'
+            && let (Some(high), Some(low)) = (
+                bytes.get(at + 1).and_then(|digit| hex_value(*digit)),
+                bytes.get(at + 2).and_then(|digit| hex_value(*digit)),
+            )
+        {
+            out.push(high * 16 + low);
+            at += 3;
+            continue;
+        }
+        out.push(byte);
+        at += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Whether `endpoint` carries `needle` as a WHOLE address: the endpoint itself,
+/// or the percent-decoded value of one of its query parameters, compared with
+/// the scheme, the query, the fragment and any trailing `/` set aside.
+///
+/// **THE STRICT READING, FOR A DECISION** (CLOUD-843). [`endpoint_carries`] is a
+/// dispatch selector, where a substring is enough because an ambiguous match is
+/// refused. A permission alias TRANSLATES a committed grant onto a key nobody
+/// committed, so the match that licenses it is equality: an address that merely
+/// extends the governed one (`…/meta-x`, `…/meta/sub`), or carries it somewhere
+/// other than a whole parameter value, is another server and resolves to
+/// nothing. This is the retired resolver's exact comparison of the wrapped
+/// upstream, without spelling the parameter a host wraps it in (non-negotiable
+/// rule 1): ANY parameter's value may be the address.
+//MUTANT upstream-prefix-accepted|s@^        if bare_address(&address) == want {$@        if bare_address(\&address).starts_with(want) {@|a_url_that_extends_the_governed_upstream_resolves_to_silence
+//MUTANT upstream-param-unread|s@^    for address in std::iter::once(endpoint.to_owned()).chain(query_values(endpoint)) {$@    for address in std::iter::once(endpoint.to_owned()) {@|a_committed_allow_and_deny_reach_the_toolbox_under_a_flipped_name
+pub(crate) fn endpoint_names(endpoint: &str, needle: &str) -> bool {
+    let want = bare_address(needle);
+    if want.is_empty() {
+        return false;
+    }
+    for address in std::iter::once(endpoint.to_owned()).chain(query_values(endpoint)) {
+        if bare_address(&address) == want {
+            return true;
+        }
+    }
+    false
+}
+
+/// Every query parameter's value in `endpoint`, percent-decoded, in order.
+fn query_values(endpoint: &str) -> Vec<String> {
+    let Some((_, query)) = endpoint.split_once('?') else {
+        return Vec::new();
+    };
+    let query = query.split('#').next().unwrap_or_default();
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .map(|(_, value)| percent_decoded(value))
+        .collect()
+}
+
+/// An address with its scheme, query, fragment and trailing `/` set aside.
+fn bare_address(address: &str) -> &str {
+    let rest = address.split_once("://").map_or(address, |(_, rest)| rest);
+    rest.split(['?', '#'])
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches('/')
+}
+
+/// One hex digit's value, or `None` where the byte is not one.
+const fn hex_value(digit: u8) -> Option<u8> {
+    match digit {
+        b'0'..=b'9' => Some(digit - b'0'),
+        b'a'..=b'f' => Some(digit - b'a' + 10),
+        b'A'..=b'F' => Some(digit - b'A' + 10),
+        _ => None,
+    }
+}
+
 /// Select the one entry whose endpoint carries `needle`.
 fn by_endpoint<'a>(map: &'a Node, needle: &str) -> Matched<'a> {
     let Node::Map(entries) = map else {
@@ -963,7 +1099,7 @@ fn by_endpoint<'a>(map: &'a Node, needle: &str) -> Matched<'a> {
     let mut found: Option<&Node> = None;
     let mut count = 0usize;
     for entry in entries.values() {
-        if endpoint_of(entry).is_some_and(|endpoint| endpoint.contains(needle)) {
+        if endpoint_of(entry).is_some_and(|endpoint| endpoint_carries(&endpoint, needle)) {
             count += 1;
             if found.is_none() {
                 found = Some(entry);
@@ -1030,7 +1166,7 @@ pub fn wiring(
     let mut tried = Vec::new();
     for source in &config.sources {
         tried.push(source.id.clone());
-        let Some(entry) = entry_in(source, repo_root, server)? else {
+        let Some(entry) = entry_in(source, repo_root, server, None)? else {
             continue;
         };
         let Some(endpoint) = endpoint_of(&entry) else {
@@ -1078,87 +1214,135 @@ fn entry_in(
     source: &Source,
     repo_root: &Path,
     server: &str,
+    file: Option<&Path>,
 ) -> std::result::Result<Option<Node>, Unresolved> {
-    {
-        let base = match (&source.base, &source.root) {
-            // A BASE THE PLATFORM DEFINES, for the one directory an operator has
-            // no variable for. `temp_dir` reads the platform's own answer rather
-            // than this crate spelling `/tmp`, which would be wrong on Windows and
-            // a literal path in a config either way.
-            (Some(Base::Temp), _) => std::env::temp_dir(),
-            // A ROOT THIS HOST DOES NOT SET IS NOT AN ABSENT FILE, and empty
-            // counts as unset: an empty variable resolves the row against the
-            // process's working directory, which is a different file on every
-            // invocation.
-            (None, Some(name)) => match std::env::var_os(name).filter(|value| !value.is_empty()) {
-                Some(dir) => std::path::PathBuf::from(dir),
-                None => return Ok(None),
-            },
-            (None, None) => repo_root.to_path_buf(),
-        };
-        // AN UNSET PLACEHOLDER IS THIS HOST NOT HAVING THE ROW'S SUBJECT, which is
-        // the `root` arm's answer one level down: skip to the next source rather
-        // than resolving a path nobody wrote.
-        let Some(path) = expand(&source.path).map_err(|_| Unresolved::PathUnusable {
-            source: source.id.clone(),
-        })?
-        else {
-            return Ok(None);
-        };
-        // THE SECOND ESCAPE CHECK, over runtime input. The load-time one saw
-        // `${ID}` and not what `ID` holds, so this is the one that stops a
-        // variable's value from walking out of the base the row declared.
-        if escapes(&path) {
-            return Err(Unresolved::PathUnusable {
-                source: source.id.clone(),
-            });
+    let Some(map) = server_map(source, repo_root, file)? else {
+        return Ok(None);
+    };
+    Ok(entry_of(source, &map, server)?.cloned())
+}
+
+/// One source's server map, or `None` where this source does not answer.
+///
+/// `file`, where given, is read IN PLACE OF the path the row resolves — the
+/// operator naming a host-injected wiring file on the command line (`mcp grant
+/// --config`, `mcp posture --config`). The row still decides the `node` and the
+/// selectors; only which bytes are read moves.
+///
+/// Split out of [`entry_in`] (CLOUD-843) so `mcp grant` can walk a map's KEYS as
+/// well as look one up, through the same path resolution, escape checks and
+/// could-not-look arms, rather than a second copy of the walk.
+pub(crate) fn server_map(
+    source: &Source,
+    repo_root: &Path,
+    file: Option<&Path>,
+) -> std::result::Result<Option<Node>, Unresolved> {
+    let path = match file {
+        Some(file) => file.to_path_buf(),
+        None => {
+            let Some(path) = resolved_path(source, repo_root)? else {
+                return Ok(None);
+            };
+            path
         }
-        let Ok(text) = std::fs::read_to_string(base.join(&path)) else {
-            return Ok(None);
-        };
-        // A FILE THAT EXISTS AND WILL NOT PARSE STOPS THE SEARCH. Falling through
-        // to the next source would report the next harness's answer for this
-        // one's broken file, which is a wrong answer wearing a right one's shape.
-        //
-        // THROUGH `rules::parse_node`, the one `Format::read` call in the crate
-        // (CLOUD-849): a second call site is a second error mapping, and two
-        // mappings over one grammar diverge.
-        let Ok(document) = crate::rules::parse_node(Format::Json, &text) else {
-            return Err(Unresolved::Unreadable {
-                source: source.id.clone(),
-            });
-        };
-        let Look::Is(map) = document.at(&source.node) else {
-            return Ok(None);
-        };
-        // THE EXACT KEY FIRST, AND UNCHANGED. Every table that resolves today
-        // resolves through this arm and reaches the same entry it always did; the
-        // selector below is consulted only where a key lookup found nothing, so
-        // adding a row cannot re-point an existing name.
-        let entry = match map.at(server) {
-            Look::Is(entry) => entry,
-            Look::IsNot | Look::CouldNotLook => match source.endpoint_contains.get(server) {
-                None => return Ok(None),
-                Some(needle) => match by_endpoint(map, needle) {
-                    // NOTHING ANSWERED IS A SKIP, NOT A REFUSAL, and it has to be:
-                    // the source list is the multi-harness precedence order, so
-                    // refusing here would make one host's absent wiring the reason
-                    // another host's row is never consulted. It ends at
-                    // `NotFound`, exactly as an exact-key miss does.
-                    Matched::None => return Ok(None),
-                    Matched::One(entry) => entry,
-                    Matched::Many(matched) => {
-                        return Err(Unresolved::Ambiguous {
-                            source: source.id.clone(),
-                            server: server.to_owned(),
-                            matched,
-                        });
-                    }
-                },
+    };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Ok(None);
+    };
+    // A FILE THAT EXISTS AND WILL NOT PARSE STOPS THE SEARCH. Falling through
+    // to the next source would report the next harness's answer for this
+    // one's broken file, which is a wrong answer wearing a right one's shape.
+    //
+    // THROUGH `rules::parse_node`, the one `Format::read` call in the crate
+    // (CLOUD-849): a second call site is a second error mapping, and two
+    // mappings over one grammar diverge.
+    let Ok(document) = crate::rules::parse_node(Format::Json, &text) else {
+        return Err(Unresolved::Unreadable {
+            source: source.id.clone(),
+        });
+    };
+    let Look::Is(map) = document.at(&source.node) else {
+        return Ok(None);
+    };
+    Ok(Some(map.clone()))
+}
+
+/// The entry `server` names in one source's map: the exact key first, then the
+/// row's endpoint selector.
+fn entry_of<'a>(
+    source: &Source,
+    map: &'a Node,
+    server: &str,
+) -> std::result::Result<Option<&'a Node>, Unresolved> {
+    // THE EXACT KEY FIRST, AND UNCHANGED. Every table that resolves today
+    // resolves through this arm and reaches the same entry it always did; the
+    // selector below is consulted only where a key lookup found nothing, so
+    // adding a row cannot re-point an existing name.
+    let entry = match map.at(server) {
+        Look::Is(entry) => entry,
+        Look::IsNot | Look::CouldNotLook => match source.endpoint_contains.get(server) {
+            None => return Ok(None),
+            Some(needle) => match by_endpoint(map, needle) {
+                // NOTHING ANSWERED IS A SKIP, NOT A REFUSAL, and it has to be:
+                // the source list is the multi-harness precedence order, so
+                // refusing here would make one host's absent wiring the reason
+                // another host's row is never consulted. It ends at
+                // `NotFound`, exactly as an exact-key miss does.
+                Matched::None => return Ok(None),
+                Matched::One(entry) => entry,
+                Matched::Many(matched) => {
+                    return Err(Unresolved::Ambiguous {
+                        source: source.id.clone(),
+                        server: server.to_owned(),
+                        matched,
+                    });
+                }
             },
-        };
-        Ok(Some(entry.clone()))
+        },
+    };
+    Ok(Some(entry))
+}
+
+/// The file a source row names on this host, or `None` where the host does not
+/// have the row's subject (an unset root or placeholder).
+fn resolved_path(
+    source: &Source,
+    repo_root: &Path,
+) -> std::result::Result<Option<std::path::PathBuf>, Unresolved> {
+    let base = match (&source.base, &source.root) {
+        // A BASE THE PLATFORM DEFINES, for the one directory an operator has
+        // no variable for. `temp_dir` reads the platform's own answer rather
+        // than this crate spelling `/tmp`, which would be wrong on Windows and
+        // a literal path in a config either way.
+        (Some(Base::Temp), _) => std::env::temp_dir(),
+        // A ROOT THIS HOST DOES NOT SET IS NOT AN ABSENT FILE, and empty
+        // counts as unset: an empty variable resolves the row against the
+        // process's working directory, which is a different file on every
+        // invocation.
+        (None, Some(name)) => match std::env::var_os(name).filter(|value| !value.is_empty()) {
+            Some(dir) => std::path::PathBuf::from(dir),
+            None => return Ok(None),
+        },
+        (None, None) => repo_root.to_path_buf(),
+    };
+    // AN UNSET PLACEHOLDER IS THIS HOST NOT HAVING THE ROW'S SUBJECT, which is
+    // the `root` arm's answer one level down: skip to the next source rather
+    // than resolving a path nobody wrote.
+    let Some(path) = expand(&source.path).map_err(|_| Unresolved::PathUnusable {
+        source: source.id.clone(),
+    })?
+    else {
+        return Ok(None);
+    };
+    // THE SECOND ESCAPE CHECK, over runtime input. The load-time one saw
+    // `${ID}` and not what `ID` holds, so this is the one that stops a
+    // variable's value from walking out of the base the row declared.
+    if escapes(&path) {
+        return Err(Unresolved::PathUnusable {
+            source: source.id.clone(),
+        });
     }
+    Ok(Some(base.join(&path)))
 }
 
 /// The key each declared tool's approval posture sits under in the injected
@@ -1168,17 +1352,24 @@ const POLICY_KEY: &str = "permission_policy";
 /// The posture that means a call stops for a human.
 const ALWAYS_ASK: &str = "always_ask";
 
+/// The one posture under which a tool never stops for a human.
+const ALWAYS_ALLOW: &str = "always_allow";
+
 /// What a registered connector's tools can actually do, and whether the session
 /// is granted them (CLOUD-1359).
 ///
 /// **Pointer-only by construction**, which is the whole shape of this type: it
-/// carries counts and a source id, and there is no field a tool name, a UUID, a
-/// header or an endpoint could occupy. Non-negotiable rule 4 is held in the TYPE
-/// rather than by each caller remembering — the same way `commit-meta` has no
-/// message body. The connector key is deliberately absent: it is a UUID on the
-/// episodes that matter (CLOUD-178), and rule 1 keeps an account-specific
+/// carries counts and posture tokens, and there is no field a tool name, a UUID,
+/// a header or an endpoint could occupy. Non-negotiable rule 4 is held in the
+/// TYPE rather than by each caller remembering — the same way `commit-meta` has
+/// no message body. The connector key is deliberately absent: it is a UUID on
+/// the episodes that matter (CLOUD-178), and rule 1 keeps an account-specific
 /// identifier out of every artifact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// No longer `Copy` since CLOUD-843 gave it [`Bound::postures`]: a list of the
+/// tokens a report names, which is posture vocabulary rather than anything a
+/// tool or a host minted.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bound {
     /// How many tools the wiring declares for this server.
     pub declared: usize,
@@ -1192,6 +1383,16 @@ pub struct Bound {
     /// parse — and never `false`. Reading "I could not compare" as "not granted"
     /// is the defect this row exists to fix, one layer up.
     pub granted: Option<bool>,
+    /// How many allow rules in the settings name a tool this server declares
+    /// with any posture but `always_allow` (CLOUD-765).
+    ///
+    /// Such a rule reads as a grant and skips nothing: the host asks anyway,
+    /// because the connector's own posture outranks the permission file. The
+    /// bare server rule counts as ONE rule when any declared tool is so
+    /// postured — see [`is_bare_server_rule`] for why it is honoured at all.
+    pub unenforceable: usize,
+    /// The distinct postures those rules ran into, sorted.
+    pub postures: Vec<String>,
 }
 
 impl Bound {
@@ -1215,6 +1416,21 @@ impl Bound {
     }
 }
 
+/// Whether `rule` is the bare server rule `mcp__<server>` — every tool of it.
+///
+/// **THE BARE-GRANT DECISION, ISOLATED HERE ON PURPOSE** (CLOUD-843). The
+/// retired resolver honoured only an exact tool name or `mcp__<server>__*`, while
+/// [`granted_in`] below records the bare prefix as the grant the host actually
+/// honours. The owner's recorded answer (2026-09-28) is to honour the bare rule:
+/// it grants every tool of the server whose endpoint resolves to that name,
+/// under any exposed key, and the posture count reads it the same way. A deny is
+/// still consulted first by every caller. One function, so the answer has one
+/// place to be read and one place to be reversed.
+#[must_use]
+pub fn is_bare_server_rule(rule: &str, server: &str) -> bool {
+    rule.strip_prefix("mcp__") == Some(server)
+}
+
 /// The tool census for `server`, from whichever declared source answers.
 ///
 /// Reuses [`entry_in`]'s walk, so the source precedence, the escape checks and
@@ -1233,13 +1449,29 @@ pub fn bound(
     server: &str,
     settings: &[std::path::PathBuf],
 ) -> std::result::Result<Bound, Unresolved> {
+    bound_in(config, repo_root, server, settings, None)
+}
+
+/// [`bound`], with `file` read in place of each source's own path — the
+/// host-injected wiring an operator names on the command line.
+///
+/// # Errors
+///
+/// As [`bound`]: every could-not-look is an [`Unresolved`] value.
+pub fn bound_in(
+    config: &McpConfig,
+    repo_root: &Path,
+    server: &str,
+    settings: &[std::path::PathBuf],
+    file: Option<&Path>,
+) -> std::result::Result<Bound, Unresolved> {
     if config.sources.is_empty() {
         return Err(Unresolved::Undeclared);
     }
     let mut tried = Vec::new();
     for source in &config.sources {
         tried.push(source.id.clone());
-        let Some(entry) = entry_in(source, repo_root, server)? else {
+        let Some(entry) = entry_in(source, repo_root, server, file)? else {
             continue;
         };
         // A SERVER DECLARING NO `tools` ARRAY IS NOT A SERVER WITH NO TOOLS. The
@@ -1273,13 +1505,88 @@ pub fn bound(
                 _ => None,
             })
             .collect();
+        let (unenforceable, postures) = unenforceable_in(settings, server, tools);
         return Ok(Bound {
             declared: tools.len(),
             asks,
             granted: granted_in(settings, server, &names),
+            unenforceable,
+            postures,
         });
     }
     Err(Unresolved::NotFound { tried })
+}
+
+/// The allow rules in `settings` that name one of `tools` the connector does not
+/// set to `always_allow`, and the postures they ran into (CLOUD-765).
+///
+/// A tool declaring no posture is skipped, for [`bound`]'s reason: the absent
+/// key is the host saying nothing. A rule carrying a `*` in its tool segment
+/// never counts, and needs no arm of its own: the lookup below is by EXACT tool
+/// name, and the host honours no wildcard segment, so such a rule is not a grant
+/// this could call unenforceable. Duplicate rules count once.
+///
+/// The cases are `batten mcp posture`'s compiled tier (`tests/it/mcp_attach.rs`):
+/// `mutate` runs a Rust suite as `cargo test -- <case>` across every target, so a
+/// row here reddens the posture case it names although this file's declared
+/// suite is the dispatch tier.
+//MUTANT allow-check-ignores-policy|s@^            (!posture.is_empty() && posture != ALWAYS_ALLOW).then_some@            (!posture.is_empty()).then_some@|an_allow_rule_whose_tool_the_connector_allows_passes
+//MUTANT bare-rule-unread|s@^        if is_bare_server_rule(rule, server) {$@        if false {@|a_bare_server_rule_counts_once_when_any_tool_asks
+//MUTANT bare-rule-over-allowed-counted|s@^            if !asking.is_empty() {$@            if true {@|a_bare_server_rule_counts_once_when_any_tool_asks
+fn unenforceable_in(
+    settings: &[std::path::PathBuf],
+    server: &str,
+    tools: &[Node],
+) -> (usize, Vec<String>) {
+    let asking: std::collections::BTreeMap<String, String> = tools
+        .iter()
+        .filter_map(|tool| {
+            let name = match tool.at("name") {
+                Look::Is(node) => node.scalar()?,
+                Look::IsNot | Look::CouldNotLook => return None,
+            };
+            let posture = match tool.at(POLICY_KEY) {
+                Look::Is(node) => node.scalar()?,
+                Look::IsNot | Look::CouldNotLook => return None,
+            };
+            (!posture.is_empty() && posture != ALWAYS_ALLOW).then_some((name, posture))
+        })
+        .collect();
+    let mut rules = std::collections::BTreeSet::new();
+    for path in settings {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let Ok(document) = crate::rules::parse_node(Format::Json, &text) else {
+            continue;
+        };
+        if let Look::Is(Node::List(allow)) = document.at("permissions.allow") {
+            rules.extend(allow.iter().filter_map(|rule| match rule {
+                Node::Text(text) => Some(text.clone()),
+                _ => None,
+            }));
+        }
+    }
+    let prefix = format!("mcp__{server}__");
+    let mut count = 0usize;
+    let mut postures = std::collections::BTreeSet::new();
+    for rule in &rules {
+        if is_bare_server_rule(rule, server) {
+            if !asking.is_empty() {
+                count += 1;
+                postures.extend(asking.values().cloned());
+            }
+            continue;
+        }
+        let Some(tool) = rule.strip_prefix(&prefix) else {
+            continue;
+        };
+        if let Some(posture) = asking.get(tool) {
+            count += 1;
+            postures.insert(posture.clone());
+        }
+    }
+    (count, postures.into_iter().collect())
 }
 
 /// Whether any settings file grants `server`, three-valued.
@@ -1763,7 +2070,8 @@ const SPAWN_WINDOW: u64 = 10;
 /// The per-clone spawn ledger's name under the git directory.
 ///
 /// **The path is a CONTRACT with a reader this module does not own.**
-/// `mcp-attach-check` opens `$GIT_DIR/batten-mcp-spawns` by that name and
+/// `mcp posture` (retiring `mcp-attach-check` under CLOUD-843) opens
+/// `$GIT_DIR/batten-mcp-spawns` by that name through [`spawn_ledger`] and
 /// compares its lines against the client's own log, which is the comparison
 /// CLOUD-714 exists to make possible. So the retirement preserves the location
 /// and the tab-separated layout exactly; a port that "improved" either would
@@ -1777,6 +2085,18 @@ const SPAWN_LEDGER: &str = "batten-mcp-spawns";
 // name wherever the file's suite line points.
 //MUTANT spawn-record-never-written|s@    drop(crate::durable::append(&ledger, &line));@    drop((ledger, line));@|a_launch_appends_one_record_naming_the_server_and_becomes_the_launch_line
 //MUTANT spawn-siblings-always-zero|s@now - \*stamp <= SPAWN_WINDOW@false@|a_launch_inside_the_window_counts_the_earlier_one_as_a_sibling
+
+/// Where the checkout at `root` keeps its spawn ledger, or `None` outside one.
+///
+/// The ONE place the reader half learns the name (CLOUD-843): `mcp posture`
+/// compares the ledger against the host's connection log, and a second spelling
+/// of the path would be free to drift from the one [`record_spawn`] writes.
+#[must_use]
+pub fn spawn_ledger(root: &Path) -> Option<std::path::PathBuf> {
+    crate::git::git_dir(root)
+        .ok()
+        .map(|dir| dir.join(SPAWN_LEDGER))
+}
 
 /// One ledger line: when, which server, which pid, the load, and how many
 /// siblings were already inside the window.
@@ -2764,5 +3084,67 @@ mod tests {
             let pointer = answer.pointer();
             assert!(!pointer.contains('/'), "{pointer:?} must carry no path");
         }
+    }
+
+    #[test]
+    fn a_percent_escape_decodes_and_a_malformed_one_is_kept_as_written() {
+        assert_eq!(
+            percent_decoded("mcp_url=https%3A%2F%2Fexample.test%2Fv1"),
+            "mcp_url=https://example.test/v1"
+        );
+        // A `%` not followed by two hex digits is text, not an escape: dropping or
+        // inventing a byte would let a selector match an address nobody wrote.
+        assert_eq!(percent_decoded("100%"), "100%");
+        assert_eq!(percent_decoded("%zz%4"), "%zz%4");
+    }
+
+    #[test]
+    fn a_selector_matches_an_encoded_upstream_as_well_as_a_plain_one() {
+        let wrapped = "https://proxy.test/p?mcp_url=https%3A%2F%2Fupstream.test%2Fv1%2Fmeta&s=1";
+        assert!(endpoint_carries(wrapped, "upstream.test/v1/meta"));
+        // The raw spelling still answers, so no landed selector stops matching.
+        assert!(endpoint_carries(wrapped, "upstream.test%2Fv1"));
+        assert!(!endpoint_carries(wrapped, "other.test/v1/meta"));
+    }
+
+    #[test]
+    fn a_governed_address_is_named_only_whole() {
+        let needle = "upstream.test/v1/meta";
+        // Wrapped in any parameter, or the endpoint itself, with or without a
+        // scheme, a query or a trailing slash.
+        assert!(endpoint_names(
+            "https://proxy.test/p?mcp_url=https%3A%2F%2Fupstream.test%2Fv1%2Fmeta&s=1",
+            needle
+        ));
+        assert!(endpoint_names(
+            "https://proxy.test/p?s=1&u=https%3A%2F%2Fupstream.test%2Fv1%2Fmeta%2F",
+            needle
+        ));
+        assert!(endpoint_names("https://upstream.test/v1/meta?s=1", needle));
+        // An address extending it, or carrying it inside a longer one, is another.
+        assert!(!endpoint_names("https://upstream.test/v1/meta-x", needle));
+        assert!(!endpoint_names("https://upstream.test/v1/meta/sub", needle));
+        assert!(!endpoint_names(
+            "https://proxy.test/p?mcp_url=https%3A%2F%2Fupstream.test%2Fv1%2Fmeta%2Fsub",
+            needle
+        ));
+        assert!(!endpoint_names(
+            "https://proxy.test/upstream.test/v1/meta",
+            needle
+        ));
+        assert!(!endpoint_names(
+            "https://evil-upstream.test/v1/meta",
+            needle
+        ));
+        // An empty needle names nothing.
+        assert!(!endpoint_names("https://upstream.test/v1/meta", ""));
+    }
+
+    #[test]
+    fn only_the_bare_prefix_is_the_bare_server_rule() {
+        assert!(is_bare_server_rule("mcp__box", "box"));
+        assert!(!is_bare_server_rule("mcp__box__*", "box"));
+        assert!(!is_bare_server_rule("mcp__box__tool", "box"));
+        assert!(!is_bare_server_rule("mcp__box2", "box"));
     }
 }

@@ -161,10 +161,11 @@ const DECLARED: [&str; 13] = [
     "session-credential",
     // CLOUD-1946: the connector-ask check, moved off `user-prompt-submit`, where
     // Claude Code delivers no advisory, so its finding was dropped every turn.
-    // After the provisioning rows because its could-not-look arm is a missing
-    // `jq`, which `session-install` provides.
+    // CLOUD-843 folded it into this one row: both halves are `batten mcp
+    // posture`, so the sibling `mcp-allow-check` row would have run the same verb
+    // twice, and its commit-scoped half is the `claude-code-cloud` preset's
+    // `mcp-grants-are-honoured.rego`.
     "mcp-attach-check",
-    "mcp-allow-check",
     "session-census",
 ];
 

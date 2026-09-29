@@ -94,6 +94,8 @@ pub mod lint;
 pub mod main_watch;
 pub mod markers;
 pub mod mcp;
+pub mod mcp_grant;
+pub mod mcp_posture;
 pub mod mint;
 pub mod minted;
 pub mod mutate;
@@ -109,6 +111,7 @@ pub mod pinned;
 pub mod pipeline;
 pub mod policy;
 pub mod pr_watch;
+pub mod preflight;
 pub mod preset;
 pub mod probe_verdict;
 pub mod provision;
@@ -286,7 +289,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             unjudgeable,
         }) => Ok(exit::ExitCode::combine(findings, unjudgeable)),
         Some(Command::ShowAgent { json }) => run_show_agent(json, &overrides, out),
-        Some(Command::Doctor { command }) => run_doctor(&command, out, err),
+        Some(Command::Doctor { command }) => run_doctor(&command, &overrides, out, err),
         // `init` reads no config — it is the verb that exists because there is
         // none — so the §8 chain is deliberately not threaded through it.
         Some(Command::Init { dry_run }) => run_init(dry_run, mode, out, err),
@@ -2449,13 +2452,43 @@ fn run_mcp(
         // Returns only on failure; success replaces this process.
         return exec::become_argv(command).map(|never| match never {});
     }
-    // CLOUD-843's two foundation arms: final arguments, bodies owed by the
-    // package retiring the connector and attach programs.
-    if let cli::McpCommand::Grant { .. } = command {
-        return unimplemented("mcp grant");
+    // CLOUD-843: the connector and attach programs, retired onto the engine.
+    if let cli::McpCommand::Grant {
+        tool,
+        guard,
+        aliases,
+        config,
+        settings,
+    } = command
+    {
+        return run_mcp_grant(
+            &McpGrantRequest {
+                tool: tool.as_deref(),
+                guard: *guard,
+                aliases: *aliases,
+                wiring: config.as_deref(),
+                settings: settings.as_deref(),
+            },
+            overrides,
+            out,
+            err,
+        );
     }
-    if let cli::McpCommand::Posture { .. } = command {
-        return unimplemented("mcp posture");
+    if let cli::McpCommand::Posture {
+        settings,
+        config,
+        logs,
+        spawns,
+    } = command
+    {
+        return run_mcp_posture(
+            settings.as_deref(),
+            config.as_deref(),
+            logs.as_deref(),
+            spawns.as_deref(),
+            overrides,
+            err,
+        );
     }
     let cli::McpCommand::Call {
         server,
@@ -2535,6 +2568,127 @@ fn run_mcp(
         out,
         err,
     )
+}
+
+/// What `mcp grant` was asked, as the surface parsed it.
+struct McpGrantRequest<'a> {
+    /// The tool name to resolve, where neither mode flag was given.
+    tool: Option<&'a str>,
+    /// Read a hook payload on stdin and answer on the handler contract.
+    guard: bool,
+    /// List each live key's governed name.
+    aliases: bool,
+    /// A host-injected wiring file, read in place of each source's own path.
+    wiring: Option<&'a str>,
+    /// The settings file to judge, instead of the committed one.
+    settings: Option<&'a str>,
+}
+
+/// The permission settings `mcp grant` and `mcp posture` judge.
+///
+/// The operand where one was given, else the committed file the MCP permission
+/// grammar belongs to — a harness fact the hook table already owns, read from
+/// there rather than spelled a second time here.
+fn mcp_settings(repo: &Path, given: Option<&str>) -> PathBuf {
+    if let Some(given) = given {
+        return PathBuf::from(given);
+    }
+    match hook::Harness::ClaudeCode.wiring().map(|wiring| wiring.file) {
+        Some(hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path)) => repo.join(path),
+        None => repo.to_path_buf(),
+    }
+}
+
+/// `batten mcp grant` (CLOUD-843, retiring `connector-allow-resolve`).
+///
+/// # Errors
+///
+/// Outside a checkout, or under a config that will not resolve — except under
+/// `--guard`, where every degradation is silence at exit 0: a pre-tool handler
+/// that could not look must neither grant nor refuse.
+fn run_mcp_grant(
+    request: &McpGrantRequest<'_>,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let loaded = git::repo_root(Path::new(".")).and_then(|repo| {
+        resolve::resolve(Path::new("."), overrides)
+            .map(|resolved| (repo, resolved.mcp.unwrap_or_default()))
+    });
+    let (repo, config) = match loaded {
+        Ok(loaded) => loaded,
+        Err(_) if request.guard => return Ok(ExitCode::Success),
+        Err(error) => return Err(error),
+    };
+    let settings = mcp_settings(&repo, request.settings);
+    let inputs = mcp_grant::Inputs {
+        config: &config,
+        repo_root: &repo,
+        settings: &settings,
+        wiring: request.wiring.map(Path::new),
+    };
+    let mut stdin = String::new();
+    let ask = if request.guard {
+        // UNREADABLE STDIN IS SILENCE, never a refusal of the event: the payload
+        // is the host's, and a guard that could not read it has nothing to apply.
+        let _ = std::io::stdin().read_to_string(&mut stdin);
+        mcp_grant::Ask::Guard
+    } else if request.aliases {
+        mcp_grant::Ask::Aliases
+    } else {
+        mcp_grant::Ask::Tool(request.tool.unwrap_or_default())
+    };
+    mcp_grant::run_grant(&inputs, ask, &stdin, out, err)
+}
+
+/// `batten mcp posture` (CLOUD-843, retiring `mcp-attach-check` and
+/// `mcp-allow-check --session`).
+///
+/// # Errors
+///
+/// Outside a checkout, under a config that will not resolve, or over a settings
+/// file that exists and will not parse.
+fn run_mcp_posture(
+    settings: Option<&str>,
+    wiring: Option<&str>,
+    logs: Option<&str>,
+    spawns: Option<&str>,
+    overrides: &Overrides,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let repo = git::repo_root(Path::new("."))?;
+    let config = resolve::resolve(Path::new("."), overrides)?
+        .mcp
+        .unwrap_or_default();
+    let settings = mcp_settings(&repo, settings);
+    let inputs = mcp_grant::Inputs {
+        config: &config,
+        repo_root: &repo,
+        settings: &settings,
+        wiring: wiring.map(Path::new),
+    };
+    let session = mcp_posture::Session {
+        logs: logs.map(PathBuf::from).or_else(mcp_log_root),
+        spawns: spawns
+            .map(PathBuf::from)
+            .or_else(|| mcp::spawn_ledger(&repo)),
+    };
+    mcp_posture::run(&inputs, &session, err)
+}
+
+/// Where the host keeps THIS project's MCP connection logs, or `None`.
+///
+/// The home-relative tree is the harness table's fact
+/// ([`hook::Harness::mcp_logs`]); the host keys it by the working directory with
+/// every separator written as `-`, which is the host's layout rather than a
+/// consumer's.
+fn mcp_log_root() -> Option<PathBuf> {
+    let tree = hook::Harness::ClaudeCode.mcp_logs()?;
+    let home = std::env::var_os("HOME").filter(|home| !home.is_empty())?;
+    let project = std::env::current_dir().ok()?;
+    let key = project.to_string_lossy().replace('/', "-");
+    Some(PathBuf::from(home).join(tree).join(key))
 }
 
 /// What `mcp call` has in hand once the exchange has completed.
@@ -21818,10 +21972,12 @@ fn run_config(
 /// misconfigured" as a deny (§7).
 fn run_doctor(
     command: &cli::DoctorCommand,
+    overrides: &Overrides,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     match *command {
+        cli::DoctorCommand::Forge => run_doctor_forge(overrides, out),
         cli::DoctorCommand::Diagnose { json } => run_diagnose(json, out),
         cli::DoctorCommand::Hooks { json } => run_doctor_hooks(json, out),
         cli::DoctorCommand::Mediator { json } => run_doctor_mediator(json, out),
@@ -21833,6 +21989,25 @@ fn run_doctor(
         }
         cli::DoctorCommand::Target { ref target } => doctor::run_target(target, out, err),
     }
+}
+
+/// Does the forge credential carry the claims this repository's tasks declare
+/// (CLOUD-843, retiring `gh-preflight`)?
+///
+/// The probe table is the COMMITTED authority's `[[forge.probe]]` rows, never a
+/// layered one: which claims a repository's tasks need is a fact about the
+/// repository, and a local file that could drop a row could make a missing claim
+/// read as a clean diagnosis. The slug is [`repo_slug`]'s, the one answer to
+/// which repository a forge read is about.
+fn run_doctor_forge(overrides: &Overrides, out: &mut dyn Write) -> Result<ExitCode> {
+    let config = resolve::committed(Path::new("."), overrides)?;
+    let probes = config
+        .forge
+        .as_ref()
+        .map(|forge| forge.probe.as_slice())
+        .unwrap_or_default();
+    let slug = repo_slug(Path::new("."));
+    preflight::run(probes, slug.as_deref(), &|path| rest::get(path, None), out)
 }
 
 /// Is every tool this manifest declares actually installed (CLOUD-1683)?

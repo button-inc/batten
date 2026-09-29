@@ -319,12 +319,14 @@ rule never skips that prompt, at any spelling and at any level: the Claude Code
 permissions docs say so, and #76264's escape 2 records it. No user-facing remedy is known: Claude Code
 Remote is not listed at claude.ai/customize/connectors (owner, 2026-09-28;
 CLOUD-1946 first claimed otherwise, and was wrong). Each call answers
-after an approval. `mcp-allow-check --session` reports every committed grant the
-account still asks for, at session start. Read `mem:connector-allowlist-recovery`'s
+after an approval. `batten mcp posture` (the `mcp-attach-check` handler row,
+CLOUD-843) reports every committed grant the account still asks for, at session
+start. Read `mem:connector-allowlist-recovery`'s
 STOP section before acting on any `MCP tool call requires approval`.
 
-So `mise run mcp-allow-check` (in the shared hk `gate`, globbed on
-`.claude/settings.json`) asserts only what is repo-verifiable: no allow rule
+So the `claude-code-cloud` preset's tree module `mcp-grants-are-honoured.rego`
+(run by `batten check`; the retired `mcp-allow-check` hk step's successor,
+CLOUD-843) asserts only what is repo-verifiable: no allow rule
 globs the server segment, since the CLI accepts a tool-name glob only after a
 literal `mcp__<server>__` prefix and skips anything broader with a warning — a
 rule that reads as a grant and is not one. It deliberately does **not** demand a

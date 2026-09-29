@@ -495,6 +495,12 @@ mod tests {
                 // task runner grades a value that runner's env block has already
                 // corrected.
                 "doctor egress".to_owned(),
+                // WHETHER THE FORGE CREDENTIAL CARRIES THE CLAIMS THE TASKS NEED
+                // (CLOUD-843, retiring `gh-preflight`). `read`: GETs against the
+                // endpoints the committed `[[forge.probe]]` rows name, beside
+                // `lease carries`' two forge reads. A row declaring a write claim is
+                // reported and never called, so nothing here performs one.
+                "doctor forge".to_owned(),
                 // Whether this checkout's commit path runs the gate (CLOUD-1398).
                 // `read`, and structurally so: it resolves a directory through
                 // git's own config and stats two files. Nothing is EXECUTED, and
@@ -887,6 +893,8 @@ mod tests {
             "dist".to_owned(),
             "doctor".to_owned(),
             "doctor egress".to_owned(),
+            // The forge-credential diagnosis (CLOUD-843), retiring `gh-preflight`.
+            "doctor forge".to_owned(),
             "doctor gate".to_owned(),
             "doctor hooks".to_owned(),
             "doctor mediator".to_owned(),

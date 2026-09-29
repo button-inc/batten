@@ -807,8 +807,6 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // pointer-only assertions still run over that refusal unchanged. THE PACKAGE
     // THAT FILLS A BODY REMOVES ITS NAME HERE, in the same change — a name left
     // behind after its verb answers is the widening this list's header forbids.
-    "mcp grant",
-    "mcp posture",
     "board check",
 ];
 
@@ -1365,6 +1363,16 @@ const CENSUS: &[Verb] = &[
     },
     Verb {
         path: "doctor egress",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // CLOUD-843, retiring `gh-preflight`. The corpus declares no
+    // `[[forge.probe]]` row, so this exercises the refusal that names the
+    // missing table — a usage answer, never a probe, and the forge fixture the
+    // sweep points every run at could not answer one anyway.
+    Verb {
+        path: "doctor forge",
         args: &[],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,

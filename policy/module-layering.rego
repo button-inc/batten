@@ -740,6 +740,20 @@ declared_modules := {
 	# cycle that predates this row and that the split neither adds to nor
 	# removes. The same holds for `step -> git -> rules` below.
 	"step_table",
+	# `mcp_grant` and `mcp_posture` arrived with CLOUD-843's P5, retiring the
+	# connector and attach programs. They are `mcp`'s readers: they walk the
+	# declared sources through `mcp`, parse a settings file through `rules`'
+	# `parse_node`, and read the spawn ledger `mcp` writes. Neither reaches
+	# `fetch`, and neither decides a mediated call -- `grant --guard` is a
+	# DISPATCHED handler, a separate process the door spawns -- so both are
+	# forbidden `hook` below for `mcp`'s reason.
+	"mcp_grant",
+	"mcp_posture",
+	# `preflight` arrived with the same package, retiring `gh-preflight`. It walks
+	# the consumer's `[[forge.probe]]` rows through `rest`, so it reaches the
+	# network, and its `hook`, `repair` and `check` edges are forbidden below for
+	# `rest`'s reason.
+	"preflight",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
@@ -808,10 +822,14 @@ forbidden[from] contains to if {
 		# its `run` arm executes a command the caller names and writes a
 		# receipt, and a mediated call adjudicates cached state -- it never runs
 		# a step. `repair` carries the same entry, since it inherits this set.
+		# `mcp_grant`, `mcp_posture` and `preflight` join for `mcp`'s and
+		# `rest`'s reasons one hop out (CLOUD-843): the first two reach `mcp`, the
+		# third reaches `rest`.
 		"hook": {
 			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
 			"pr_watch", "fast_forward", "main_watch", "forge_query", "ci_signal", "sbom",
 			"step",
+			"mcp_grant", "mcp_posture", "preflight",
 		},
 		# `repair` RUNS A CONSUMER'S DECLARED COMMAND ON THE MEDIATED PATH
 		# (CLOUD-1639), so it inherits `hook`'s set entire and for the same
@@ -836,6 +854,7 @@ forbidden[from] contains to if {
 			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
 			"pr_watch", "fast_forward", "main_watch", "forge_query", "ci_signal", "sbom",
 			"step",
+			"mcp_grant", "mcp_posture", "preflight",
 		},
 		# `check` NAMES NO MODULE TODAY, so this row is INERT — and that is worth
 		# stating rather than leaving a reader to infer enforcement from a table
@@ -852,6 +871,7 @@ forbidden[from] contains to if {
 		"check": {
 			"lease", "gitwrite", "land",
 			"pr_watch", "fast_forward", "main_watch", "forge_query", "ci_signal", "sbom",
+			"preflight",
 		},
 		# And the other direction, which is `symbols`' and `pinned`'s row again: the
 		# dispatcher sits below the engine and must not reach the module that
@@ -977,6 +997,11 @@ forbidden[from] contains to if {
 		# like every row here; the two-hop `git -> rules -> config` route is the
 		# pre-existing `config <-> rules` cycle, stated at `declared_modules`.
 		"step_table": {"step", "resolve", "config", "rules", "hook"},
+		# `mcp`'s row, for its readers (CLOUD-843): below the engine that
+		# adjudicates a mediated call, never reaching back into it.
+		"mcp_grant": {"hook"},
+		"mcp_posture": {"hook"},
+		"preflight": {"hook"},
 	}
 	some to in targets
 }
