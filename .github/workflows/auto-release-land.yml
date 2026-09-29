@@ -311,20 +311,26 @@ jobs:
       # consecutive CI-run-lengths — a gap no active landing loop produces. It is
       # also above p75 of the gap distribution, so it coalesces ~80% of merges
       # where 30m coalesced ~3%. Below ~45m is measurably a no-op; past 2h the
-      # returns flatten, since p90 is already 301m and those are long idles
-      # `RELEASE_MAX_WAIT_HOURS` already covers. That knob is deliberately left at
-      # its 24h default, so a `main` that never goes quiet still ships daily.
+      # returns flatten, since p90 is already 301m and those are long idles the
+      # max wait already covers. That window is deliberately left at 24h, so a
+      # `main` that never goes quiet still ships daily.
       #
-      # AND IT IS SET HERE RATHER THAN IN THE TASK: the task's default describes
-      # the unset case and this is the one consumer with an operating point, so
-      # the point lives on the call site and reaches `release-due-record` through
-      # the environment (CLOUD-1717 moved the task inline).
+      # AND IT IS COMMITTED NOW RATHER THAN EXPORTED HERE (CLOUD-843). This was
+      # `RELEASE_QUIET_MINUTES` on this step, read by `release-due-record`'s body;
+      # that body retired onto two `[[forge.query]]` windows, and a window's
+      # length is the row's `since.seconds` in `batten.toml` — 7200 for the trunk,
+      # 86400 for the max wait. This step was the one consumer with an operating
+      # point, so the point moved to the authority this step already reads.
+      #
+      # `BATTEN_GITHUB_TOKEN` because `record query` reads the credential through
+      # `[forge] credential_names`, which names no conventional variable; the
+      # job token is what a scheduled run holds.
       - name: Is the release due, or is it still being debounced?
         if: steps.target.outputs.num != ''
         id: debounce
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_QUIET_MINUTES: "120"
+          BATTEN_GITHUB_TOKEN: ${{ github.token }}
         run: |
           # `set +e` on purpose: the default shell is `bash -e`, under which a
           # hold would abort the step before its exit code could be read as a

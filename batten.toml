@@ -2447,10 +2447,14 @@ writer = "mise run pr-unsubscribed check"
 record = "release-assets"
 writer = "mise run release-assets-record"
 
-# CLOUD-319's reading, ported off `release-due.sh` under CLOUD-1717.
+# CLOUD-319's readings, one family per `[[forge.query]]` row above (CLOUD-843).
 [[record]]
-record = "release-due"
-writer = "mise run release-due-record"
+record = "release-due-activity"
+writer = "batten record query release-due-activity"
+
+[[record]]
+record = "release-due-latest"
+writer = "batten record query release-due-latest"
 
 # A release ARCHIVE, as `policy/release-assets.rego` reads one: the name ends in
 # a packed extension. A composed leg's `<stem>.spdx.json` carries the same triple,
@@ -7481,8 +7485,9 @@ module = "policy/release-assets.rego"
 severity = "deny"
 
 # CLOUD-319, ported off `mise-tasks/release-due.sh` under CLOUD-1717. A HOLD is
-# the finding: `auto-release-land.yml` runs `mise run release-due`, which produces
-# then checks this one rule, and reads 2 as "not yet". Silent with no record.
+# the finding: `auto-release-land.yml` runs `mise run release-due`, which records
+# the two `[[forge.query]]` windows then checks this one rule, and reads 2 as
+# "not yet". Silent with neither window recorded.
 [[rule]]
 id = "release grade early"
 kind = "policy"
@@ -10861,6 +10866,34 @@ names = ["GITHUB_PERSONAL_ACCESS_TOKEN", "BATTEN_GITHUB_TOKEN"]
 # needed" — there is deliberately no fallback in the engine to fall back to.
 [forge]
 credential_names = ["BATTEN_GITHUB_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN"]
+
+# CLOUD-319's two readings, retiring `[tasks.release-due-record]` (CLOUD-843). The
+# body read the clock and the forge and recorded two AGES; these two rows move the
+# clock into the producer (`record query`'s window) and leave the ages unwritten:
+# a row is kept only when its instant is inside the window, so `kept=0` IS "older
+# than the window" and `policy/release-due.rego` compares no timestamp at all.
+#
+# ONE ROW EACH, NEWEST FIRST, which is what the body's `.[0]` read. `main` is this
+# consumer's trunk and a fact about this repository, so it is a parameter here and
+# never a literal in the engine. The windows are the ones `auto-release-land.yml`
+# ran the body with — 120 quiet minutes (its `RELEASE_QUIET_MINUTES`), and the
+# 24-hour max wait the body defaulted to — now committed rather than exported.
+[[forge.query]]
+id = "release-due-activity"
+endpoint = "repos/{owner}/{repo}/commits"
+params = { sha = "main" }
+per_page = 1
+max_pages = 1
+since = { field = "commit.committer.date", seconds = 7200 }
+select = ["commit.committer.date"]
+
+[[forge.query]]
+id = "release-due-latest"
+endpoint = "repos/{owner}/{repo}/releases"
+per_page = 1
+max_pages = 1
+since = { field = "published_at", seconds = 86400 }
+select = ["published_at"]
 
 # --- the scripts the launcher re-arms every spawn (CLOUD-1704) -----------------
 #
@@ -15514,17 +15547,21 @@ the max wait passes. A maintainer commenting /fast-forward lands it now.
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "mise run release-due-record"
+target = "mise run release-due"
 
 [[verdict]]
 id = "release measure partial"
-gloss = "the release-due record is missing one of its four readings"
-class = "A record missing a reading decides over part of the answer."
+gloss = "a release-due window is missing, torn, or read no commit on main"
+class = """
+Both windows decide together, so one without the other decides over part of \
+the answer. A window whose closing line is absent or disagrees with its rows is \
+torn, and a trunk window that read no commit at all measured nothing.
+"""
 
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "mise run release-due-record"
+target = "mise run release-due"
 
 # CLOUD-618's readings, ported off `release-tracking-check.sh` under CLOUD-1717.
 # The second subject names which shape; the module's header says what each means.
