@@ -15066,6 +15066,9 @@ fn collect_batch_advice(
     err: &mut dyn Write,
     advice: &mut Vec<advisory::Advice>,
 ) -> Result<()> {
+    // FIRST, AND THE ORDER IS THE PREDICATE (CLOUD-1991): the stamp dates the
+    // session, so it is written before any declared handler provisions anything.
+    stamp_session(envelope);
     if Some(envelope.event) == harness.capabilities().degrade(hook::Event::PostToolBatch) {
         drain_advisories(envelope, overrides, mode, err, advice)?;
     }
@@ -15082,6 +15085,30 @@ fn collect_batch_advice(
     repair_startup_rows(envelope, overrides);
     report_container_health(envelope, overrides, advice);
     Ok(())
+}
+
+/// Write the session boundary `claim check` dates refinement against (CLOUD-1991).
+///
+/// **The engine reads it, so the engine writes it.** It was a consumer `mise`
+/// task (`session:stamp`) dispatched by one declared handler row — a shell line
+/// whose only job was to resolve the per-worktree git directory and truncate one
+/// file, and a precondition of an engine gate that a repository had to know to
+/// declare. Written here, before [`dispatch_handlers`] runs a single row, every
+/// session start through `batten hook` dates itself, in any repository.
+///
+/// Fails open and silently, like every other side effect at this boundary: a
+/// session start is not a call being adjudicated, and a clone with no readable
+/// git directory is one where `claim check` reports the missing stamp itself.
+fn stamp_session(envelope: &hook::Envelope) {
+    if envelope.event != hook::Event::SessionStart {
+        return;
+    }
+    let Ok(git_dir) = git::git_dir(hook_authority_root()) else {
+        return;
+    };
+    // `RECEIPT_DIR` under the PER-WORKTREE directory, which is where
+    // `run_claim_check` reads it: a linked worktree dates its own session.
+    let _stamped = claim::stamp_session(&git_dir.join(RECEIPT_DIR));
 }
 
 /// Record what the pin provides, once per session (CLOUD-1028).

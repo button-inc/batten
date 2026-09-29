@@ -455,16 +455,24 @@ fn the_toolchain_precondition_is_invoked_through_the_task_runner() {
     );
 }
 
-/// CLOUD-1683. The install half. The wrapper is what turns the lying zero into a
-/// non-zero; the existing guard is KEPT rather than replaced, because it is still
-/// the right answer for a genuine non-zero and it is now reachable.
+/// CLOUD-1683. The install half. The check after the install is what turns the
+/// lying zero into a non-zero; a genuine non-zero from the install itself still
+/// stops the step.
+///
+/// CHANGED BY CLOUD-1991, which retired the shell guard: the run is an argv
+/// sequence, and mise stops a sequence at its first failing entry with that
+/// entry's exit code. So the non-zero arm is the ORDER — the install first, the
+/// toolchain check after it — rather than a spelled `exit 1`.
 #[test]
 fn the_install_step_cannot_report_success_over_a_sub_invocation_that_failed() {
-    let body = task_body("session:install");
-    assert!(body.contains("exit 1"), "the non-zero arm is kept");
+    let body = common::task_value(&task_body("session:install"), "run");
+    let install = body.find("mise install").expect("the install runs");
+    let check = body
+        .find("mise run toolchain-check")
+        .expect("and the zero-exit failure this row exists for is caught after it");
     assert!(
-        body.contains("mise run toolchain-check"),
-        "and the zero-exit failure this row exists for is caught after it"
+        install < check,
+        "the check reads the outcome of the install, so it runs after it: {body}"
     );
 }
 

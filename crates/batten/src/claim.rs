@@ -409,8 +409,8 @@ fn sequence_refusal(issue: &Issue, description: &str, receipts: &Path) -> Result
     if !receipts.join(SESSION_STAMP).exists() {
         return Ok(Some(Refusal {
             id: issue.id.clone(),
-            rule: "no-session-stamp (run `mise run session:stamp`, or pass \
-                   --bypass-sequence)"
+            rule: "no-session-stamp (a session start through `batten hook` writes it, or \
+                   pass --bypass-sequence)"
                 .to_owned(),
             kind: Kind::Sequence,
         }));
@@ -500,6 +500,29 @@ fn read_baseline(receipt: &Path, store: &Path) -> Result<Option<String>> {
 /// The session boundary, written by the `SessionStart` hook before it does
 /// anything else, so its presence means a session began in this clone.
 const SESSION_STAMP: &str = "session-start";
+
+/// Write the session boundary under `receipts` (CLOUD-1991).
+///
+/// **THE ENGINE WRITES WHAT THE ENGINE READS.** [`sequence_refusal`] compares an
+/// issue's `updatedAt` against this file's mtime, and for its whole life the file
+/// was written by a consumer's `mise` task that one `[[hook.handler]]` row
+/// dispatched — so the gate's precondition was a task name a repository had to
+/// know to declare, and a repository that had not refused every claim with
+/// `no-session-stamp`. The write is mechanism with no consumer fact in it: one
+/// empty file at a fixed name under the per-worktree receipt store.
+///
+/// Replaced rather than touched, through [`crate::durable::replace`], so the
+/// mtime is the moment of this call — which is the property the ordering rests
+/// on: refinement must PREDATE the session that implements it.
+///
+/// # Errors
+///
+/// Whatever creating the store or writing the file reports; the caller decides
+/// whether a session start may continue without it.
+pub fn stamp_session(receipts: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(receipts)?;
+    crate::durable::replace(receipts.join(SESSION_STAMP), b"")
+}
 
 /// The prefix `[[mint]] issue-read` writes one file per issue key under.
 const READ_RECEIPT_PREFIX: &str = "issue-read.";

@@ -7503,19 +7503,6 @@ run = "cargo run --quiet -p batten -- check --rule 'rule watch other'"
 # the three corrected comments in `[tasks."test:bats"]` are the same fact said
 # where the next author reads it.
 
-[tasks."session:stamp"]
-description = "Session start: stamp the beginning of the session, before anything else runs (CLOUD-431)"
-# FIRST, AND THE ORDER IS THE PREDICATE. `claim-check`'s `refined-this-session`
-# rule compares an issue's tracker-minted `updatedAt` against this file's mtime:
-# refinement must PREDATE the session that implements it. A stamp written after
-# the provisioning steps would date the session to whenever provisioning finished,
-# which is exactly the ordering that rule exists to refuse.
-#
-# Silent and non-fatal by construction — `mkdir -p` and a truncation, both
-# idempotent. `claim-check` refuses on a MISSING stamp rather than passing, so a
-# failure here fails closed downstream instead of needing to halt the session.
-run = "mkdir -p \"$(git rev-parse --git-dir)/batten-receipts\" && : > \"$(git rev-parse --git-dir)/batten-receipts/session-start\""
-
 [tasks."session:install"]
 description = "Session start: provision the mise toolchain, purely — the step whose absence was CLOUD-196"
 # The load-bearing one. `.mcp.json` launches Serena with `mise exec --`, and
@@ -7544,7 +7531,17 @@ description = "Session start: provision the mise toolchain, purely — the step 
 # manifest declares actually installed. That catches the lying zero AND the
 # install that fails silently, writing no error at all, because it reads the
 # outcome rather than the report.
-run = "env MISE_LOCKFILE=false mise install >/tmp/session-start-install.log 2>&1 || { echo '::error:: session-start: install failed — see /tmp/session-start-install.log' >&2; tail -5 /tmp/session-start-install.log >&2; exit 1; }\nif ! mise run toolchain-check; then echo '::error:: session-start: install reported success over an unprovisioned tree — the refusal above names every declared tool that is not installed' >&2; exit 1; fi"
+# QUIET BY DECLARATION, NOT BY A LOG REDIRECT (CLOUD-1991). The shell wrapper
+# sent both streams to a `/tmp` log, and on failure printed an `::error::` line
+# and the log's last five lines. `silent = "stdout"` is the half the handler
+# contract needs — a passing step's stdout would become session advice, which
+# CLOUD-891 removed — and `quiet` drops mise's own command echo. On a failure the
+# step's stderr IS the reason the door forwards, and its exit code is the step's
+# own rather than a flattened `1`.
+quiet = true
+silent = "stdout"
+env = { MISE_LOCKFILE = "false" }
+run = ["mise install", "mise run toolchain-check"]
 
 [tasks."toolchain-check"]
 description = "Gate: every tool [tools] declares is actually installed — the question doctor.sh structurally cannot ask"
@@ -7599,7 +7596,16 @@ printf '%s' "$probe" | cargo run --quiet -p batten -- doctor toolchain mise.toml
 
 [tasks."session:submodules"]
 description = "Session start: check out the vendored submodules — bats lives in tests/bats"
-run = "git submodule update --init --recursive >/tmp/session-start-submodules.log 2>&1 || { echo '::error:: session-start: submodules failed — see /tmp/session-start-submodules.log' >&2; tail -5 /tmp/session-start-submodules.log >&2; exit 1; }"
+# QUIET BY DECLARATION, NOT BY A LOG REDIRECT (CLOUD-1991). The shell wrapper
+# sent both streams to a `/tmp` log, and on failure printed an `::error::` line
+# and the log's last five lines. `silent = "stdout"` is the half the handler
+# contract needs — a passing step's stdout would become session advice, which
+# CLOUD-891 removed — and `quiet` drops mise's own command echo. On a failure the
+# step's stderr IS the reason the door forwards, and its exit code is the step's
+# own rather than a flattened `1`.
+quiet = true
+silent = "stdout"
+run = "git submodule update --init --recursive"
 
 [tasks."session:doctor"]
 description = "Session start: provision what mise does not own — the rustup cross targets above all (CLOUD-218)"
@@ -7615,7 +7621,16 @@ description = "Session start: provision what mise does not own — the rustup cr
 #
 # This is not a retry: it does not make the race survivable, it empties the
 # window the race needs.
-run = "mise run provision:startup >/tmp/session-start-doctor.log 2>&1 || { echo '::error:: session-start: provisioning failed — see /tmp/session-start-doctor.log' >&2; tail -5 /tmp/session-start-doctor.log >&2; exit 1; }"
+# QUIET BY DECLARATION, NOT BY A LOG REDIRECT (CLOUD-1991). The shell wrapper
+# sent both streams to a `/tmp` log, and on failure printed an `::error::` line
+# and the log's last five lines. `silent = "stdout"` is the half the handler
+# contract needs — a passing step's stdout would become session advice, which
+# CLOUD-891 removed — and `quiet` drops mise's own command echo. On a failure the
+# step's stderr IS the reason the door forwards, and its exit code is the step's
+# own rather than a flattened `1`.
+quiet = true
+silent = "stdout"
+run = "mise run provision:startup"
 
 [tasks."session:batten"]
 description = "Session start: install the latest RELEASE over whatever `deps-install` provisioned — a verified download, never a compile"
@@ -7670,7 +7685,16 @@ description = "Session start: install the latest RELEASE over whatever `deps-ins
 # The ordering consequence, unchanged: a session whose `deps-install` did not run
 # has no binary to dispatch handlers with, so nothing here runs and the advisory
 # `contract::unmediated_session` reports it.
-run = "./install.sh >/tmp/session-start-batten.log 2>&1 || { echo '::error:: session-start: release install failed — see /tmp/session-start-batten.log' >&2; tail -5 /tmp/session-start-batten.log >&2; exit 1; }"
+# QUIET BY DECLARATION, NOT BY A LOG REDIRECT (CLOUD-1991). The shell wrapper
+# sent both streams to a `/tmp` log, and on failure printed an `::error::` line
+# and the log's last five lines. `silent = "stdout"` is the half the handler
+# contract needs — a passing step's stdout would become session advice, which
+# CLOUD-891 removed — and `quiet` drops mise's own command echo. On a failure the
+# step's stderr IS the reason the door forwards, and its exit code is the step's
+# own rather than a flattened `1`.
+quiet = true
+silent = "stdout"
+run = "./install.sh"
 
 [tasks."session:git-hooks"]
 description = "Session start: install the repo-owned git hooks, the per-clone step nothing performed for 24 commits (CLOUD-476)"
@@ -7699,7 +7723,16 @@ description = "Session start: set this clone's repo-local git identity, quietly 
 # which is the CLOUD-891 announcement this hook had already removed. This keeps
 # the old behaviour exactly: silent when it has nothing to repair, loud when it
 # fails.
-run = "mise run attribution-identity >/tmp/session-start-identity.log 2>&1 || { echo '::error:: session-start: attribution-identity failed — see /tmp/session-start-identity.log' >&2; tail -5 /tmp/session-start-identity.log >&2; exit 1; }"
+# QUIET BY DECLARATION, NOT BY A LOG REDIRECT (CLOUD-1991). The shell wrapper
+# sent both streams to a `/tmp` log, and on failure printed an `::error::` line
+# and the log's last five lines. `silent = "stdout"` is the half the handler
+# contract needs — a passing step's stdout would become session advice, which
+# CLOUD-891 removed — and `quiet` drops mise's own command echo. On a failure the
+# step's stderr IS the reason the door forwards, and its exit code is the step's
+# own rather than a flattened `1`.
+quiet = true
+silent = "stdout"
+run = "mise run attribution-identity"
 
 [tasks."session:signing"]
 description = "Session start: put the not-signing posture into force, quietly — the `step`-wrapped call from the retired hook"
@@ -7708,7 +7741,16 @@ description = "Session start: put the not-signing posture into force, quietly �
 # `signing-posture: signing disabled in this checkout …` into every session's
 # advisory. Measured 2026-09-01 by dispatching the real rows. The retired script
 # `step`-wrapped this call, so that line was never a session's to read.
-run = "mise run signing-posture-repair >/tmp/session-start-signing.log 2>&1 || { echo '::error:: session-start: signing-posture failed — see /tmp/session-start-signing.log' >&2; tail -5 /tmp/session-start-signing.log >&2; exit 1; }"
+# QUIET BY DECLARATION, NOT BY A LOG REDIRECT (CLOUD-1991). The shell wrapper
+# sent both streams to a `/tmp` log, and on failure printed an `::error::` line
+# and the log's last five lines. `silent = "stdout"` is the half the handler
+# contract needs — a passing step's stdout would become session advice, which
+# CLOUD-891 removed — and `quiet` drops mise's own command echo. On a failure the
+# step's stderr IS the reason the door forwards, and its exit code is the step's
+# own rather than a flattened `1`.
+quiet = true
+silent = "stdout"
+run = "mise run signing-posture-repair"
 
 [tasks."session:wiring"]
 description = "Session start: reclaim the hook surface from launcher-provisioned siblings — the third repair of the class `session:identity` and `session:signing` already close (CLOUD-1079)"
@@ -7764,7 +7806,16 @@ description = "Session start: reclaim the hook surface from launcher-provisioned
 # `deps-install` above already describes, which the container's setup script
 # calls before any session begins — upstream of both the rewrite and the harness
 # snapshot.
-run = "batten wiring reclaim -y >/tmp/session-start-wiring.log 2>&1 || { echo '::error:: session-start: wiring reclaim failed — see /tmp/session-start-wiring.log' >&2; tail -5 /tmp/session-start-wiring.log >&2; exit 1; }"
+# QUIET BY DECLARATION, NOT BY A LOG REDIRECT (CLOUD-1991). The shell wrapper
+# sent both streams to a `/tmp` log, and on failure printed an `::error::` line
+# and the log's last five lines. `silent = "stdout"` is the half the handler
+# contract needs — a passing step's stdout would become session advice, which
+# CLOUD-891 removed — and `quiet` drops mise's own command echo. On a failure the
+# step's stderr IS the reason the door forwards, and its exit code is the step's
+# own rather than a flattened `1`.
+quiet = true
+silent = "stdout"
+run = "batten wiring reclaim -y"
 
 [tasks."session:census"]
 description = "Session start: record this boot and read back what was running when the container we replaced went down (CLOUD-451)"

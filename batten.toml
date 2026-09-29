@@ -11776,15 +11776,10 @@ expires = "2027-02-28"
 # close, so each is sized against the slowest honest run of that step and not
 # against the warm one this container measures.
 
-[[hook.handler]]
-id = "session-stamp"
-on = "session-start"
-run = ["mise", "run", "session:stamp"]
-# Two `git rev-parse` calls and a truncation. Nothing here can be slow, and a
-# bound this tight is the statement: a stamp that needs ten seconds is broken.
-timeout_ms = 10000
-owner = "CLOUD-312"
-expires = "2027-02-28"
+# NO `session-stamp` ROW SINCE CLOUD-1991. The session boundary `claim check`
+# dates refinement against is written by `batten hook` itself at SessionStart,
+# before any row below runs — the engine reads it, so the engine writes it, and a
+# consumer no longer has to know to declare the step its gate depends on.
 
 [[hook.handler]]
 id = "session-install"
@@ -11835,7 +11830,8 @@ expires = "2027-02-28"
 id = "session-git-hooks"
 on = "session-start"
 run = ["mise", "run", "session:git-hooks"]
-# Two symlinks. Same reasoning as `session-stamp`.
+# Two symlinks. Nothing here can be slow, and a bound this tight is the
+# statement: a step that needs ten seconds is broken.
 timeout_ms = 10000
 owner = "CLOUD-312"
 expires = "2027-02-28"

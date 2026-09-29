@@ -125,8 +125,10 @@ use common::{at_root, git_in, scratch, stderr, stdout, write};
 ///
 /// A LIST RATHER THAN A COUNT, because a count cannot tell an added row from a
 /// renamed one, and the ordering claim below needs the names anyway.
-const DECLARED: [&str; 14] = [
-    "session-stamp",
+const DECLARED: [&str; 13] = [
+    // NO `session-stamp`: the engine writes the stamp itself before any row runs
+    // (CLOUD-1991), which `a_session_start_writes_the_stamp_before_any_row_runs`
+    // asserts over the compiled binary.
     "session-install",
     "session-submodules",
     "session-doctor",
@@ -360,6 +362,38 @@ fn the_steps_run_in_declaration_order() {
         ran.lines().collect::<Vec<_>>(),
         ["zulu", "alpha", "mike"],
         "the declaration order is the running order"
+    );
+}
+
+// carried: "session:stamp: the session boundary is written first, before any provisioning step" crates/batten/src/lib.rs kind:mechanism crates/batten/tests/it/session_provisioning.rs
+// changed: "session:stamp: the stamp is a declared handler row a consumer runs" crates/batten/src/lib.rs `claim check` reads the stamp, so `batten hook` writes it at SessionStart ahead of every handler; the `session-stamp` row and its `mise` task are withdrawn, and a repository that never declared them is now dated too
+#[test]
+fn a_session_start_writes_the_stamp_before_any_row_runs() {
+    // THE STAMP IS THE ENGINE'S (CLOUD-1991). The step below records whether the
+    // stamp already existed when it ran, which is the ordering the claim gate's
+    // `refined-this-session` rule depends on: refinement must PREDATE the
+    // session, so the boundary is written before anything is provisioned.
+    let bench = bench("session-stamp", &[("observer", 5000)]);
+    bench.step(
+        "observer",
+        "if [ -f \"$(git rev-parse --git-dir)/batten-receipts/session-start\" ]; then \
+         printf 'present\\n' > \"$(dirname \"$0\")/../observed\"; else \
+         printf 'absent\\n' > \"$(dirname \"$0\")/../observed\"; fi",
+    );
+
+    let door = bench.session_start();
+    assert_eq!(door.code, Some(0), "session start allows: {}", door.err);
+    assert!(
+        bench
+            .repo
+            .join(".git/batten-receipts/session-start")
+            .is_file(),
+        "a session start through the door dates the session"
+    );
+    assert_eq!(
+        std::fs::read_to_string(bench.repo.join("observed")).expect("the step ran"),
+        "present\n",
+        "the stamp exists before the first declared row runs"
     );
 }
 
@@ -854,22 +888,29 @@ fn the_install_step_is_declared_lockfile_free() {
     // where it is: the row names `mise run session:install`, and the environment
     // assignment is inside that task's body. Asserting it on the row would be
     // asserting a spelling this change did not choose.
-    let text = std::fs::read_to_string(at_root("mise.toml")).expect("mise.toml is readable");
-    let body = text
-        .split("[tasks.\"session:install\"]")
-        .nth(1)
-        .expect("the install step is a declared task")
-        .split("\n[tasks")
-        .next()
-        .expect("the task body ends at the next table");
+    //
+    // PARSED RATHER THAN SCANNED since CLOUD-1991 moved the assignment from a
+    // `VAR=` prefix in the body to the task's `env` table: a substring scan of the
+    // block would be satisfied by the COMMENT that explains the setting, which is
+    // a gate reading prose rather than the declaration.
+    let block = task_block("session:install").expect("the install step is a declared task");
+    let parsed: toml::Value = toml::from_str(&block).expect("a task block is a TOML table");
+    let task = parsed
+        .get("tasks")
+        .and_then(toml::Value::as_table)
+        .and_then(|tasks| tasks.values().next())
+        .expect("the block carries its task");
 
-    assert!(
-        body.contains("MISE_LOCKFILE=false"),
+    assert_eq!(
+        task.get("env")
+            .and_then(|env| env.get("MISE_LOCKFILE"))
+            .and_then(toml::Value::as_str),
+        Some("false"),
         "provisioning installs purely, so it cannot append a platform key `mise lock` \
          cannot produce and `lock cover partial` rejects"
     );
     assert!(
-        body.contains("mise install"),
+        task_value(&block, "run").contains("mise install"),
         "the step whose absence was CLOUD-196 is the one this task performs"
     );
 }
