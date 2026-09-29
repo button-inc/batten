@@ -61,13 +61,18 @@
 //! An id, a rule, a column word, a path and line, a count — never a byte of an
 //! issue body and never a line of a source file. Bodies carry customer detail.
 //!
-//! # Why this is Rust and not a module
+//! # The decisions here are OWED to a preset, and this is not their home
 //!
-//! A Rego module reads `input.tree.*` or a mediated call, and there is no
-//! payload-set surface for it to read — [`crate::ready`]'s own header records
-//! the same bound for the grammar this composes. So the decision lives beside
-//! the only reader that can see its input, and every vocabulary it decides with
-//! is the consumer's.
+//! The migration's rule puts a generic decision in a preset bundle and only the
+//! mechanism in the engine; this package's row named the `tracker-hygiene`
+//! bundle. An earlier revision of this header argued that no Rego module could
+//! read a payload set, and that is refuted in this tree: `duplicate-close-check`
+//! records piped payloads as facts and decides over them in
+//! `policy/duplicate-close.rego`. So the predicates below — the column claims,
+//! the `blockedBy` graph, the frontier, the citation joins — are a port still
+//! owed, recorded as a blocker on CLOUD-1221 rather than defended as a design.
+//! Every vocabulary they decide with is already the consumer's, which is the
+//! half of the move that is done.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
