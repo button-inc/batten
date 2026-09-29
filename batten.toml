@@ -2391,12 +2391,13 @@ record = "branch-age"
 writer = "mise run branch-age-record"
 
 # CLOUD-583's probe and verifier, ported off `attestation-check.sh` under
-# CLOUD-1717. The producer makes the posture probe, downloads the release's
-# archives, unpacks each one and runs `gh attestation verify` over the BINARY
-# inside — every step of which section 5 keeps outside `check`.
+# CLOUD-1717 and off `[tasks.attestation-record]` onto the engine under CLOUD-843.
+# The producer makes the posture probe, downloads the release's archives, unpacks
+# each one and runs the verifier over the BINARY inside — every step of which
+# section 5 keeps outside `check`. `batten` is this consumer's binary name.
 [[record]]
 record = "attestation"
-writer = "mise run attestation-record"
+writer = "batten record attestation --binary batten"
 
 # CLOUD-266's other half, ported off `timeout-drift.sh` under CLOUD-1717. The
 # producer reads successful runs from the Actions API, subtracts their instants
@@ -6303,8 +6304,8 @@ no_fix_reason = "the missing fields do not exist in a cargo lockfile, so no comm
 
 # Release provenance, adopted as `gh attestation verify` (CLOUD-583, CLOUD-279
 # verdict 1 — `slsa-verifier` is redundant against the same absent provenance and
-# `cosign` has no signing identity here). `policy/attestation.rego` carries the
-# design; what belongs here is why this is ONE row and which half it runs.
+# `cosign` has no signing identity here). The `supply-chain` preset's
+# `attestation-is-verified.rego` carries the design (CLOUD-843); what belongs here is why this is ONE row and which half it runs.
 #
 # THE OFFLINE HALF, and that is the whole of the wiring decision. Whether a
 # published release is attested changes with no diff, so it is a property of the
@@ -6335,23 +6336,27 @@ no_fix_reason = "the missing fields do not exist in a cargo lockfile, so no comm
 # had anything to do with attestation. CLOUD-614 carries the general defect; naming
 # the file the row exists to run is what makes the trigger and the mechanism the
 # same object rather than a coincidence.
-# REPOINTED, NOT REMOVED (CLOUD-1717). `mise-tasks/attestation-check.sh` is
-# retired, and its precondition mode survives as `[tasks.attestation-record]
-# --precondition`: the same one fact, decided from the same local reading, still
-# at `deny` on every gate invocation. Retiring the row instead would have removed
-# a gate and owed a weakening; this changes only which program carries it.
+# REPOINTED, NOT REMOVED (CLOUD-1717, and again under CLOUD-843).
+# `mise-tasks/attestation-check.sh` retired into `[tasks.attestation-record]
+# --precondition`, and that body retired onto `batten record attestation`, whose
+# world half needs the network. The precondition was always ONE fact — the
+# verifier resolves through the pin — so it is that fact's own argv now, the
+# `regal`/`opa` rows' shape below: the same local reading, no network, still at
+# `deny` on every gate invocation. Retiring the row instead would have removed a
+# gate; changing the check is the `rule-predicate-changed` pair CLOUD-843's
+# integration answers for.
 #
 # THE GLOB FOLLOWS THE CHECK, which is this row's own discipline one paragraph
 # down: it must name a path `batten-glob-check` can prove covered, and it must not
-# match inside a fixture tree, because a `mise run` check resolves only where a
+# match inside a fixture tree, because a `mise exec` check resolves only where a
 # mise.toml is findable. `mise.toml` is both — it is in hk's `batten-check` list,
-# and it is where the task body now lives, so the trigger and the mechanism stay
-# the same object.
+# and it is where the pin the check resolves through is declared, so the trigger
+# and the mechanism stay the same object.
 [[rule]]
 id = "release check unread"
 kind = "command"
 glob = "mise.toml"
-check = "mise run attestation-record --precondition"
+check = "mise exec -- gh --version"
 severity = "deny"
 scope = "tree"
 no_fix_reason = "install the pinned `gh` (`mise install aqua:cli/cli`) or supply GH_TOKEN; neither is a change to this tree's content"
@@ -6775,53 +6780,39 @@ writer = "mise run evaluator-io-record"
 # attribution gate structurally has: `Attribution` carries `identity_deny`,
 # `trailer_deny`, `body_deny`, `trailer_allow` and `identity` with NO signature
 # field, so `gpgsig` — the one commit field that was carrying a vendor-held key —
-# is invisible to it until CLOUD-440 lets the engine read a commit object.
+# is invisible to it.
+#
+# THE `supply-chain` PRESET, ENABLED ONCE, and this is the row (CLOUD-843). Its
+# modules decide the signing posture AND a release's attestation — the second was
+# `release grade unsafe`'s own row, folded in here because two rows enabling one
+# preset at one scope would each evaluate every module and report each finding
+# twice. `release-assets.yml` names this row now.
+#
+# THE COLUMNS ARE WHAT THE SIGNING MODULE READS, and without them it ships dead:
+# `commit.gpgsign` per scope is the CONFLICT the retired task body computed in
+# shell, and `origin/main..HEAD` is the range `commit-attribution` and
+# `commit-lint` share, read for each commit's `signed` header bit. The signer's
+# own classification — a readable, non-empty key file — is the one reading no
+# projection can make, so it stays a record the engine writes.
 [[rule]]
 id = "commit grade unsafe"
 kind = "policy"
 scope = "tree"
-module = "policy/signing-posture.rego"
+preset = "supply-chain"
+git_config = ["commit.gpgsign"]
+commits = ["origin/main..HEAD"]
 severity = "deny"
-no_fix_reason = "a commit already signed cannot be unsigned in place: repair the checkout's config (`mise run signing-posture-repair`) and rewrite the range, or publish the key's public half so the signature becomes verifiable (CLOUD-591)"
+no_fix_reason = "a commit already signed cannot be unsigned in place: repair the checkout's config (`batten attribution signing`) and rewrite the range, or publish the key's public half so the signature becomes verifiable (CLOUD-591); an unverified release is rebuilt and re-attested, never edited"
 
+# The signer's classification, written by the engine from this checkout's own
+# config (CLOUD-843 retired the task that gathered it).
 [[record]]
 record = "signing-posture"
-writer = "mise run signing-posture-record"
+writer = "batten record derive signing-posture"
 
-[[verdict]]
-id = "config carry unsafe"
-gloss = "signing is on in this checkout with a signer whose key cannot be verified or reproduced"
-class = """
-NOT A VERDICT ABOUT SIGNING, which is good and which CLOUD-591 is working \
-toward. It is about a signature that LOOKS like provenance and carries none: a \
-key whose public half cannot be read, or a signer under `/tmp` that the container \
-reclaims. The refusal is the CONFLICT — something outside the checkout turns \
-signing on and nothing local answers it — never the mere absence of a local \
-override, because a CI runner has no launcher and an absent local value is \
-correct there.
-"""
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run signing-posture-repair"
-
-[[verdict]]
-id = "commit carry unsafe"
-gloss = "a commit in range carries a gpgsig from a key this repository cannot verify or reproduce"
-class = """
-The posture already produced one. Config can be repaired AFTER a commit was \
-written, so a repaired checkout still carries what it signed before the repair — \
-and those are exactly what must not reach `main`. That is why this is a separate \
-class from the config one rather than the same finding twice: repairing the \
-config clears that arm and leaves this one firing, which is the distinction the \
-declared mutation exists to hold.
-"""
-
-[[verdict.route]]
-id = "module read first"
-kind = "document"
-target = "policy/signing-posture.rego"
+# `config carry unsafe` and `commit carry unsafe` MOVED into the `supply-chain`
+# preset's manifest under CLOUD-843, with the decision they name: a vendored
+# class and a consumer row may not share a token.
 
 [[verdict]]
 id = "test judge never"
@@ -7369,18 +7360,11 @@ scope = "tree"
 module = "policy/branch-age.rego"
 severity = "warn"
 
-# CLOUD-583, ported off `mise-tasks/attestation-check.sh` under CLOUD-1717.
-#
-# `deny` BECAUSE THE GAP IS NOT A VERDICT. The module fires nothing while the
-# platform offers no attestation — a 404 posture judges no artifact — so the only
-# way this reds is a release whose binaries the verifier actually refused where
-# attestation IS available. That is a release to fix, which is what `deny` means.
-[[rule]]
-id = "release grade unsafe"
-kind = "policy"
-scope = "tree"
-module = "policy/attestation.rego"
-severity = "deny"
+# CLOUD-583's row, `release grade unsafe`, folded into `commit grade unsafe`
+# under CLOUD-843: its module moved into the `supply-chain` preset, and that row
+# is where the preset is enabled. Still `deny`, for the reason this row gave: the
+# module fires nothing while the platform offers no attestation, so the only way
+# it reds is a release whose binaries the verifier actually refused.
 
 # CLOUD-266's world half, ported off `mise-tasks/timeout-drift.sh` under
 # CLOUD-1717.
@@ -15392,54 +15376,9 @@ id = "patch run first"
 kind = "command"
 target = "git commit -F <path>"
 
-# CLOUD-583's three readings, ported off `attestation-check.sh` under CLOUD-1717.
-[[verdict]]
-id = "release ship unsafe"
-gloss = "a release archive's binary carries no verifiable provenance"
-class = """
-`gh attestation verify` refused the executable inside a published archive while \
-the platform DOES offer attestation for this repository. That is a release to \
-fix rather than a gap to report, and the two are told apart by the attestations \
-endpoint's own status code: 200 with an empty array where the feature exists, \
-404 on the resource where it does not. The subject is the BINARY and not the \
-archive, because `release-artifacts.yml` attests the executable deliberately so \
-that repackaging cannot launder the claim.
-"""
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run attestation-record"
-
-[[verdict]]
-id = "release carry missing"
-gloss = "a release archive carries no executable to verify"
-class = """
-The archive unpacked and held no `batten` binary, so there was nothing for the \
-verifier to judge. A packaging problem rather than a provenance one, and its own \
-class for that reason: collapsing it into the unverified finding would send a \
-reader after a signing identity when the dist matrix dropped a file.
-"""
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run attestation-record"
-
-[[verdict]]
-id = "release list empty"
-gloss = "the producer looked at a tag and found no archive on it"
-class = """
-A green verdict over a release carrying nothing would be about nothing. \
-Present-and-empty and absent are different readings and must not collapse: an \
-absent record is the producer unable to look, where this is the producer having \
-looked and found a tag with no archives.
-"""
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run attestation-record"
+# CLOUD-583's three readings — `release ship unsafe`, `release carry missing`
+# and `release list empty` — MOVED into the `supply-chain` preset's manifest
+# under CLOUD-843, with the module that raises them.
 
 # CLOUD-266's four readings, ported off `timeout-drift.sh` under CLOUD-1717.
 [[verdict]]

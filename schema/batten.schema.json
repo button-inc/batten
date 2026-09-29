@@ -4139,6 +4139,7 @@
             "mise",
             "pinned-toolchain",
             "shell-hygiene",
+            "supply-chain",
             "trunk-based"
           ]
         },

@@ -150,8 +150,8 @@ jobs:
           version: 2026.9.1
           # `rust`, and nothing else. `commit-lint` depends on `commit-check` and
           # `commit-attribution`, both of which are `cargo run --quiet -p batten`,
-          # and on `signing-posture`, which uses only git, gpg and ssh-keygen —
-          # none of them pinned here. The other 27 `[tools]` entries were being
+          # and on `signing-posture-check`, which is the same engine since
+          # CLOUD-843 reads the signer and the range in process. The other 27 `[tools]` entries were being
           # installed on every PR push to run a commit-subject predicate.
           install_args: rust
       # A REQUIRED CHECK THAT SPENDS ~340s COLD-BUILDING TO RUN A 758ms LINT

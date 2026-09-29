@@ -888,6 +888,102 @@ asserted rather than tested.",
         ],
         patterns: &[],
     },
+    // CLOUD-843's `supply-chain`: what a release and a commit claim about where
+    // they came from is checkable. Two modules here, and more ship with the SBOM
+    // readings beside them; each binds its own `package` so their helpers cannot
+    // collide. Both read records the ENGINE's own producers write under the
+    // producer's name (`record derive signing-posture`, `record attestation`),
+    // and git facts a row declares, so no consumer fact travels inside one.
+    Manifest {
+        name: "supply-chain",
+        version: 1,
+        modules: &[
+            PresetModule {
+                scope: RuleScope::Tree,
+                // A forge's attestation endpoint answered through the engine's
+                // producer, never a workflow's expression language.
+                provider: None,
+                pointer: "<preset:supply-chain>/attestation-is-verified.rego",
+                source: include_str!("policy/presets/supply-chain/attestation-is-verified.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                // git's own config scopes and commit headers; no CI provider.
+                provider: None,
+                pointer: "<preset:supply-chain>/signer-is-verifiable.rego",
+                source: include_str!("policy/presets/supply-chain/signer-is-verifiable.rego"),
+            },
+        ],
+        verdicts: &[
+            VendoredVerdict {
+                id: "release ship unsafe",
+                gloss: "a release archive's binary carries no verifiable provenance",
+                class: "The verifier refused the executable inside a published archive while the \
+platform DOES offer attestation for this repository. That is a release to fix rather than a gap \
+to report, and the two are told apart by the attestations endpoint's own status code: 200 with an \
+empty list where the feature exists, 404 on the resource where it does not. The subject is the \
+BINARY and not the archive, because a release attests the executable so that repackaging cannot \
+launder the claim.",
+                routes: &[run(
+                    "record run first",
+                    "batten record attestation <tag> --binary <name>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "release carry missing",
+                gloss: "a release archive carries no executable to verify",
+                class: "The archive unpacked and held no binary of the declared name, so there was \
+nothing for the verifier to judge. A packaging problem rather than a provenance one, and its own \
+class for that reason: collapsing it into the unverified finding would send a reader after a \
+signing identity when the build matrix dropped a file.",
+                routes: &[run(
+                    "record run first",
+                    "batten record attestation <tag> --binary <name>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "release list empty",
+                gloss: "the producer looked at a tag and found no archive on it",
+                class: "A green verdict over a release carrying nothing would be about nothing. \
+Present-and-empty and absent are different readings and must not collapse: an absent record is \
+the producer unable to look, where this is the producer having looked and found a tag with no \
+archives.",
+                routes: &[run(
+                    "record run first",
+                    "batten record attestation <tag> --binary <name>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "config carry unsafe",
+                gloss: "signing is on in this checkout with a signer whose key cannot be verified or reproduced",
+                class: "NOT A VERDICT ABOUT SIGNING, which is good. It is about a signature that \
+LOOKS like provenance and carries none: a key whose public half cannot be read, or a signer under \
+a directory the environment reclaims. The refusal is the CONFLICT — something turns signing on and \
+no local `false` answers it — never the mere absence of a local override, because a CI runner has \
+no launcher and an absent local value is correct there.",
+                routes: &[run("repair run first", "batten attribution signing")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "commit carry unsafe",
+                gloss: "a commit in range carries a gpgsig from a key this repository cannot verify or reproduce",
+                class: "The posture already produced one. Config can be repaired AFTER a commit was \
+written, so a repaired checkout still carries what it signed before the repair — and those are \
+exactly what must not land. That is why this is a separate class from the config one rather than \
+the same finding twice: repairing the config clears that arm and leaves this one firing. Rewrite \
+the range unsigned, or publish the key's public half so the signature becomes verifiable.",
+                routes: &[read(
+                    "module read first",
+                    "<preset:supply-chain>/signer-is-verifiable.rego",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+        ],
+        patterns: &[],
+    },
     Manifest {
         name: "trunk-based",
         version: 1,
