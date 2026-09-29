@@ -101,6 +101,7 @@ row here, so a new module lands with its line.
 - `drain.rs` — the advisory drain (CLOUD-79): the first thing that reads the store back TO the agent.
 - `emission.rs` — the emission policy (CLOUD-165): hysteresis and a re-emit cap on the notification channel, and NOTHING on the state plane.
 - `judge.rs` — the judge's payload-privacy boundary (CLOUD-135): what may be sent to a model.
+- `dispatch.rs` — parallel-session dispatch cleared by receipt (CLOUD-1978): a passing `batten lint brief` and the owner's `Approve dispatch` answer each write a digest-keyed receipt, and `cleared` answers the `dispatch-cleared` fact the `claude-code-cloud` preset grants `create_session`/`send_message` on. Digests and a boolean only, never a byte of a prompt.
 - `design.rs` — design-evidence integrity gates (CLOUD-53): is the RECORD behind a decision sound, whatever the decision was?
 - `transcript.rs` — completed-session transcripts as an optional `check` input (CLOUD-95): a serde parse from a host-provided path to a typed event stream.
 - `selfwrite.rs` — unprompted agent self-persistence (CLOUD-267): a memory write in a turn no genuine user message opened, over `transcript.rs`'s stream.
