@@ -5039,8 +5039,9 @@ continue_on_error = false
 # P5-SCHEMA-PENDING (CLOUD-843): uncomment once `mise run schema` has regenerated
 # `schema/batten.schema.json` from the merged binary; the committed schema
 # predates the key, so the commit-time `taplo` step refuses it until then. NOT
-# OPTIONAL: commented out, the guard and the posture census decide nothing here,
-# and `connector_allow_door.rs`'s
+# OPTIONAL, and the branch does not land commented: commented out, the
+# `connector-allow-guard` pre-tool handler (`mcp:guard`) and the posture census
+# (CLOUD-765) decide nothing here, and `connector_allow_door.rs`'s
 # `this_repository_declares_the_names_its_guard_translates` is red until it is.
 # [mcp]
 # permission_aliases = ["Claude_Code_Remote"]
@@ -10933,7 +10934,11 @@ credential_names = ["BATTEN_GITHUB_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN"]
 # endpoint and claim, in its order.
 # P5-SCHEMA-PENDING (CLOUD-843): uncomment once `mise run schema` has regenerated
 # `schema/batten.schema.json` from the merged binary; the commit-time `taplo` step
-# refuses `forge.probe` until then.
+# refuses `forge.probe` until then. NOT OPTIONAL, and the branch does not land
+# commented: with no row, `batten doctor forge` refuses before it probes, so the
+# `session-credential` handler below reports a usage refusal at every session
+# start in place of the credential diagnosis, and `gh_preflight.rs`'s
+# `this_repository_declares_the_claims_its_tasks_need` is red until it is.
 # [[forge.probe]]
 # endpoint = "repos/{owner}/{repo}"
 # claim = "metadata=read"

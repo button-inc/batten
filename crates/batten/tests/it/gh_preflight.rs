@@ -7,6 +7,12 @@
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
 // carried: mise-tasks/gh-preflight.sh crates/batten/src/preflight.rs kind:verb crates/batten/tests/it/gh_preflight.rs
+// carried: "every_read_answering_passes_and_names_the_identity" crates/batten/src/preflight.rs kind:verb
+// carried: "a_forbidden_read_is_missing_and_named" crates/batten/src/preflight.rs kind:verb
+// changed: "a_claim_github_names_that_the_table_does_not_marks_it_stale" crates/batten/src/preflight.rs kind:verb still exit 1 and still STALE naming both claims; the table it is checked against is the consumer's `[[forge.probe]]` rows rather than an inline bash table, so the words say "the forge" and "the table" where the retired body said "GitHub" and "we" (`a_claim_the_forge_names_that_the_table_does_not_marks_it_stale`)
+// carried: "a_not_found_read_is_reported_not_counted" crates/batten/src/preflight.rs kind:verb
+// changed: "the_write_claims_are_declared_never_probed" crates/batten/src/preflight.rs kind:verb still three rows reported and never asked, each by its row's `probe = false` as the retired table's `|no` column; the label drops "write —", which the retired body printed even for the `actions=read` jobs row, and the case now also asserts the forge was never asked those endpoints (`the_declared_only_claims_are_never_probed`)
+// changed: "no_resolvable_repository_is_could_not_look" crates/batten/src/preflight.rs kind:verb still could-not-look with the same words, renumbered from the retired script's exit 2 to exit 1: the house contract's could-not-look is `ExitCode::Usage` (1), and the corpus inverts the shell's 1/2 (`no_resolvable_repository_is_a_failed_diagnosis`)
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

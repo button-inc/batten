@@ -58,8 +58,9 @@ following them re-derived hand dispatch.
   connectors ignore `permissions.allow`; closed not-planned) and
   [#96638](https://github.com/anthropics/claude-code/issues/96638) (plan mode
   re-prompts on every call to a parameterized MCP tool; open).
-- `mcp-allow-check --session` reports the unenforceable committed grants at
-  session start. It says the prompt stands, not how to clear it.
+- `batten mcp posture` (the `mcp-attach-check` handler row; it replaced
+  `mcp-allow-check --session` under CLOUD-843) reports the unenforceable
+  committed grants at session start. It says the prompt stands, not how to clear it.
 - Re-test after a client upgrade rather than trusting any memory, this one
   included.
 
