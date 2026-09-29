@@ -166,6 +166,7 @@ pub mod store;
 /// The per-suite cost corpus, derived from the report the runner already wrote.
 pub mod suites;
 pub mod surface;
+pub mod sweep;
 /// What a long-running task is doing, recorded where it can be read without a log.
 pub mod task;
 /// The task runner's argv, from a receipt minted outside the mediated call.
@@ -484,6 +485,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(Command::Dist(request)) => dist::run(&request, out, err),
         Some(Command::Board { command }) => match command {
             cli::BoardCommand::Check { .. } => unimplemented("board check"),
+            cli::BoardCommand::Sweep { issues } => run_board_sweep(&issues, &overrides, out, err),
         },
         // The census is the one foundation verb that answers today: the §8 chain
         // supplies the declaration, and the tree is the WORKING TREE's — the
@@ -3504,6 +3506,7 @@ fn run_landed(
             refs,
             instant,
             max_idle_days,
+            gather,
         } => run_landed_abandoned(
             overrides,
             &AbandonAsk {
@@ -3513,6 +3516,7 @@ fn run_landed(
                 refs: refs.as_deref(),
                 instant: instant.as_deref(),
                 max_idle_days: max_idle_days.as_deref(),
+                gather,
             },
             mode,
             out,
@@ -3533,6 +3537,177 @@ struct AbandonAsk<'a> {
     refs: Option<&'a str>,
     instant: Option<&'a str>,
     max_idle_days: Option<&'a str>,
+    /// Acquire every arm above that names no file (CLOUD-843).
+    gather: bool,
+}
+
+/// Pages of 100 the branch listing may walk before it refuses as truncated.
+const BRANCH_PAGES: u32 = 50;
+
+/// What `landed abandoned --gather` acquired for itself, arm by arm (CLOUD-843,
+/// retiring `[tasks.in-progress-drain]`'s gather).
+///
+/// `None` is an arm the caller named a file for, which the gather never
+/// overrides: an explicit file is the caller's evidence, and silently replacing
+/// it with a fresher reading would make a fixture unrepeatable.
+#[derive(Debug, Default)]
+struct Gathered {
+    claimed: Option<std::collections::BTreeSet<String>>,
+    merged: Option<std::collections::BTreeSet<String>>,
+    refs: Option<std::collections::BTreeSet<String>>,
+}
+
+// The gather's mutations (CLOUD-843, retiring `[tasks.in-progress-drain]`). Each
+// drops one gathered arm, or launders one arm's could-not-look into an empty
+// reading, and the named case is the compiled tier that stops discriminating;
+// `board sweep`'s `--issue` read is the last two rows.
+//MUTANT gather-trunk-ignored|s@        evidence.claimed.extend(keys.iter().cloned());@        let _ = keys;@|an_in_progress_issue_whose_commits_are_on_main_is_landed_unswept
+//MUTANT gather-merged-ignored|s@        evidence.merged.extend(keys.iter().cloned());@        let _ = keys;@|the_merged_set_is_gathered_when_no_file_names_it
+//MUTANT gather-refs-ignored|s@            Ok(names) => gathered.refs = Some(names),@            Ok(_) => {}@|the_remote_branch_list_is_gathered_and_an_empty_one_could_not_look
+//MUTANT gather-trunk-unread-is-empty|s@git::messages_reachable(root, &trunk)@Some(String::new())@|a_gather_that_cannot_read_the_trunk_is_could_not_look
+//MUTANT gather-trunk-hardcoded|s@worktree::land_target(root, config.must_land_on.as_deref())@Ok::<_, anyhow::Error>(Some(String::from("origin/main")))@|the_gather_reads_the_declared_trunk_not_origin_main
+//MUTANT gather-merged-failure-is-empty|s@            Err(why) => return Ok(Err(format!("merged pull requests: {why}"))),@            Err(_) => gathered.merged = Some(std::collections::BTreeSet::new()),@|a_gather_whose_merged_pull_requests_cannot_be_read_is_could_not_look
+//MUTANT sweep-issue-read-dropped|s@        stream.push_str(&text);@        let _ = \&text;@|several_ids_are_resolved_in_one_sweep
+//MUTANT sweep-issue-reads-the-write|s@    let tools = \[READ_TOOL.to_owned()\];@    let tools = [READ_TOOL.to_owned(), WRITE_TOOL.to_owned()];@|a_later_save_issue_response_does_not_displace_the_read_the_sweep_hands_its_gates
+
+/// Acquire every evidence arm the caller named no file for.
+///
+/// **Each arm is the authority its file used to come from, consulted rather
+/// than copied.** The trunk's closing keys are [`race::claimed_from`] with
+/// [`race::Source::ClosingOnly`] over the trunk's whole history — the task piped
+/// `git log --format=%B origin/main` into `claim keys --closing-only`, which is
+/// that call. The merged set is [`merged_pr_lines`], `claim merged`'s own body.
+/// The branches are the forge's listing, which is what `git ls-remote --heads`
+/// read, through the vendored client rather than a spawn.
+///
+/// **ONE TRUNK AND ONE REPOSITORY FOR ALL THREE ARMS** (review of CLOUD-843's
+/// port). The trunk is [`worktree::land_target`] — the consumer's declared
+/// `must_land_on`, else the remote's recorded default — which is the answer
+/// `worktree status` and the baseline already read; a literal `origin/main` here
+/// was a second answer, and on any consumer whose trunk is named otherwise it
+/// made the drain could-not-look forever. Both forge arms derive their
+/// repository from [`repo_slug`], so a consumer pointing `LAND_LOCK_REMOTE` or
+/// `GH_REPO` at another repository reads its merged pull requests and its
+/// branches from the SAME one rather than one from each.
+///
+/// # Errors
+///
+/// The outer `Result` is config and the checkout. The inner `Err` is a gather
+/// that could not finish — an unresolvable trunk, a forge that did not answer, a
+/// truncated or empty listing — which the verb renders as could-not-look: a
+/// thinner evidence set would read landed rows as live and live branches as
+/// dead, and both push a row toward ABANDONED.
+fn gather_evidence(
+    root: &Path,
+    ask: &AbandonAsk<'_>,
+    overrides: &Overrides,
+) -> Result<std::result::Result<Gathered, String>> {
+    let mut gathered = Gathered::default();
+    if ask.claimed.is_none() {
+        let config = resolve::resolve(Path::new("."), overrides)?;
+        let Some(trunk) = worktree::land_target(root, config.must_land_on.as_deref())? else {
+            return Ok(Err(
+                "no trunk to read: `must_land_on` is not declared and the remote records no \
+                 default branch, so which keys the trunk closes cannot be read"
+                    .to_owned(),
+            ));
+        };
+        let Some(log) = git::messages_reachable(root, &trunk) else {
+            return Ok(Err(format!(
+                "{trunk} did not resolve, or its history could not be walked to the end, so \
+                 which keys the trunk closes cannot be read"
+            )));
+        };
+        let grammar = board_grammar(overrides)?;
+        gathered.claimed = Some(
+            race::claimed_from("", "", &log, "", &grammar, race::Source::ClosingOnly)
+                .into_iter()
+                .collect(),
+        );
+    }
+    if ask.merged_prs.is_none() {
+        match merged_pr_lines(root, MERGED_PR_LIMIT, overrides)? {
+            Ok(lines) => {
+                gathered.merged = Some(
+                    lines
+                        .iter()
+                        .filter_map(|line| line.split('\t').next())
+                        .map(str::to_owned)
+                        .collect(),
+                );
+            }
+            Err(why) => return Ok(Err(format!("merged pull requests: {why}"))),
+        }
+    }
+    if ask.refs.is_none() {
+        match remote_branches(root) {
+            Ok(names) => gathered.refs = Some(names),
+            Err(why) => {
+                return Ok(Err(format!(
+                    "the remote's branches: {why}. On a forge this listing does not reach, \
+                     name the branches with --refs instead"
+                )));
+            }
+        }
+    }
+    Ok(Ok(gathered))
+}
+
+/// Every branch name the remote carries, from the forge's listing.
+///
+/// Could-not-look, as the retired task's `git ls-remote` reading was, on: no
+/// repository to ask about, a forge that did not answer, a walk that did not
+/// reach the end, and a listing with no branch at all — which cannot be true of
+/// a repository with a trunk, and read as empty would make every claim's branch
+/// read as gone.
+///
+/// **A FORGE LISTING, NOT A GIT TRANSPORT, and that narrows who can gather this
+/// arm.** The retired `git ls-remote --heads` worked against any remote git's
+/// own credential could reach; this reads the forge's REST listing through the
+/// vendored client, so it starts no program and the verb stays a `read` — but a
+/// consumer whose forge does not serve that listing gets could-not-look here on
+/// every run. That is the safe direction, and the arm is not lost to them:
+/// `--refs <file>` still takes the names, and an arm the caller names a file for
+/// is never gathered.
+fn remote_branches(root: &Path) -> std::result::Result<std::collections::BTreeSet<String>, String> {
+    let Some(slug) = repo_slug(root) else {
+        return Err("no remote this can derive a repository from".to_owned());
+    };
+    let git_dir = git::git_dir(root).map_err(|failure| failure.to_string())?;
+    let rows = match forge::window(
+        &git_dir,
+        &format!("repos/{slug}/branches"),
+        &[("per_page", "100")],
+        forge::Shape::Bare,
+        BRANCH_PAGES,
+    ) {
+        forge::Window::Whole(rows) => rows,
+        forge::Window::Truncated { read, .. } => {
+            return Err(format!(
+                "the walk read {read} branch(es) and did not reach the end — a truncated list \
+                 makes a live branch read as gone"
+            ));
+        }
+        forge::Window::CouldNotLook { endpoint, status } => {
+            return Err(format!(
+                "the forge did not answer for {endpoint} (status {})",
+                status.map_or_else(|| String::from("none"), |code| code.to_string())
+            ));
+        }
+    };
+    let names: std::collections::BTreeSet<String> = rows
+        .iter()
+        .filter_map(|row| row.get("name").and_then(serde_json::Value::as_str))
+        .map(str::to_owned)
+        .collect();
+    if names.is_empty() {
+        return Err(
+            "the remote reports no branches at all, which cannot be true of a repository with \
+             a trunk"
+                .to_owned(),
+        );
+    }
+    Ok(names)
 }
 
 /// Sweep a board for columns that contradict git and the forge.
@@ -3725,13 +3900,18 @@ fn run_landed_abandoned(
     // ABANDONED — the sweep over-reports, and an over-reporting drain is the one
     // that gets switched off. `--claimed` and `--landed-by` fail the safe way
     // and stay optional.
-    let Some(merged_prs) = ask.merged_prs else {
+    //
+    // `--gather` is the one other way to satisfy it: the verb reads the same
+    // merged-PR authority `claim merged` does, and a gather that cannot finish
+    // is could-not-look below rather than an empty arm.
+    if ask.merged_prs.is_none() && !ask.gather {
         return Err(UsageError::raise(
             "landed: no --merged-prs evidence, so every row a merged pull request closed would \
-             read as an abandoned claim. Supply `<CLOUD-id><TAB><pr-number>` lines."
+             read as an abandoned claim. Supply `<CLOUD-id><TAB><pr-number>` lines, or pass \
+             --gather to read them from the forge."
                 .to_owned(),
         ));
-    };
+    }
 
     // THE CLOCK IS THE BOUNDARY'S. An instant the caller names is parsed here
     // and refused here; absent, the system clock answers — and either way the
@@ -3766,11 +3946,28 @@ fn run_landed_abandoned(
     })?;
     let claims = landed::claims_from(&value)?;
 
+    // THE GATHER RUNS AFTER THE PAYLOAD READS, so a caller piping the wrong
+    // thing is told so without a forge round trip first — the order the retired
+    // `[tasks.in-progress-drain]` kept.
+    let gathered = if ask.gather {
+        match gather_evidence(&board_root(), ask, overrides)? {
+            Ok(gathered) => gathered,
+            Err(why) => {
+                writeln!(err, "batten: landed abandoned: could not look: {why}")?;
+                return Ok(ExitCode::Internal);
+            }
+        }
+    } else {
+        Gathered::default()
+    };
+
     let mut evidence = landed::Evidence::default();
     if let Some(path) = ask.claimed {
         for (key, _) in evidence_file(path, "--claimed")? {
             evidence.claimed.insert(key);
         }
+    } else if let Some(keys) = &gathered.claimed {
+        evidence.claimed.extend(keys.iter().cloned());
     } else {
         // ABSENCE IS A READING, AND HERE IT LEANS THE UNSAFE WAY. On the sibling
         // arm a missing `--claimed` under-reports; on this one it does the
@@ -3791,8 +3988,12 @@ fn run_landed_abandoned(
              `claimed-keys --closing-only` output to decide on all three arms.",
         )?;
     }
-    for (key, _) in evidence_file(merged_prs, "--merged-prs")? {
-        evidence.merged.insert(key);
+    if let Some(path) = ask.merged_prs {
+        for (key, _) in evidence_file(path, "--merged-prs")? {
+            evidence.merged.insert(key);
+        }
+    } else if let Some(keys) = &gathered.merged {
+        evidence.merged.extend(keys.iter().cloned());
     }
     if let Some(path) = ask.landed_by {
         for (key, reference) in evidence_file(path, "--landed-by")? {
@@ -3806,6 +4007,8 @@ fn run_landed_abandoned(
         for (name, _) in evidence_file(path, "--refs")? {
             refs.insert(name);
         }
+    } else if let Some(names) = &gathered.refs {
+        refs.extend(names.iter().cloned());
     }
 
     // THE COLUMN THE DRAIN SELECTS ON, demanded for `run_landed_check`'s reason
@@ -4964,10 +5167,6 @@ fn run_claim_merged(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let cannot_look = |err: &mut dyn Write, why: &str| -> Result<ExitCode> {
-        writeln!(err, "batten: claim merged: {why}")?;
-        Ok(ExitCode::Internal)
-    };
     let limit = match limit {
         Some(raw) => match raw.trim().parse::<usize>() {
             Ok(parsed) if parsed > 0 => parsed,
@@ -4981,10 +5180,47 @@ fn run_claim_merged(
         },
         None => MERGED_PR_LIMIT,
     };
+    match merged_pr_lines(repo, limit, overrides)? {
+        Ok(lines) => {
+            for line in lines {
+                writeln!(out, "{line}")?;
+            }
+            Ok(ExitCode::Success)
+        }
+        Err(why) => {
+            writeln!(err, "batten: claim merged: {why}")?;
+            Ok(ExitCode::Internal)
+        }
+    }
+}
 
-    let remotes = git::remote_fact(repo)?.remotes;
-    let Some(slug) = remotes.get("origin").and_then(|url| race::slug_of(url)) else {
-        return cannot_look(err, "no origin remote this can derive a repository from");
+/// `<key>\t<number>` for every key a merged pull request body CLOSES, or why the
+/// reading could not be made.
+///
+/// Lifted out of [`run_claim_merged`] so `landed abandoned --gather` reads the
+/// SAME authority rather than a second copy of it (CLOUD-338: both sides of a
+/// landed-ness comparison come out of one extraction). Every could-not-look the
+/// verb documents is an `Err` here, and the verb renders it.
+///
+/// # Errors
+///
+/// The outer `Result` is config resolution and the checkout; the inner one is
+/// the forge's answer.
+fn merged_pr_lines(
+    repo: &Path,
+    limit: usize,
+    overrides: &resolve::Overrides,
+) -> Result<std::result::Result<std::collections::BTreeSet<String>, String>> {
+    // [`repo_slug`], never a second derivation: `landed abandoned --gather` reads
+    // the remote's branches through it, and two arms asking two repositories —
+    // `GH_REPO` or `LAND_LOCK_REMOTE` for one, `origin` for the other — would
+    // judge one repository's claims against another's merges.
+    let Some(slug) = repo_slug(repo) else {
+        return Ok(Err(
+            "no remote this can derive a repository from (`GH_REPO`, else the \
+             `LAND_LOCK_REMOTE` remote, else `origin`)"
+                .to_owned(),
+        ));
     };
     let git_dir = git::git_dir(repo)?;
     // ONE PAGE OF 100 PER LAP, so the budget is stated in pull requests rather
@@ -5000,23 +5236,17 @@ fn run_claim_merged(
     ) {
         forge::Window::Whole(rows) => rows,
         forge::Window::Truncated { read, .. } => {
-            return cannot_look(
-                err,
-                &format!(
-                    "the walk read {read} pull request(s) and did not reach the end — the answer \
-                     is truncated, and a truncated evidence file makes landed work read as live. \
-                     Raise --limit above {limit} and run again"
-                ),
-            );
+            return Ok(Err(format!(
+                "the walk read {read} pull request(s) and did not reach the end — the answer \
+                 is truncated, and a truncated evidence file makes landed work read as live. \
+                 Raise --limit above {limit} and run again"
+            )));
         }
         forge::Window::CouldNotLook { endpoint, status } => {
-            return cannot_look(
-                err,
-                &format!(
-                    "the forge did not answer for {endpoint} (status {})",
-                    status.map_or_else(|| String::from("none"), |code| code.to_string())
-                ),
-            );
+            return Ok(Err(format!(
+                "the forge did not answer for {endpoint} (status {})",
+                status.map_or_else(|| String::from("none"), |code| code.to_string())
+            )));
         }
     };
 
@@ -5028,21 +5258,20 @@ fn run_claim_merged(
         .filter(|row| row.get("merged_at").is_some_and(|at| !at.is_null()))
         .collect();
     if merged.is_empty() {
-        return cannot_look(
-            err,
+        return Ok(Err(
             "the forge reports no merged pull requests at all, which cannot be true of a \
-             repository with a trunk — a reachability problem, not an empty answer",
-        );
+             repository with a trunk — a reachability problem, not an empty answer"
+                .to_owned(),
+        ));
     }
 
     let grammar = board_grammar(overrides)?;
     let mut lines: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for row in merged {
         let Some(number) = row.get("number").and_then(serde_json::Value::as_u64) else {
-            return cannot_look(
-                err,
-                "a pull request in the reading carries no usable number",
-            );
+            return Ok(Err(
+                "a pull request in the reading carries no usable number".to_owned(),
+            ));
         };
         let body = row
             .get("body")
@@ -5052,10 +5281,7 @@ fn run_claim_merged(
             lines.insert(format!("{key}\t{number}"));
         }
     }
-    for line in lines {
-        writeln!(out, "{line}")?;
-    }
-    Ok(ExitCode::Success)
+    Ok(Ok(lines))
 }
 
 fn run_claim_bot(
@@ -5557,6 +5783,84 @@ fn parse_json(text: &str) -> Result<serde_json::Value> {
             "the input is not a get_issue payload with a .description field".to_owned(),
         )
     })
+}
+
+/// `batten board sweep`: every gate the committed `[board] sweep` table
+/// declares, run over one payload set and reported as a set (CLOUD-825,
+/// retiring `[tasks.board-sweep]` under CLOUD-843).
+///
+/// The payload set is stdin, or — with `--issue` — each key's newest READ out
+/// of the capture store, which is what retired `[tasks.board-payloads]`: the
+/// sweep pays the fetch once because the fetch already stored the bytes, and no
+/// agent re-types a payload (CLOUD-526). A key with no stored read is refused by
+/// name, never skipped: sweeping a short closure is what every board gate
+/// refuses.
+///
+/// # Errors
+///
+/// [`UsageError`] for an undeclared or malformed table, an unreadable or empty
+/// payload set, and a key the store holds no read for — each could-not-look
+/// about the INPUT, before any gate runs.
+fn run_board_sweep(
+    issues: &[String],
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    let gates = config
+        .board
+        .as_ref()
+        .map(|board| board.sweep.as_slice())
+        .unwrap_or_default();
+    if let Some(why) = sweep::malformed(gates) {
+        return Err(UsageError::raise(format!("board sweep: {why}")));
+    }
+    let root = board_root();
+    let text = if issues.is_empty() {
+        let mut raw = String::new();
+        std::io::stdin().read_to_string(&mut raw)?;
+        raw
+    } else {
+        stored_payloads(&root, issues)?
+    };
+    let (payload, count) =
+        sweep::prepare(&text).map_err(|why| UsageError::raise(format!("board sweep: {why}")))?;
+    sweep::run(&root, gates, &payload, count, out, err)
+}
+
+/// Each key's newest stored READ, as one stream of payloads.
+///
+/// [`READ_TOOL`] alone, where `ready lint --issue` also takes the write's
+/// response: a board gate reads RELATIONS and attachments, and a write's
+/// response is shape-identical across `id`, `status` and `attachments` while
+/// omitting `relations` — so letting a later write displace the read would hand
+/// the gates a poorer payload than the one the tracker served (CLOUD-782).
+fn stored_payloads(root: &Path, issues: &[String]) -> Result<String> {
+    let tools = [READ_TOOL.to_owned()];
+    let mut stream = String::new();
+    for key in issues {
+        let selector = capture::Selector {
+            tools: &tools,
+            key,
+            key_at: DEFAULT_KEY_AT,
+        };
+        let Some(found) = capture::find(root, &selector)? else {
+            return Err(UsageError::raise(format!(
+                "board sweep: no stored {READ_TOOL} read for {key} in this repository's capture \
+                 store — read the row and the capture mints itself, then run this again"
+            )));
+        };
+        let bytes = capture::read(root, &found.capture)?;
+        let text = String::from_utf8(bytes).map_err(|_| {
+            UsageError::raise(format!(
+                "board sweep: the stored response for {key} is not UTF-8"
+            ))
+        })?;
+        stream.push_str(&text);
+        stream.push('\n');
+    }
+    Ok(stream)
 }
 
 /// The tool whose response carries an issue body as read.

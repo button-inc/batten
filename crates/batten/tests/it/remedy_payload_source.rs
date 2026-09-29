@@ -1,5 +1,5 @@
 //! Every remedy that sources a payload names the source that works on ANY host
-//! (CLOUD-990), over the committed config and `[tasks.board-payloads]`' body.
+//! (CLOUD-990), over the committed config.
 //!
 //! Measured before the rule existed: an agent read `board-payloads`' refusal on a
 //! host that writes no transcript, concluded the board could not be written, and
@@ -15,7 +15,7 @@
 // carried: "THE PREDICATE: every refusal names the source that works on any host" batten.toml kind:mechanism
 // carried: "THE STRONGER PREDICATE: the two board-write rows send the reader to no payload at all" batten.toml kind:mechanism
 // carried: "every --grep in a remedy carries a pattern, since a bare flag is not a command" batten.toml kind:mechanism
-// carried: "the absent-transcript path spells the recipe, since that is where the agent lands" mise.toml kind:mechanism
+// changed: "the absent-transcript path spells the recipe, since that is where the agent lands" crates/batten/src/lib.rs the transcript route retired with `[tasks.board-payloads]` (CLOUD-843): the capture store is the one route, so no refusal is left to be written for a host with no transcript
 // carried: "the search recipe is followable in the ZERO-HIT case its own text blesses" batten.toml kind:mechanism
 // carried: "no message invites the agent to re-type a payload" batten.toml kind:mechanism
 // carried: "the capture route is described as equally valid, not as a fallback to apologise for" batten.toml kind:mechanism
@@ -45,22 +45,10 @@ fn reason(id: &str) -> Option<String> {
     first
 }
 
-/// `board-payloads`' absent-transcript refusal: from its message to the `fi`.
-fn absent() -> String {
-    let body = common::task_body("board-payloads");
-    let start = body
-        .find("no readable transcript")
-        .expect("the absent-transcript refusal");
-    let rest = &body[start..];
-    let end = rest.find("\nfi\n").expect("the refusal's block closes");
-    rest[..end].to_owned()
-}
-
 struct Messages {
     read_guard: String,
     search_guard: String,
     claim_row: String,
-    absent: String,
 }
 
 fn messages() -> Messages {
@@ -68,7 +56,6 @@ fn messages() -> Messages {
         read_guard: reason("issue read stale").expect("the read guard's reason"),
         search_guard: reason("issue list unread").expect("the search guard's reason"),
         claim_row: reason("claim read unread").expect("the claim row's reason"),
-        absent: absent(),
     }
 }
 
@@ -79,22 +66,18 @@ fn every_message_is_found_and_is_the_refusal() {
     assert!(m.read_guard.contains("get_issue"));
     assert!(m.search_guard.contains("list_issues"));
     assert!(m.claim_row.contains("claim-check"));
-    assert!(m.absent.contains("not an empty harvest"));
 }
 
 /// THE PREDICATE, in its runnable shape: `show` names the verb and `--raw` makes
-/// the bytes pipeable. Both, where naming only `board-payloads` dead-ends.
+/// the bytes pipeable. Both, where naming a transcript-only route dead-ends.
 #[test]
 fn every_payload_sourcing_refusal_names_the_capture_store_runnably() {
     let m = messages();
-    for message in [&m.claim_row, &m.absent] {
-        assert!(message.contains("batten capture show"), "{message}");
-        assert!(message.contains("--raw"), "{message}");
-        assert!(message.contains("re-type"), "{message}");
-        assert!(message.contains("bytes the tracker returned"), "{message}");
-    }
-    assert!(m.absent.contains("batten capture list"));
-    assert!(m.absent.contains("--grep"));
+    let message = &m.claim_row;
+    assert!(message.contains("batten capture show"), "{message}");
+    assert!(message.contains("--raw"), "{message}");
+    assert!(message.contains("re-type"), "{message}");
+    assert!(message.contains("bytes the tracker returned"), "{message}");
 }
 
 /// CLOUD-1024: the board-write rows ask for a call, never a payload, so they
@@ -122,7 +105,7 @@ fn the_board_write_rows_send_the_reader_to_no_payload() {
 #[test]
 fn every_grep_in_a_remedy_is_typeable() {
     let m = messages();
-    for message in [&m.read_guard, &m.search_guard, &m.claim_row, &m.absent] {
+    for message in [&m.read_guard, &m.search_guard, &m.claim_row] {
         let mut rest = message.as_str();
         while let Some(at) = rest.find("--grep") {
             let prefix = &rest[..at];

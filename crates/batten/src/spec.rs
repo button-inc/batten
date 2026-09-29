@@ -576,6 +576,13 @@ mod tests {
                 // `git ls-remote`, so this arm starts no program either. That
                 // was the design constraint the flag exists to satisfy.
                 //
+                // `--gather` (CLOUD-843) keeps it: the verb may now acquire the
+                // arms itself, but from the trunk's history in process and from
+                // the forge through the vendored client — `claim merged`'s own
+                // route — so it still starts no program. A forge that client
+                // cannot list is could-not-look on that arm, and `--refs` is
+                // still how such a consumer supplies it.
+                //
                 // Before its sibling because the list is compared SORTED, not as
                 // a set: `abandoned` precedes `check`.
                 "landed abandoned".to_owned(),
@@ -830,6 +837,10 @@ mod tests {
             // because the tracker-hygiene packages may hang recording arms under it.
             "board".to_owned(),
             "board check".to_owned(),
+            // Every declared board gate over one payload set (CLOUD-825),
+            // retiring `[tasks.board-sweep]`. Unclassified: it runs the argv the
+            // consumer's `[board] sweep` rows declare.
+            "board sweep".to_owned(),
             // The handle-navigation noun (CLOUD-121). `capture show`, not a
             // bare `show`: §2 is noun-verb and lists no bare `show`, and the
             // noun is what gives lifecycle (`prune`) somewhere to live.

@@ -754,6 +754,13 @@ declared_modules := {
 	# network, and its `hook`, `repair` and `check` edges are forbidden below for
 	# `rest`'s reason.
 	"preflight",
+	# `sweep` arrived with CLOUD-843, retiring `[tasks.board-sweep]`. It is a
+	# COMPOSER: it runs the argv a consumer's `[board] sweep` rows declare, through
+	# `exec`'s placed adapter, and folds their exits onto `exit`'s table. It reads
+	# `board` for the row type and nothing else — it decides no gate's predicate,
+	# so it reaches no decider, and because what it runs is consumer-declared its
+	# `hook` and `repair` edges are forbidden below for `repair`'s reason.
+	"sweep",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
@@ -825,11 +832,14 @@ forbidden[from] contains to if {
 		# `mcp_grant`, `mcp_posture` and `preflight` join for `mcp`'s and
 		# `rest`'s reasons one hop out (CLOUD-843): the first two reach `mcp`, the
 		# third reaches `rest`.
+		# `sweep` joins for `repair`'s reason below (CLOUD-843): it runs argv a
+		# consumer declared, and a mediated call able to reach it would run every
+		# board gate inside CLOUD-689's ceiling.
 		"hook": {
 			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
 			"pr_watch", "fast_forward", "main_watch", "forge_query", "ci_signal", "sbom",
 			"step",
-			"mcp_grant", "mcp_posture", "preflight",
+			"mcp_grant", "mcp_posture", "preflight", "sweep",
 		},
 		# `repair` RUNS A CONSUMER'S DECLARED COMMAND ON THE MEDIATED PATH
 		# (CLOUD-1639), so it inherits `hook`'s set entire and for the same
@@ -854,7 +864,7 @@ forbidden[from] contains to if {
 			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
 			"pr_watch", "fast_forward", "main_watch", "forge_query", "ci_signal", "sbom",
 			"step",
-			"mcp_grant", "mcp_posture", "preflight",
+			"mcp_grant", "mcp_posture", "preflight", "sweep",
 		},
 		# `check` NAMES NO MODULE TODAY, so this row is INERT — and that is worth
 		# stating rather than leaving a reader to infer enforcement from a table
@@ -1002,6 +1012,10 @@ forbidden[from] contains to if {
 		"mcp_grant": {"hook"},
 		"mcp_posture": {"hook"},
 		"preflight": {"hook"},
+		# `sweep -> {rules, hook}`, `forge_query`'s pair for the composer's reason:
+		# a sweep that reached the engine deciding over one of its gates would be a
+		# second authority on that gate's predicate (CLOUD-843).
+		"sweep": {"rules", "hook"},
 	}
 	some to in targets
 }
@@ -1404,6 +1418,40 @@ test_the_step_cache_reaches_what_it_composes if {
 	count(violation) == 0 with input as judging(
 		"crates/batten/src/lib.rs",
 		[internal("step", 20)],
+	)
+}
+
+# CLOUD-843's board sweep, both directions: the mediated call must not reach a
+# composer that runs consumer-declared argv, and the composer must not reach the
+# engine deciding over any gate it runs.
+test_the_mediated_path_must_not_reach_the_board_sweep if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("sweep", 31)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/repair.rs",
+		[internal("sweep", 31)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/sweep.rs",
+		[internal("rules", 12)],
+	)
+}
+
+# AND THE ARRANGEMENT: the composer reads the row type, spawns through the placed
+# adapter and folds onto the exit table, and the dispatch reaches it.
+test_the_board_sweep_reaches_what_it_composes if {
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/sweep.rs",
+		[internal("board", 10), internal("exec", 11), internal("exit", 12)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/lib.rs",
+		[internal("sweep", 20)],
 	)
 }
 

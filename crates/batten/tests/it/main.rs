@@ -393,6 +393,7 @@ mod submodule;
 mod suite_cost_corpus;
 mod suite_subjects;
 mod surface;
+mod sweep_exit_table;
 mod symbols;
 mod target_consolidation;
 mod target_prune;

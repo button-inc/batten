@@ -533,8 +533,9 @@ structurally unable to make.
 shipped tag — spelling the placeholder in angle brackets makes it a redirect and the line
 dies with a shell syntax error before `mise` is ever reached. Then pipe the In
 Review closure back through it (`get_issue` payloads carrying `attachments`,
-`description` and `relations` — `board-payloads` recovers them byte-perfect from
-the transcript) for the conjunction with `graph-check`; then `done-check` to
+`description` and `relations` — the capture store holds them byte-perfect, and
+`batten board sweep --issue <key>...` hands each key's newest stored read to every
+declared board gate at once) for the conjunction with `graph-check`; then `done-check` to
 confirm no Done outran its release. Shipping a ref is **necessary, not
 sufficient** — read each row's own Acceptance against the released tree before
 promoting it. CLOUD-807 was once Done with none of its acceptance met, and a

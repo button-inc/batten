@@ -2217,13 +2217,20 @@ const DECLINED: FlagDecl = FlagDecl {
 /// The remote's branch names, one per line. **Evidence rather than a spawn, and
 /// that is what keeps the arm on the read-only allowlist**: `spec.rs` admits
 /// `landed check` there precisely because it "starts no program", so resolving
-/// this with a `git ls-remote` would take the arm off it. The program being
-/// retired gathered them itself; gathering is the caller's half of
-/// agents-fetch-gates-decide, where a credential belongs.
+/// this with a `git ls-remote` would take the arm off it.
 ///
-/// Absent is an empty list, which is a legitimate reading: a repository whose
-/// branches the caller did not gather cannot rescue any claim, and the refusal
-/// for a gather that FAILED belongs to the caller that ran it.
+/// Since CLOUD-843 the verb can also acquire the names itself, under `--gather`
+/// — through the forge's REST listing and the vendored client, which is still
+/// no program started, so the verb stays `read` the way `claim merged` (a forge
+/// read by the same client) is. That listing is one forge's; a consumer whose
+/// forge does not serve it gathers could-not-look on this arm and names the
+/// branches here instead — `git ls-remote --heads` output reduced to names,
+/// from whatever credential the caller holds. A file named here is never
+/// replaced by a gathered reading.
+///
+/// Absent without `--gather` is an empty list, which is a legitimate reading: a
+/// repository whose branches the caller did not gather cannot rescue any claim,
+/// and the refusal for a gather that FAILED belongs to the caller that ran it.
 const REFS: FlagDecl = FlagDecl {
     id: "refs",
     long: Some("refs"),
@@ -2237,6 +2244,27 @@ const REFS: FlagDecl = FlagDecl {
     rung: Rung::None,
     value: ValueDecl::Str,
 };
+
+/// `--gather` on `landed abandoned` (CLOUD-843, retiring
+/// `[tasks.in-progress-drain]`).
+///
+/// A SWITCH over the arms rather than a replacement for them: an arm the caller
+/// names a file for is read from that file, and only an arm left unnamed is
+/// acquired — the trunk's closing keys from the declared trunk's (`must_land_on`)
+/// history in process, the merged pull requests and the remote's branches from
+/// the forge through the vendored client, both from the one repository
+/// `GH_REPO` / `LAND_LOCK_REMOTE` resolve. Off, every arm keeps its
+/// caller-supplied contract unchanged. A gather that cannot finish is
+/// could-not-look, never a thinner evidence set.
+///
+/// Still `read`: every acquisition is in process or through the vendored forge
+/// client, so the verb starts no program — the property its place on the
+/// read-only allowlist rests on.
+const GATHER: FlagDecl = FlagDecl::switch(
+    "gather",
+    "gather",
+    "Acquire each evidence arm no file was named for: the trunk's closing keys, merged pull requests, and the remote's branches",
+);
 
 /// `--instant <ISO-8601>` on `landed abandoned` (CLOUD-1513).
 ///
@@ -4678,7 +4706,15 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_VERDICT,
         effect: Effect::Read,
-        flags: &[CLAIMED, MERGED_PRS, LANDED_BY, REFS, INSTANT, MAX_IDLE_DAYS],
+        flags: &[
+            CLAIMED,
+            MERGED_PRS,
+            LANDED_BY,
+            REFS,
+            INSTANT,
+            MAX_IDLE_DAYS,
+            GATHER,
+        ],
     },
     CommandDecl {
         path: "ready lint",
@@ -6667,6 +6703,21 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_VERDICT,
         effect: Effect::Read,
+        flags: &[BOARD_ISSUE],
+    },
+    // Every board gate over ONE payload set, reported as a set (CLOUD-825),
+    // retiring `[tasks.board-sweep]` (CLOUD-843). UNCLASSIFIED, not `read`: it
+    // runs the argv the consumer's `[board] sweep` rows declare, and what those
+    // do is theirs. The spawn is `exec`'s placed adapter, so the inventory does
+    // not grow. `EXITS_VERDICT`: a refusal is `Violation`, and a gate that could
+    // not look — or abstained on this clone — is `Internal`.
+    CommandDecl {
+        path: "board sweep",
+        id: "board.sweep",
+        about: "Run every declared board gate over one payload set and report the set of refusals",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Unclassified,
         flags: &[BOARD_ISSUE],
     },
     // How far the landing loop diverged from linear over a window (retiring
