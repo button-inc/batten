@@ -2957,6 +2957,20 @@ record nonverdict` classifies failed required jobs by their failed steps and
   through it `resolve`. A row keys only index entries, tool stdout and args, so
   a step reading state outside the tree (`enforce`: record/capture stores under
   the git dir) has no row — `batten-check` runs uncached.
+- `release.rs` — a published release's own assets (CLOUD-843, retiring the
+  `checksums`, `release-assets-record` and `release-backfill` bodies).
+  `release sums` hashes the assets into a `sha256sum`-format manifest in byte
+  order, never itself; `record release` records the tag, assets, the
+  manifest's entries and the entries whose bytes disagree (`sha256sum -c` in
+  process) as `release-<kind>` lines closed by a census, so the
+  `release-hygiene` preset reads them by KIND without naming the family;
+  `release backfill` dispatches a workflow per tag, oldest first by version,
+  waiting on each RUN id through `pr_watch`'s one clock. **It decides
+  nothing**: the manifest's truth is the preset's, the expected asset list the
+  consumer module's. Asset bytes come through `rest::download`
+  (`Accept: application/octet-stream`; `fetch` drops the credential on the
+  cross-host redirect). Manifest name, workflow, branch and tag glob are
+  arguments (rule 1).
 - `severity.rs` — the severity taxonomy (CLOUD-168): one rank table plus the
   adapter across the three axes — `RuleSeverity` (config, CLOUD-61),
   `AdvisoryTier` (the one _stored_ severity, CLOUD-80/78), `ReportLevel`

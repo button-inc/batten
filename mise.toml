@@ -683,7 +683,7 @@ CI_VERDICT_STEPS = "Run mise run ,Run mise exec -- "
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,branch-age,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,macos-link,ntia,task-pr-unsubscribed,task-test:cargo,release-tracking,sbom-actions,task-sonar-gate,task-callable,transcript-corpus,engine-rules,release-assets,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,ci-signal,engine-ci-signal,docs-tree-absent,ripcord-untracked,hk-pin-agreement,engine-record,hk-fix-selection.pkl,engine-dist,engine-sbom,supply-chain,engine-reclaim,engine-durable,engine-step,engine-step-table,engine-mcp-grant,engine-mcp-posture,engine-preflight,engine-trust,engine-sweep,sweep-exit-table,tracker-hygiene,engine-tracker-reading,task-duplicate-close-check"
+MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,branch-age,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,macos-link,ntia,task-pr-unsubscribed,task-test:cargo,release-tracking,sbom-actions,task-sonar-gate,task-callable,transcript-corpus,engine-rules,release-assets,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,ci-signal,engine-ci-signal,docs-tree-absent,ripcord-untracked,hk-pin-agreement,engine-record,hk-fix-selection.pkl,engine-dist,engine-sbom,supply-chain,engine-reclaim,engine-durable,engine-step,engine-step-table,engine-mcp-grant,engine-mcp-posture,engine-preflight,engine-trust,engine-sweep,sweep-exit-table,tracker-hygiene,engine-tracker-reading,task-duplicate-close-check,engine-release,release-hygiene,task-sbom-binary-record"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -2658,103 +2658,15 @@ flag "--names" help="print the asset path and exit, with no build and no network
 # so asking for the name still builds nothing.
 run = '{% if usage.names %}echo reference={% if env.RENDER_CLI_OUT_DIR %}{{env.RENDER_CLI_OUT_DIR}}{% else %}reference{% endif %}/{{env.BATTEN_CLI_REFERENCE}}{% else %}cargo run --quiet -p batten -- artifacts write --reference {% if env.RENDER_CLI_OUT_DIR %}{{env.RENDER_CLI_OUT_DIR}}{% else %}reference{% endif %}/{{env.BATTEN_CLI_REFERENCE}}{% endif %}'
 
-# CLOUD-278's manifest, moved off `mise-tasks/checksums.sh` under CLOUD-1717. An
-# EFFECT with no decision in it — download a release's own assets, hash them in
-# byte order, write `SHA256SUMS` — so there is no module to move anything into and
-# the body moves whole. The release workflow calls it by this name, and
-# `release-assets-check` asks `--names` for the asset path rather than spelling it.
+# CLOUD-278's manifest, moved off `mise-tasks/checksums.sh` under CLOUD-1717 and
+# off this body onto `batten release sums` under CLOUD-843: download a release's
+# own assets, hash them in byte order, write the manifest, never hashing itself.
+# The release workflow calls it by this name with the tag appended (an empty tag
+# is the latest release), and `--names` answers the path with no network. The
+# manifest's name is `[env]`'s one declaration, rendered into the argv.
 [tasks.checksums]
 description = "Effect: derive the SHA256 manifest of a release's own assets, read back after upload"
-shell = "bash -c"
-# ARGUMENTS ARRIVE THROUGH `usage`, not `$1`: an inline body is a template, and
-# mise appends raw arguments to its TEXT, so `--names` ran as a command and an
-# empty `$1` hashed the latest release instead. `usage` hands them over by name.
-usage = '''
-flag "--names" help="print the manifest path and exit, with no tag, network or download"
-arg "[tag]" help="the release to hash; the latest when omitted or empty"
-'''
-run = '''
-{% raw %}
-set -euo pipefail
-
-# The asset name. One authority: `release-assets-check` asks `--names` rather
-# than spelling it a second time, the way it already asks `sbom --names`.
-readonly MANIFEST="${BATTEN_CHECKSUM_MANIFEST:?the manifest name is declared in [env]}"
-
-# Where the manifest lands. Overridable so a caller can stage it outside the
-# tree; git-ignored either way, like `dist/` and `sbom/`.
-OUT_DIR="${CHECKSUMS_OUT_DIR:-checksums}"
-SUMS="${OUT_DIR}/${MANIFEST}"
-
-# Answered before the tag lookup and before any network, so a gate can ask from
-# any directory and pay nothing for the answer.
-if [[ "${usage_names:-}" = "true" ]]; then
-	echo "sums=$SUMS"
-	exit 0
-fi
-
-# An empty first argument is "no tag", not a tag named "": the release workflow
-# passes `"$TAG"` quoted, so the argument always arrives.
-tag="${usage_tag:-}"
-if [[ -z "$tag" ]]; then
-	if ! tag=$(gh release view --json tagName --jq .tagName 2>/dev/null) || [[ -z "$tag" ]]; then
-		echo "::error:: checksums: no tag given and no latest release readable. Pass one: mise run checksums <tag>" >&2
-		exit 2
-	fi
-fi
-
-scratch=$(mktemp -d)
-trap 'rm -rf "$scratch"' EXIT
-
-# gh writes progress to stderr already; its stdout goes there too so the KEY=VALUE
-# channel this script owns cannot be polluted by a future gh that prints on it.
-if ! gh release download "$tag" --dir "$scratch" --clobber >&2; then
-	echo "::error:: checksums: cannot download the assets of release $tag, so there is nothing to hash. That is a lookup failure, not an empty release." >&2
-	exit 2
-fi
-
-# A manifest must never hash itself. Re-running against a release that already
-# carries one would otherwise digest the previous run's output, and the file
-# could never be reproduced from the release it describes.
-rm -f "$scratch/$MANIFEST"
-
-# LC_ALL=C so the order is byte order on every machine: two runs over one release
-# produce identical bytes, which is what makes the published artifact a function
-# of the release rather than of who cut it.
-#
-# A `read` loop rather than `mapfile` (CLOUD-282): `mapfile` is bash 4 and macOS
-# ships 3.2, so it would die here on the one platform whose release artifacts
-# this manifest covers. `no-bash4-mapfile` in batten.toml is the standing gate —
-# it caught this line the day the file landed.
-assets=()
-while IFS= read -r asset; do
-	assets+=("$asset")
-done < <(cd "$scratch" && shopt -s nullglob && for f in *; do printf '%s\n' "$f"; done | LC_ALL=C sort)
-
-if [[ "${#assets[@]}" -eq 0 ]]; then
-	echo "::error:: checksums: release $tag carries no assets to hash. A manifest that covers nothing is indistinguishable from no manifest, so none is written." >&2
-	exit 1
-fi
-
-# Written inside the scratch directory first and moved into place only on success:
-# a failed run must not leave a truncated manifest for the upload step to publish.
-# Safe to write there — the argument list is already fixed, so this file is not
-# among the ones being hashed.
-if ! (cd "$scratch" && LC_ALL=C sha256sum -- "${assets[@]}" >"$MANIFEST"); then
-	echo "::error:: checksums: could not hash the assets of release $tag, so no manifest was produced." >&2
-	exit 1
-fi
-
-mkdir -p "$OUT_DIR"
-mv "$scratch/$MANIFEST" "$SUMS"
-
-echo "checksums: $tag — ${#assets[@]} asset(s) hashed" >&2
-
-# stdout is the answer: a pointer to the artifact, never its bytes (rule 4).
-# KEY=VALUE so the release workflow appends it to $GITHUB_OUTPUT unchanged.
-echo "sums=$SUMS"
-{% endraw %}
-'''
+run = "cargo run --quiet -p batten -- release sums --manifest {{env.BATTEN_CHECKSUM_MANIFEST}}"
 
 # CLOUD-518's gate and CLOUD-790's actor, moved off `mise-tasks/pr-unsubscribed.sh`
 # under CLOUD-1717. `drop` and `record` are effects that mint a receipt under
@@ -3014,170 +2926,22 @@ mint_receipt "$session" "$pr" "$answer" agent
 '''
 
 # CLOUD-258/262/278's reading half, ported off `mise-tasks/release-assets-check.sh`
-# under CLOUD-1717. The decisions are `policy/release-assets.rego`'s; this records
-# NAMES only — the matrix targets, the platform-independent assets the release job
-# uploads, the release's assets, the manifest's name and entries, and
-# `sha256sum -c`'s failures — and refuses, writing nothing, wherever the retired
-# program exited 2.
+# under CLOUD-1717 and off this body onto `batten record release` under
+# CLOUD-843. It records what the FORGE says — the tag, the assets, the manifest's
+# entries and the entries whose bytes disagree — and nothing else: which assets
+# the release must carry is derived by `policy/release-assets.rego` from the build
+# workflow it declares as a document, and whether the manifest tells the truth is
+# the `release-hygiene` preset's. The tag is appended; empty is the latest.
 [tasks.release-assets-record]
-description = "Effect: record a release's expected targets and assets, what it carries, and its checksum manifest's entries and byte failures (CLOUD-258)"
-shell = "bash -c"
-usage = """
-arg "[tag]" help="the release to read; the latest when omitted or empty"
-"""
-run = '''
-{% raw %}
-set -euo pipefail
-if [[ -n "${BATTEN_BIN:-}" ]]; then batten=("$BATTEN_BIN"); else batten=(cargo run --quiet -p batten --); fi
-refuse() { echo "::error:: release-assets-record: $*. Nothing recorded." >&2; exit 2; }
-WORKFLOW="${BATTEN_RELEASE_WORKFLOW:-.github/workflows/release-artifacts.yml}"
-MANIFEST="${BATTEN_CHECKSUM_MANIFEST:-}"
-[[ -n "$MANIFEST" ]] || refuse "no manifest name declared in [env]"
-[[ -f "$WORKFLOW" ]] || refuse "cannot read $WORKFLOW, so the target list is unknown"
-# `- target: <triple>` list items only, so a `target:` in prose cannot widen it.
-targets=$(sed -nE 's/^[[:space:]]*-[[:space:]]+target:[[:space:]]*([A-Za-z0-9_.-]+)[[:space:]]*$/\1/p' "$WORKFLOW" | sort -u)
-[[ -n "$targets" ]] || refuse "no matrix targets found in $WORKFLOW"
-# The legs whose build-tool is not `cross` also publish a binary-level SBOM.
-composed=$(awk '
-	/^[[:space:]]*-[[:space:]]+target:[[:space:]]*/ { t = $NF; next }
-	/^[[:space:]]*build-tool:[[:space:]]*/ { if (t != "" && $NF != "cross") print t; t = "" }
-' "$WORKFLOW" | sort -u)
-uploads=$(grep -F 'gh release upload' "$WORKFLOW" || true)
-literal=$(tr ' ' '\n' <<<"$uploads" | sed -nE 's#^"?([A-Za-z0-9_./-]+\.(json|sh))"?$#\1#p' || true)
-# Guarded on the SCRAPE: the derived names always contribute, so a union test
-# could never reach zero.
-[[ -n "$literal" ]] || refuse "no literal asset operand on a 'gh release upload' line in $WORKFLOW"
-# The SBOM names from the tasks that decide them, run from the manifest that
-# declares them. An answer they cannot give is could-not-look, never a silently
-# shorter list of demanded assets.
-names=$("${batten[@]}" sbom --names) || refuse "sbom could not name its assets"
-derived=$(sed -nE 's/^(spdx|cdx)=//p' <<<"$names")
-[[ -n "$derived" ]] || refuse "sbom named no assets"
-REFERENCE="${BATTEN_CLI_REFERENCE:-}"
-[[ -n "$REFERENCE" ]] || refuse "no CLI reference name declared in [env]"
-derived=$(printf '%s\n%s\n' "$derived" "$REFERENCE")
-while IFS= read -r leg; do
-	[[ -n "$leg" ]] || continue
-	names=$("${batten[@]}" sbom --names --target "$leg") ||
-		refuse "sbom could not name the binary asset for $leg"
-	derived=$(printf '%s\n%s\n' "$derived" "$(sed -nE 's/^sbom=//p' <<<"$names")")
-done <<<"$composed"
-extras=$(printf '%s\n%s\n' "$literal" "$derived" | sed 's#^.*/##' | sed '/^$/d' | sort -u)
-tag="${usage_tag:-}"
-if [[ -z "$tag" ]]; then
-	tag=$(gh release view --json tagName --jq .tagName 2>/dev/null) || tag=""
-	[[ -n "$tag" ]] || refuse "no tag given and no latest release readable"
-fi
-assets=$(gh release view "$tag" --json assets --jq '.assets[].name' 2>/dev/null) || refuse "cannot read release $tag"
-covered=""
-mismatch=""
-if grep -qxF -- "$MANIFEST" <<<"$assets"; then
-	scratch=$(mktemp -d)
-	trap 'rm -rf "$scratch"' EXIT
-	gh release download "$tag" --dir "$scratch" --clobber >/dev/null 2>&1 || refuse "cannot download the assets of release $tag"
-	# `sha256sum`'s own line format, anchored, so an unreadable line is no entry.
-	covered=$(sed -nE 's/^[0-9a-fA-F]{64} [ *](.+)$/\1/p' "$scratch/$MANIFEST" | LC_ALL=C sort -u)
-	if [[ -n "$covered" ]]; then
-		# No `--quiet` and a `shasum` fallback: neither is portable, and macOS
-		# refused the flag. Every line not ending `: OK` is the finding.
-		sum256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
-		checked=$(cd "$scratch" && LC_ALL=C sum256 -c -- "$MANIFEST" 2>/dev/null) || true
-		[[ -n "$checked" ]] || refuse "sha256sum could not read $MANIFEST on $tag"
-		if bad=$(grep -v ': OK$' <<<"$checked"); then
-			[[ -n "$bad" ]] || refuse "sha256sum could not read $MANIFEST on $tag"
-			mismatch=$(sed -nE 's/^(.*): FAILED.*$/\1/p' <<<"$bad" | LC_ALL=C sort -u)
-		fi
-	fi
-fi
-out=""
-counts=""
-emit() { # emit <kind> <newline-separated values>
-	local kind=$1 n=0 value
-	while IFS= read -r value; do
-		[[ -n "$value" ]] || continue
-		out+="${kind}"$'\t'"${value}"$'\n'
-		n=$((n + 1))
-	done <<<"$2"
-	counts+="${counts:+$'\t'}${kind}=${n}"
-}
-emit target "$targets"
-emit extra "$extras"
-emit asset "$assets"
-emit manifest "$MANIFEST"
-emit covered "$covered"
-emit mismatch "$mismatch"
-printf '%scensus\t%s\n' "$out" "$counts" | "${batten[@]}" record named release-assets
-{% endraw %}
-'''
+description = "Effect: record a release's assets, its checksum manifest's entries, and the entries whose bytes disagree (CLOUD-258)"
+run = "cargo run --quiet -p batten -- record release --manifest {{env.BATTEN_CHECKSUM_MANIFEST}}"
 
-# The name `release-assets.yml` runs on its clock, kept: read the release, decide.
+# The name `release-assets.yml` runs on its clock, kept, and the DECISION only:
+# the record is written by `release-assets-record <tag>` first, because a task's
+# appended argument reaches its LAST command and the tag belongs to the record.
 [tasks.release-assets-check]
 description = "Gate: a release carries one archive per target the dist matrix builds, every uploaded asset, and a covering checksum manifest (CLOUD-258)"
-usage = """
-arg "[tag]" default="" help="the release to check; the latest when omitted or empty"
-"""
-# AN ARGV SEQUENCE, NOT A `set -e` BODY (CLOUD-843, CLOUD-1991). mise stops an
-# array at its first failing entry with that entry's code, which is all `set -e`
-# bought, and an empty tag renders as no argument at all — the `${usage_tag:+…}`
-# expansion's one job — so the producer still reads "the latest" for it.
-run = [
-  "mise run release-assets-record {{usage.tag}}",
-  "cargo run --quiet -p batten -- check --rule 'release grade other'",
-]
-
-# CLOUD-319's reading half, ported off `mise-tasks/release-due.sh` under
-# CLOUD-1717. The decision is `policy/release-due.rego`; the engine has no clock,
-# so this reads it and the forge and records two AGES in seconds plus the two
-# windows. Every refusal the retired program made stays here and writes nothing:
-# a knob that is not a whole number, an unreadable reading, an unparseable time.
-# The readings stay injectable (`RELEASE_DUE_NOW`, `RELEASE_DUE_LAST_ACTIVITY`,
-# `RELEASE_DUE_LAST_RELEASE`), and an EMPTY last release is "none yet".
-[tasks.release-due-record]
-description = "Effect: record how long main has been quiet and how old the last release is, against the debounce windows (CLOUD-319)"
-shell = "bash -c"
-run = '''
-{% raw %}
-set -euo pipefail
-if [[ -n "${BATTEN_BIN:-}" ]]; then batten=("$BATTEN_BIN"); else batten=(cargo run --quiet -p batten --); fi
-# EXIT 3, NOT 2: `check` answers a hold with 2, and `auto-release-land.yml` reads
-# 2 as "not yet". A reading this could not take is could-not-look, which is 3.
-refuse() { echo "::error:: release-due-record: $*. Nothing recorded." >&2; exit 3; }
-QUIET_MINUTES="${RELEASE_QUIET_MINUTES:-30}"
-MAX_WAIT_HOURS="${RELEASE_MAX_WAIT_HOURS:-24}"
-case "$QUIET_MINUTES" in '' | *[!0-9]*) refuse "RELEASE_QUIET_MINUTES must be a whole number of minutes, got '$QUIET_MINUTES'" ;; esac
-case "$MAX_WAIT_HOURS" in '' | *[!0-9]*) refuse "RELEASE_MAX_WAIT_HOURS must be a whole number of hours, got '$MAX_WAIT_HOURS'" ;; esac
-epoch() { jq -rn --arg d "$1" '$d | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601' 2>/dev/null; }
-if [[ -n "${RELEASE_DUE_NOW+set}" ]]; then
-	now=$(epoch "$RELEASE_DUE_NOW") || refuse "cannot parse RELEASE_DUE_NOW '$RELEASE_DUE_NOW'"
-else
-	now=$(date -u +%s)
-fi
-if [[ -n "${RELEASE_DUE_LAST_ACTIVITY+set}" ]]; then
-	activity_raw="$RELEASE_DUE_LAST_ACTIVITY"
-else
-	activity_raw=$(gh api "repos/{owner}/{repo}/commits/main" --jq '.commit.committer.date' 2>/dev/null) || refuse "could not read the last commit on main"
-fi
-[[ -n "$activity_raw" ]] || refuse "the last commit on main has no timestamp"
-if [[ -n "${RELEASE_DUE_LAST_RELEASE+set}" ]]; then
-	release_raw="$RELEASE_DUE_LAST_RELEASE"
-else
-	release_raw=$(gh api "repos/{owner}/{repo}/releases?per_page=1" --jq '.[0].published_at // ""' 2>/dev/null) || refuse "could not read the latest release"
-fi
-activity_at=$(epoch "$activity_raw") || refuse "cannot parse the last-commit timestamp '$activity_raw'"
-# A FUTURE TIMESTAMP IS REFUSED, NOT SUBTRACTED: `now - activity_at` would record
-# a negative age, which no reading means (review of #962).
-(( activity_at <= now )) || refuse "the last-commit timestamp '$activity_raw' is later than now, so its age means nothing"
-release_age=none
-if [[ -n "$release_raw" ]]; then
-	release_at=$(epoch "$release_raw") || refuse "cannot parse the last-release timestamp '$release_raw'"
-	(( release_at <= now )) || refuse "the last-release timestamp '$release_raw' is later than now, so its age means nothing"
-	release_age=$((now - release_at))
-fi
-printf 'activity-age\t%d\nrelease-age\t%s\nquiet\t%d\nmax-wait\t%d\n' \
-	"$((now - activity_at))" "$release_age" "$((QUIET_MINUTES * 60))" "$((MAX_WAIT_HOURS * 3600))" |
-	"${batten[@]}" record named release-due
-{% endraw %}
-'''
+run = "cargo run --quiet -p batten -- check --rule 'release grade other' --rule 'release pin other'"
 
 # The name `auto-release-land.yml` runs, kept: exit 0 due, 2 holding.
 # `release-tracking-check`'s name, kept for `hk.pkl` and every hand that types it:
@@ -3208,135 +2972,33 @@ run = [
   "cargo run --quiet -p batten -- receipt record sbom-ntia",
 ]
 
+# CLOUD-319's gate, whose reading half retired off `[tasks.release-due-record]`
+# under CLOUD-843: two declared `[[forge.query]]` windows in `batten.toml`, each
+# read and windowed by `record query`'s own clock, then the one rule over both.
+# A window the forge would not answer is `record query`'s exit 3, which stops the
+# chain before `check` could judge a stale record.
 [tasks.release-due]
 description = "Gate: may the release PR land now? Debounce — quiet minutes on main, or hours since the last release, whichever comes first"
 run = [
-  "mise run release-due-record",
+  "cargo run --quiet -p batten -- record query release-due-activity",
+  "cargo run --quiet -p batten -- record query release-due-latest",
   "cargo run --quiet -p batten -- check --rule 'release grade early'",
 ]
 
-# CLOUD-618's sweep, ported off `mise-tasks/release-backfill.sh` under CLOUD-1717.
-# NOT A GATE: an operator effect that dispatches `linear-release-backfill.yml`
-# once per tag. The workflow's shape is `release wire other`'s business
-# (`policy/release-tracking.rego`); this decides only order and when to stop.
+# CLOUD-618's sweep, ported off `mise-tasks/release-backfill.sh` under CLOUD-1717
+# and off this body onto `batten release backfill` under CLOUD-843. NOT A GATE:
+# an operator effect that dispatches `linear-release-backfill.yml` once per tag,
+# oldest first by version, waiting on each RUN rather than on its dispatch and
+# stopping at the first that does not succeed. The workflow's shape is
+# `release wire other`'s business (`policy/release-tracking.rego`).
 #
-# OLDEST FIRST AND SERIALLY: the action derives a release's issues from the tag's
-# commit range, so `sort -V`, never lexical (v0.0.110 sorts after v0.0.78).
-# STOP ON THE FIRST FAILURE: a refused credential fails every tag identically,
-# and `sync` is create-or-update, so the sweep is resumable where it stopped.
-# WAIT ON THE RUN, NOT THE DISPATCH: a dispatch returning 0 means accepted, not
-# recorded. The newest run id is read BEFORE the dispatch so the previous tag's
-# completed run is never taken for this one; the poll cap is a COUNT backstop.
-# Arguments arrive through `usage`; `RELEASE_BACKFILL_GH`, `_TAGS`, `_WORKFLOW`,
-# `_POLL_INTERVAL` and `_MAX_POLLS` stay injectable.
+# The workflow, its branch and what a release tag looks like are this
+# repository's facts, so they are arguments here and never literals in the
+# engine. Name tags with `-- --tag <tag>` (repeatable), or none for every tag the
+# pattern selects; `-- --dry-run` prints the plan.
 [tasks.release-backfill]
 description = "Effect: record historical tags in the Linear release pipeline: dispatch the backfill workflow once per tag, oldest first, stopping on the first failure"
-shell = "bash -c"
-usage = '''
-flag "--dry-run" help="print the plan, oldest first, and dispatch nothing"
-arg "[tag]..." var=#true help="release tags to record; the injected list or the repository's tags when omitted"
-'''
-run = '''
-{% raw %}
-set -euo pipefail
-WORKFLOW="${RELEASE_BACKFILL_WORKFLOW:-linear-release-backfill.yml}"
-GH_BIN="${RELEASE_BACKFILL_GH:-gh}"
-POLL_INTERVAL="${RELEASE_BACKFILL_POLL_INTERVAL:-5}"
-MAX_POLLS="${RELEASE_BACKFILL_MAX_POLLS:-240}"
-dry_run=0
-[[ "${usage_dry_run:-}" = "true" ]] && dry_run=1
-tags=()
-read -ra tags <<<"${usage_tag:-}"
-# Arguments win, then the injected list, then the repository's own tags.
-if [[ "${#tags[@]}" -eq 0 ]]; then
-	if [[ -n "${RELEASE_BACKFILL_TAGS:-}" ]]; then
-		while IFS= read -r tag; do
-			[[ -n "$tag" ]] && tags+=("$tag")
-		done < <(tr ' ' '\n' <<<"$RELEASE_BACKFILL_TAGS" | sort -V)
-	else
-		while IFS= read -r tag; do
-			[[ -n "$tag" ]] && tags+=("$tag")
-		done < <(git tag --list 'v[0-9]*' | sort -V)
-	fi
-fi
-if [[ "${#tags[@]}" -eq 0 ]]; then
-	echo "::error:: release-backfill: no tags to record. Nothing here can tell an empty repository from a bad pattern, so this is a refusal rather than a clean sweep of nothing." >&2
-	exit 1
-fi
-# The whole bad list at once, before the workflow's tag probe finds one per run.
-bad=()
-for tag in "${tags[@]}"; do
-	case "$tag" in
-	v[0-9]*) ;;
-	*) bad+=("$tag") ;;
-	esac
-done
-if [[ "${#bad[@]}" -ne 0 ]]; then
-	echo "::error:: release-backfill: ${#bad[@]} argument(s) are not release tags: ${bad[*]}" >&2
-	exit 2
-fi
-if [[ "$dry_run" = 1 ]]; then
-	echo "release-backfill: would dispatch $WORKFLOW for ${#tags[@]} tag(s), oldest first:"
-	printf '  %s\n' "${tags[@]}"
-	exit 0
-fi
-if ! command -v "$GH_BIN" >/dev/null 2>&1; then
-	echo "::error:: release-backfill: no forge client at '$GH_BIN' (\$RELEASE_BACKFILL_GH overrides), so nothing can be dispatched. Run: mise install aqua:cli/cli" >&2
-	exit 2
-fi
-newest_run() {
-	"$GH_BIN" run list --workflow "$WORKFLOW" --limit 1 \
-		--json databaseId --jq '.[0].databaseId // ""' 2>/dev/null || true
-}
-run_state() { # run_state <id> -> "<status> <conclusion>"
-	"$GH_BIN" run view "$1" --json status,conclusion \
-		--jq '"\(.status) \(.conclusion // "")"' 2>/dev/null || true
-}
-recorded=0
-for tag in "${tags[@]}"; do
-	before=$(newest_run)
-	if ! "$GH_BIN" workflow run "$WORKFLOW" -f "tag=$tag" >/dev/null; then
-		echo "::error:: release-backfill: the dispatch for $tag was refused, after recording $recorded tag(s). \`sync\` is create-or-update, so re-run this task once the cause is fixed — the tags already recorded cost nothing to repeat." >&2
-		exit 1
-	fi
-	# Wait for THIS run: a different id than the one read before the dispatch.
-	id=""
-	polls=0
-	while [[ -z "$id" ]]; do
-		polls=$((polls + 1))
-		if [[ "$polls" -gt "$MAX_POLLS" ]]; then
-			echo "::error:: release-backfill: the run dispatched for $tag never appeared after $MAX_POLLS poll(s). A dispatch GitHub accepted and never scheduled is a platform failure, not a slow run; $recorded tag(s) were recorded before this." >&2
-			exit 1
-		fi
-		candidate=$(newest_run)
-		if [[ -n "$candidate" ]] && [[ "$candidate" != "$before" ]]; then
-			id="$candidate"
-			break
-		fi
-		sleep "$POLL_INTERVAL"
-	done
-	status=""
-	conclusion=""
-	while :; do
-		polls=$((polls + 1))
-		if [[ "$polls" -gt "$MAX_POLLS" ]]; then
-			echo "::error:: release-backfill: run $id for $tag did not finish within $MAX_POLLS poll(s); $recorded tag(s) were recorded before this." >&2
-			exit 1
-		fi
-		read -r status conclusion <<<"$(run_state "$id")"
-		[[ "$status" = "completed" ]] && break
-		sleep "$POLL_INTERVAL"
-	done
-	if [[ "$conclusion" != "success" ]]; then
-		echo "::error:: release-backfill: $tag concluded '$conclusion' in run $id, so the sweep stops here with $recorded tag(s) recorded. Read that run before re-running: a credential the action refuses fails every tag identically, and pressing on would queue $((${#tags[@]} - recorded - 1)) more of them." >&2
-		exit 1
-	fi
-	recorded=$((recorded + 1))
-	echo "release-backfill: $tag recorded (run $id)"
-done
-echo "release-backfill: ${#tags[@]} tag(s) recorded, oldest first"
-{% endraw %}
-'''
+run = "cargo run --quiet -p batten -- release backfill --workflow linear-release-backfill.yml --ref main --pattern 'v[0-9]*'"
 
 # A turn that cites `path:line` evidence and gives it no OPEN row stranded a
 # finding (CLOUD-252) — retired off `mise-tasks/finding-sink-check.sh` under

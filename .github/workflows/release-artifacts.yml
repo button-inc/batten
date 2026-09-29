@@ -411,6 +411,9 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # `batten release sums` reads the credential through `[forge]
+          # credential_names` (CLOUD-843), which names no conventional variable.
+          BATTEN_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag || github.event.release.tag_name }}
         run: mise run checksums "$TAG" >>"$GITHUB_OUTPUT"
       - name: Upload to the release

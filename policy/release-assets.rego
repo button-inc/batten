@@ -1,37 +1,54 @@
-# A release carries one archive per target the dist matrix builds, every
-# platform-independent asset the release job uploads, and a checksum manifest that
-# covers exactly those assets with matching bytes (ported off
+# A release carries one archive per target the dist matrix builds and every
+# platform-independent asset the release job uploads (ported off
 # `mise-tasks/release-assets-check.sh` under CLOUD-1717; the predicates are
-# CLOUD-258's, CLOUD-262's and CLOUD-278's).
+# CLOUD-258's and CLOUD-262's).
 #
 # `release-artifacts.yml` failed on every release from v0.0.31 to v0.0.36 and no
 # binary shipped, unnoticed, because a `release`-triggered run reaches no PR and no
 # gate. This is that missing signal, run on a clock (`release-assets.yml`) because
 # it is a property of the world rather than of a commit.
 #
-# THE SPLIT IS §5's. `[tasks.release-assets-record]` reads the workflow's own
-# matrix and upload lines, the release's asset list, and — when a manifest is
-# on it — the manifest's entries and `sha256sum -c`'s failures, and records only
-# NAMES. Every set comparison is here: which target has no archive, which asset
-# is absent, whether the manifest is missing, lists itself, covers nothing, omits
-# an asset, names an orphan, or disagrees on bytes. The producer refuses where
-# the retired program exited 2 — an unreadable workflow, no targets, no upload
-# line, no tag, an unreadable release, a failed download — and writes nothing.
+# THE SPLIT, SINCE CLOUD-843. `batten record release` records what the forge
+# says — the tag, the assets, and the manifest's entries and byte failures — and
+# the `release-hygiene` preset decides whether the manifest tells the truth
+# about them. What is left HERE is the half only this repository can state:
+# which assets a release of THIS project must carry. The body this replaced
+# derived that list with `sed` and `awk` over the workflow and recorded it beside
+# the release's facts; it is derived here now, from the workflow the rule row
+# declares as a document, because a derivation from a committed file belongs
+# where the file is already parsed.
+#
+# WHERE EACH EXPECTED NAME COMES FROM, one authority each:
+#   * targets — every `target` in the workflow's matrix `include` list;
+#   * a binary SBOM per leg whose `build-tool` is not `cross`, named by `dist`'s
+#     stem rule over the RECORDED tag (`<bin>-<tag>-<target>.spdx.json`) — the
+#     tag the release was cut from, where the retired body read the checkout's
+#     version and misnamed every leg of an older tag;
+#   * the literal `.json`/`.sh` operands of the workflow's `gh release upload`
+#     lines, basenames only;
+#   * the repository SBOM's two documents, which the sbom producer names;
+#   * the CLI reference, whose name `mise.toml`'s `[env]` declares once.
 #
 # ARCHIVE, NOT TRIPLE: a composed leg also uploads `<stem>.spdx.json`, whose name
 # carries the same triple, so a target is present only when an asset naming it
 # ends in `.tar.gz` or `.zip` — the document must not stand in for the binary.
 #
-# MISMATCH ONLY ONCE THE NAMES AGREE, as the retired program ordered it: with a
-# name missing, `sha256sum -c` reports that as a failure too, and one defect
-# would be counted twice under two rule ids.
-#
-# THE CENSUS CLOSES THE RECORD and counts every kind of line above it.
+# COULD NOT LOOK IS A FINDING HERE, NEVER A PASS: a workflow that did not parse,
+# a matrix naming no target, no upload line to read, an undeclared reference
+# name, or a record carrying no tag each mean the list of what must ship is
+# unknown, and a gate over an unknown list must not report a complete release.
+# The retired body refused to record in each of those cases; the record is the
+# forge's facts alone now, so the refusal moved to the one place that reads the
+# list.
 #
 #MUTANT-SUITE crates/batten/tests/it/release_assets.rs
 #MUTANT missing-archive-passes|s@^\tnot archived(target)$@\tfalse@|a_release_with_only_the_schema_is_refused
-#MUTANT mismatch-passes|s@^\tsome name in mismatched$@\tsome name in set()@|a_byte_mismatch_is_refused_once_the_names_agree
-#MUTANT torn-record-passes|s@^\tnot census_agrees$@\tfalse@|a_release_assets_record_without_its_census_is_torn_rather_than_clean
+#MUTANT missing-extra-passes|s@^\tnot name in assets$@\tfalse@|every_non_target_asset_is_demanded_from_both_sources
+#MUTANT unreadable-list-passes|s@^\tnot expectations_readable$@\tfalse@|a_list_that_cannot_be_derived_is_partial_never_complete
+#MUTANT cross-leg-sbom-demanded|s@^\tleg\["build-tool"\] != "cross"$@\ttrue@|the_real_matrix_is_readable_by_the_module
+#MUTANT sbom-document-name-drifts|s@^sbom_documents := {"batten.spdx.json", @sbom_documents := {"batten.sbom.json", @|the_names_the_module_demands_are_the_names_the_producers_write
+#MUTANT stem-binary-drifts|s@^binary := "batten"$@binary := "batten-cli"@|the_names_the_module_demands_are_the_names_the_producers_write
+#MUTANT sbom-suffix-drifts|s@sprintf("%s-%s-%s.spdx.json", @sprintf("%s-%s-%s.sbom.json", @|the_names_the_module_demands_are_the_names_the_producers_write
 
 # METADATA
 # description: |
@@ -48,9 +65,26 @@ import rego.v1
 
 rules contains "release grade other"
 
-lines := input.tree.records["release-assets"]
+# The build workflow the expectations are read off, and the manifest that names
+# the reference. Both are declared as documents on the rule row.
+workflow_path := ".github/workflows/release-artifacts.yml"
 
-kinds := ["target", "extra", "asset", "manifest", "covered", "mismatch"]
+# The repository SBOM's two documents, as the sbom producer names them, and the
+# binary name every per-target asset stem begins with (`dist`'s stem rule); the
+# binary SBOM's `.spdx.json` suffix is spelled in `extras` below.
+# SPELLED HERE AND TIED TO THEIR PRODUCERS BY A GATE, not by agreement: the
+# compiled tier `the_names_the_module_demands_are_the_names_the_producers_write`
+# (crates/batten/tests/it/release_assets.rs) asks `[tasks.sbom]`'s `--names`,
+# `[tasks.sbom-binary-record]`'s `--names <target>` and `mise-tasks/dist.sh
+# --stem` for every name and requires a release carrying exactly those to be
+# clean, so a constant that drifts from its producer, or a producer that drifts
+# from the constant, reds that tier. Both directions carry a `#MUTANT` row: the
+# constants' above, the producer's suffix in `[tasks.sbom-binary-record]`.
+sbom_documents := {"batten.spdx.json", "batten.cdx.json"}
+
+binary := "batten"
+
+lines := input.tree.records["release-assets"]
 
 of(kind) := {columns[1] |
 	some line in lines
@@ -59,44 +93,55 @@ of(kind) := {columns[1] |
 	columns[0] == kind
 }
 
-targets := of("target")
+assets := of("release-asset")
 
-extras := of("extra")
-
-assets := of("asset")
-
-covered_raw := of("covered")
-
-mismatched_raw := of("mismatch")
-
-manifest := name if {
-	names := of("manifest")
-	count(names) == 1
-	some name in names
+tag := name if {
+	tags := of("release-tag")
+	count(tags) == 1
+	some name in tags
 }
 
-# `census\ttarget=<n>\textra=<n>\tasset=<n>\tmanifest=<n>\tcovered=<n>\tmismatch=<n>`.
-census_counts[pair[0]] := pair[1] if {
-	some line in lines
-	startswith(line, "census\t")
-	some field in array.slice(split(line, "\t"), 1, 100)
-	pair := split(field, "=")
-	count(pair) == 2
-	regex.match(data.batten.patterns["whole-number"], pair[1])
+workflow := input.tree.documents[workflow_path]
+
+# Every matrix leg carrying a target, across every job.
+legs contains leg if {
+	is_object(workflow.jobs)
+	some job in workflow.jobs
+	some leg in job.strategy.matrix.include
+	is_string(leg.target)
 }
 
-census_agrees if {
-	count([line | some line in lines; startswith(line, "census\t")]) == 1
-	every kind in kinds {
-		to_number(census_counts[kind]) == count([line | some line in lines; startswith(line, sprintf("%s\t", [kind]))])
-	}
-	manifest
+targets := {leg.target | some leg in legs}
+
+# The legs that also publish a binary SBOM: a declared build tool that is not
+# `cross`, as the release job's own `if:` reads it.
+composed := {leg.target |
+	some leg in legs
+	is_string(leg["build-tool"])
+	leg["build-tool"] != "cross"
 }
 
-torn if {
-	lines
-	not census_agrees
+# The literal operands of every `gh release upload` line, as basenames.
+literal contains name if {
+	some line in input.tree.lines[workflow_path]
+	contains(line, "gh release upload")
+	some token in split(line, " ")
+	regex.match(data.batten.patterns["release-upload-operand"], token)
+	parts := split(trim(token, "\""), "/")
+	name := parts[count(parts) - 1]
 }
+
+reference := input.tree.documents["mise.toml"].env.BATTEN_CLI_REFERENCE
+
+expectations_readable if {
+	is_object(workflow)
+	count(targets) > 0
+	count(literal) > 0
+	is_string(reference)
+	tag
+}
+
+extras := ((literal | sbom_documents) | {reference}) | {sprintf("%s-%s-%s.spdx.json", [binary, tag, target]) | some target in composed}
 
 archived(target) if {
 	some name in assets
@@ -106,10 +151,19 @@ archived(target) if {
 
 violation contains {
 	"rule": "release grade other",
+	"verdict": "release read partial",
+	"subjects": [{"path": workflow_path}],
+} if {
+	lines
+	not expectations_readable
+}
+
+violation contains {
+	"rule": "release grade other",
 	"verdict": "release ship missing",
 	"subjects": [{"artifact": target}],
 } if {
-	not torn
+	expectations_readable
 	some target in targets
 	not archived(target)
 }
@@ -119,145 +173,78 @@ violation contains {
 	"verdict": "release ship missing",
 	"subjects": [{"artifact": name}],
 } if {
-	not torn
+	expectations_readable
 	some name in extras
 	not name in assets
 }
 
-manifest_on_release if manifest in assets
-
-violation contains {
-	"rule": "release grade other",
-	"verdict": "release pin broken",
-	"subjects": [{"artifact": sprintf("%s:checksums-missing", [manifest])}],
-} if {
-	not torn
-	not manifest_on_release
-}
-
-violation contains {
-	"rule": "release grade other",
-	"verdict": "release pin broken",
-	"subjects": [{"artifact": sprintf("%s:checksums-self", [manifest])}],
-} if {
-	not torn
-	manifest_on_release
-	manifest in covered_raw
-}
-
-covered := covered_raw - {manifest}
-
-expected := assets - {manifest}
-
-violation contains {
-	"rule": "release grade other",
-	"verdict": "release pin broken",
-	"subjects": [{"artifact": sprintf("%s:checksums-empty", [manifest])}],
-} if {
-	not torn
-	manifest_on_release
-	count(covered) == 0
-}
-
-omitted := {name | some name in expected; not name in covered}
-
-orphaned := {name | some name in covered; not name in assets}
-
-violation contains {
-	"rule": "release grade other",
-	"verdict": "release pin broken",
-	"subjects": [{"artifact": sprintf("%s:checksums-omits", [name])}],
-} if {
-	not torn
-	manifest_on_release
-	count(covered) > 0
-	some name in omitted
-}
-
-violation contains {
-	"rule": "release grade other",
-	"verdict": "release pin broken",
-	"subjects": [{"artifact": sprintf("%s:checksums-orphan", [name])}],
-} if {
-	not torn
-	manifest_on_release
-	count(covered) > 0
-	some name in orphaned
-}
-
-mismatched := mismatched_raw if {
-	count(omitted) == 0
-	count(orphaned) == 0
-} else := set()
-
-violation contains {
-	"rule": "release grade other",
-	"verdict": "release pin broken",
-	"subjects": [{"artifact": sprintf("%s:checksums-mismatch", [name])}],
-} if {
-	not torn
-	manifest_on_release
-	count(covered) > 0
-	some name in mismatched
-}
-
-violation contains {
-	"rule": "release grade other",
-	"verdict": "release read partial",
-	"subjects": [{"count": count(lines)}],
-} if {
-	torn
-}
-
 # --- cases -------------------------------------------------------------------
 
-record(body) := {"tree": {"records": {"release-assets": array.concat(body, [sprintf(
-	"census\ttarget=%d\textra=%d\tasset=%d\tmanifest=%d\tcovered=%d\tmismatch=%d",
-	[
-		count([l | some l in body; startswith(l, "target\t")]),
-		count([l | some l in body; startswith(l, "extra\t")]),
-		count([l | some l in body; startswith(l, "asset\t")]),
-		count([l | some l in body; startswith(l, "manifest\t")]),
-		count([l | some l in body; startswith(l, "covered\t")]),
-		count([l | some l in body; startswith(l, "mismatch\t")]),
-	],
-)])}}}
+fixture(record, workflow_lines) := {"tree": {
+	"records": {"release-assets": record},
+	"documents": {
+		workflow_path: {"jobs": {"dist": {"strategy": {"matrix": {"include": [
+			{"target": "x86_64-unknown-linux-gnu", "build-tool": "cargo"},
+			{"target": "aarch64-unknown-linux-gnu", "build-tool": "cross"},
+		]}}}}},
+		"mise.toml": {"env": {"BATTEN_CLI_REFERENCE": "ref.md"}},
+	},
+	"lines": {workflow_path: workflow_lines},
+}}
 
-healthy := [
-	"target\tx86_64-unknown-linux-gnu",
-	"extra\tbatten.schema.json",
-	"manifest\tSHA256SUMS",
-	"asset\tbatten-x86_64-unknown-linux-gnu.tar.gz",
-	"asset\tbatten.schema.json",
-	"asset\tSHA256SUMS",
-	"covered\tbatten-x86_64-unknown-linux-gnu.tar.gz",
-	"covered\tbatten.schema.json",
+uploads := [`        run: gh release upload "$TAG" schema/batten.schema.json install.sh "$SPDX" --clobber`]
+
+complete := [
+	"release-tag\tv1.2.3",
+	"release-asset\tbatten-v1.2.3-x86_64-unknown-linux-gnu.tar.gz",
+	"release-asset\tbatten-v1.2.3-aarch64-unknown-linux-gnu.tar.gz",
+	"release-asset\tbatten-v1.2.3-x86_64-unknown-linux-gnu.spdx.json",
+	"release-asset\tbatten.schema.json",
+	"release-asset\tinstall.sh",
+	"release-asset\tbatten.spdx.json",
+	"release-asset\tbatten.cdx.json",
+	"release-asset\tref.md",
 ]
 
-test_a_healthy_release_is_clean if {
-	count(violation) == 0 with input as record(healthy)
+test_a_complete_release_is_clean if {
+	count(violation) == 0 with input as fixture(complete, uploads)
+		with data.batten.patterns as patterns
 }
 
 test_an_sbom_does_not_stand_in_for_an_archive if {
-	found := violation with input as record([
-		"target\tx86_64-unknown-linux-gnu",
-		"manifest\tSHA256SUMS",
-		"asset\tbatten-x86_64-unknown-linux-gnu.spdx.json",
-		"asset\tSHA256SUMS",
-		"covered\tbatten-x86_64-unknown-linux-gnu.spdx.json",
-	])
-	{entry.verdict | some entry in found} == {"release ship missing"}
+	found := violation with input as fixture(
+		[line | some line in complete; not endswith(line, "x86_64-unknown-linux-gnu.tar.gz")],
+		uploads,
+	)
+		with data.batten.patterns as patterns
+	{entry.subjects[0].artifact | some entry in found} == {"x86_64-unknown-linux-gnu"}
 }
 
-test_a_mismatch_is_held_back_while_a_name_disagrees if {
-	found := violation with input as record(array.concat(healthy, [
-		"covered\tghost.tar.gz",
-		"mismatch\tghost.tar.gz",
-	]))
-	{entry.subjects[0].artifact | some entry in found} == {"ghost.tar.gz:checksums-orphan"}
+test_a_cross_leg_publishes_no_binary_sbom if {
+	# The `cross` leg's SBOM is never demanded, and the composed one is.
+	found := violation with input as fixture(
+		[line | some line in complete; not endswith(line, ".spdx.json"); line != "release-asset\tbatten.spdx.json"],
+		uploads,
+	)
+		with data.batten.patterns as patterns
+	{entry.subjects[0].artifact | some entry in found} == {
+		"batten-v1.2.3-x86_64-unknown-linux-gnu.spdx.json",
+		"batten.spdx.json",
+	}
 }
 
-test_a_missing_census_is_torn if {
-	found := violation with input as {"tree": {"records": {"release-assets": healthy}}}
+test_no_upload_line_is_partial if {
+	found := violation with input as fixture(complete, ["        run: echo nothing"])
+		with data.batten.patterns as patterns
 	{entry.verdict | some entry in found} == {"release read partial"}
+}
+
+test_no_record_is_silent if {
+	count(violation) == 0 with input as {"tree": {"records": {}, "documents": {}, "lines": {}}}
+		with data.batten.patterns as patterns
+}
+
+patterns := {
+	"release-archive": `[.](tar[.]gz|zip)$`,
+	"release-upload-operand": `^"?[A-Za-z0-9_./-]+[.](json|sh)"?$`,
 }

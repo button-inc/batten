@@ -390,6 +390,9 @@ pub fn run(
             err,
         ),
         crate::cli::RecordCommand::Census { command } => crate::reclaim::run(command, out, err),
+        crate::cli::RecordCommand::Release { tag, manifest } => {
+            crate::release::run_record(tag.as_deref(), &manifest, err)
+        }
     }
 }
 

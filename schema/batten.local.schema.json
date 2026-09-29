@@ -1238,6 +1238,7 @@
             "landing-loop",
             "mise",
             "pinned-toolchain",
+            "release-hygiene",
             "shell-hygiene",
             "supply-chain",
             "tracker-hygiene",

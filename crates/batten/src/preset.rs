@@ -1072,6 +1072,54 @@ declares, and a probe inside the pin's environment is already correct",
         ],
         patterns: &[],
     },
+    // CLOUD-843's `release-hygiene`: a published release's checksum manifest
+    // tells the truth about the release. The record is `batten record release`'s,
+    // read by KIND rather than by family name, because the family is the
+    // consumer's to declare. Which assets a release must carry is read off each
+    // consumer's own build workflow, so that half stays in the consumer's module.
+    Manifest {
+        name: "release-hygiene",
+        version: 1,
+        modules: &[PresetModule {
+            scope: RuleScope::Tree,
+            // Reads a record `batten record release` writes; no CI provider's
+            // expression language is involved, so it applies anywhere.
+            provider: None,
+            pointer: "<preset:release-hygiene>/checksums-cover-the-release.rego",
+            source: include_str!("policy/presets/release-hygiene/checksums-cover-the-release.rego"),
+        }],
+        verdicts: &[
+            VendoredVerdict {
+                id: "release pin broken",
+                gloss: "a release's checksum manifest is missing, lists itself, covers nothing, omits or orphans an asset, or disagrees on bytes",
+                class: "A manifest a packager cannot trust pins nothing. Uploads are routinely \
+idempotent and a failed leg is recovered by re-running it, so an asset can be replaced after the \
+manifest was cut, and nothing downstream notices: every consumer verifying against the manifest \
+either fails for a reason that looks like tampering or, where the manifest omits the asset, \
+verifies nothing at all. Re-derive the manifest from the release as it now stands and re-upload \
+it.",
+                routes: &[run(
+                    "sums run first",
+                    "batten release sums <tag> --manifest <name>, then upload the manifest it writes",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "release record torn",
+                gloss: "a release record carries no census, or one that disagrees with its lines",
+                class: "A record torn mid-write judges part of a release as if it were all of it: \
+a manifest check over half the asset list reports the other half as neither covered nor missing. \
+The census closes the record and counts every kind above it, so a disagreement is a finding about \
+the record rather than a verdict about the release. Record it again.",
+                routes: &[run(
+                    "record run first",
+                    "batten record release <tag> --manifest <name>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+        ],
+        patterns: &[],
+    },
     Manifest {
         name: "shell-hygiene",
         version: 1,

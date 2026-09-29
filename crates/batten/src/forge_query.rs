@@ -1061,6 +1061,44 @@ mod tests {
     }
 
     #[test]
+    fn a_row_exactly_at_the_cut_off_is_kept_and_one_second_older_is_not() {
+        // THE BOUNDARY, PINNED: the window is `[cut-off, now]`, closed at the
+        // cut-off. A consumer reading `kept == 0` as "older than the window"
+        // (`release grade early`) is therefore due only once the newest row is
+        // STRICTLY older than it — the direction CLOUD-843's retirement moved the
+        // release debounce, recorded in that tier's ledger.
+        let asked = std::cell::RefCell::new(Vec::new());
+        let pages = [
+            r#"{"total_count": 2, "workflow_runs": [{"id": 1, "created_at": "2026-08-29T10:39:00Z"}, {"id": 2, "created_at": "2026-08-29T10:38:59Z"}]}"#,
+        ];
+        let row = Query {
+            max_pages: 1,
+            since: Some(Since {
+                field: String::from("created_at"),
+                seconds: 60,
+                stop: false,
+            }),
+            ..query("repos/x/runs")
+        };
+        let body = recorded(
+            produce(
+                &row,
+                &BTreeMap::new(),
+                None,
+                1_788_000_000,
+                &scratch("since-boundary"),
+                &served(&pages, &asked),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            body,
+            "row\t{\"conclusion\":null,\"id\":1}\n\
+             window\tstate=whole\tread=2\tkept=1\tsince=2026-08-29T10:39:00Z\n"
+        );
+    }
+
+    #[test]
     fn an_undated_row_is_could_not_look_rather_than_outside_the_window() {
         // A misspelled `since.field` would otherwise drop every row and record an
         // empty window over a full collection.

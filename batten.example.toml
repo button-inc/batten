@@ -509,7 +509,7 @@ model = "some-model-id"
 # common practices, and enabling one is a rule row naming it. `batten config show`
 # lists what this binary carries; today that is `ci-hygiene`, `claude-code-cloud`,
 # `commit-hygiene`,
-# `landing-loop`, `pinned-toolchain`, `shell-hygiene`, `supply-chain` and
+# `landing-loop`, `pinned-toolchain`, `release-hygiene`, `shell-hygiene`, `supply-chain` and
 # `trunk-based`.
 #
 # SCOPE IS THE FIELD TO GET RIGHT. A preset's modules read one surface's facts:

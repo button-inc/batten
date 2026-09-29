@@ -2481,15 +2481,23 @@ writer = "mise run closing-key-check"
 record = "pr-unsubscribed"
 writer = "mise run pr-unsubscribed check"
 
-# CLOUD-258/262/278's reading, ported off `release-assets-check.sh` under CLOUD-1717.
+# CLOUD-258/262/278's reading, ported off `release-assets-check.sh` under
+# CLOUD-1717, and off `[tasks.release-assets-record]`'s body onto the engine's
+# own producer under CLOUD-843. The family is the engine's name for the record;
+# `policy/release-assets.rego` reads it by name and the `release-hygiene` preset
+# by its lines' kinds.
 [[record]]
 record = "release-assets"
-writer = "mise run release-assets-record"
+writer = "batten record release"
 
-# CLOUD-319's reading, ported off `release-due.sh` under CLOUD-1717.
+# CLOUD-319's readings, one family per `[[forge.query]]` row above (CLOUD-843).
 [[record]]
-record = "release-due"
-writer = "mise run release-due-record"
+record = "release-due-activity"
+writer = "batten record query release-due-activity"
+
+[[record]]
+record = "release-due-latest"
+writer = "batten record query release-due-latest"
 
 # A release ARCHIVE, as `policy/release-assets.rego` reads one: the name ends in
 # a packed extension. A composed leg's `<stem>.spdx.json` carries the same triple,
@@ -2497,6 +2505,14 @@ writer = "mise run release-due-record"
 [[pattern]]
 id = "release-archive"
 regex = '[.](tar[.]gz|zip)$'
+
+# A literal asset operand on a `gh release upload` line, as
+# `policy/release-assets.rego` reads one: a path ending `.json` or `.sh`, quoted
+# or bare. The shell's own `sed` spelled this in the body CLOUD-843 retired; a
+# variable (`"$SPDX"`) carries a `$` and is never one.
+[[pattern]]
+id = "release-upload-operand"
+regex = '^"?[A-Za-z0-9_./-]+[.](json|sh)"?$'
 
 # `policy/release-tracking.rego`'s readings of a workflow's lines (CLOUD-618,
 # ported off `release-tracking-check.sh` under CLOUD-1717). YAML's comment rule
@@ -4108,19 +4124,40 @@ module = "policy/pr-unsubscribed.rego"
 severity = "deny"
 
 # CLOUD-258, ported off `mise-tasks/release-assets-check.sh` under CLOUD-1717.
-# `deny`, as the program's exit 1 was: it runs on `release-assets.yml`'s clock via
-# `mise run release-assets-check`, which produces then checks this one rule. A
-# property of the world, so with no record it is silent and no branch is judged.
+# `deny`, as the program's exit 1 was: it runs on `release-assets.yml`'s clock,
+# after `mise run release-assets-record` has recorded the release, via
+# `mise run release-assets-check`. A property of the world, so with no record it
+# is silent and no branch is judged.
+#
+# THE TWO DOCUMENTS ARE WHERE THE EXPECTED LIST COMES FROM (CLOUD-843): the
+# build workflow's matrix and upload lines, and `mise.toml`'s `[env]` for the
+# reference's name. The body that retired derived the list with `sed` and `awk`
+# and recorded it; the module derives it from the parsed documents now.
 [[rule]]
 id = "release grade other"
 kind = "policy"
 scope = "tree"
 module = "policy/release-assets.rego"
+documents = [".github/workflows/release-artifacts.yml", "mise.toml"]
+line_sources = [".github/workflows/release-artifacts.yml"]
+severity = "deny"
+
+# CLOUD-278's half of the same record, moved into the `release-hygiene` preset
+# under CLOUD-843: whether the published checksum manifest covers exactly the
+# release's assets and agrees with their bytes. The decision is generic, so it
+# ships vendored and this row is what enables it here; `mise run
+# release-assets-check` names both rows, and with no record it is silent.
+[[rule]]
+id = "release pin other"
+kind = "policy"
+scope = "tree"
+preset = "release-hygiene"
 severity = "deny"
 
 # CLOUD-319, ported off `mise-tasks/release-due.sh` under CLOUD-1717. A HOLD is
-# the finding: `auto-release-land.yml` runs `mise run release-due`, which produces
-# then checks this one rule, and reads 2 as "not yet". Silent with no record.
+# the finding: `auto-release-land.yml` runs `mise run release-due`, which records
+# the two `[[forge.query]]` windows then checks this one rule, and reads 2 as
+# "not yet". Silent with neither window recorded.
 [[rule]]
 id = "release grade early"
 kind = "policy"
@@ -7659,6 +7696,34 @@ names = ["GITHUB_PERSONAL_ACCESS_TOKEN", "BATTEN_GITHUB_TOKEN"]
 # needed" — there is deliberately no fallback in the engine to fall back to.
 [forge]
 credential_names = ["BATTEN_GITHUB_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN"]
+
+# CLOUD-319's two readings, retiring `[tasks.release-due-record]` (CLOUD-843). The
+# body read the clock and the forge and recorded two AGES; these two rows move the
+# clock into the producer (`record query`'s window) and leave the ages unwritten:
+# a row is kept only when its instant is inside the window, so `kept=0` IS "older
+# than the window" and `policy/release-due.rego` compares no timestamp at all.
+#
+# ONE ROW EACH, NEWEST FIRST, which is what the body's `.[0]` read. `main` is this
+# consumer's trunk and a fact about this repository, so it is a parameter here and
+# never a literal in the engine. The windows are the ones `auto-release-land.yml`
+# ran the body with — 120 quiet minutes (its `RELEASE_QUIET_MINUTES`), and the
+# 24-hour max wait the body defaulted to — now committed rather than exported.
+[[forge.query]]
+id = "release-due-activity"
+endpoint = "repos/{owner}/{repo}/commits"
+params = { sha = "main" }
+per_page = 1
+max_pages = 1
+since = { field = "commit.committer.date", seconds = 7200 }
+select = ["commit.committer.date"]
+
+[[forge.query]]
+id = "release-due-latest"
+endpoint = "repos/{owner}/{repo}/releases"
+per_page = 1
+max_pages = 1
+since = { field = "published_at", seconds = 86400 }
+select = ["published_at"]
 
 # THE CLAIMS THIS REPOSITORY'S TASKS NEED, each with the endpoint that proves it
 # (CLOUD-843, retiring `[tasks.gh-preflight]`'s bash table into rows
@@ -12410,17 +12475,21 @@ the max wait passes. A maintainer commenting /fast-forward lands it now.
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "mise run release-due-record"
+target = "mise run release-due"
 
 [[verdict]]
 id = "release measure partial"
-gloss = "the release-due record is missing one of its four readings"
-class = "A record missing a reading decides over part of the answer."
+gloss = "a release-due window is missing, torn, or read no commit on main"
+class = """
+Both windows decide together, so one without the other decides over part of \
+the answer. A window whose closing line is absent or disagrees with its rows is \
+torn, and a trunk window that read no commit at all measured nothing.
+"""
 
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "mise run release-due-record"
+target = "mise run release-due"
 
 # CLOUD-618's readings, ported off `release-tracking-check.sh` under CLOUD-1717.
 # The second subject names which shape; the module's header says what each means.
@@ -12466,24 +12535,19 @@ id = "task run first"
 kind = "command"
 target = "mise run release-assets-record"
 
-[[verdict]]
-id = "release pin broken"
-gloss = "a release's checksum manifest is missing, lists itself, covers nothing, omits or orphans an asset, or disagrees on bytes"
-class = """
-A manifest a packager cannot trust pins nothing. Uploads are `--clobber` \
-idempotent and the recovery is a per-target re-run, so an asset can be replaced \
-after the manifest was cut; re-run `mise run checksums <tag>` and re-upload it.
-"""
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run release-assets-record"
+# `release pin broken` MOVED into the `release-hygiene` preset's manifest under
+# CLOUD-843, with the decision it names: a vendored class and a consumer row may
+# not share a token, so this table no longer declares it.
 
 [[verdict]]
 id = "release read partial"
-gloss = "the release-assets record carries no census, or one that disagrees with its lines"
-class = "A record torn mid-write judges part of a release as if it were all of it."
+gloss = "the list of assets a release must carry could not be derived from the build workflow"
+class = """
+The expected list is read off `release-artifacts.yml`'s matrix and upload lines \
+and `mise.toml`'s reference name. A workflow that did not parse, a matrix naming \
+no target, no upload line, or a record carrying no tag leaves that list unknown, \
+and a gate over an unknown list must not report a complete release.
+"""
 
 [[verdict.route]]
 id = "task run first"
