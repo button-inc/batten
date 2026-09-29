@@ -16,7 +16,7 @@
 //!
 //! Which steps exist, what each reads and which tools it trusts are facts about a
 //! repository, so they are `[[step]]` rows in its committed `batten.toml`, read
-//! from the committed authority alone ([`crate::resolve::committed`]). A caller
+//! from the committed authority alone (`crate::resolve::committed`). A caller
 //! cannot hand the verb its own input list: a caller that could would key a
 //! receipt to files the step never read. The retired task's `BATTEN_STEP_SPECS`
 //! and `BATTEN_STEP_TOOLS` overrides were exactly that door, and they did not
@@ -57,7 +57,7 @@
 //! code alone would read "run the step" as a broken gate.
 //!
 //! **It spawns nothing of its own.** Tool argvs go through
-//! [`crate::exec::piped_argv`] and the step's command through
+//! `crate::exec::piped_argv` and the step's command through
 //! [`crate::exec::run`] — the placed boundary — so the spawn inventory does not
 //! grow by the cache.
 
