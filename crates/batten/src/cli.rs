@@ -922,6 +922,12 @@ pub enum ChecksCommand {
         /// The fan-in whose failure a cancelled sibling can manufacture. Absent
         /// leaves every failure manufacturable, which is the safe default.
         fanin: Option<String>,
+        /// The commit whose check runs are read from the forge. Absent means the
+        /// reading comes on stdin, the verb's original shape (CLOUD-843).
+        sha: Option<String>,
+        /// The repository to read, in the forge client's own spelling; only
+        /// meaningful beside `sha`.
+        repo: Option<String>,
         /// Emit the verdict on the structured channel.
         json: bool,
     },
@@ -1693,10 +1699,22 @@ pub enum RecordCommand {
         /// caller can hand over a digest at all.
         id: String,
     },
+    /// Run a declared tool row's `run` argv and record its exit code
+    /// (CLOUD-843).
+    Validate {
+        /// The `[[rule.tools]]` id whose argv runs and whose key is written.
+        id: String,
+    },
     /// Record the forge's check verdicts for one commit.
     Forge {
         /// The ref or sha the verdict was taken against.
         reference: String,
+        /// Read the check-runs from the forge instead of stdin (CLOUD-843).
+        fetch: bool,
+        /// The fan-in check whose answer gates writing at all.
+        fanin: Option<String>,
+        /// The conclusions that constitute an answer, comma-separated.
+        answered: Option<String>,
     },
     /// Record one named family under this branch, for a module to read.
     ///
@@ -2852,6 +2870,8 @@ fn checks_of(matches: &ArgMatches) -> Option<ChecksCommand> {
             absent_ok: matches.get_one::<String>("absent_ok").cloned(),
             answered: matches.get_one::<String>("answered").cloned()?,
             fanin: matches.get_one::<String>("fanin").cloned(),
+            sha: matches.get_one::<String>("sha").cloned(),
+            repo: matches.get_one::<String>("repo").cloned(),
             json: flag(matches, "json"),
         }),
         _ => None,
@@ -3290,8 +3310,14 @@ fn record_of(matches: &ArgMatches) -> Option<RecordCommand> {
                 None => RecordCommand::Tool { id },
             })
         }
+        ("validate", matches) => Some(RecordCommand::Validate {
+            id: matches.get_one::<String>("id")?.clone(),
+        }),
         ("forge", matches) => Some(RecordCommand::Forge {
             reference: matches.get_one::<String>("ref")?.clone(),
+            fetch: flag(matches, "fetch"),
+            fanin: matches.get_one::<String>("fanin").cloned(),
+            answered: matches.get_one::<String>("answered").cloned(),
         }),
         ("named", matches) => Some(RecordCommand::Named {
             family: matches.get_one::<String>("family")?.clone(),

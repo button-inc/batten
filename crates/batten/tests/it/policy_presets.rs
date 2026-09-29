@@ -147,6 +147,7 @@ const PRESET_SCOPES: &[(&str, bool)] = &[
     ("supply-chain", true),
     ("tracker-hygiene", true),
     ("release-hygiene", true),
+    ("ci-signal", true),
 ];
 
 /// A row enabling `name` at the scope it is really enabled with.
@@ -746,6 +747,55 @@ fn the_supply_chain_preset_refuses_a_vacuous_or_foreign_binary_inventory() {
     assert!(
         other.is_empty(),
         "another family's shape is not judged: {other:?}"
+    );
+}
+
+/// (CLOUD-843) `ci-signal`'s timeout arm decides for a consumer with no
+/// vocabulary of its own: its workflow lives outside the provider's usual
+/// directory, it declares no `[[pattern]]` row, and a slack budget is still read
+/// off its own lines and reported — while a correct one is clean, and a tree
+/// whose producer never ran is silent.
+#[test]
+fn the_ci_signal_preset_reads_a_budget_off_the_consumers_own_lines() {
+    let bundle = loaded("ci-signal-drift", tree_preset_row("signal", "ci-signal"));
+    let legs: Vec<String> = (0..5)
+        .map(|_| {
+            String::from(
+                "row\t{\"conclusion\":\"success\",\"name\":\"build (x86)\",\"run\":3,\"seconds\":120}",
+            )
+        })
+        .chain(std::iter::once(String::from(
+            "window\tstate=whole\tread=5\tkept=5\tmembers=1\ttruncated=0",
+        )))
+        .collect();
+    let document = |declared: u32| {
+        serde_json::json!({"tree": {
+            "lines": {"ci/pipeline.yml": [
+                "name: pipeline",
+                "jobs:",
+                "  build:",
+                format!("    timeout-minutes: {declared} # budget: p95=120s x3"),
+            ]},
+            "records": {
+                "drift-runs": [
+                    "row\t{\"id\":3,\"path\":\"ci/pipeline.yml\"}",
+                    "window\tstate=whole\tread=1\tkept=1\tmembers=1\ttruncated=0",
+                ],
+                "drift-jobs": &legs,
+            },
+        }})
+        .to_string()
+    };
+    assert!(
+        decided(&bundle, &document(6)).is_empty(),
+        "five 120s legs justify exactly 6 minutes"
+    );
+    let slack = decided(&bundle, &document(12));
+    assert_eq!(slack.len(), 1, "one finding for one slack budget");
+    assert_eq!(bundle.attribute(&slack[0]), "bound pin loose");
+    assert!(
+        decided(&bundle, r#"{"tree":{"records":{},"lines":{}}}"#).is_empty(),
+        "no producer ran, so nothing is judged"
     );
 }
 

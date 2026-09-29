@@ -1,34 +1,27 @@
-//! `branch watch loose` over the compiled binary (CLOUD-349, CLOUD-1717).
+//! `branch watch loose` over the compiled binary (CLOUD-349, CLOUD-1717; the
+//! producer retired into forge queries under CLOUD-843).
 //!
 //! # Why this tier exists and the module's own `test_` rules do not suffice
 //!
-//! `policy/branch-age.rego` carries eleven load-time cases, and every one of
-//! them fabricates its input with `with input as`. That is the shape
-//! `rules/policy-modules.md` warns about: a case can assert over a fact the
-//! engine is unable to produce, and the module stays green while the row decides
-//! nothing on any real checkout. This module spent a whole session in exactly
-//! that state — registered, green, and reading a key `recorder_records` never
-//! projected (CLOUD-1810) — so the case that matters here is the one no
-//! `with input as` can reach: a record WRITTEN by the producer, read through the
-//! engine's own projection, deciding.
+//! Every load-time case in `policy/branch-age.rego` fabricates its input with
+//! `with input as`, which can assert over a fact the engine is unable to produce
+//! — the state this module spent a whole session in (CLOUD-1810). The cases here
+//! run the REAL producer, the three declared `[[forge.query]]` reads against the
+//! `BATTEN_REST_FIXTURE` forge, and then the real module over the engine's own
+//! projection of what it wrote.
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
-//! The program's successor is `policy/branch-age.rego` for every DECISION it
-//! made, and `[tasks.branch-age-record]` for the two steps that are not
-//! decisions: the `gh` reads and the civil-calendar subtraction. That split is
-//! forced rather than chosen — house style §5 makes `check` `read` and
-//! structurally incapable of spawning, and `Fact::Instant` projects `null` to
-//! every module, which `clippy.toml`'s `disallowed-methods` and
-//! `crates/batten/tests/clock_ban.rs` hold the engine to. CLOUD-1559's reading
-//! rule says the same thing from the other side: carry the decisions, not the
-//! steps.
-//!
-//! Three cases below the file arms are NOT carried, and each says why in its own
-//! row rather than being dropped quietly.
+//! The program's successor was `policy/branch-age.rego` for every DECISION and
+//! `[tasks.branch-age-record]`'s shell body for the reads and the civil-calendar
+//! subtraction. The body is gone: the reads are `[[forge.query]]` rows, the age
+//! is a `span` measured in UTC days against the PRODUCER's clock — the engine
+//! still calls no clock on any evaluation path — and the trunk exclusion, which
+//! the body applied before recording, is the module's again.
 //!
 // carried: mise-tasks/branch-age-check.sh policy/branch-age.rego kind:mechanism crates/batten/tests/it/branch_age.rs
 // carried: tests/branch-age-check.bats policy/branch-age.rego kind:mechanism crates/batten/tests/it/branch_age.rs
+// carried: "[tasks.branch-age-record]" crates/batten/src/forge_query.rs kind:mechanism crates/batten/tests/it/branch_age.rs
 // carried: "a remote carrying only fresh branches passes" policy/branch-age.rego kind:mechanism
 // carried: "a branch past the threshold is refused, and named with its age" policy/branch-age.rego kind:mechanism
 // The title is qualified because `perf-compare.bats` carried one spelled
@@ -40,39 +33,34 @@
 // carried: "a reused name whose branch is already gone is not counted" policy/branch-age.rego kind:mechanism
 // carried: "a clean remote reaches green, which is the state the gate must be able to reach" policy/branch-age.rego kind:mechanism
 // carried: "a remote reporting no branches at all is exit 2, not a pass" policy/branch-age.rego kind:mechanism
-// changed: "the trunk is never counted, however old or however many PRs it heads" mise.toml the exclusion is a STEP rather than a decision, so it moved to the producer with the `gh` call that needs it: `[tasks.branch-age-record]` filters the trunk before recording, and the module never sees a trunk line to count. A case here would assert over input the producer cannot emit
-// changed: "an unreadable refs reading is exit 2, not a pass" mise.toml the reading is the producer's and so is its failure: `[tasks.branch-age-record]` writes NOTHING when it cannot reach the forge, which is the could-not-look the module then reads as an absent record. The decision half is `an_absent_record_says_nothing_rather_than_passing`; what changed is that could-not-look is silence here rather than exit 2, because a module refusing there would refuse every checkout with no credential
-// changed: "an unreadable PR reading is exit 2, not a pass" mise.toml the same split as the refs reading directly above, over the second of the producer's two forge calls: a failed read writes nothing, and nothing is could-not-look
-// changed: "a custom threshold is honoured in both the verdict and the message" policy/branch-age.rego there is no custom threshold to honour: the figure is the practice's own "couple of days" and lives in the module, where moving it costs a diff a reviewer reads. A config knob invites raising it until nothing fires, which is `repetition-without-progress`'s reasoning one row over
-// changed: "an unparseable tip date is reported rather than silently skipped" policy/branch-age.rego the producer refuses a malformed line at WRITE time, while its author is watching, so an unparseable line at read time is a torn store rather than a branch with a bad date. `a_line_this_reader_cannot_parse_is_skipped` pins the reader's half, and a surviving good line in that case is what stops it passing for want of any readable ref
-// withdrawn: "a nonsense today is exit 2, not an arithmetic answer" there is no `today` for a caller to make nonsense of. The engine calls no clock on any evaluation path, so the module never subtracts dates at all — it compares a number the producer already computed against a threshold. The case asserted a property of an arithmetic step that no longer exists on this surface
+// carried: "the trunk is never counted, however old or however many PRs it heads" policy/branch-age.rego kind:mechanism
+// changed: "an unreadable refs reading is exit 2, not a pass" crates/batten/src/forge_query.rs a forge that will not answer is `record query`'s could-not-look: exit 3, and the family is REMOVED, so the module reads an absent record and says nothing — a module refusing there would refuse every checkout with no credential. `a_forge_that_will_not_answer_leaves_nothing_to_decide_over` holds it
+// changed: "an unreadable PR reading is exit 2, not a pass" crates/batten/src/forge_query.rs the same split over the third read
+// changed: "a custom threshold is honoured in both the verdict and the message" policy/branch-age.rego there is no custom threshold to honour: the figure is the practice's own "couple of days" and lives in the module, where moving it costs a diff a reviewer reads
+// changed: "an unparseable tip date is reported rather than silently skipped" crates/batten/src/forge_query.rs the tip's date is read by the producer, and one that is not an RFC 3339 instant records a `null` age, which the module cannot compare and does not report — `the_tip_age_is_the_producers_count_of_days` pins the producer's half
+// withdrawn: "a nonsense today is exit 2, not an arithmetic answer" there is no `today` for a caller to make nonsense of: the producer reads its own clock, and the module compares a number against a threshold
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
 
-use common::{git_in, init_repo, run, run_with_stdin, scratch, write};
+use std::path::{Path, PathBuf};
+use std::process::Output;
 
-/// A repository registering the real module against a declared family.
-///
-/// The REAL module and the REAL row, never a fixture copy: the whole point of
-/// this tier is that the module decides over the engine's own projection, and a
-/// stand-in would be one more `with input as` wearing a different costume.
-fn repo(name: &str) -> std::path::PathBuf {
-    let dir = scratch(&format!("branch-age-{name}"));
-    let module = std::fs::read_to_string("../../policy/branch-age.rego")
-        .expect("the module this tier exists for");
-    write(&dir, "policy/branch-age.rego", &module);
-    write(
-        &dir,
-        "batten.toml",
-        r#"version = 1
+use common::{at_root, git_in, init_repo, scratch, stderr, stdout, write};
+
+/// The repository the fixture forge answers for.
+const REPO: &str = "acme/widgets";
+
+/// A commit date no clock reaches, so its age is never over the threshold.
+const FRESH: &str = "2999-01-01T00:00:00Z";
+
+/// A commit date every clock this suite runs under is years past.
+const ANCIENT: &str = "2020-01-01T00:00:00Z";
+
+const CONFIG: &str = r#"version = 1
 scope = ["**"]
-
-[[pattern]]
-id = "whole-number"
-regex = '^[0-9]+$'
 
 [[verdict]]
 id = "branch watch stale"
@@ -97,7 +85,7 @@ target = "mise run branch-age-record"
 [[verdict]]
 id = "branch list empty"
 gloss = "the producer looked and the remote reported no branches at all"
-class = "A remote with a trunk cannot report no branches; the listing failed while exiting zero."
+class = "A remote with a trunk cannot report no branches; the listing failed while answering."
 
 [[verdict.route]]
 id = "task run first"
@@ -112,126 +100,355 @@ module = "policy/branch-age.rego"
 severity = "deny"
 
 [[record]]
-record = "branch-age"
+record = "branch-heads"
 writer = "mise run branch-age-record"
-"#,
-    );
+
+[[record]]
+record = "branch-tips"
+writer = "mise run branch-age-record"
+
+[[record]]
+record = "branch-merged"
+writer = "mise run branch-age-record"
+
+[[forge.query]]
+id = "branch-heads"
+endpoint = "repos/{owner}/{repo}/branches"
+per_page = 100
+max_pages = 1
+select = ["name", "commit.sha"]
+
+[[forge.query]]
+id = "branch-tips"
+endpoint = "repos/{owner}/{repo}/commits"
+params = { sha = "{tip}" }
+per_page = 1
+max_pages = 1
+select = ["commit.committer.date"]
+each = { query = "branch-heads", field = "commit.sha", input = "tip" }
+
+[[forge.query.span]]
+name = "age"
+from = "commit.committer.date"
+unit = "days"
+
+[[forge.query]]
+id = "branch-merged"
+endpoint = "repos/{owner}/{repo}/pulls"
+params = { state = "closed", sort = "created", direction = "desc" }
+per_page = 100
+max_pages = 10
+select = ["head.ref", "merged_at"]
+"#;
+
+/// A committed consumer registering the real module, and its fixture forge.
+fn consumer(name: &str) -> (PathBuf, PathBuf) {
+    let dir = scratch(&format!("branch-age-{name}"));
     init_repo(&dir);
+    write(&dir, "batten.toml", CONFIG);
+    write(
+        &dir,
+        "policy/branch-age.rego",
+        &std::fs::read_to_string(at_root("policy/branch-age.rego"))
+            .expect("the module this tier exists for"),
+    );
     git_in(&dir, &["add", "-A"]);
     git_in(&dir, &["commit", "-qm", "register the module"]);
-    dir
+    (dir, scratch(&format!("branch-age-{name}-forge")))
 }
 
-/// Write the producer's record, as `mise run branch-age-record` would.
-fn record(dir: &std::path::Path, lines: &str) {
-    let written = run_with_stdin(dir, &["record", "named", "branch-age"], lines);
-    assert!(
-        written.status.success(),
-        "the setup write lands: {}",
-        String::from_utf8_lossy(&written.stderr)
-    );
+fn respond(forge: &Path, n: u32, body: &str) {
+    std::fs::write(
+        forge.join(format!("resp.{n}")),
+        format!("HTTP/2 200\ncontent-type: application/json\n\n{body}\n"),
+    )
+    .expect("write the canned answer");
+}
+
+/// The forge's answers: `heads` as `(name, sha)`, one tip per DISTINCT sha in
+/// first-seen order as `(sha, date)`, and the closed pulls as `(head, merged)`,
+/// served a hundred to a page — a full last page is followed by an empty one,
+/// because a page as long as `per_page` is how the walk knows to ask again.
+fn forge_answers(
+    forge: &Path,
+    heads: &[(&str, &str)],
+    tips: &[(&str, &str)],
+    pulls: &[(&str, bool)],
+) {
+    let heads: Vec<String> = heads
+        .iter()
+        .map(|(name, sha)| {
+            format!(r#"{{"name": "{name}", "commit": {{"sha": "{sha}"}}, "protected": false}}"#)
+        })
+        .collect();
+    respond(forge, 1, &format!("[{}]", heads.join(", ")));
+    let mut n = 2;
+    for (sha, date) in tips {
+        respond(
+            forge,
+            n,
+            &format!(
+                r#"[{{"sha": "{sha}", "commit": {{"committer": {{"date": "{date}"}}, "message": "a body nobody declared"}}}}]"#
+            ),
+        );
+        n += 1;
+    }
+    let mut pages: Vec<&[(&str, bool)]> = pulls.chunks(100).collect();
+    if pulls.len().is_multiple_of(100) {
+        pages.push(&[]);
+    }
+    for page in pages {
+        let rows: Vec<String> = page
+            .iter()
+            .map(|(head, merged)| {
+                let at = if *merged {
+                    "\"2026-08-01T00:00:00Z\""
+                } else {
+                    "null"
+                };
+                format!(r#"{{"head": {{"ref": "{head}"}}, "merged_at": {at}, "title": "t"}}"#)
+            })
+            .collect();
+        respond(forge, n, &format!("[{}]", rows.join(", ")));
+        n += 1;
+    }
+}
+
+fn against(dir: &Path, forge: &Path, args: &[&str]) -> Output {
+    common::batten()
+        .args(args)
+        .env("GH_REPO", REPO)
+        .env("BATTEN_REST_FIXTURE", forge)
+        .current_dir(dir)
+        .output()
+        .expect("the compiled binary runs")
+}
+
+/// `mise run branch-age-record`'s three reads, in its order, each asserted.
+fn produce(dir: &Path, forge: &Path) {
+    for id in ["branch-heads", "branch-tips", "branch-merged"] {
+        let recorded = against(dir, forge, &["record", "query", id]);
+        assert_eq!(
+            recorded.status.code(),
+            Some(0),
+            "`record query {id}` records\n{}",
+            stderr(&recorded)
+        );
+    }
+}
+
+fn said(out: &Output) -> String {
+    format!("{}{}", stdout(out), stderr(out))
 }
 
 #[test]
 fn a_recorded_branch_past_the_threshold_is_reported_through_the_engines_own_projection() {
-    // THE CASE NO `with input as` CAN REACH, and the one that was false for a
-    // whole session: the module was registered, its own suite green, and
-    // `recorder_records` projected no `record named` family at all — so this
-    // exact tree exited 0 over a 36-day branch (CLOUD-1810).
-    let dir = repo("stale");
-    record(&dir, "ref\tclaude/ancient\t36\nref\tclaude/fresh\t1\n");
+    let (dir, forge) = consumer("stale");
+    forge_answers(
+        &forge,
+        &[
+            ("main", "t0"),
+            ("claude/ancient", "a1"),
+            ("claude/fresh", "f1"),
+        ],
+        &[("t0", FRESH), ("a1", ANCIENT), ("f1", FRESH)],
+        &[],
+    );
+    produce(&dir, &forge);
+    let decided = against(&dir, &forge, &["check"]);
+    assert_eq!(decided.status.code(), Some(2), "{}", said(&decided));
+    assert!(
+        said(&decided).contains("claude/ancient"),
+        "the finding names the branch to delete\n{}",
+        said(&decided)
+    );
+    assert!(
+        !said(&decided).contains("claude/fresh"),
+        "and says nothing about one inside the threshold\n{}",
+        said(&decided)
+    );
+}
 
-    let decided = run(&dir, &["check"]);
-    assert_eq!(
-        decided.status.code(),
-        Some(2),
-        "a branch past the threshold decides\n{}",
-        String::from_utf8_lossy(&decided.stderr)
+#[test]
+fn a_clean_remote_reaches_green() {
+    // THE ANTI-VACUITY MIRROR: the state the gate must be able to reach.
+    let (dir, forge) = consumer("clean");
+    forge_answers(
+        &forge,
+        &[("main", "t0"), ("claude/fresh", "f1")],
+        &[("t0", FRESH), ("f1", FRESH)],
+        &[("claude/fresh", true)],
     );
-    // BOTH STREAMS, because which one a finding lands on is the output contract's
-    // business and not this case's: what is asserted is that the pointer reaches
-    // the reader at all.
-    let said = format!(
-        "{}{}",
-        String::from_utf8_lossy(&decided.stdout),
-        String::from_utf8_lossy(&decided.stderr)
+    produce(&dir, &forge);
+    let quiet = against(&dir, &forge, &["check"]);
+    assert_eq!(quiet.status.code(), Some(0), "{}", said(&quiet));
+}
+
+#[test]
+fn the_trunk_is_never_counted_however_old() {
+    let (dir, forge) = consumer("trunk");
+    forge_answers(
+        &forge,
+        &[("main", "t0"), ("claude/fresh", "f1")],
+        &[("t0", ANCIENT), ("f1", FRESH)],
+        &[("main", true), ("main", true)],
     );
+    produce(&dir, &forge);
+    let quiet = against(&dir, &forge, &["check"]);
+    assert_eq!(quiet.status.code(), Some(0), "{}", said(&quiet));
+}
+
+#[test]
+fn the_tip_age_is_the_producers_count_of_days() {
+    // THE ONE STEP THE MODULE CANNOT TAKE: the producer's record carries each
+    // distinct tip once, tagged with its sha, with an age in whole days — and
+    // not the commit message the forge sent beside the date.
+    let (dir, forge) = consumer("age");
+    forge_answers(
+        &forge,
+        &[("main", "t0"), ("claude/a", "s"), ("claude/b", "s")],
+        &[("t0", FRESH), ("s", ANCIENT)],
+        &[],
+    );
+    produce(&dir, &forge);
+    let branch = git_in(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    let tips = std::fs::read_to_string(batten::recorder::record_path(
+        &dir.join(".git"),
+        "branch-tips",
+        &branch,
+        None,
+    ))
+    .expect("the tips family was written where the projection reads it");
+    assert_eq!(tips.matches("\"tip\":\"s\"").count(), 1, "{tips}");
+    assert!(tips.contains("\"age\":"), "{tips}");
+    assert!(!tips.contains("nobody declared"), "rule 4: {tips}");
+    assert!(tips.contains("\tmembers=2\t"), "{tips}");
+    let asked = std::fs::read_to_string(forge.join("args")).unwrap_or_default();
     assert!(
-        said.contains("claude/ancient"),
-        "the finding names the branch to delete\n{said}"
+        asked.contains(&format!("repos/{REPO}/commits?page=1&sha=s&per_page=1")),
+        "the tip read is bound to the recorded sha: {asked}"
     );
-    assert!(
-        !said.contains("claude/fresh"),
-        "and says nothing about one inside the threshold\n{said}"
-    );
+    // Both branches at the ancient tip are stale.
+    let decided = against(&dir, &forge, &["check"]);
+    assert!(said(&decided).contains("claude/a"), "{}", said(&decided));
+    assert!(said(&decided).contains("claude/b"), "{}", said(&decided));
 }
 
 #[test]
 fn an_absent_record_says_nothing_rather_than_passing() {
-    // COULD NOT LOOK IS NOT A PASS, and on this surface it is also not a
-    // refusal. The producer writes nothing when it cannot reach the forge, so a
-    // module that refused here would refuse every checkout with no credential —
-    // and one that PASSED would be the silent green the whole port exists to
-    // remove. The discrimination is only visible with the record absent.
-    let dir = repo("absent");
-
-    let quiet = run(&dir, &["check"]);
+    let (dir, forge) = consumer("absent");
+    let quiet = against(&dir, &forge, &["check"]);
     assert_eq!(
         quiet.status.code(),
         Some(0),
         "an absent record is could-not-look\n{}",
-        String::from_utf8_lossy(&quiet.stderr)
+        said(&quiet)
     );
+}
+
+#[test]
+fn a_forge_that_will_not_answer_leaves_nothing_to_decide_over() {
+    let (dir, forge) = consumer("refused");
+    std::fs::write(
+        forge.join("resp.1"),
+        "HTTP/2 403\ncontent-type: application/json\n\n{\"message\": \"no\"}\n",
+    )
+    .expect("write the refusal");
+    let refused = against(&dir, &forge, &["record", "query", "branch-heads"]);
+    assert_eq!(refused.status.code(), Some(3), "{}", said(&refused));
+    let quiet = against(&dir, &forge, &["check"]);
+    assert_eq!(quiet.status.code(), Some(0), "{}", said(&quiet));
 }
 
 #[test]
 fn a_present_record_naming_no_branch_is_refused_rather_than_read_as_clean() {
-    // PRESENT-AND-EMPTY IS THE THIRD STATE, and collapsing it into the second is
-    // where the whole gate evaporates: a remote reporting no branches "cannot be
-    // true of a repository with a trunk", so the honest reading is that the
-    // listing failed while exiting zero.
-    let dir = repo("empty");
-    record(&dir, "merged\tclaude/gone\n");
-
-    let refused = run(&dir, &["check"]);
-    assert_eq!(
-        refused.status.code(),
-        Some(2),
-        "a record that looked and found no branch at all is refused\n{}",
-        String::from_utf8_lossy(&refused.stderr)
-    );
+    // PRESENT-AND-EMPTY IS THE THIRD STATE: the listing answered and named no
+    // branch at all, which cannot be true of a repository with a trunk.
+    let (dir, forge) = consumer("empty");
+    forge_answers(&forge, &[], &[], &[("claude/gone", true)]);
+    produce(&dir, &forge);
+    let refused = against(&dir, &forge, &["check"]);
+    assert_eq!(refused.status.code(), Some(2), "{}", said(&refused));
 }
 
 #[test]
 fn a_reused_name_still_on_the_remote_is_reported_and_one_already_deleted_is_not() {
-    // THE SURVIVOR CONJUNCT, as an exit code rather than as an argument. Merged
-    // pull requests are immutable, so a name that headed two of them heads two
-    // forever; without intersecting against what the remote still carries this
-    // would be an alarm no action could clear, which is the shape that gets a
-    // gate switched off.
-    let live = repo("reused-live");
-    record(
-        &live,
-        "ref\tclaude/reused\t1\nmerged\tclaude/reused\nmerged\tclaude/reused\n",
+    let (live, forge) = consumer("reused-live");
+    forge_answers(
+        &forge,
+        &[("main", "t0"), ("claude/reused", "r")],
+        &[("t0", FRESH), ("r", FRESH)],
+        &[("claude/reused", true), ("claude/reused", true)],
     );
-    let reported = run(&live, &["check"]);
-    assert_eq!(
-        reported.status.code(),
-        Some(2),
-        "a reused name still on the remote is reported\n{}",
-        String::from_utf8_lossy(&reported.stderr)
-    );
+    produce(&live, &forge);
+    let reported = against(&live, &forge, &["check"]);
+    assert_eq!(reported.status.code(), Some(2), "{}", said(&reported));
 
-    let gone = repo("reused-gone");
-    record(
-        &gone,
-        "ref\tclaude/other\t1\nmerged\tclaude/deleted\nmerged\tclaude/deleted\n",
+    let (gone, forge) = consumer("reused-gone");
+    forge_answers(
+        &forge,
+        &[("main", "t0"), ("claude/other", "o")],
+        &[("t0", FRESH), ("o", FRESH)],
+        &[("claude/deleted", true), ("claude/deleted", true)],
     );
-    let quiet = run(&gone, &["check"]);
+    produce(&gone, &forge);
+    let quiet = against(&gone, &forge, &["check"]);
     assert_eq!(
         quiet.status.code(),
         Some(0),
-        "and the same history with the branch deleted is clean — the remedy worked\n{}",
-        String::from_utf8_lossy(&quiet.stderr)
+        "the same history with the branch deleted is clean — the remedy worked\n{}",
+        said(&quiet)
+    );
+}
+
+/// `count` distinct heads for pull requests closed before the ones a case is
+/// about.
+fn earlier(prefix: &str, count: usize) -> Vec<String> {
+    (1..=count).map(|i| format!("claude/{prefix}{i}")).collect()
+}
+
+#[test]
+fn only_the_two_hundred_most_recent_merged_pull_requests_are_counted() {
+    // THE RETIRED BODY'S POPULATION: `gh pr list --state merged --limit 200`.
+    // A name whose two merges both fall past the 200th most recent merge was
+    // never in that list, so it is not reported. The window reads more than
+    // 200 CLOSED rows only so that unmerged ones cannot shrink it.
+    let (dir, forge) = consumer("merged-window");
+    let older = earlier("f", 200);
+    let mut pulls: Vec<(&str, bool)> = older.iter().map(|head| (head.as_str(), true)).collect();
+    pulls.extend([("claude/reused", true), ("claude/reused", true)]);
+    forge_answers(
+        &forge,
+        &[("main", "t0"), ("claude/reused", "r")],
+        &[("t0", FRESH), ("r", FRESH)],
+        &pulls,
+    );
+    produce(&dir, &forge);
+    let quiet = against(&dir, &forge, &["check"]);
+    assert_eq!(quiet.status.code(), Some(0), "{}", said(&quiet));
+}
+
+#[test]
+fn an_unmerged_pull_request_takes_no_slot_in_the_merged_window() {
+    // THE GAP A CLOSED-SET READ OPENS: 200 closed rows are not 200 merges, and
+    // every unmerged one among them would push a merge out of what the retired
+    // body saw. The cap counts merges, after the unmerged rows are dropped.
+    let (dir, forge) = consumer("merged-window-unmerged");
+    let closed = earlier("u", 200);
+    let mut pulls: Vec<(&str, bool)> = closed.iter().map(|head| (head.as_str(), false)).collect();
+    pulls.extend([("claude/reused", true), ("claude/reused", true)]);
+    forge_answers(
+        &forge,
+        &[("main", "t0"), ("claude/reused", "r")],
+        &[("t0", FRESH), ("r", FRESH)],
+        &pulls,
+    );
+    produce(&dir, &forge);
+    let reported = against(&dir, &forge, &["check"]);
+    assert_eq!(reported.status.code(), Some(2), "{}", said(&reported));
+    assert!(
+        said(&reported).contains("claude/reused"),
+        "{}",
+        said(&reported)
     );
 }

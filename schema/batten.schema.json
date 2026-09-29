@@ -1802,6 +1802,30 @@
       },
       "additionalProperties": false
     },
+    "Each": {
+      "description": "A `[[forge.query]]` row's fan-out: one walk per distinct value at `field`\nin the rows of the family `query` recorded, bound to the placeholder\n`input` (CLOUD-843).",
+      "type": "object",
+      "properties": {
+        "field": {
+          "description": "Which of the source row's `select` paths holds a member's value, spelled\nexactly as that row declares it.\n\nA recorded row carries each selected path as ONE flat key — `commit.sha`\nis a key, not an object — so this is looked up whole rather than walked,\nand a path the source never selected is refused at load, where it can be\nfixed, rather than read as could-not-look on every run.",
+          "type": "string"
+        },
+        "input": {
+          "description": "The placeholder each member binds, and the key it is recorded under on\nevery row its walk kept.",
+          "type": "string"
+        },
+        "query": {
+          "description": "The `[[forge.query]]` id whose recorded rows supply the members.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "query",
+        "field",
+        "input"
+      ]
+    },
     "Effect": {
       "type": "string",
       "enum": [
@@ -2892,6 +2916,13 @@
           "description": "The key this plan is projected under in `input.tree.plan`.",
           "type": "string"
         },
+        "profile": {
+          "description": "Profiles to ask the runner about, each passed as `--profile <p>`\n(CLOUD-843).\n\n**The runner's own grammar, including its negation** (`!slow`), so a\nconsumer can ask what the gate plans with a tier switched OFF — the only\nreading that shows which steps declare that tier, since a step excluded\nfor a missing profile is by construction a step that declared it. The\nanswer stays hk's: this passes the words and parses nothing.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "prohibited_profiles": {
           "description": "Profiles whose presence makes the plan unusable for this consumer.",
           "type": "array",
@@ -3234,6 +3265,17 @@
       "description": "One `[[forge.query]]` row: a declared, paginated REST read and the reduction\na producer records from it (CLOUD-843).\n\n# Why a row rather than a verb per measurement\n\nEleven shell bodies each re-derived the same four things — an endpoint with\nthe repository spliced in, a pagination walk, a date cut-off and a `jq`\nprojection — and three of them got the truncation wrong three different ways\n([`crate::forge`]'s header). One declared row per read puts the consumer's\nfacts (which endpoint, which fields, which window) in the committed authority\nand leaves the mechanism in the engine, which is non-negotiable rule 1's split\nexactly: nothing here names an endpoint, and nothing in `batten.toml` walks a\npage.\n\nThe row's `id` is also the RECORD FAMILY it writes, and a `[[record]]` row\nmust declare that family — a query nothing projects would write a store no\nmodule can read, which is CLOUD-1810's dead gate one table over, refused at\nload rather than discovered as a green run.",
       "type": "object",
       "properties": {
+        "each": {
+          "description": "Walk this row once per value another row's record holds (CLOUD-843).\n\n**The fan-out a single endpoint cannot express**: a run's jobs, a\nbranch's tip commit. The shell bodies this absorbs looped `gh api` over the\nids an earlier `gh api` printed; declaring the loop names which family the\nmembers come from, so the walk is the engine's and the members are a\nrecord a module can also read.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Each"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "endpoint": {
           "description": "The API-relative endpoint, with no leading slash and no query string,\ne.g. `repos/{owner}/{repo}/actions/runs`.\n\n`{owner}` and `{repo}` are resolved from the checkout's forge remote;\n`{since}` is the window's cut-off instant where `since` is declared; any\nother `{name}` is bound by `record query --input name=value`. A\nplaceholder nobody binds is a usage error, never a literal brace on the\nwire — the forge client this replaces expanded `{owner}/{repo}` itself,\nand a port that inherited the spelling without the expansion 404'd on\nevery call (`land_forge_reads.rs`).",
           "type": "string"
@@ -3285,6 +3327,13 @@
               "type": "null"
             }
           ]
+        },
+        "span": {
+          "description": "Durations derived from the instants a row carries (CLOUD-843).\n\nArithmetic over instants is the one reduction a module cannot make — no\nclock and no date parser reach the policy surface — so it is declared\nhere and computed by the producer, beside the fields it reads.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Span"
+          }
         }
       },
       "additionalProperties": false,
@@ -4202,6 +4251,7 @@
           "enum": [
             "ci-hygiene",
             "ci-signal",
+            "ci-signal",
             "claude-code-cloud",
             "commit-hygiene",
             "landing-loop",
@@ -4889,6 +4939,52 @@
         "path"
       ]
     },
+    "Span": {
+      "description": "One duration a `[[forge.query]]` row derives from its instants (CLOUD-843).",
+      "type": "object",
+      "properties": {
+        "from": {
+          "description": "The dot-separated path of the RFC 3339 instant the span starts at.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The key the duration is recorded under. A placeholder-shaped name, so it\ncan never be mistaken for a dotted `select` path.",
+          "type": "string"
+        },
+        "to": {
+          "description": "The dot-separated path of the instant it ends at; absent is the\nproducer's clock, which is how an AGE is declared.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unit": {
+          "description": "What the duration counts.",
+          "$ref": "#/$defs/SpanUnit",
+          "default": "seconds"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "from"
+      ]
+    },
+    "SpanUnit": {
+      "description": "What a [`Span`] counts.",
+      "oneOf": [
+        {
+          "description": "Whole seconds between the two instants.",
+          "type": "string",
+          "const": "seconds"
+        },
+        {
+          "description": "UTC calendar days between the two instants' dates — a civil-day count,\nso an instant at 23:59 and one at 00:01 the next day are one day apart.",
+          "type": "string",
+          "const": "days"
+        }
+      ]
+    },
     "Startup": {
       "description": "One declared precondition, and optionally the fix for it.",
       "type": "object",
@@ -5054,6 +5150,13 @@
         "input": {
           "description": "The repository-relative path whose bytes the verdict was taken over.\n\nIts digest is the third component of the key, so a verdict goes stale by\nconstruction the moment the file changes — the anti-staleness half, and\nthe one a `status: clean` marker alone could never provide.\n\nUnreadable, or outside the tree, is [`Look::CouldNotLook`]: the id is\nabsent from the map, never present with an empty verdict.",
           "type": "string"
+        },
+        "run": {
+          "description": "The argv that takes this verdict, run by `batten record validate <id>`\nfrom the repository root (CLOUD-843).\n\n**Optional, and a row without one is still read**: a producer outside the\nengine may still pipe its verdict to `record tool`. Declared, the argv is\nthe consumer's and never the engine's — which validator, with which\nflags, over which file is this repository's fact (non-negotiable rule 1),\nand what reaches the record is the EXIT CODE and nothing the tool printed.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "tool": {
           "description": "The tool's name, as the producer wrote it into the record's key.",

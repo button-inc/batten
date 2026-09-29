@@ -2420,8 +2420,21 @@ regex = '^[0-9]+$'
 # already does. What it buys is that a declared family always says who fills it,
 # because a store with no producer is a row that can only ever read
 # could-not-look.
+# CLOUD-349's three forge reads (CLOUD-843, retiring the body of
+# `[tasks.branch-age-record]`): the remote's branches, each branch tip's commit
+# with its age in UTC days measured by the producer's clock, and the heads of
+# recently closed pull requests. Each is a `[[forge.query]]` row in `[forge]`
+# below; `policy/branch-age.rego` joins them.
 [[record]]
-record = "branch-age"
+record = "branch-heads"
+writer = "mise run branch-age-record"
+
+[[record]]
+record = "branch-tips"
+writer = "mise run branch-age-record"
+
+[[record]]
+record = "branch-merged"
 writer = "mise run branch-age-record"
 
 # CLOUD-583's probe and verifier, ported off `attestation-check.sh` under
@@ -2432,12 +2445,20 @@ writer = "mise run branch-age-record"
 record = "attestation"
 writer = "mise run attestation-record"
 
-# CLOUD-266's other half, ported off `timeout-drift.sh` under CLOUD-1717. The
-# producer reads successful runs from the Actions API, subtracts their instants
-# and computes a p95 per job; the engine calls no clock, so the arithmetic cannot
-# move in and only the classification does.
+# CLOUD-266's three forge reads (CLOUD-843, retiring the body of
+# `[tasks.timeout-drift-record]`): every workflow, each one's last successful
+# runs, and each run's jobs with their durations measured by the producer. The
+# p95 and the classification are the `ci-signal` preset's.
 [[record]]
-record = "timeout-drift"
+record = "drift-workflows"
+writer = "mise run timeout-drift-record"
+
+[[record]]
+record = "drift-runs"
+writer = "mise run timeout-drift-record"
+
+[[record]]
+record = "drift-jobs"
 writer = "mise run timeout-drift-record"
 
 # CLOUD-484's measuring half, ported off `nonverdict-scan.sh` under CLOUD-1717
@@ -4117,6 +4138,53 @@ severity = "deny"
 # as `check`'s exit 1 was: `land` runs it as an entry gate on every lap. Silent
 # with no record, so an ordinary `check` is unaffected.
 [[rule]]
+id = "release grade unsafe"
+kind = "policy"
+scope = "tree"
+module = "policy/attestation.rego"
+severity = "deny"
+
+# CLOUD-266's world half, ported off `mise-tasks/timeout-drift.sh` under
+# CLOUD-1717.
+#
+# `warn` IS THE PORTED POSTURE, not a hedge. The retired program reported and
+# never blocked: it failed only its own scheduled run, filed no issue and posted
+# no comment, because a budget that no longer matches reality means nothing is
+# broken and no branch is at fault. A warn finding is reported without failing the
+# run, which is that posture on the engine's contract.
+#
+# THE DECISION IS THE `ci-signal` PRESET'S (CLOUD-843). Nothing in it was this
+# repository's once the reads became `[[forge.query]]` rows: the multiplier, the
+# minimum sample, the slack, the p95 and the job-key walk are the practice's, and
+# the job and timeout grammar is GitHub Actions'. What stays here is this
+# consumer's: which workflows hold budgets (`line_sources`) and which forge reads
+# feed the two families (`drift-runs`, `drift-jobs`, in `[forge]` below).
+
+[[rule]]
+id = "bound grade other"
+kind = "policy"
+scope = "tree"
+preset = "ci-signal"
+provider = "github-actions"
+line_sources = [".github/workflows/*.yml"]
+severity = "warn"
+
+# CLOUD-484, ported off `mise-tasks/nonverdict-assert.sh` under CLOUD-1717.
+#
+# `warn` HOLDS TWO CLAIMS THAT LOOK OPPOSED, and both are the retired pair's own.
+# The decider argued that a rate which rises has to FAIL something or it becomes
+# an artifact nobody opens (non-negotiable rule 2) — it was filed against twice,
+# both times by someone deciding the number was not worth collecting.
+# `nonverdict-rate.yml` argued just as plainly that its failure is informational:
+# a job dying in provisioning is the platform having a bad afternoon, no branch
+# is at fault, and nothing in the tree is broken.
+#
+# A warn finding is reported without failing the run, so an ordinary `check` and
+# every `verify` stay green — which is what stops a branch going red for a reason
+# it did not cause — while the scheduled job runs `--fail-on-warning` and reds on
+# the rate. The gate is preserved and its blast radius is the clock, not the
+# landing path.
+[[rule]]
 id = "event watch other"
 kind = "policy"
 scope = "tree"
@@ -4844,6 +4912,11 @@ id = "config-validator"
 tool = "pkl"
 version = "0.29.1"
 input = "hk.pkl"
+# `batten record validate config-validator` runs this and records its exit code
+# (CLOUD-843). The retired body also chose a `--ca-certificates` bundle for a
+# TLS-intercepting sandbox; pkl reads `~/.pkl/cacerts` itself, and a warm package
+# cache needs no fetch at all (CLOUD-406 owns the cache).
+run = ["pkl", "eval", "hk.pkl"]
 
 # The second validator on this row, and the reason it is a SIBLING rather than a
 # rule of its own: what counts as a clean verdict is the same question for both,
@@ -4859,6 +4932,10 @@ id = "renovate-config"
 tool = "renovate-config-validator"
 version = "44.52.1"
 input = "renovate.json5"
+# `--strict` makes a warning fatal, carried out of the retired body: a producer
+# recording clean while telling the author the config is wrong is a log without a
+# gate (non-negotiable rule 2).
+run = ["renovate-config-validator", "--strict", "renovate.json5"]
 
 # The two-tier hk gate (CLOUD-509), ported off `mise-tasks/hook-profile-check.sh`
 # under CLOUD-1199.
@@ -4880,11 +4957,21 @@ module = "policy/hook-profile.rego"
 line_sources = [".claude/hooks/git-hook.sh"]
 severity = "deny"
 
-[[rule.tools]]
-id = "hk-plan"
-tool = "hk"
-version = "1.56.1"
-input = "hk.pkl"
+# THE TIER IS READ OFF TWO OF HK'S OWN PLANS, acquired at the boundary (CLOUD-843,
+# retiring the `hk-plan` arm of `[tasks.record-verdicts]`). `gate` is `check` as
+# committed and is the SAME query `plan require missing` declares — an identical
+# redeclaration, one acquisition. `gate-fast` is `check` with the slow tier
+# switched off: a step it skips for a missing profile is, by construction, a step
+# that declared the tier, which is the reading the retired `jq` join took.
+[[rule.plan]]
+id = "gate"
+hook = "check"
+required = ["batten-check", "test", "policy-test"]
+
+[[rule.plan]]
+id = "gate-fast"
+hook = "check"
+profile = ["!slow"]
 
 # The published inventory, judged against the tree it claims to describe
 # (CLOUD-262, ported off `mise-tasks/sbom-check.sh` under CLOUD-1318).
@@ -7696,6 +7783,45 @@ names = ["GITHUB_PERSONAL_ACCESS_TOKEN", "BATTEN_GITHUB_TOKEN"]
 # needed" — there is deliberately no fallback in the engine to fall back to.
 [forge]
 credential_names = ["BATTEN_GITHUB_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN"]
+
+# --- the declared forge reads (CLOUD-843) ---------------------------------------
+#
+# Each row is walked by `batten record query <id>` and written as the record
+# family of the same name. The rows carry this repository's facts — which
+# endpoints, which fields, which windows — and the engine carries none of them.
+
+# `timeout-drift`: the workflows the forge knows, keyed by the id the runs
+# endpoint takes.
+[[forge.query]]
+id = "drift-workflows"
+endpoint = "repos/{owner}/{repo}/actions/workflows"
+rows = "workflows"
+per_page = 100
+max_pages = 1
+select = ["id", "path"]
+
+# `branch-age`: the remote's branches, the first hundred, as the retired GraphQL
+# read took them.
+[[forge.query]]
+id = "branch-heads"
+endpoint = "repos/{owner}/{repo}/branches"
+per_page = 100
+max_pages = 1
+select = ["name", "commit.sha"]
+
+# Recently CLOSED pull requests and whether each merged, newest-created first —
+# the order `gh pr list` reads. The pulls endpoint has no merged-only state, so a
+# closed-but-unmerged pull request takes a slot in the window; ten pages are read
+# so that the retired body's population, the 200 most recent MERGED pull requests
+# (`--state merged --limit 200`), fits inside the window, and
+# `policy/branch-age.rego` keeps the first 200 merged rows and no more.
+[[forge.query]]
+id = "branch-merged"
+endpoint = "repos/{owner}/{repo}/pulls"
+params = { state = "closed", sort = "created", direction = "desc" }
+per_page = 100
+max_pages = 10
+select = ["head.ref", "merged_at"]
 
 # CLOUD-319's two readings, retiring `[tasks.release-due-record]` (CLOUD-843). The
 # body read the clock and the forge and recorded two AGES; these two rows move the
@@ -12402,66 +12528,6 @@ id = "task run first"
 kind = "command"
 target = "mise run attestation-record"
 
-# CLOUD-266's four readings, ported off `timeout-drift.sh` under CLOUD-1717.
-[[verdict]]
-id = "bound pin loose"
-gloss = "a job's declared timeout sits well above what its measurement justifies"
-class = """
-A budget is a ceiling rather than a target, so headroom is correct and a slack \
-allowance keeps this off a job that merely got a little faster. Past that \
-allowance the number has gone slack, which is the direction a report that only \
-complained about tightness would let rot upward forever. Nothing is broken and no \
-branch is at fault: re-derive the number and commit the new comment.
-"""
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run timeout-drift-record"
-
-[[verdict]]
-id = "bound pin wrong"
-gloss = "a job's measurement has outgrown its declared timeout"
-class = """
-The p95 of recent successful runs, times the repo-wide headroom multiplier, is \
-already above the committed budget. Raise it before it starts failing healthy \
-runs — this is the direction that turns into a red job nobody caused.
-"""
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run timeout-drift-record"
-
-[[verdict]]
-id = "bound pin stale"
-gloss = "a dated debt entry now has a usable sample and can become a measured budget"
-class = """
-The prompt, never the conversion. A bot re-baselining the number it is supposed \
-to defend is the move section 4 forbids outright, so this reports that the debt \
-is now convertible and a deliberate commit does the converting.
-"""
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run timeout-drift-record"
-
-[[verdict]]
-id = "bound measure partial"
-gloss = "too few successful runs to characterise a job, so no budget is proposed"
-class = """
-Below the declared minimum a job is uncharacterised rather than fast, and saying \
-so is itself the useful signal. Most jobs here run weekly or on release, so a \
-naive percentile over a short window would compute a confident value from two \
-samples and propose tightening a release job on it.
-"""
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run timeout-drift-record"
-
 # CLOUD-319's readings, ported off `release-due.sh` under CLOUD-1717.
 [[verdict]]
 id = "release ship early"
@@ -14862,16 +14928,4 @@ tools = [
   ["git", "rev-parse", "-q", "--verify", "origin/main:Cargo.toml"],
   ["git", "rev-parse", "-q", "--verify", "origin/main:Cargo.lock"],
   ["git", "log", "--format=%B", "origin/main..HEAD"],
-]
-
-# The three validator records are a function of committed bytes, so one run
-# answers for all (CLOUD-1891). The task's forge arm stays outside the key.
-[[step]]
-id = "record-verdicts"
-inputs = ["hk.pkl", "renovate.json5", "mise.toml"]
-tools = [
-  ["pkl", "--version"],
-  ["renovate-config-validator", "--version"],
-  ["hk", "--version"],
-  ["mise", "tasks", "info", "record-verdicts", "--json"],
 ]

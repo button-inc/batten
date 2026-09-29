@@ -2180,6 +2180,15 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::ForgeVerdict,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-843's validator door. The fixture declares no `[[rule.tools]]` row,
+    // so this answers the usage refusal naming the id — a pointer — and never
+    // reaches a spawn; what it would record is an exit code, never a report.
+    Verb {
+        path: "record validate",
+        args: &["config-validator"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // CLOUD-472. The entry id piped in carries the canary, because an id is the
     // AGENT's own text and is the one thing a refusal here must never echo — a
     // malformed line is reported by its NUMBER and the closed status vocabulary,

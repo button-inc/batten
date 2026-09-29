@@ -258,13 +258,239 @@ pub(crate) fn store_tool(id: &str, text: &str, overrides: &Overrides) -> Result<
     store(&tools::record_path(&git_dir, &key), validated(text)?)
 }
 
-/// Record the forge's verdicts for one commit.
+/// Run a declared tool row's `run` argv and record the exit code it answered
+/// under the row's key (CLOUD-843, retiring `[tasks.record-verdicts]`' validator
+/// arms).
+///
+/// **The exit code is the whole reduction**, `exit <n>`, and what it MEANS is the
+/// consumer's module: the engine does not know which validator treats `1` as a
+/// finding and which as a crash, and a vocabulary of `clean`/`error` spelled here
+/// would be one consumer's reading built into every consumer's binary. The
+/// tool's own report goes to the terminal through [`crate::exec::run_in`] and
+/// never into the record (rule 4).
+///
+/// The key is composed over the bytes of the row's `input` as they stood when
+/// the tool was started, with the same two functions [`run_tool`] and the reader
+/// use.
+///
+/// **A question already answered `0` is not asked again** — see
+/// [`already_clean`] — which is the step receipt the retired body kept, so a
+/// `verify` that follows the hk steps over the same bytes pays nothing twice.
 ///
 /// # Errors
 ///
-/// A [`UsageError`] when `reference` resolves to no commit, or when a piped line
-/// carries no token. An internal error when the store cannot be written.
-pub fn run_forge(reference: &str, _overrides: &Overrides) -> Result<ExitCode> {
+/// A [`UsageError`] when no row declares `id`, when it declares no `run`, or when
+/// its `input` will not read. Could-not-look — the argv would not start, or ended
+/// without an exit code — records NOTHING and answers [`ExitCode::Internal`]: a
+/// validator that never ran has no verdict, and recording one would be the
+/// could-not-look-as-a-finding shape this family exists to keep apart.
+pub fn run_validate(id: &str, overrides: &Overrides, err: &mut dyn Write) -> Result<ExitCode> {
+    let rows = declared(overrides)?;
+    let Some(row) = rows.into_iter().find(|row| row.id == id) else {
+        return Err(UsageError::raise(format!(
+            "no `[[rule.tools]]` row declares the id `{id}`, so there is no key to record under"
+        )));
+    };
+    if row.run.is_empty() {
+        return Err(UsageError::raise(format!(
+            "the `[[rule.tools]]` row `{id}` declares no `run` argv, so there is nothing to validate with"
+        )));
+    }
+    let root = git::repo_root(Path::new("."))?;
+    let Ok(bytes) = std::fs::read(root.join(&row.input)) else {
+        return Err(UsageError::raise(format!(
+            "cannot read `{}`, the input row `{id}` names, so no verdict can be keyed to it",
+            row.input
+        )));
+    };
+    let key = tools::record_key(&row, &tools::digest(&bytes));
+    let git_dir = git::git_dir(Path::new("."))?;
+    let record = tools::record_path(&git_dir, &key);
+    let receipt = git_dir.join(RECEIPTS).join(&key);
+    let asked = tools::digest(row.run.join("\0").as_bytes());
+    if already_clean(&record, &receipt, &asked) {
+        writeln!(
+            err,
+            "record validate {id}: these bytes already answered 0 to this argv; not asked again"
+        )?;
+        return Ok(ExitCode::Success);
+    }
+    let code = match crate::exec::run_in(&root, &row.run) {
+        Ok(ExitCode::Success) => Some(0),
+        Ok(_) => None,
+        Err(error) => error
+            .downcast_ref::<crate::error::Passthrough>()
+            .map(|passthrough| passthrough.0),
+    };
+    let Some(code) = code else {
+        writeln!(
+            err,
+            "batten: record validate {id}: could not look: the declared `run` did not start or gave no exit code"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    // THE RECEIPT GOES FIRST AND COMES BACK LAST, `forge::conditional_get`'s
+    // commit-point order: an interruption between the two writes leaves no
+    // receipt, which costs one re-run and never replays a stale answer.
+    if let Err(error) = std::fs::remove_file(&receipt)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(error).context("remove a stale validate receipt");
+    }
+    store(&record, &format!("exit {code}\n"))?;
+    if code == 0 {
+        store(&receipt, &asked)?;
+    }
+    Ok(ExitCode::Success)
+}
+
+/// Where `record validate` keeps the argv each clean record was answered to,
+/// under the git directory and beside — never inside — the tool store, so the
+/// reader's keyed lookup can never mistake one for a verdict.
+const RECEIPTS: &str = "batten-tools-asked";
+
+/// Whether this exact question — these bytes, this tool at this version, this
+/// argv — was already answered `0` (CLOUD-843, carrying CLOUD-1891's step
+/// receipt out of `[tasks.record-verdicts]`).
+///
+/// **The retired receipt's two rules, kept.** It skipped a validator only when
+/// the inputs it read were unchanged, and it wrote a receipt only over a CLEAN
+/// store, because "a network flake reads the same as a bad config" and an error
+/// held under a receipt "replays forever until an input moves". So a record
+/// that is anything but `exit 0` is always asked again, and so is one whose
+/// argv moved: the key carries the tool, its pinned version and the input's
+/// digest, and the receipt carries the argv the key does not.
+///
+/// `0` here is not a verdict. What a code MEANS is the consumer's module; this
+/// only declines to re-ask a question whose last answer was the process
+/// convention for success, which is the one answer a flake cannot forge.
+//
+// THE RECEIPT'S DISCRIMINATION, over the compiled binary: skipping the check
+// re-runs a validator whose inputs did not move, and an unkeyed argv replays an
+// answer to a question nobody is asking.
+//MUTANT receipt-never-read|s@^    if already_clean(.record, .receipt, .asked) {$@    if false {@|a_clean_answer_over_the_same_bytes_and_argv_is_not_asked_again
+//MUTANT receipt-ignores-argv|s@^    let same_argv = .*$@    let same_argv = std::fs::metadata(receipt).is_ok();@|a_moved_argv_is_asked_again_over_the_same_bytes
+fn already_clean(record: &Path, receipt: &Path, asked: &str) -> bool {
+    let answered_zero = std::fs::read_to_string(record).is_ok_and(|body| body == "exit 0\n");
+    let same_argv = std::fs::read_to_string(receipt).is_ok_and(|held| held == asked);
+    answered_zero && same_argv
+}
+
+/// The forge's latest ANSWERED conclusion per check name, as `forge-verdict`
+/// records spell them (CLOUD-1707, CLOUD-1965).
+///
+/// **Latest per name, by `checks green`'s own choice of it**: a re-run adds a
+/// second run under the same name, and the reader folds a record into a map, so
+/// the line that wins must be chosen here by recency rather than by listing
+/// order. The choice is [`crate::checks_green::winner`] itself — `completed_at`
+/// first, then `started_at`, then `id`, with a completed-but-unanswered twin
+/// never burying a verdict it raced — rather than a second ordering beside it: a
+/// key led by `started_at` picks the other run of an overlapping pair
+/// (CLOUD-1662), and the record and `checks green` would then speak for one name
+/// with two conclusions.
+///
+/// **Answered only, and membership is the caller's declared set**: a `skipped`
+/// draft-era check, a `cancelled` fan-in and a pending run all judged nothing,
+/// and recording any of them as a conclusion is how this producer twice wrote a
+/// could-not-look as a verdict. The set is the one `checks green` reads, so the
+/// two agree on what counts as an answer AND on which run is the latest.
+//
+// THE FORGE ARM'S DISCRIMINATION (CLOUD-843), each over the compiled binary and
+// the fixture forge: an unanswered conclusion recorded as a grading
+// (CLOUD-1965), a run other than `checks green`'s latest winning, a record
+// written before the fan-in answers, and a spaced name mangled into the record.
+//MUTANT-SUITE crates/batten/tests/it/record_verdicts.rs
+//MUTANT unanswered-recorded|s@^    answered.contains(.conclusion)$@    true@|an_unanswered_conclusion_is_not_recorded_as_a_grading
+//MUTANT listing-order-wins|s@^        if let Some(run) = crate::checks_green::winner(.group, .owned) {$@        if let Some(run) = group.last().copied() {@|the_latest_run_per_name_wins_by_completion_then_start
+//MUTANT fanin-ungated|s@^        && !graded.contains_key(fanin)$@        \&\& false@|nothing_is_written_until_the_fan_in_has_answered
+//MUTANT spaced-name-kept|s@^        if name.chars().any(char::is_whitespace) {$@        if false {@|a_name_with_whitespace_is_dropped_and_counted_never_mangled
+#[must_use]
+pub fn graded(runs: &[crate::checks_green::Run], answered: &[&str]) -> BTreeMap<String, String> {
+    let owned: Vec<String> = answered.iter().map(|word| (*word).to_owned()).collect();
+    let mut grouped: BTreeMap<&str, Vec<&crate::checks_green::Run>> = BTreeMap::new();
+    for run in runs {
+        grouped.entry(run.name.as_str()).or_default().push(run);
+    }
+    let mut latest: BTreeMap<&str, &crate::checks_green::Run> = BTreeMap::new();
+    for (name, group) in grouped {
+        if let Some(run) = crate::checks_green::winner(&group, &owned) {
+            latest.insert(name, run);
+        }
+    }
+    latest
+        .into_iter()
+        .filter(|(_, run)| answers(answered, &run.conclusion))
+        .map(|(name, run)| (name.to_owned(), run.conclusion.clone()))
+        .collect()
+}
+
+/// Whether `conclusion` is one of the declared answers.
+fn answers(answered: &[&str], conclusion: &str) -> bool {
+    answered.contains(&conclusion)
+}
+
+/// The record body [`graded`] conclusions spell, or `None` while the fan-in has
+/// not answered — and how many names could not be spelled.
+///
+/// **The fan-in gates writing AT ALL.** It is the check every other required job
+/// feeds, so until it has an answered conclusion the forge has not finished
+/// judging the commit, and a partial record would be a record PRESENT without a
+/// passing fan-in — which `forge-verdict-required` refuses, on local `verify` and
+/// inside CI's own run alike. Absent is could-not-look, the correct reading for
+/// both.
+///
+/// **A name with whitespace has no spelling here** and is dropped rather than
+/// mangled: the record splits `<name> <token>` on the first whitespace run, so
+/// `action (ubuntu-latest) success` would record the name `action`.
+#[must_use]
+pub fn forge_body(
+    graded: &BTreeMap<String, String>,
+    fanin: Option<&str>,
+) -> Option<(String, usize)> {
+    if let Some(fanin) = fanin
+        && !graded.contains_key(fanin)
+    {
+        return None;
+    }
+    let mut body = String::new();
+    let mut dropped = 0_usize;
+    for (name, conclusion) in graded {
+        if name.chars().any(char::is_whitespace) {
+            dropped += 1;
+            continue;
+        }
+        body.push_str(name);
+        body.push(' ');
+        body.push_str(conclusion);
+        body.push('\n');
+    }
+    Some((body, dropped))
+}
+
+/// Record the forge's verdicts for one commit.
+///
+/// Piped `<check> <conclusion>` lines by default. With `fetch`, the check-runs
+/// are read from the forge in process through [`crate::pr_watch::read`] — the
+/// same paginated client `pr watch` and `land` read — reduced by [`graded`] over
+/// `answered`, and gated on `fanin` by [`forge_body`] (CLOUD-843, retiring the
+/// forge arm of `[tasks.record-verdicts]`).
+///
+/// # Errors
+///
+/// A [`UsageError`] when `reference` resolves to no commit, when a piped line
+/// carries no token, or when `--fanin`/`--answered` are given without `--fetch`
+/// or `--fetch` without `--answered`. An internal error when the store cannot be
+/// written. A forge that could not be read is could-not-look: nothing is
+/// recorded and the answer is [`ExitCode::Internal`].
+pub fn run_forge(
+    reference: &str,
+    fetch: Option<&Fetch>,
+    _overrides: &Overrides,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    if let Some(fetch) = fetch {
+        return run_forge_fetch(reference, fetch, err);
+    }
     let text = verdict_lines()?;
     // RESOLVED, never taken literally, because the reader keys on a sha and a
     // producer naturally holds a ref. Recording under the ref's own spelling would
@@ -277,6 +503,114 @@ pub fn run_forge(reference: &str, _overrides: &Overrides) -> Result<ExitCode> {
 
     let git_dir = git::git_dir(Path::new("."))?;
     store(&forge::record_path(&git_dir, &sha), validated(&text)?)?;
+    Ok(ExitCode::Success)
+}
+
+/// What `record forge --fetch` reads the forge with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fetch {
+    /// The check whose answered conclusion gates writing at all, if any.
+    pub fanin: Option<String>,
+    /// The conclusions that constitute an answer.
+    pub answered: Vec<String>,
+}
+
+/// Hold `record forge`'s three flags to one of its two shapes.
+///
+/// # Errors
+///
+/// A [`UsageError`] for a qualifier without `--fetch`, a `--fetch` with no
+/// `--answered` set — every conclusion would then be a non-answer and the record
+/// could never be written — or an empty `--fanin`, which names no check.
+fn forge_fetch(
+    fetch: bool,
+    fanin: Option<String>,
+    answered: Option<&str>,
+) -> Result<Option<Fetch>> {
+    if !fetch {
+        if fanin.is_some() || answered.is_some() {
+            return Err(UsageError::raise(String::from(
+                "record forge: `--fanin` and `--answered` qualify a `--fetch` reading; a piped verdict was already reduced",
+            )));
+        }
+        return Ok(None);
+    }
+    let answered: Vec<String> = answered
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|word| !word.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if answered.is_empty() {
+        return Err(UsageError::raise(String::from(
+            "record forge --fetch: `--answered` names no conclusion, so no check-run could ever count as graded",
+        )));
+    }
+    if fanin.as_deref().is_some_and(|name| name.trim().is_empty()) {
+        return Err(UsageError::raise(String::from(
+            "record forge --fetch: `--fanin` is empty, so it names no check to gate on",
+        )));
+    }
+    Ok(Some(Fetch { fanin, answered }))
+}
+
+/// `record forge --fetch`: read the commit's check-runs from the forge and
+/// record their answered conclusions, gated on the fan-in.
+fn run_forge_fetch(reference: &str, fetch: &Fetch, err: &mut dyn Write) -> Result<ExitCode> {
+    let root = Path::new(".");
+    let Some(sha) = git::resolve_ref(root, reference)? else {
+        return Err(UsageError::raise(format!(
+            "`{reference}` resolves to no commit, so there is no sha to key this verdict to"
+        )));
+    };
+    let Some(repo) = crate::repo_slug(root) else {
+        writeln!(
+            err,
+            "batten: record forge: could not look: no forge remote names the repository"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    let config = crate::pr_watch::Config {
+        sha: sha.clone(),
+        repo,
+        interval: crate::pr_watch::DEFAULT_INTERVAL,
+        progress: None,
+    };
+    let Some(answer) = crate::pr_watch::read(&config, None) else {
+        writeln!(
+            err,
+            "batten: record forge: could not look: the forge did not answer for the check-runs"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    if !answer.is_reading() {
+        writeln!(
+            err,
+            "batten: record forge: could not look: the forge answered status {} for the check-runs",
+            answer.status
+        )?;
+        return Ok(ExitCode::Internal);
+    }
+    let runs = crate::pr_watch::runs_from_body(&answer.body);
+    let answered: Vec<&str> = fetch.answered.iter().map(String::as_str).collect();
+    let conclusions = graded(&runs, &answered);
+    let Some((body, dropped)) = forge_body(&conclusions, fetch.fanin.as_deref()) else {
+        writeln!(
+            err,
+            "record forge: the fan-in has no answered conclusion yet; nothing recorded"
+        )?;
+        return Ok(ExitCode::Success);
+    };
+    // A COUNT, never the names (rule 4), so the limit stays visible.
+    if dropped > 0 {
+        writeln!(
+            err,
+            "record forge: {dropped} check-run name(s) carry whitespace and have no spelling in a forge record; dropped"
+        )?;
+    }
+    let git_dir = git::git_dir(root)?;
+    store(&forge::record_path(&git_dir, &sha), &body)?;
     Ok(ExitCode::Success)
 }
 
@@ -349,7 +683,16 @@ pub fn run(
         crate::cli::RecordCommand::ToolPicked { id, pick } => {
             run_tool_picked(&id, &pick, overrides)
         }
-        crate::cli::RecordCommand::Forge { reference } => run_forge(&reference, overrides),
+        crate::cli::RecordCommand::Validate { id } => run_validate(&id, overrides, err),
+        crate::cli::RecordCommand::Forge {
+            reference,
+            fetch,
+            fanin,
+            answered,
+        } => {
+            let fetch = forge_fetch(fetch, fanin, answered.as_deref())?;
+            run_forge(&reference, fetch.as_ref(), overrides, err)
+        }
         crate::cli::RecordCommand::Plan => run_plan(),
         crate::cli::RecordCommand::Closes => run_closes(overrides),
         crate::cli::RecordCommand::Named { family } => run_named(&family),
@@ -1305,6 +1648,26 @@ fn named_path(verb: &str, family: &str) -> Result<PathBuf> {
 /// As [`named_path`], and an internal error when the store cannot be written.
 pub(crate) fn store_named(verb: &str, family: &str, body: &str) -> Result<()> {
     store(&named_path(verb, family)?, body)
+}
+
+/// Read one named family's record for this branch back, or `None` where none
+/// was written (CLOUD-843).
+///
+/// **The same path [`store_named`] writes**, so a producer that fans out over an
+/// earlier producer's rows reads exactly what the projection hands a module —
+/// never a second composition of the key.
+///
+/// # Errors
+///
+/// As [`named_path`], and an internal error when a record exists and will not
+/// read — which is not the same answer as one that is absent.
+pub(crate) fn load_named(verb: &str, family: &str) -> Result<Option<String>> {
+    let path = named_path(verb, family)?;
+    match std::fs::read_to_string(&path) {
+        Ok(body) => Ok(Some(body)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("read the record {}", path.display())),
+    }
 }
 
 /// Remove one named family's record for this branch, where one exists.

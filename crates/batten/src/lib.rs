@@ -4174,6 +4174,50 @@ fn parse_run(line: &str) -> Option<checks_green::Run> {
     })
 }
 
+/// `checks green --sha`: one commit's check runs, read from the forge in process
+/// (CLOUD-843), or `None` once a could-not-look has been said on `err`.
+///
+/// The same [`pr_watch::read`] `record forge --fetch` and `land` read, so the
+/// three cannot disagree on which runs a commit carries. EVERY FAILURE IS
+/// COULD-NOT-LOOK, as the retired `checks-green` task's `gh api` arm made it: no
+/// answer, and an answer that is not a reading (a 404 for an unpushed sha, a 401,
+/// a 5xx) alike. An empty `runs` from a declined request would otherwise read as
+/// a head no workflow has registered for — "not yet", which a caller polls on
+/// forever rather than hearing that it could not look.
+//
+//MUTANT-SUITE crates/batten/tests/it/checks_green.rs
+//MUTANT declined-read-as-empty|s@^    if !answer.is_reading() {$@    if false {@|a_declined_forge_read_is_could_not_look_never_not_yet
+//MUTANT fetch-ignores-sha|s@^        sha: sha.to_owned(),$@        sha: String::from("HEAD"),@|the_fetched_reading_is_the_named_commits
+fn checks_green_fetch(
+    sha: &str,
+    repo: Option<String>,
+    err: &mut dyn Write,
+) -> Result<Option<Vec<checks_green::Run>>> {
+    let config = pr_watch::Config {
+        sha: sha.to_owned(),
+        // `--repo` first, then the checkout's remote — `pr watch`'s order.
+        repo: repo.unwrap_or_else(|| repo_or_placeholder(Path::new("."))),
+        interval: pr_watch::DEFAULT_INTERVAL,
+        progress: None,
+    };
+    let Some(answer) = pr_watch::read(&config, None) else {
+        writeln!(
+            err,
+            "::error:: checks green: could not look: the forge did not answer for {sha}'s check runs. A reading this gate cannot take is not a pass."
+        )?;
+        return Ok(None);
+    };
+    if !answer.is_reading() {
+        writeln!(
+            err,
+            "::error:: checks green: could not look: the forge answered status {} for {sha}'s check runs. A reading this gate cannot take is not a pass.",
+            answer.status
+        )?;
+        return Ok(None);
+    }
+    Ok(Some(pr_watch::runs_from_body(&answer.body)))
+}
+
 fn run_checks(
     command: ChecksCommand,
     out: &mut dyn Write,
@@ -4184,12 +4228,31 @@ fn run_checks(
         absent_ok,
         answered,
         fanin,
+        sha,
+        repo,
         json,
     } = command;
 
-    let mut raw = String::new();
-    std::io::stdin().read_to_string(&mut raw)?;
-    let runs: Vec<checks_green::Run> = raw.lines().filter_map(parse_run).collect();
+    let runs: Vec<checks_green::Run> = if let Some(sha) = sha {
+        match checks_green_fetch(&sha, repo, err)? {
+            Some(runs) => runs,
+            None => return Ok(ExitCode::Internal),
+        }
+    } else {
+        let mut raw = String::new();
+        std::io::stdin().read_to_string(&mut raw)?;
+        // `--repo` QUALIFIES A FETCH. Beside a piped reading it would be a
+        // repository nobody reads, which a caller could take for a scope. Refused
+        // AFTER the pipe is drained, so a writer is never cut off mid-reading.
+        if repo.is_some() {
+            writeln!(
+                err,
+                "::error:: checks green: --repo names the repository `--sha` reads; a piped reading was already taken"
+            )?;
+            return Ok(ExitCode::Usage);
+        }
+        raw.lines().filter_map(parse_run).collect()
+    };
 
     let roster = checks_green::Roster {
         required: roster_field(Some(&required)),

@@ -79,7 +79,7 @@ use crate::rest::Query;
 //MUTANT since-window-keeps-everything|s@^            if at < cutoff {$@            if false {@|the_since_window_keeps_recent_rows_and_drops_old_ones
 //MUTANT truncation-recorded-as-whole|s@^            "truncated",$@            "whole",@|a_truncated_window_reaches_the_module_as_truncated
 //MUTANT unprojected-family-loads|s@^        if !families.iter().any(.family. family.record == id) {$@        if false {@|a_query_whose_family_no_record_row_declares_is_refused_at_load
-//MUTANT reduction-keeps-the-whole-row|s@^        body.push_str(.reduce(row, .query.select).to_string());$@        body.push_str(row.to_string().as_str());@|a_declared_query_is_walked_reduced_and_decided_over
+//MUTANT reduction-keeps-the-whole-row|s@^        body.push_str(.reduced(query, row, now, tag).to_string());$@        body.push_str(row.to_string().as_str());@|a_declared_query_is_walked_reduced_and_decided_over
 //MUTANT unread-input-ignored|s@^        if !named.contains(key.as_str()) {$@        if false {@|an_input_the_query_does_not_read_is_a_usage_error
 
 /// The leaf this module answers for, as a refusal names it.
@@ -257,6 +257,78 @@ pub fn validate(queries: &[Query], families: &[crate::record::Declared]) -> Resu
                  could read it"
             )));
         }
+        validate_derived(query, queries, &named).map_err(refuse)?;
+    }
+    Ok(())
+}
+
+/// A row's fan-out and spans: every name they add to a recorded row is one no
+/// other key of that row already holds, and every path they read is well formed.
+fn validate_derived(
+    query: &Query,
+    queries: &[Query],
+    named: &std::collections::BTreeSet<&str>,
+) -> std::result::Result<(), String> {
+    let mut keys: std::collections::BTreeSet<&str> =
+        query.select.iter().map(String::as_str).collect();
+    if let Some(each) = &query.each {
+        if each.query == query.id {
+            return Err(String::from(
+                "`each.query` names this row itself, whose record the walk is about to replace",
+            ));
+        }
+        let Some(source) = queries.iter().find(|other| other.id == each.query) else {
+            return Err(format!(
+                "`each.query` names `{}`, which no `[[forge.query]]` row declares",
+                each.query
+            ));
+        };
+        // THE MEMBER IS READ OFF THE RECORDED ROW, which carries the source's
+        // `select` paths as its keys, spelled as declared — so a field the source
+        // never selected is a member no walk could ever find, refused here rather
+        // than read at run time as could-not-look.
+        if !source.select.iter().any(|path| path == &each.field) {
+            return Err(format!(
+                "`each.field` `{}` is not one of `{}`'s `select` paths, which are the only keys its recorded rows carry",
+                each.field, each.query
+            ));
+        }
+        if !is_name(&each.input) || RESERVED.contains(&each.input.as_str()) {
+            return Err(String::from(
+                "`each.input` must be a placeholder name the engine does not bind itself",
+            ));
+        }
+        if !named.contains(each.input.as_str()) {
+            return Err(format!(
+                "`each.input` binds `{{{}}}`, which no template of this row names",
+                each.input
+            ));
+        }
+        if !keys.insert(each.input.as_str()) {
+            return Err(String::from(
+                "`each.input` is also a `select` path, so a recorded row would carry one key twice",
+            ));
+        }
+    }
+    for span in &query.span {
+        if !is_name(&span.name) {
+            return Err(String::from(
+                "a `span.name` is not letters, digits, `_` or `-`",
+            ));
+        }
+        if !keys.insert(span.name.as_str()) {
+            return Err(format!(
+                "`span.name` `{}` is already a key of the recorded row",
+                span.name
+            ));
+        }
+        let unreadable = |path: &str| segments(path).is_none();
+        if unreadable(&span.from) || span.to.as_deref().is_some_and(unreadable) {
+            return Err(format!(
+                "span `{}` reads an instant at a path that is not dot-separated",
+                span.name
+            ));
+        }
     }
     Ok(())
 }
@@ -354,6 +426,10 @@ enum Encoding {
 // operator can see it.
 //MUTANT-SUITE crates/batten/src/forge_query.rs
 //MUTANT param-literal-unencoded|s@^        Encoding::Whole => encode(.out),$@        Encoding::Whole => out,@|binding_resolves_the_slug_the_inputs_and_encodes_every_value
+//MUTANT fan-out-member-untagged|s@^            map.insert(key.to_owned(), value.clone());$@@|a_fan_out_walks_each_recorded_member_and_tags_its_rows
+//MUTANT span-never-measured|s@^            map.insert(span.name.clone(), measured(row, span, now));$@@|a_fan_out_walks_each_recorded_member_and_tags_its_rows
+//MUTANT members-repeat|s@^        if seen.insert(value.to_string()) {$@        if true {@|a_torn_or_memberless_source_is_could_not_look_and_members_are_distinct
+//MUTANT member-field-unselected|s@^        if !source.select.iter().any(.path. path == .each.field) {$@        if false {@|a_fan_out_or_span_that_could_never_run_is_refused_at_load
 /// Render one template with its placeholders bound, encoded as `encoding` says.
 fn render(
     template: &str,
@@ -503,12 +579,85 @@ fn dated(row: &serde_json::Value, path: &str) -> Option<i64> {
         .and_then(crate::landed::second_of)
 }
 
+/// Seconds in a UTC day, which is what makes a civil-day count a division.
+const DAY: i64 = 86_400;
+
+/// One declared span over a row, or `null` where an instant it reads is absent.
+///
+/// `null` rather than a refusal, and the asymmetry with `since` is deliberate: a
+/// `since` field decides which rows are KEPT, so an undated row there would be
+/// silently dropped, while a span is a recorded value a module reads and can see
+/// is missing.
+fn measured(row: &serde_json::Value, span: &crate::rest::Span, now: i64) -> serde_json::Value {
+    let Some(from) = dated(row, &span.from) else {
+        return serde_json::Value::Null;
+    };
+    let to = match &span.to {
+        Some(path) => dated(row, path),
+        None => Some(now),
+    };
+    let Some(to) = to else {
+        return serde_json::Value::Null;
+    };
+    let value = match span.unit {
+        crate::rest::SpanUnit::Seconds => to.saturating_sub(from),
+        crate::rest::SpanUnit::Days => to.div_euclid(DAY) - from.div_euclid(DAY),
+    };
+    serde_json::Value::from(value)
+}
+
+/// A row reduced to what its query declares: the selected fields, each span,
+/// and — for a fan-out member — the value the member was bound to.
+fn reduced(
+    query: &Query,
+    row: &serde_json::Value,
+    now: i64,
+    tag: Option<(&str, &serde_json::Value)>,
+) -> serde_json::Value {
+    let mut kept = reduce(row, &query.select);
+    if let serde_json::Value::Object(map) = &mut kept {
+        for span in &query.span {
+            map.insert(span.name.clone(), measured(row, span, now));
+        }
+        if let Some((key, value)) = tag {
+            map.insert(key.to_owned(), value.clone());
+        }
+    }
+    kept
+}
+
+/// A walk's recorded rows and the fields its closing line reports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Composed {
+    /// The `row<TAB><json>` lines, each newline-terminated.
+    lines: String,
+    /// `whole` or `truncated`.
+    state: &'static str,
+    /// Rows the walk read.
+    read: usize,
+    /// Rows the window kept.
+    kept: usize,
+    /// The truncation fields, `<TAB>total=…<TAB>pages=…`, or nothing.
+    tail: String,
+}
+
+/// The whole record for one walk: its rows, then the one closing line.
+fn closed(composed: &Composed, cutoff: Option<&str>) -> String {
+    let since = cutoff.map_or_else(String::new, |text| format!("\tsince={text}"));
+    format!(
+        "{}window\tstate={}\tread={}\tkept={}{}{since}\n",
+        composed.lines, composed.state, composed.read, composed.kept, composed.tail
+    )
+}
+
 /// Compose the record body from a walk's answer.
 fn compose(
     query: &Query,
     window: Window,
     cutoff: Option<(i64, &str)>,
-) -> std::result::Result<String, Refusal> {
+    now: i64,
+    tag: Option<(&str, &serde_json::Value)>,
+) -> std::result::Result<Composed, Refusal> {
     let (state, rows, tail) = match window {
         Window::Whole(rows) => ("whole", rows, String::new()),
         Window::Truncated {
@@ -548,55 +697,55 @@ fn compose(
             }
         }
         body.push_str("row\t");
-        body.push_str(&reduce(row, &query.select).to_string());
+        body.push_str(&reduced(query, row, now, tag).to_string());
         body.push('\n');
         kept += 1;
     }
-    let since = cutoff.map_or_else(String::new, |(_, text)| format!("\tsince={text}"));
-    {
-        use std::fmt::Write as _;
-        // `write!` to a String cannot fail; bound rather than dropped for
-        // `forge::window_over`'s reason.
-        let _ = writeln!(
-            body,
-            "window\tstate={state}\tread={}\tkept={kept}{tail}{since}",
-            rows.len()
-        );
-    }
-    Ok(body)
+    Ok(Composed {
+        lines: body,
+        state,
+        read: rows.len(),
+        kept,
+        tail,
+    })
 }
 
-/// Run one declared query over a transport: bind, walk, reduce, compose.
+/// A walk's answer: its rows and the cut-off it measured back to, or the
+/// could-not-look pointer.
+type Walked = std::result::Result<(Composed, Option<String>), String>;
+
+/// One member's walk: bound, fetched, reduced — its rows and its window's end.
 ///
-/// Everything a run needs is an argument — the slug, the instant, the git
-/// directory, the transport — so the whole of it is testable without a
-/// network, a clock or a remote, and [`run`] is this with the live ones bound.
-///
-/// # Errors
-///
-/// A [`UsageError`] when the invocation cannot run as written: an input the row
-/// names no placeholder for, a reserved one, or a placeholder nothing bound.
-pub fn produce(
+/// The outer `Result` is the caller's fault (a usage refusal); the inner one is
+/// the world's, carrying the could-not-look pointer.
+fn walk(
     query: &Query,
     inputs: &BTreeMap<String, String>,
     slug: Option<&str>,
     now: u64,
     git_dir: &Path,
     fetch: Transport<'_>,
-) -> Result<Produced> {
-    let refused = |refusal: Refusal| -> Result<Produced> {
+    tag: Option<(&str, &serde_json::Value)>,
+) -> Result<Walked> {
+    let refused = |refusal: Refusal| -> Result<Walked> {
         match refusal {
             Refusal::Usage(why) => Err(UsageError::raise(format!("{VERB} {}: {why}", query.id))),
-            Refusal::CouldNotLook(why) => Ok(Produced::CouldNotLook(why)),
+            Refusal::CouldNotLook(why) => Ok(Err(why)),
         }
     };
+    // A SPAN MEASURED TO NOW NEEDS A NOW, for the `since` arm's reason below.
+    if now == 0 && query.span.iter().any(|span| span.to.is_none()) {
+        return Ok(Err(String::from(
+            "the clock did not read, so a span measured to now has no end",
+        )));
+    }
     let cutoff = match &query.since {
         None => None,
         // A CLOCK THAT DID NOT READ IS NOT AN INSTANT, `rest::backoff_of`'s rule:
         // `now_unix` answers 0 on failure, and a window measured back from the
         // epoch would keep nothing and record that as the reading.
         Some(_) if now == 0 => {
-            return Ok(Produced::CouldNotLook(String::from(
+            return Ok(Err(String::from(
                 "the clock did not read, so the window has no end to measure back from",
             )));
         }
@@ -644,14 +793,173 @@ pub fn produce(
         stop_at.is_some().then_some(&stop as forge::Stop<'_>),
         fetch,
     );
-    match compose(
+    let clock = i64::try_from(now).unwrap_or(i64::MAX);
+    let answer = compose(
         query,
         window,
         cutoff.as_ref().map(|(at, text)| (*at, text.as_str())),
-    ) {
-        Ok(body) => Ok(Produced::Recorded(body)),
+        clock,
+        tag,
+    );
+    match answer {
+        Ok(composed) => Ok(Ok((composed, cutoff.map(|(_, text)| text)))),
         Err(refusal) => refused(refusal),
     }
+}
+
+/// Run one declared query over a transport: bind, walk, reduce, compose.
+///
+/// Everything a run needs is an argument — the slug, the instant, the git
+/// directory, the transport — so the whole of it is testable without a
+/// network, a clock or a remote, and [`run`] is this with the live ones bound.
+///
+/// # Errors
+///
+/// A [`UsageError`] when the invocation cannot run as written: an input the row
+/// names no placeholder for, a reserved one, or a placeholder nothing bound.
+pub fn produce(
+    query: &Query,
+    inputs: &BTreeMap<String, String>,
+    slug: Option<&str>,
+    now: u64,
+    git_dir: &Path,
+    fetch: Transport<'_>,
+) -> Result<Produced> {
+    Ok(
+        match walk(query, inputs, slug, now, git_dir, fetch, None)? {
+            Ok((composed, since)) => Produced::Recorded(closed(&composed, since.as_deref())),
+            Err(why) => Produced::CouldNotLook(why),
+        },
+    )
+}
+
+/// A member's value as a placeholder binds it: a string as written, anything
+/// else as its JSON text (an id is a number on the wire).
+fn bound_text(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(text) => text.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// Run a fan-out row once per member and record every member's rows as one
+/// family (CLOUD-843).
+///
+/// Each kept row carries the member it was walked for under `each.input`, so a
+/// module can join it back to the source family. The closing line sums the
+/// members' reads and keeps, and names how many members there were and how many
+/// of their walks ran out of budget:
+///
+/// ```text
+/// window<TAB>state=whole|truncated<TAB>read=<n><TAB>kept=<n><TAB>members=<n><TAB>truncated=<n>[<TAB>since=<rfc3339>]
+/// ```
+///
+/// **One member that could not be looked at makes the whole family
+/// could-not-look**, never a family with that member missing: a module reading
+/// the record cannot tell an absent member from one with no rows.
+///
+/// # Errors
+///
+/// As [`produce`], and a [`UsageError`] when an `--input` names the placeholder
+/// the fan-out binds per member.
+pub fn produce_each(
+    query: &Query,
+    inputs: &BTreeMap<String, String>,
+    members: &[serde_json::Value],
+    slug: Option<&str>,
+    now: u64,
+    git_dir: &Path,
+    fetch: Transport<'_>,
+) -> Result<Produced> {
+    let Some(each) = &query.each else {
+        return produce(query, inputs, slug, now, git_dir, fetch);
+    };
+    if inputs.contains_key(&each.input) {
+        return Err(UsageError::raise(format!(
+            "{VERB} {}: `--input {}` is bound per member by `each`, and cannot be supplied",
+            query.id, each.input
+        )));
+    }
+    let mut lines = String::new();
+    let (mut read, mut kept, mut truncated) = (0_usize, 0_usize, 0_usize);
+    let mut since: Option<String> = None;
+    for (index, member) in members.iter().enumerate() {
+        let mut bound = inputs.clone();
+        bound.insert(each.input.clone(), bound_text(member));
+        let tag = Some((each.input.as_str(), member));
+        match walk(query, &bound, slug, now, git_dir, fetch, tag)? {
+            Ok((composed, cutoff)) => {
+                lines.push_str(&composed.lines);
+                read += composed.read;
+                kept += composed.kept;
+                if composed.state != "whole" {
+                    truncated += 1;
+                }
+                since = since.or(cutoff);
+            }
+            // THE MEMBER'S NUMBER, never its value: a member is a forge-supplied
+            // token, and a pointer names where to look rather than what was there.
+            Err(why) => {
+                return Ok(Produced::CouldNotLook(format!(
+                    "member {} of {}: {why}",
+                    index + 1,
+                    members.len()
+                )));
+            }
+        }
+    }
+    let state = if truncated == 0 { "whole" } else { "truncated" };
+    let since = since.map_or_else(String::new, |text| format!("\tsince={text}"));
+    let count = members.len();
+    Ok(Produced::Recorded(format!(
+        "{lines}window\tstate={state}\tread={read}\tkept={kept}\tmembers={count}\ttruncated={truncated}{since}\n"
+    )))
+}
+
+/// The distinct values at `field_path` across a recorded family's rows, in the
+/// order the family recorded them.
+///
+/// `field_path` is a KEY of the recorded row — one of the source's `select`
+/// paths, which the reduction writes flat — so it is a single lookup and never a
+/// walk; [`validate`] has already refused a path the source did not select.
+///
+/// # Errors
+///
+/// A could-not-look pointer when the body is torn — not exactly one closing
+/// line — or a row is unparseable or carries nothing at `field_path`. A member
+/// that silently dropped out would shrink the fan-out without the record saying
+/// so.
+fn members_of(body: &str, field_path: &str) -> std::result::Result<Vec<serde_json::Value>, String> {
+    let closes = body
+        .lines()
+        .filter(|line| line.starts_with("window\t"))
+        .count();
+    if closes != 1 {
+        return Err(String::from(
+            "the source record is torn: it does not carry exactly one closing `window` line",
+        ));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut members = Vec::new();
+    for (index, line) in body.lines().enumerate() {
+        let Some(json) = line.strip_prefix("row\t") else {
+            continue;
+        };
+        let Some(value) = serde_json::from_str::<serde_json::Value>(json)
+            .ok()
+            .and_then(|row| row.get(field_path).cloned())
+            .filter(|value| value.is_string() || value.is_number())
+        else {
+            return Err(format!(
+                "the source record's line {} carries no value at `{field_path}`",
+                index + 1
+            ));
+        };
+        if seen.insert(value.to_string()) {
+            members.push(value);
+        }
+    }
+    Ok(members)
 }
 
 /// `batten record query <id>`: run a declared query and write its family.
@@ -683,14 +991,38 @@ pub fn run(
     let root = Path::new(".");
     let git_dir = crate::git::git_dir(root)?;
     let slug = crate::repo_slug(root);
-    let produced = produce(
-        query,
-        &inputs,
-        slug.as_deref(),
-        crate::now_unix(),
-        &git_dir,
-        &|path, etag| crate::rest::get(path, etag),
-    )?;
+    let transport = |path: &str, etag: Option<&str>| crate::rest::get(path, etag);
+    let produced = match &query.each {
+        None => produce(
+            query,
+            &inputs,
+            slug.as_deref(),
+            crate::now_unix(),
+            &git_dir,
+            &transport,
+        )?,
+        // THE SOURCE IS READ FROM THE STORE, never re-walked: the members are
+        // what the source family RECORDED, which is also what a module joining
+        // the two reads, so the fan-out and the join cannot disagree.
+        Some(each) => match crate::record::load_named(VERB, &each.query)? {
+            None => Produced::CouldNotLook(format!(
+                "the source family `{}` is not recorded; run `record query {}` first",
+                each.query, each.query
+            )),
+            Some(body) => match members_of(&body, &each.field) {
+                Err(why) => Produced::CouldNotLook(why),
+                Ok(members) => produce_each(
+                    query,
+                    &inputs,
+                    &members,
+                    slug.as_deref(),
+                    crate::now_unix(),
+                    &git_dir,
+                    &transport,
+                )?,
+            },
+        },
+    };
     match produced {
         Produced::Recorded(body) => {
             crate::record::store_named(VERB, &query.id, &body)?;
@@ -720,7 +1052,160 @@ mod tests {
             max_pages: 3,
             since: None,
             select: vec![String::from("id"), String::from("conclusion")],
+            each: None,
+            span: Vec::new(),
         }
+    }
+
+    /// A fan-out row over `runs`' ids, measuring each job's duration.
+    fn jobs() -> Query {
+        Query {
+            id: String::from("jobs"),
+            rows: Some(String::from("jobs")),
+            select: vec![String::from("name")],
+            each: Some(crate::rest::Each {
+                query: String::from("runs"),
+                field: String::from("id"),
+                input: String::from("run"),
+            }),
+            span: vec![crate::rest::Span {
+                name: String::from("seconds"),
+                from: String::from("started_at"),
+                to: Some(String::from("completed_at")),
+                unit: crate::rest::SpanUnit::Seconds,
+            }],
+            ..query("repos/{owner}/{repo}/actions/runs/{run}/jobs")
+        }
+    }
+
+    // THE FAN-OUT'S OWN DISCRIMINATION (CLOUD-843). Two members, each walked
+    // against its own bound path; every row carries the member it came from and
+    // the span it declared, and the closing line counts the members.
+    #[test]
+    fn a_fan_out_walks_each_recorded_member_and_tags_its_rows() {
+        let git = scratch("each");
+        let asked = std::cell::RefCell::new(Vec::new());
+        let pages = [
+            r#"{"total_count": 1, "jobs": [{"name": "build", "started_at": "2026-08-29T10:00:00Z", "completed_at": "2026-08-29T10:02:00Z"}]}"#,
+            r#"{"total_count": 1, "jobs": [{"name": "dist (x86)", "started_at": "2026-08-29T10:00:00Z"}]}"#,
+        ];
+        let members = [serde_json::json!(7), serde_json::json!(9)];
+        let body = recorded(
+            produce_each(
+                &jobs(),
+                &BTreeMap::new(),
+                &members,
+                Some("o/r"),
+                1_788_000_000,
+                &git,
+                &served(&pages, &asked),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            body,
+            "row\t{\"name\":\"build\",\"run\":7,\"seconds\":120}\n\
+             row\t{\"name\":\"dist (x86)\",\"run\":9,\"seconds\":null}\n\
+             window\tstate=whole\tread=2\tkept=2\tmembers=2\ttruncated=0\n"
+        );
+        assert_eq!(
+            asked.borrow().clone(),
+            vec![
+                String::from("repos/o/r/actions/runs/7/jobs?page=1&per_page=2"),
+                String::from("repos/o/r/actions/runs/9/jobs?page=1&per_page=2"),
+            ]
+        );
+        // The member is the engine's to bind, never the caller's.
+        let supplied = BTreeMap::from([(String::from("run"), String::from("1"))]);
+        assert!(
+            produce_each(
+                &jobs(),
+                &supplied,
+                &members,
+                Some("o/r"),
+                1_788_000_000,
+                &git,
+                &served(&pages, &asked),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn an_age_counts_utc_calendar_days_back_from_the_clock() {
+        // 1_788_000_000 is 2026-08-29T10:40:00Z. A commit at 23:59 two days
+        // earlier is two civil days old, though it is under 59 hours.
+        let span = crate::rest::Span {
+            name: String::from("age"),
+            from: String::from("at"),
+            to: None,
+            unit: crate::rest::SpanUnit::Days,
+        };
+        let row = serde_json::json!({"at": "2026-08-27T23:59:00Z"});
+        assert_eq!(measured(&row, &span, 1_788_000_000), serde_json::json!(2));
+        let undated = serde_json::json!({"at": "yesterday"});
+        assert_eq!(
+            measured(&undated, &span, 1_788_000_000),
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn a_torn_or_memberless_source_is_could_not_look_and_members_are_distinct() {
+        assert!(members_of("row\t{\"id\":1}\n", "id").is_err(), "no close");
+        assert!(
+            members_of("row\t{\"x\":1}\nwindow\tstate=whole\n", "id").is_err(),
+            "a row with no member"
+        );
+        assert_eq!(
+            members_of(
+                "row\t{\"id\":1}\nrow\t{\"id\":2}\nrow\t{\"id\":1}\nwindow\tstate=whole\n",
+                "id"
+            )
+            .unwrap(),
+            vec![serde_json::json!(1), serde_json::json!(2)]
+        );
+    }
+
+    #[test]
+    fn a_fan_out_or_span_that_could_never_run_is_refused_at_load() {
+        let families = [family("runs"), family("jobs")];
+        let runs = query("repos/{owner}/{repo}/actions/runs");
+        assert!(validate(&[runs.clone(), jobs()], &families).is_ok());
+        let refused = |row: Query| {
+            assert!(validate(&[runs.clone(), row], &families).is_err());
+        };
+        // A source nobody declares, a self-reference, and a binding no template reads.
+        let mut row = jobs();
+        row.each = row.each.map(|each| crate::rest::Each {
+            query: String::from("missing"),
+            ..each
+        });
+        refused(row);
+        let mut row = jobs();
+        row.each = row.each.map(|each| crate::rest::Each {
+            query: String::from("jobs"),
+            ..each
+        });
+        refused(row);
+        let mut row = jobs();
+        row.each = row.each.map(|each| crate::rest::Each {
+            input: String::from("unread"),
+            ..each
+        });
+        refused(row);
+        // A member field the source never selected, so no row it records carries
+        // the key — refused at load rather than read as could-not-look per run.
+        let mut row = jobs();
+        row.each = row.each.map(|each| crate::rest::Each {
+            field: String::from("run_id"),
+            ..each
+        });
+        refused(row);
+        // A span colliding with a selected key.
+        let mut row = jobs();
+        row.span[0].name = String::from("name");
+        refused(row);
     }
 
     fn family(name: &str) -> crate::record::Declared {

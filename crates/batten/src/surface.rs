@@ -1248,6 +1248,55 @@ const DERIVE_INPUT: FlagDecl = FlagDecl {
     value: ValueDecl::StrMany,
 };
 
+/// `record forge --fetch`: read the commit's check-runs in process rather than
+/// take reduced lines on stdin (CLOUD-843, retiring the forge arm of
+/// `[tasks.record-verdicts]`).
+const FORGE_FETCH: FlagDecl = FlagDecl {
+    id: "fetch",
+    long: Some("fetch"),
+    short: None,
+    help: "Read the commit's check-runs from the forge instead of `<check> <conclusion>` lines on stdin",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
+/// `record forge --fetch --fanin <check>`: the check whose answered conclusion
+/// gates writing any record at all.
+const FORGE_FANIN: FlagDecl = FlagDecl {
+    id: "fanin",
+    long: Some("fanin"),
+    short: None,
+    help: "With --fetch: record nothing until this check has an answered conclusion",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `record forge --fetch --answered <list>`: the conclusions that constitute an
+/// answer, the consumer's own set and never a list spelled in this crate.
+const FORGE_ANSWERED: FlagDecl = FlagDecl {
+    id: "answered",
+    long: Some("answered"),
+    short: None,
+    help: "With --fetch: comma-separated conclusions that constitute an answer; anything else is not recorded",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 /// A `<name>=<value>` binding for one of a `[[forge.query]]` row's own
 /// placeholders (CLOUD-843).
 ///
@@ -2438,6 +2487,28 @@ const WAIT_SHA: FlagDecl = FlagDecl {
     global: false,
     positional: false,
     required: true,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--sha` on `checks green`: read this commit's check runs from the forge
+/// instead of taking a reading on stdin (CLOUD-843).
+///
+/// Optional, where `pr watch`'s is required, because absent keeps the verb's
+/// original shape — a pure decision over a piped reading — byte for byte. Taken
+/// literally rather than resolved, for [`WAIT_SHA`]'s reason: the caller knows
+/// which commit it means, and resolving would also start a program the `read`
+/// row promises this verb never starts.
+const CHECKS_SHA: FlagDecl = FlagDecl {
+    id: "sha",
+    long: Some("sha"),
+    short: None,
+    help: "Read this commit's check runs from the forge instead of a reading on stdin",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
     hidden: false,
     rung: Rung::None,
     value: ValueDecl::Str,
@@ -4867,11 +4938,18 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Unclassified,
         flags: &[],
     },
-    // `read`, and structurally so: it decides over a reading handed to it on
-    // stdin and cannot start a program. The FETCH stays with the caller — the
-    // poller already holds the body it got conditionally — which is the
+    // `read`, and structurally so: it decides over a reading and cannot start a
+    // program. By default the reading is handed to it on stdin — the poller
+    // already holds the body it got conditionally — which is the
     // agents-fetch-gates-decide split the board gates use, and what lets every
     // case run offline.
+    //
+    // `--sha` TAKES THE READING IN PROCESS (CLOUD-843), through the same
+    // `pr_watch::read` `record forge --fetch` and `land` use: one GET, no
+    // program started and nothing written, so the row stays `read`. It exists to
+    // retire the `checks-green` task's `gh api` + `jq` acquisition, whose only
+    // other job was re-deciding the engine's exit code off its stdout. Absent,
+    // the verb is the stdin decider it always was.
     //
     // THE EXIT CODES ARE THIS TABLE'S, NOT THE PREDECESSOR'S (CLOUD-1143).
     // `checks-green.sh` used `0` green / `1` red / `2` could-not-look / `3`
@@ -4899,6 +4977,8 @@ pub const SURFACE: &[CommandDecl] = &[
             ABSENT_OK_CHECKS,
             ANSWERED_CONCLUSIONS,
             FANIN_CHECK,
+            CHECKS_SHA,
+            WAIT_REPO,
             JSON,
         ],
     },
@@ -6069,13 +6149,36 @@ pub const SURFACE: &[CommandDecl] = &[
     CommandDecl {
         path: "record forge",
         id: "record.forge",
-        about: "Record the forge's check verdicts for one commit, read as `<check> <conclusion>` lines on stdin",
+        about: "Record the forge's check verdicts for one commit, read as `<check> <conclusion>` lines on stdin or with --fetch from the forge",
         data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Write,
+        flags: &[
+            FlagDecl::positional("ref", "The ref or sha the verdict was taken against"),
+            FORGE_FETCH,
+            FORGE_FANIN,
+            FORGE_ANSWERED,
+        ],
+    },
+    // CLOUD-843's validator door, retiring `[tasks.record-verdicts]`' two
+    // validator arms. `record tool` records a verdict some OTHER program reduced;
+    // this runs the row's own declared argv and records the exit code, so the
+    // reduction is one integer and the reading of it is the consumer's module.
+    //
+    // `Effect::Unclassified`, stated rather than guessed (see `effect.rs`): it
+    // runs a program the CONSUMER names, so what it does cannot be known from
+    // this row — `exec`'s disposition, one leaf over. The spawn is `exec`'s own,
+    // so this adds no site to the inventory.
+    CommandDecl {
+        path: "record validate",
+        id: "record.validate",
+        about: "Run a declared tool row's `run` argv and record its exit code under the row's key",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Unclassified,
         flags: &[FlagDecl::positional(
-            "ref",
-            "The ref or sha the verdict was taken against",
+            "id",
+            "The `[[rule.tools]]` id whose argv runs and whose verdict is recorded",
         )],
     },
     // CLOUD-472. A VERB rather than a `[[recorder]]` on the harness's own todo

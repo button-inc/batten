@@ -2924,7 +2924,35 @@ view` and no argument, which reads the CURRENT BRANCH — so under a detached
   the stale record and exits 3, since a module cannot date a window. The row's
   `id` must be a declared `[[record]]` family, refused at load, so a query no
   module can read is unwritable. `[forge]` is read from the committed authority
-  alone (`resolve::committed`), never layered.
+  alone (`resolve::committed`), never layered. **Two derived columns (p9-signal):**
+  `each = {query, field, input}` walks the row once per distinct value the
+  SOURCE family recorded (read back through `record::load_named`, never
+  re-walked), tags every kept row with its member under `input`, and closes with
+  `members=<n><TAB>truncated=<n>`; one unreadable member makes the whole family
+  could-not-look. `[[forge.query.span]] {name, from, to?, unit}` records seconds
+  or UTC civil days between two instants — `to` absent is the PRODUCER's clock,
+  which is how an age reaches a module that has none. `timeout-drift` and
+  `branch-age` are three chained rows each. `each.field` must be one of the
+  source's `select` paths (a recorded row's keys are those paths, flat), refused
+  at load. `branch-tips` costs one REST call per tip where the retired body made
+  one GraphQL call — the row has no GraphQL transport.
+- `record validate <id>` / `record forge <ref> --fetch` (p9-signal, retiring
+  `[tasks.record-verdicts]`' body). `validate` runs a `[[rule.tools]]` row's
+  declared `run` argv through `exec::run_in` (no new spawn site) and records
+  `exit <n>` under the row's key — the module decides what a code means. It
+  carries CLOUD-1891's receipt: a key already recorded `exit 0` with the same
+  argv (held under `.git/batten-tools-asked/<key>`) is not re-run; non-zero is
+  always re-asked. `--fetch --answered <set> [--fanin <check>]` reads HEAD's
+  check-runs through `pr_watch::read`, keeps each name's latest run by
+  `checks_green::winner` (the SAME choice `checks green` makes) filtered to
+  answered conclusions (`record::graded`), and writes nothing until the fan-in
+  answered (`record::forge_body`). It presents only a `[forge] credential_names`
+  token, so `gh auth` alone no longer satisfies `verify`. `[[rule.plan]] profile
+= ["!slow"]` passes `--profile` words to hk, so `hook-profile.rego` derives the
+  slow tier from two acquired plans — over EVERY reason's kind (`reasonKinds`),
+  not the first — instead of a recorded `jq` join. The timeout-drift decision is
+  the `ci-signal` preset's `timeout-tracks-its-measurement.rego` (GitHub Actions
+  provider, inline grammar, `drift_` names in the shared package).
 - `ci_signal.rs` — the two CI-signal PRODUCERS (CLOUD-843, retiring
   `land-divergence-record` and `nonverdict-record`): `batten record divergence`
   joins a window of CI runs to merged PRs and writes `land-divergence`; `batten

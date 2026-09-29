@@ -305,6 +305,7 @@ mod reclaim_census;
 mod reclaim_report_once;
 mod record_closes;
 mod record_families;
+mod record_verdicts;
 mod redirect_resolves;
 mod reference_coverage;
 mod refusal_ceiling;

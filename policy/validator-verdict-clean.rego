@@ -50,6 +50,13 @@ rules contains "tool judge dirty"
 # keep apart.
 status := "status"
 
+# The key `batten record validate` writes: the declared argv's exit code, and
+# nothing the tool printed (CLOUD-843). What that code MEANS is this module's —
+# every validator this repository declares answers `0` for a file it accepts.
+exit_code := "exit"
+
+clean_exit := "0"
+
 # The rows THIS module adjudicates.
 #
 # `input.tree["tool-verdict"]` is built from every `[[rule.tools]]` row in the
@@ -88,13 +95,18 @@ refused contains id if {
 # A record whose status is anything but `clean` counts its status as a finding
 # too: a validator that reported `error` and listed nothing is still a validator
 # that reported an error.
-findings(verdict) := {key |
+findings(verdict) := ({key |
 	some key, _ in verdict
 	key != status
+	key != exit_code
 } | {key |
 	some key, value in verdict
 	key == status
 	value != "clean"
+}) | {key |
+	some key, value in verdict
+	key == exit_code
+	value != clean_exit
 }
 
 violation contains {
@@ -148,9 +160,19 @@ test_another_rows_record_is_not_read_as_a_finding if {
 	count(violation) == 0 with input as {"tree": {"tool-verdict": {"hk-plan": {"batten-check": "included"}}}}
 }
 
+# THE VALIDATE VERB'S SHAPE: an exit code, clean only at zero.
+test_a_zero_exit_is_clean_and_any_other_is_refused if {
+	count(violation) == 0 with input as recorded({"exit": "0"})
+	some v in violation with input as recorded({"exit": "1"})
+	v.verdict == "tool judge dirty"
+	some w in violation with input as recorded({"exit": "143"})
+	w.verdict == "tool judge dirty"
+}
+
 test_could_not_look_does_not_fault if {
 	count(violation) == 0 with input as {"tree": {"tool-verdict": null}}
 }
 
 #MUTANT-SUITE crates/batten/tests/it/tool_verdict_facts.rs
 #MUTANT unclean-verdict-unread|s@^\tcount(refused) > 0$@\tfalse@|the_shipped_module_refuses_a_recorded_error
+#MUTANT nonzero-exit-unread|s@^\tvalue != clean_exit$@\tfalse@|a_validator_that_exits_nonzero_is_recorded_and_refused
