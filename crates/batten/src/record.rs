@@ -1207,10 +1207,11 @@ fn emit_derived(derived: &str, out: &mut dyn std::io::Write) -> Result<ExitCode>
     // `record named` prints nothing and this does: `named` cannot tell a verdict
     // from a payload, because it never looked at one.
     //
-    // It matters beyond symmetry. A producer task composes: `evaluator-io-record`
-    // branches on `probe failed` to mint its step receipt, and a verb that
-    // swallowed its own answer would force the task to read the record store back
-    // — a second reader of a path `recorder::record_path` is the one authority on.
+    // It matters beyond symmetry. A producer task composes: a caller that
+    // branches on the reading it just derived reads it here, and a verb that
+    // swallowed its own answer would force the caller to read the record store
+    // back — a second reader of a path `recorder::record_path` is the one
+    // authority on.
     out.write_all(derived.as_bytes())?;
     Ok(ExitCode::Success)
 }

@@ -7972,7 +7972,7 @@ lint:clippy)
 	tools="cargo clippy --version && rustc --version"
 	known=yes
 	;;
-test:cargo | msrv | cross-check | evaluator-io-check)
+test:cargo | msrv | cross-check)
 	specs="$rust_specs"
 	tools="$rust_tools"
 	known=yes
