@@ -1,12 +1,11 @@
 #MUTANT-SUITE crates/batten/tests/it/shell_banned.rs
 #MUTANT task-growth-unchecked|s@^\thead > base_count\[path\]$@\tfalse@|a_task_body_grown_by_one_line_is_refused
-#MUTANT task-appearance-unchecked|s@^\tnot trim_space(head\[h\]) in base_units(path, keys, unit)$@\tfalse@|a_body_moved_into_a_new_task_is_refused_even_when_the_total_falls
+#MUTANT task-appearance-unchecked|s@^\tnot trim_space(head\[h\]) in units_with_shell(base_side(path), keys, unit)$@\tfalse@|a_body_moved_into_a_new_task_is_refused_even_when_the_total_falls
 #MUTANT one-liner-unread|s@^\tshell_syntax(value)$@\tfalse@|a_shell_one_liner_added_to_a_task_is_refused
 #MUTANT workflow-growth-unchecked|s@^\tworkflow_count(head) > workflow_count(base)$@\tfalse@|a_workflow_run_block_grown_is_refused
 #MUTANT file-extension-unread|s@^shell_file(path) if shell_path(path)$@shell_file(path) if false@|an_added_shell_script_is_refused
 #MUTANT exempt-unread|s@^\tsome glob in exempt_globs$@\tsome glob in set()@|an_exempt_file_is_admitted
 #MUTANT declaration-unread|s@^\tshell := doc.census.shell$@\tshell := doc.census.absent@|a_task_body_grown_by_one_line_is_refused
-#MUTANT unread-base-admitted|s@^base_units(path, _, _) := set() if not has_base(path)$@base_units(path, _, _) := set() if false@|every_shipped_preset_passes_its_own_suite
 
 # No NEW shell, measured in lines: a repository that has decided to stop writing
 # shell can declare it, and this refuses the change that writes more.
@@ -71,10 +70,12 @@
 #
 # ─── A BASE THAT COULD NOT BE READ ───────────────────────────────────────────
 #
-# An edited manifest missing from `base-lines` is could-not-look: the base side
-# was not read, so nothing about what the edit removed is known. The unit arm
-# reads that as NO unit carrying shell at the base, which refuses every shell unit
-# the head carries — "cannot tell" is never read as "nothing was added".
+# The engine hands every edited path a base side, and a base blob it could not
+# read (or that is not UTF-8) arrives as the EMPTY side. Every arm reads that as
+# nothing at the base, so each shell line and shell unit the head carries is
+# growth and is refused — "cannot tell" is never read as "nothing was added".
+# `base_side` gives a path missing from the map the same reading, so no arm
+# depends on which of the two shapes an unread base takes.
 
 # METADATA
 # description: |
@@ -371,7 +372,7 @@ head_count[path] := count(shell_lines(input.tree.lines[path], keys)) if {
 	path in delta.edited
 }
 
-base_count[path] := count(shell_lines(delta["base-lines"][path], keys)) if {
+base_count[path] := count(shell_lines(base_side(path), keys)) if {
 	some path, keys in manifest_keys
 	path in delta.edited
 }
@@ -397,20 +398,17 @@ violation contains {
 	head := input.tree.lines[path]
 	keys := manifest_keys[path]
 	some h in shell_units(head, keys, unit)
-	not trim_space(head[h]) in base_units(path, keys, unit)
+	not trim_space(head[h]) in units_with_shell(base_side(path), keys, unit)
 }
 
-# The units carrying shell at the base. A path missing from `base-lines` is
-# could-not-look (the engine's own contract on the field), and left undefined it
-# would fail the arm above and admit every unit, so it reads as NO unit instead:
-# every shell unit the head carries is refused. The second clause is not
-# redundant with the `not` above — the call is evaluated outside the negation,
-# measured with `opa test` against this module.
-base_units(path, keys, unit) := units_with_shell(delta["base-lines"][path], keys, unit)
-
-base_units(path, _, _) := set() if not has_base(path)
-
-has_base(path) if delta["base-lines"][path]
+# The base side of an edited path, as ONE reading. The engine emits a base side
+# for every edited path, and an unreadable or non-UTF-8 base blob arrives as the
+# EMPTY side (`git.rs`, `base_text` and the `base_lines` insert below it), so an
+# unreadable base reads as nothing at the base and every shell line the head
+# carries is growth. A path missing from the map is read the same way rather
+# than left undefined — undefined would fail every arm above and admit the edit —
+# so no input shape, emitted or not, turns "cannot tell" into "nothing was added".
+base_side(path) := object.get(object.get(delta, "base-lines", {}), path, [])
 
 violation contains {
 	"rule": "shell write other",
@@ -420,7 +418,7 @@ violation contains {
 	some path in delta.edited
 	is_workflow(path)
 	head := input.tree.lines[path]
-	base := delta["base-lines"][path]
+	base := base_side(path)
 	workflow_count(head) > workflow_count(base)
 }
 
@@ -585,19 +583,24 @@ test_a_consumer_declaring_no_census_is_not_banned if {
 	}}
 }
 
-# COULD-NOT-LOOK IS NOT CLEAN: an edited manifest with no base side refuses
-# every shell unit it carries, rather than reading the unread base as holding
-# them all.
+# COULD-NOT-LOOK IS NOT CLEAN: an edited manifest whose base could not be read
+# refuses every shell line and unit it carries, rather than reading the unread
+# base as holding them all. The engine's shape is the empty side; the missing key
+# is read alike, so both are pinned by one case.
 test_an_unread_base_refuses_every_shell_unit if {
 	head := task("a", ["echo one"])
-	document := {"tree": {
-		"documents": {"config.toml": declared},
-		"base-delta": {"added": [], "edited": ["tasks.toml"], "deleted": [], "base-lines": {}},
-		"lines": {"tasks.toml": head},
-	}}
-	some v in violation with input as document
-	v.verdict == "task add refused"
-	v.subjects == [{"path": "tasks.toml", "line": 1}]
+	every base_lines in [{"tasks.toml": []}, {}] {
+		document := {"tree": {
+			"documents": {"config.toml": declared},
+			"base-delta": {"added": [], "edited": ["tasks.toml"], "deleted": [], "base-lines": base_lines},
+			"lines": {"tasks.toml": head},
+		}}
+		found := {[v.verdict, v.subjects] | some v in violation with input as document}
+		found == {
+			["task write refused", [{"path": "tasks.toml"}, {"count": 1}]],
+			["task add refused", [{"path": "tasks.toml", "line": 1}]],
+		}
+	}
 }
 
 test_a_base_that_did_not_resolve_decides_nothing if {
