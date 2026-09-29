@@ -15,15 +15,15 @@
 // carried: "a set with no dissonance exits 0 and says every gate ran" mise.toml kind:mechanism
 // carried: "every gate is reached, and the report names each one" mise.toml kind:mechanism
 // carried: "a landed-but-In-Progress row is named by in-progress-drain" mise.toml kind:mechanism
-// carried: "a payload set reaches graph-check behind released" mise.toml kind:mechanism
+// changed: "a payload set reaches graph-check behind released" mise.toml the gate behind released is batten board check since CLOUD-1221
 // carried: "an empty payload set is COULD NOT LOOK, not a clean board" mise.toml kind:mechanism
 // carried: "a gate exiting 2 is not laundered into the refusal lane" mise.toml kind:mechanism
-// carried: "a board-scoped could-not-look outranks a refusal, so a half-run sweep is never exit 1" mise.toml kind:mechanism
+// changed: "a board-scoped could-not-look outranks a refusal, so a half-run sweep is never exit 1" mise.toml the could-not-look is done-pr-check's over an empty pull set, since the SPEC_REF_ROOT knob retired with spec-ref-check
 // carried: "a duplicate close sharing its target's operation is named by the sweep" mise.toml kind:mechanism
-// carried: "a tag-less clone still gets a graph-check verdict, and the sweep says so" mise.toml kind:mechanism
+// changed: "a tag-less clone still gets a graph-check verdict, and the sweep says so" mise.toml the leaf verdict is board-check's since CLOUD-1221
 // carried: "an abstention and a not-judged sweep are different exit codes" mise.toml kind:mechanism
 // carried: "a refusal outranks a clone-scoped abstention, so reachability buys no weaker verdict" mise.toml kind:mechanism
-// carried: "a tag-less clone reaches ready-lint, which is graph-check's own leaf" mise.toml kind:mechanism
+// changed: "a tag-less clone reaches ready-lint, which is graph-check's own leaf" mise.toml the Ready gate is asked in process by board check, and its refusal arrives through run_verb's fold
 // carried: "the report carries no issue body" mise.toml kind:mechanism
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
@@ -32,16 +32,16 @@
 use crate::common;
 
 use std::io::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Output, Stdio};
 
 const GATES: [&str; 6] = [
-    "graph-check",
+    "board-check",
     "duplicate-close-check",
     "released",
     "in-progress-drain",
     "done-pr-check",
-    "spec-ref-check",
+    "board-check-refs",
 ];
 
 /// A fixture clone: the committed config, `main` and `origin/main` at one empty
@@ -113,7 +113,7 @@ impl Board {
         self.git(&["checkout", "-q", "work"]);
     }
 
-    fn sweep(&self, payloads: &str, spec_root: Option<&Path>) -> Output {
+    fn sweep(&self, payloads: &str) -> Output {
         let mut command = common::task_command(&self.repo, "board-sweep");
         command
             .env("MISE_CONFIG_FILE", common::at_root("mise.toml"))
@@ -123,7 +123,6 @@ impl Board {
             .env("DRAIN_MERGED_PRS", self.root.join("merged.tsv"))
             .env("WIP_DRAIN_REFS", self.root.join("refs"))
             .env("WIP_DRAIN_TODAY", "2026-08-20")
-            .env("SPEC_REF_ROOT", spec_root.unwrap_or(&self.repo))
             .env("BOARD_PAYLOADS_DIR", self.root.join("payloads"))
             .env("SWEEP_PULLS", self.root.join("pulls.json"))
             .env_remove("usage_tag")
@@ -172,12 +171,15 @@ const CLOSES_ONE: &str = "feat: work\n\nCloses CLOUD-1";
 #[test]
 fn a_clean_board_exits_0_and_every_gate_is_reached_and_named() {
     let board = Board::new("clean");
-    let out = board.sweep(&set_of(&[clean("CLOUD-1")]), None);
+    let out = board.sweep(&set_of(&[clean("CLOUD-1")]));
     let text = said(&out);
     assert_eq!(out.status.code(), Some(0), "{text}");
     assert!(text.contains("every gate ran"), "{text}");
     for gate in GATES {
-        assert!(text.contains(gate), "{gate} unreached: {text}");
+        assert!(
+            text.contains(&format!("  {gate} ok")),
+            "{gate} unreached: {text}"
+        );
     }
 }
 
@@ -186,22 +188,19 @@ fn a_landed_but_in_progress_row_is_named_by_in_progress_drain() {
     let board = Board::new("drain");
     board.land(CLOSES_ONE);
     board.evidence("CLOUD-1\t1\n");
-    let out = board.sweep(&set_of(&[clean("CLOUD-1")]), None);
+    let out = board.sweep(&set_of(&[clean("CLOUD-1")]));
     assert_ne!(out.status.code(), Some(0), "{}", said(&out));
     assert!(said(&out).contains("in-progress-drain"), "{}", said(&out));
 }
 
-/// `REFUSED (in-review-no-pr)` is `graph-check`'s verdict as printed by
+/// `REFUSED (in-review-no-pr)` is `board check`'s verdict as printed by
 /// `released`, reachable only if `released` was handed the payload set.
 #[test]
-fn a_payload_set_reaches_graph_check_behind_released() {
+fn a_payload_set_reaches_board_check_behind_released() {
     let board = Board::new("released");
     board.land(CLOSES_ONE);
     board.git(&["tag", "v0.0.2", "main"]);
-    let out = board.sweep(
-        &set_of(&[row("CLOUD-1", "In Review", "\"t@t\"", "[]")]),
-        None,
-    );
+    let out = board.sweep(&set_of(&[row("CLOUD-1", "In Review", "\"t@t\"", "[]")]));
     assert_ne!(out.status.code(), Some(0), "{}", said(&out));
     assert!(
         said(&out).contains("REFUSED (in-review-no-pr)"),
@@ -213,7 +212,7 @@ fn a_payload_set_reaches_graph_check_behind_released() {
 #[test]
 fn an_empty_payload_set_is_could_not_look() {
     let board = Board::new("empty");
-    let out = board.sweep("", None);
+    let out = board.sweep("");
     let text = said(&out);
     assert_eq!(out.status.code(), Some(2), "{text}");
     assert!(!text.contains("every gate ran"), "{text}");
@@ -225,7 +224,7 @@ fn an_empty_payload_set_is_could_not_look() {
 fn a_gate_exiting_2_is_not_laundered_into_the_refusal_lane() {
     let board = Board::new("laundered");
     board.pulls("[]");
-    let out = board.sweep(&set_of(&[clean("CLOUD-1")]), None);
+    let out = board.sweep(&set_of(&[clean("CLOUD-1")]));
     let text = said(&out);
     assert_eq!(out.status.code(), Some(2), "{text}");
     assert!(text.contains("done-pr-check COULD NOT LOOK"), "{text}");
@@ -237,9 +236,15 @@ fn a_board_scoped_could_not_look_outranks_a_refusal() {
     let board = Board::new("outranks");
     board.land(CLOSES_ONE);
     board.evidence("CLOUD-1\t1\n");
-    let gone = board.root.join("gone");
-    let out = board.sweep(&set_of(&[clean("CLOUD-1")]), Some(&gone));
+    // Board-scoped: `done-pr-check` exits 2 over an empty pull set.
+    board.pulls("[]");
+    let out = board.sweep(&set_of(&[clean("CLOUD-1")]));
     assert_eq!(out.status.code(), Some(2), "{}", said(&out));
+    assert!(
+        said(&out).contains("in-progress-drain REFUSED"),
+        "{}",
+        said(&out)
+    );
 }
 
 #[test]
@@ -252,7 +257,7 @@ fn a_duplicate_close_sharing_its_targets_operation_is_named_by_the_sweep() {
     let duplicate = format!(
         r#"{{"id":"CLOUD-2","status":"Canceled","updatedAt":"{op}","gitBranchName":"x/2","projectMilestone":{{"name":"m"}},"assignee":"t@t","assigneeId":"t@t","description":"a body","completedAt":null,"canceledAt":"{op}","relations":{{"blockedBy":[],"blocks":[],"relatedTo":[],"duplicateOf":{{"id":"CLOUD-1"}}}},"attachments":[]}}"#
     );
-    let out = board.sweep(&set_of(&[target, duplicate]), None);
+    let out = board.sweep(&set_of(&[target, duplicate]));
     assert_ne!(out.status.code(), Some(0), "{}", said(&out));
     assert!(
         said(&out).contains("duplicate-close-check REFUSED"),
@@ -262,12 +267,12 @@ fn a_duplicate_close_sharing_its_targets_operation_is_named_by_the_sweep() {
 }
 
 #[test]
-fn a_tag_less_clone_still_gets_a_graph_check_verdict() {
+fn a_tag_less_clone_still_gets_a_board_check_verdict() {
     let board = Board::new("tagless");
     board.git(&["tag", "-d", "v0.0.1"]);
-    let out = board.sweep(&set_of(&[clean("CLOUD-1")]), None);
+    let out = board.sweep(&set_of(&[clean("CLOUD-1")]));
     let text = said(&out);
-    assert!(text.contains("graph-check ok"), "{text}");
+    assert!(text.contains("board-check ok"), "{text}");
     assert!(text.contains("released ABSTAINED"), "{text}");
     assert_eq!(out.status.code(), Some(3), "{text}");
 }
@@ -276,10 +281,10 @@ fn a_tag_less_clone_still_gets_a_graph_check_verdict() {
 fn an_abstention_and_a_not_judged_sweep_are_different_exit_codes() {
     let board = Board::new("lanes");
     board.git(&["tag", "-d", "v0.0.1"]);
-    let abstained = board.sweep(&set_of(&[clean("CLOUD-1")]), None);
+    let abstained = board.sweep(&set_of(&[clean("CLOUD-1")]));
     assert_eq!(abstained.status.code(), Some(3), "{}", said(&abstained));
     board.pulls("[]");
-    let unjudged = board.sweep(&set_of(&[clean("CLOUD-1")]), None);
+    let unjudged = board.sweep(&set_of(&[clean("CLOUD-1")]));
     assert_eq!(unjudged.status.code(), Some(2), "{}", said(&unjudged));
 }
 
@@ -289,18 +294,33 @@ fn a_refusal_outranks_a_clone_scoped_abstention() {
     board.git(&["tag", "-d", "v0.0.1"]);
     board.land(CLOSES_ONE);
     board.evidence("CLOUD-1\t1\n");
-    let out = board.sweep(&set_of(&[clean("CLOUD-1")]), None);
+    let out = board.sweep(&set_of(&[clean("CLOUD-1")]));
     assert_eq!(out.status.code(), Some(1), "{}", said(&out));
     assert!(said(&out).contains("in-progress-drain"), "{}", said(&out));
 }
 
+/// The engine's violation (exit 2) is the sweep's refusal (1), never its
+/// could-not-look (2): `run_verb`'s fold, on the byte the two tables share.
 #[test]
-fn a_tag_less_clone_reaches_ready_lint() {
+fn a_tag_less_clone_reaches_the_ready_gate_through_board_check() {
     let board = Board::new("ready-lint");
     board.git(&["tag", "-d", "v0.0.1"]);
-    let out = board.sweep(&set_of(&[row("CLOUD-1", "Todo", "null", "[]")]), None);
+    let out = board.sweep(&set_of(&[row("CLOUD-1", "Todo", "null", "[]")]));
     assert_eq!(out.status.code(), Some(1), "{}", said(&out));
+    assert!(said(&out).contains("board-check REFUSED"), "{}", said(&out));
     assert!(said(&out).contains("todo-not-ready"), "{}", said(&out));
+}
+
+/// And the engine's could-not-look (exit 3) is the sweep's, never a clean
+/// verdict: a set whose rows carry no status cannot be judged.
+#[test]
+fn a_board_check_that_could_not_look_is_not_a_clean_board() {
+    let board = Board::new("verb-blind");
+    let out = board.sweep(r#"[{"id":"CLOUD-1"}]"#);
+    let text = said(&out);
+    assert_eq!(out.status.code(), Some(2), "{text}");
+    assert!(text.contains("board-check COULD NOT LOOK"), "{text}");
+    assert!(!text.contains("board-check ok"), "{text}");
 }
 
 #[test]
@@ -308,9 +328,6 @@ fn the_report_carries_no_issue_body() {
     let board = Board::new("pointer");
     board.land(CLOSES_ONE);
     board.git(&["tag", "v0.0.2", "main"]);
-    let out = board.sweep(
-        &set_of(&[row("CLOUD-1", "In Review", "\"t@t\"", "[]")]),
-        None,
-    );
+    let out = board.sweep(&set_of(&[row("CLOUD-1", "In Review", "\"t@t\"", "[]")]));
     assert!(!said(&out).contains("a body"), "{}", said(&out));
 }

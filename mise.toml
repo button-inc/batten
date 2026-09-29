@@ -4417,7 +4417,7 @@ while read -r id; do
 	numbers=$(jq -r '[.attachments // [] | .[] | .url
 	                  | select(test("github\\.com/.+/pull/[0-9]+"))
 	                  | capture("/pull/(?<n>[0-9]+)").n] | unique | .[]' <<<"$payload")
-	# `graph-check` requires a PR to enter In Review, so Done cannot need less.
+	# `batten board check` requires a PR to enter In Review, so Done cannot need less.
 	if [[ -z "$numbers" ]]; then
 		report "$id" "no-pr"
 		continue
@@ -5301,7 +5301,7 @@ fail=0
 if [[ -n "$landed_ids" ]]; then
 	fail=1
 	echo "::error:: landed-unswept — In Progress while their work is on main; landed is In Review (AGENTS.md)." >&2
-	echo "  \`board-move-guard\` still wants a \`graph-check\` exit 0 naming each id before it moves — this decides" >&2
+	echo "  \`board-move-guard\` still wants a \`batten board check\` exit 0 naming each id before it moves — this decides" >&2
 	echo "  that the column is behind git, never that the work is complete, which is \`released\`'s question:" >&2
 	printf '%s\n' "$landed_ids" | sed 's/^/  /' >&2
 fi
@@ -5640,13 +5640,16 @@ fi
 # `MISE_CONFIG_FILE` naming this manifest so it executes in the CALLER's tree —
 # every retired board gate declares `dir = "{{cwd}}"` for exactly that. Measured:
 # without that `dir`, or through `-C`, the task runs in the manifest's directory
-# and would judge the wrong repository.
+# and would judge the wrong repository. A gate that became an ENGINE VERB — the
+# graph and the clause references, `batten board check` and its `--refs` since
+# CLOUD-1221 — runs through `run_verb`, which folds the engine's exit table onto
+# this one: the two tables are inverse on the byte they share.
 #
 # COULD-NOT-LOOK OUTRANKS A REFUSAL, AND A REFUSAL OUTRANKS AN ABSTENTION
 # (CLOUD-921). Board-scoped `unjudgeable` (a gate exited 2 over the payload set,
 # or the set is empty or not JSON) is exit 2; clone-scoped `abstained` (no `v*`
 # tag for `released`, no pull-request state for `done-pr-check`) is exit 3, and a
-# refusal beside it is still exit 1. `graph-check` is a LEAF here, run before
+# refusal beside it is still exit 1. `board check` is a LEAF here, run before
 # `released`, so a tag-less clone still gets its verdict.
 #
 # EFFECT IS `read`: it decides and reports and MOVES NO ROW.
@@ -5655,8 +5658,11 @@ fi
 #MUTANT empty-set-is-clean|s@^\[\[ "\$count" -gt 0 \]\]@[[ "$count" -ge 0 ]]@|an_empty_payload_set_is_could_not_look
 #MUTANT gate-two-laundered|s@^\t\tunjudgeable=@\t\trefusals=@|a_gate_exiting_2_is_not_laundered_into_the_refusal_lane
 #MUTANT drain-not-invoked|s@^run_gate in-progress-drain@true in-progress-drain@|a_landed_but_in_progress_row_is_named_by_in_progress_drain
-#MUTANT released-fed-nothing|s@^\trun_gate released "\$tag" <<<"\$issues"@\trun_gate released "$tag" </dev/null@|a_payload_set_reaches_graph_check_behind_released
-#MUTANT graph-check-not-a-leaf|s@^run_gate graph-check@true graph-check@|a_tag_less_clone_still_gets_a_graph_check_verdict
+#MUTANT released-fed-nothing|s@^\trun_gate released "\$tag" <<<"\$issues"@\trun_gate released "$tag" </dev/null@|a_payload_set_reaches_board_check_behind_released
+#MUTANT board-check-not-a-leaf|s@^run_verb board-check board check@true board-check@|a_tag_less_clone_still_gets_a_board_check_verdict
+#MUTANT verb-violation-laundered|s@^\t2) status=1 ;;$@\t2) status=2 ;;@|a_tag_less_clone_reaches_the_ready_gate_through_board_check
+#MUTANT verb-blind-spot-passes|s@^\t\*) status=2 ;;$@\t*) status=0 ;;@|a_board_check_that_could_not_look_is_not_a_clean_board
+#MUTANT refs-not-run|s@^run_verb board-check-refs @true @|a_clean_board_exits_0_and_every_gate_is_reached_and_named
 #MUTANT abstention-laundered|s@^\tabstained=@\tunjudgeable=@|an_abstention_and_a_not_judged_sweep_are_different_exit_codes
 #MUTANT refusal-loses-to-abstention|s@^if \[\[ "\$refusals" -gt 0 \]\]; then$@if [[ "$refusals" -gt 99 ]]; then@|a_refusal_outranks_a_clone_scoped_abstention
 description = "Gate: run every board gate over one payload set and report the set of refusals (reads get_issue payloads on stdin or from BOARD_PAYLOADS_DIR) — CLOUD-825"
@@ -5725,10 +5731,8 @@ gate() { # gate <name> [args...]
 # Pointer-only: the gate's name and its verdict. Both streams, because the gates
 # disagree on which one carries a finding (`released` puts its verdicts on
 # stdout), and a composer reading one throws half the report away.
-run_gate() { # run_gate <name> [args...]
-	local name=$1 report status
-	report=$(gate "$@" 2>&1)
-	status=$?
+verdict_of() { # verdict_of <name> <status on the gates' table> <report>
+	local name=$1 status=$2 report=$3
 	case "$status" in
 	0)
 		echo "  $name ok"
@@ -5747,8 +5751,30 @@ run_gate() { # run_gate <name> [args...]
 		;;
 	esac
 }
+run_gate() { # run_gate <name> [args...]
+	local report status
+	report=$(gate "$@" 2>&1)
+	status=$?
+	verdict_of "$1" "$status" "$report"
+}
+# An engine verb answers on the ENGINE's table (§7: 0 clean, 2 a violation, 1
+# and 3 could not look), the inverse of the gates' one on the byte they share.
+# Folded here and nowhere else, so a verb's violation is never read as a blind
+# spot, nor a blind spot as a refusal. The manifest's own config is the authority.
+run_verb() { # run_verb <name> <batten args...>
+	local name=$1 report status
+	shift
+	report=$(batten --config-in "$(dirname -- "$manifest")" "$@" 2>&1)
+	status=$?
+	case "$status" in
+	0) ;;
+	2) status=1 ;;
+	*) status=2 ;;
+	esac
+	verdict_of "$name" "$status" "$report"
+}
 echo "board-sweep: $count issue(s)"
-run_gate graph-check <<<"$issues"
+run_verb board-check board check <<<"$issues"
 run_gate duplicate-close-check <<<"$issues"
 if [[ -z "$tag" ]]; then
 	tag=$(git tag --list 'v[0-9]*' --sort=-version:refname | head -n1) || tag=""
@@ -5778,7 +5804,7 @@ else
 	with_pulls=$(jq -c --argjson pulls "$pulls" 'map(. + {pulls: $pulls})' <<<"$issues")
 	run_gate done-pr-check <<<"$with_pulls"
 fi
-run_gate spec-ref-check <<<"$issues"
+run_verb board-check-refs board check --refs <<<"$issues"
 if [[ "$unjudgeable" -gt 0 ]]; then
 	echo "board-sweep: $unjudgeable gate(s) could not look — the board has not been judged" >&2
 	exit 2
