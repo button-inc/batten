@@ -2370,6 +2370,28 @@ const WAIT_SHA: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--sha` on `checks green`: read this commit's check runs from the forge
+/// instead of taking a reading on stdin (CLOUD-843).
+///
+/// Optional, where `pr watch`'s is required, because absent keeps the verb's
+/// original shape — a pure decision over a piped reading — byte for byte. Taken
+/// literally rather than resolved, for [`WAIT_SHA`]'s reason: the caller knows
+/// which commit it means, and resolving would also start a program the `read`
+/// row promises this verb never starts.
+const CHECKS_SHA: FlagDecl = FlagDecl {
+    id: "sha",
+    long: Some("sha"),
+    short: None,
+    help: "Read this commit's check runs from the forge instead of a reading on stdin",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 /// `--repo` on `pr watch`: which repository, in the client's own spelling.
 ///
 /// Optional, because the client resolves its own placeholder from the checkout's
@@ -4574,11 +4596,18 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Unclassified,
         flags: &[],
     },
-    // `read`, and structurally so: it decides over a reading handed to it on
-    // stdin and cannot start a program. The FETCH stays with the caller — the
-    // poller already holds the body it got conditionally — which is the
+    // `read`, and structurally so: it decides over a reading and cannot start a
+    // program. By default the reading is handed to it on stdin — the poller
+    // already holds the body it got conditionally — which is the
     // agents-fetch-gates-decide split the board gates use, and what lets every
     // case run offline.
+    //
+    // `--sha` TAKES THE READING IN PROCESS (CLOUD-843), through the same
+    // `pr_watch::read` `record forge --fetch` and `land` use: one GET, no
+    // program started and nothing written, so the row stays `read`. It exists to
+    // retire the `checks-green` task's `gh api` + `jq` acquisition, whose only
+    // other job was re-deciding the engine's exit code off its stdout. Absent,
+    // the verb is the stdin decider it always was.
     //
     // THE EXIT CODES ARE THIS TABLE'S, NOT THE PREDECESSOR'S (CLOUD-1143).
     // `checks-green.sh` used `0` green / `1` red / `2` could-not-look / `3`
@@ -4606,6 +4635,8 @@ pub const SURFACE: &[CommandDecl] = &[
             ABSENT_OK_CHECKS,
             ANSWERED_CONCLUSIONS,
             FANIN_CHECK,
+            CHECKS_SHA,
+            WAIT_REPO,
             JSON,
         ],
     },

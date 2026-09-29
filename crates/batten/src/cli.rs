@@ -847,6 +847,12 @@ pub enum ChecksCommand {
         /// The fan-in whose failure a cancelled sibling can manufacture. Absent
         /// leaves every failure manufacturable, which is the safe default.
         fanin: Option<String>,
+        /// The commit whose check runs are read from the forge. Absent means the
+        /// reading comes on stdin, the verb's original shape (CLOUD-843).
+        sha: Option<String>,
+        /// The repository to read, in the forge client's own spelling; only
+        /// meaningful beside `sha`.
+        repo: Option<String>,
         /// Emit the verdict on the structured channel.
         json: bool,
     },
@@ -2643,6 +2649,8 @@ fn checks_of(matches: &ArgMatches) -> Option<ChecksCommand> {
             absent_ok: matches.get_one::<String>("absent_ok").cloned(),
             answered: matches.get_one::<String>("answered").cloned()?,
             fanin: matches.get_one::<String>("fanin").cloned(),
+            sha: matches.get_one::<String>("sha").cloned(),
+            repo: matches.get_one::<String>("repo").cloned(),
             json: flag(matches, "json"),
         }),
         _ => None,
