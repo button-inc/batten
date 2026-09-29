@@ -174,9 +174,12 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   consumer path (rule 1); an exempt file is measured and set apart, never
   totalled. **Since CLOUD-1994 the ban reads the SAME table** (the enabling row
   declares `documents = ["batten.toml"]`; the preset finds `census.shell` by
-  shape and abstains without one), so the table is policy-bearing: `trust`
-  compares it as `shell-census-narrowed` (a home removed or an exemption added)
-  and `tests/it/shell_banned.rs` pins the exempt set exactly. Not layered (§8): a
+  shape and abstains without one) — through two matchers, so `validate` holds
+  its globs to `*`/`?`/`**` and refuses a brace, class or escape; `exempt`
+  over a manifest or workflow is the census's alone — so the table is
+  policy-bearing: `trust` compares it as `shell-census-narrowed` (a home
+  removed or an exemption added) and `tests/it/shell_banned.rs` pins the exempt
+  set exactly. Not layered (§8): a
   local file able to add an exempt glob could make a wave read as progress. The
   other CLOUD-843 foundation verbs (`step check|record|run`, `sbom`, `dist`,
   `mcp grant|posture`, `board check`, `record divergence`, `record census …`)

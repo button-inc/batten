@@ -33,11 +33,18 @@
 //! # What the lift changed, stated rather than absorbed
 //!
 //! The consumer module's `stays_bash` literal and its hard-wired manifest and
-//! workflow paths became the consumer's `[census.shell]` table. Three behaviours
+//! workflow paths became the consumer's `[census.shell]` table. Four behaviours
 //! follow: the ban reads EVERY declared manifest's command keys (in this
 //! repository that adds `hk.pkl`'s `check`/`fix` strings, which the census
-//! already counted), exempt entries are globs, and a consumer declaring no
-//! census is not banned at all.
+//! already counted), exempt entries are globs, a consumer declaring no census is
+//! not banned at all, and the table's globs are held to `*`, `?` and `**` — the
+//! operators both the census and the ban read alike — so a brace, a class or an
+//! escape is refused at load rather than read two ways.
+//!
+//! One behaviour is the old module's, restored after review: an edited manifest
+//! whose base side is missing from `base-lines` refuses every shell unit it
+//! carries, as the consumer module did, rather than reading the unread base as
+//! holding them all.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -345,6 +352,47 @@ fn an_exempt_file_is_admitted() {
     change(&dir, "bootstrap.sh", "#!/bin/sh\necho bootstrap\n");
     let output = check(&dir);
     assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+}
+
+/// A BASE THE ENGINE COULD NOT READ AS TEXT IS NOT A BASE HOLDING THE HEAD'S
+/// SHELL. A non-UTF-8 base blob reaches the module as an empty base, so the
+/// unit the head carries is new and refused; the module's own `test_` rules pin
+/// the other could-not-look shape, a path missing from `base-lines`.
+#[test]
+fn a_manifest_whose_base_is_not_text_is_judged_against_nothing() {
+    let fixture = Fixture::new("shell-ban-unreadable-base")
+        .config(&config())
+        .git();
+    let mut base = manifest(&[("a", &["echo a"])]).into_bytes();
+    base.extend_from_slice(b"# \xff\xfe\n");
+    std::fs::write(fixture.path().join("mise.toml"), base).unwrap();
+    let dir = fixture.base_commit().build();
+    change(&dir, "mise.toml", &manifest(&[("a", &["echo a"])]));
+    let (code, found) = findings(&dir);
+    assert_eq!(code, Some(2), "{found:?}");
+    assert!(
+        gained_at(&found, "mise.toml", 1),
+        "the head's unit is judged new: {found:?}"
+    );
+}
+
+/// ONE LIST, ONE GLOB LANGUAGE. The census reads `[census.shell]` through
+/// `globset` and the ban through its own matcher, which implements `*`, `?` and
+/// `**` only; a brace would be every workflow to the first and none to the
+/// second. So the declaration is refused before either reads it.
+#[test]
+fn a_census_glob_the_ban_cannot_read_is_refused_at_load() {
+    let dir = Fixture::new("shell-ban-brace-glob")
+        .config(&config().replace(
+            "workflows = [\".github/workflows/*.yml\"]",
+            "workflows = [\".github/workflows/*.{yml,yaml}\"]",
+        ))
+        .file("README.md", "x\n")
+        .git()
+        .base_commit()
+        .build();
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
 }
 
 /// NO DECLARATION, NO BAN. A consumer enabling `shell-hygiene` for its naming

@@ -24,7 +24,9 @@
 //!
 //! The first two are EXACTLY the detection a line-unit ban over the same files
 //! applies — the `shell-hygiene` preset's `no-new-shell` module, which reads
-//! this same `[census.shell]` table as its list of homes — down to its quirks:
+//! this same `[census.shell]` table as its list of homes, through a glob
+//! language [`ShellCensus::validate`] holds to what both matchers read alike
+//! (`*`, `?`, `**`) — down to its quirks:
 //! a one-liner's first word is read with its quote still attached, and an array
 //! entry is judged without a comment test. That is deliberate. A census that
 //! counted differently from the gate would make "the census reads 0" and "the
@@ -39,6 +41,9 @@
 //! The engine owns the grammar of "is this line shell" and nothing about where a
 //! repository keeps its commands. An exempt file is still measured and reported —
 //! apart, and outside the total — so the exemption is visible rather than a hole.
+//! The ban reads `exempt` for FILES only: an exempt manifest or workflow is set
+//! apart here and still judged there, so on those two homes the ban is the
+//! stricter reading, never the laxer one.
 //!
 //! # Pointer-only (non-negotiable rule 4)
 //!
@@ -108,8 +113,9 @@ impl ShellCensus {
     /// # Errors
     ///
     /// A [`UsageError`] (→ exit `1`) for a manifest with no path or no key, a
-    /// key that is empty or carries whitespace, an empty unit header, or a glob
-    /// `globset` cannot parse.
+    /// key that is empty or carries whitespace, an empty unit header, a glob
+    /// `globset` cannot parse, or a glob spelling an operator the ban cannot read
+    /// (`BAN_UNREAD_OPERATORS`).
     pub fn validate(&self) -> Result<()> {
         for manifest in &self.manifests {
             if manifest.path.trim().is_empty() {
@@ -145,9 +151,40 @@ impl ShellCensus {
         }
         for glob in self.workflows.iter().chain(&self.exempt) {
             Selector::new(glob)?;
+            if let Some(operator) = ban_unread(glob) {
+                return Err(UsageError::raise(format!(
+                    "census.shell: glob `{glob}` spells `{operator}`, which the census reads as a \
+                     glob operator and the `shell-hygiene` ban reads as a literal character — \
+                     the two would judge different files off this one list; write each \
+                     alternative as its own entry"
+                )));
+            }
         }
         Ok(())
     }
+}
+
+/// The `globset` operators the ban's matcher does not implement.
+///
+/// **ONE LIST, TWO MATCHERS, SO THE LANGUAGE IS THEIR INTERSECTION.** The census
+/// matches `workflows` and `exempt` through [`Selector`] (`globset`), and the
+/// `shell-hygiene` preset's `no-new-shell` module matches the same strings with
+/// its own glob-to-regex, which implements `*`, `?` and `**` and escapes
+/// everything else as a literal. Over a brace, a class or a backslash escape the
+/// two therefore select different files: `ci/*.{yml,yaml}` is every workflow to
+/// the census and none to the ban, so the ban judges nothing while the census
+/// counts. Refused at load instead, so no declaration can hold a glob the two
+/// read differently. A stray `**` inside a component is not listed: `globset`
+/// already refuses it in [`Selector::new`].
+const BAN_UNREAD_OPERATORS: [char; 5] = ['{', '}', '[', ']', '\\'];
+
+/// The first operator in `glob` the ban does not implement, if any.
+///
+/// The row below reads every glob as portable, and the unit case's brace, class
+/// and escape then load.
+//MUTANT ban-unread-operator-admitted|s@^    glob.chars().find(.c. BAN_UNREAD_OPERATORS.contains(c))$@    glob.chars().find(char::is_ascii_control)@|a_glob_the_ban_reads_differently_is_refused
+fn ban_unread(glob: &str) -> Option<char> {
+    glob.chars().find(|c| BAN_UNREAD_OPERATORS.contains(c))
 }
 
 // ---------------------------------------------------------------------------
@@ -810,6 +847,33 @@ mod tests {
             ..ShellCensus::default()
         };
         assert!(empty_unit.validate().is_err());
+    }
+
+    #[test]
+    fn a_glob_the_ban_reads_differently_is_refused() {
+        // Each parses under `globset`, so `Selector::new` alone admits it; each
+        // selects different files under the ban's matcher.
+        for glob in ["ci/*.{yml,yaml}", "[ab].sh", "a\\*.sh"] {
+            let workflows = ShellCensus {
+                workflows: vec![glob.to_owned()],
+                ..ShellCensus::default()
+            };
+            assert!(workflows.validate().is_err(), "workflows {glob}");
+            let exempt = ShellCensus {
+                exempt: vec![glob.to_owned()],
+                ..ShellCensus::default()
+            };
+            assert!(exempt.validate().is_err(), "exempt {glob}");
+        }
+        let shared = ShellCensus {
+            workflows: vec!["ci/**/*.yml".to_owned()],
+            exempt: vec!["boot?.sh".to_owned(), "vendor/**".to_owned()],
+            ..ShellCensus::default()
+        };
+        assert!(
+            shared.validate().is_ok(),
+            "`*`, `?` and `**` are read alike"
+        );
     }
 
     #[test]

@@ -1,11 +1,12 @@
 #MUTANT-SUITE crates/batten/tests/it/shell_banned.rs
 #MUTANT task-growth-unchecked|s@^\thead > base_count\[path\]$@\tfalse@|a_task_body_grown_by_one_line_is_refused
-#MUTANT task-appearance-unchecked|s@^\tnot trim_space(head\[h\]) in base_units$@\tfalse@|a_body_moved_into_a_new_task_is_refused_even_when_the_total_falls
+#MUTANT task-appearance-unchecked|s@^\tnot trim_space(head\[h\]) in base_units(path, keys, unit)$@\tfalse@|a_body_moved_into_a_new_task_is_refused_even_when_the_total_falls
 #MUTANT one-liner-unread|s@^\tshell_syntax(value)$@\tfalse@|a_shell_one_liner_added_to_a_task_is_refused
 #MUTANT workflow-growth-unchecked|s@^\tworkflow_count(head) > workflow_count(base)$@\tfalse@|a_workflow_run_block_grown_is_refused
 #MUTANT file-extension-unread|s@^shell_file(path) if shell_path(path)$@shell_file(path) if false@|an_added_shell_script_is_refused
 #MUTANT exempt-unread|s@^\tsome glob in exempt_globs$@\tsome glob in set()@|an_exempt_file_is_admitted
 #MUTANT declaration-unread|s@^\tshell := doc.census.shell$@\tshell := doc.census.absent@|a_task_body_grown_by_one_line_is_refused
+#MUTANT unread-base-admitted|s@^base_units(path, _, _) := set() if not has_base(path)$@base_units(path, _, _) := set() if false@|every_shipped_preset_passes_its_own_suite
 
 # No NEW shell, measured in lines: a repository that has decided to stop writing
 # shell can declare it, and this refuses the change that writes more.
@@ -62,7 +63,18 @@
 # it decides nothing about it.
 #
 # Globs are read as the census reads them, with `*` and `?` stopping at `/` and
-# `**` crossing it. Braces and classes are matched literally.
+# `**` crossing it. Those three are the whole glob language here: a declaration
+# spelling a brace, a class or a backslash escape is refused when the config
+# loads (`ShellCensus::validate`), because `globset` would read it as an operator
+# and this module as a literal, and the census and the ban would then judge
+# different files off one list.
+#
+# ─── A BASE THAT COULD NOT BE READ ───────────────────────────────────────────
+#
+# An edited manifest missing from `base-lines` is could-not-look: the base side
+# was not read, so nothing about what the edit removed is known. The unit arm
+# reads that as NO unit carrying shell at the base, which refuses every shell unit
+# the head carries — "cannot tell" is never read as "nothing was added".
 
 # METADATA
 # description: |
@@ -71,6 +83,8 @@
 #   THE BRACKETS ARE NOT STYLE: `base-delta` carries a hyphen, so the dotted
 #   form is a parse error.
 #   THIS BLOCK IS YAML AND MUST STAY THE LAST COMMENT BLOCK BEFORE `package`.
+# schemas:
+#   - input: schema["policy-input.schema"]
 package batten.shell_growth
 
 import rego.v1
@@ -382,10 +396,21 @@ violation contains {
 	path in delta.edited
 	head := input.tree.lines[path]
 	keys := manifest_keys[path]
-	base_units := units_with_shell(delta["base-lines"][path], keys, unit)
 	some h in shell_units(head, keys, unit)
-	not trim_space(head[h]) in base_units
+	not trim_space(head[h]) in base_units(path, keys, unit)
 }
+
+# The units carrying shell at the base. A path missing from `base-lines` is
+# could-not-look (the engine's own contract on the field), and left undefined it
+# would fail the arm above and admit every unit, so it reads as NO unit instead:
+# every shell unit the head carries is refused. The second clause is not
+# redundant with the `not` above — the call is evaluated outside the negation,
+# measured with `opa test` against this module.
+base_units(path, keys, unit) := units_with_shell(delta["base-lines"][path], keys, unit)
+
+base_units(path, _, _) := set() if not has_base(path)
+
+has_base(path) if delta["base-lines"][path]
 
 violation contains {
 	"rule": "shell write other",
@@ -558,6 +583,21 @@ test_a_consumer_declaring_no_census_is_not_banned if {
 		"base-delta": {"added": ["scripts/x.sh"], "edited": [], "deleted": [], "base-lines": {}},
 		"lines": {"scripts/x.sh": ["echo"]},
 	}}
+}
+
+# COULD-NOT-LOOK IS NOT CLEAN: an edited manifest with no base side refuses
+# every shell unit it carries, rather than reading the unread base as holding
+# them all.
+test_an_unread_base_refuses_every_shell_unit if {
+	head := task("a", ["echo one"])
+	document := {"tree": {
+		"documents": {"config.toml": declared},
+		"base-delta": {"added": [], "edited": ["tasks.toml"], "deleted": [], "base-lines": {}},
+		"lines": {"tasks.toml": head},
+	}}
+	some v in violation with input as document
+	v.verdict == "task add refused"
+	v.subjects == [{"path": "tasks.toml", "line": 1}]
 }
 
 test_a_base_that_did_not_resolve_decides_nothing if {

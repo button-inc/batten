@@ -1091,7 +1091,7 @@ fi
 # compile: a module that does not parse, or reads a path the engine never emits,
 # used to surface only inside `batten-check`, after the whole cargo chain. The
 # `module read undefined` row stays the landing authority over the same command.
-mise exec -- opa check -s schema/ policy/
+mise exec -- opa check -s schema/ policy/ crates/batten/src/policy/presets/shell-hygiene/
 echo "lint:rego: every tracked Rego module is formatted and type-checks"
 '''
 

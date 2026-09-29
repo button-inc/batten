@@ -5943,9 +5943,12 @@ no_fix_reason = "migrate the predicate onto a rule kind, or waive the increase d
 # CLOUD-843. THE MEASUREMENT AND THE BAN READ ONE DECLARATION. `batten census
 # shell` counts every home shell lives in, and the ban refuses growth in exactly
 # those homes: this table is the only place either learns which manifests, keys,
-# unit headers, workflows and exempt files this repository has. So "the census
-# reads 0" and "the ban passes" cannot disagree about a file, because there is no
-# second list for them to disagree over.
+# unit headers, workflows and exempt files this repository has. The two read it
+# with different matchers (`globset` and the module's own glob-to-regex), so its
+# globs are held at load to `*`, `?` and `**`, the operators both read alike; a
+# brace, a class or an escape is refused by `ShellCensus::validate` rather than
+# read two ways. The one reading they do not share is `exempt` over a manifest or
+# workflow: the census sets it apart, the ban still judges it.
 #
 # `exempt` IS THE FIXED SET OF FILES THAT MUST BE SHELL, and `shell_banned.rs`
 # asserts it exactly, so growing it is a failing change a reviewer reads — and
@@ -9623,7 +9626,13 @@ kind = "command"
 # here and nowhere else; `hk.pkl`'s `batten-check` glob is what decides WHEN it is
 # worth asking, and it carries `policy/**/*.rego` for exactly that.
 glob = ".regal/config.yaml"
-check = "mise exec -- regal lint policy/"
+# The `shell-hygiene` preset bundle is named beside `policy/` because its
+# `no-new-shell` module is this repository's shell ban, lifted out of `policy/`
+# (CLOUD-1994): the lift must not take it out of reach of the two static gates it
+# was under. The other bundles under `crates/batten/src/policy/presets/` do not
+# pass `opa check` together today (a package annotation redeclared per bundle),
+# so the reach is widened one bundle at a time rather than all at once.
+check = "mise exec -- regal lint policy/ crates/batten/src/policy/presets/shell-hygiene/"
 severity = "deny"
 scope = "tree"
 no_fix_reason = "add a `# METADATA schemas:` block binding `input` to the schema for the module's surface — `schema[\"policy-input.schema\"]` for a tree-scoped module, `schema[\"policy-call.schema\"]` for a mediated_call one. One block per PACKAGE; OPA refuses a redeclaration"
@@ -9649,7 +9658,8 @@ kind = "command"
 # `policy-modules-bind-input` above: a glob over `policy/**` matches inside the
 # fixtures that copy the committed modules, and `mise exec` cannot resolve there.
 glob = "schema/policy-input.schema.json"
-check = "mise exec -- opa check -s schema/ policy/"
+# `shell-hygiene` is named for the reason on `module bind missing` above.
+check = "mise exec -- opa check -s schema/ policy/ crates/batten/src/policy/presets/shell-hygiene/"
 severity = "deny"
 scope = "tree"
 no_fix_reason = "the module names an input path the engine does not emit; fix the path or add the fact, and read the `want (one of)` list in the error for what this surface actually carries"

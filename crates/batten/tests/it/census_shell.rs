@@ -4,8 +4,10 @@
 //!
 //! The retirement's rule is that every wave moves the census down, and the ban
 //! (`shell-hygiene`'s `no-new-shell` preset module) is what refuses a wave that
-//! moves it up. Since CLOUD-1994 both read one `[census.shell]` table, so they
-//! cannot disagree about WHERE; this tier proves they agree about WHAT. Two
+//! moves it up. Since CLOUD-1994 both read one `[census.shell]` table, held at
+//! load to the glob operators both matchers read alike, so they agree about WHERE
+//! (bar `exempt` over a manifest or workflow, which only the census sets apart);
+//! this tier proves they agree about WHAT. Two
 //! readings of "a shell line" would make those claims able to disagree — a wave
 //! could read as progress to one and as growth to the other. So the census does
 //! not choose its own detection; it carries the ban's, and this tier proves the
