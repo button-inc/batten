@@ -95,9 +95,8 @@ use anyhow::{Context as _, Result, bail};
 
 /// The declaration markers, bare — the comment opener is [`OPENERS`]'s business.
 ///
-/// Beside the code rather than in a manifest, for the reason `step-receipt`'s
-/// spec table lives in `step-receipt`: a declaration in a second file is a
-/// second authority that drifts.
+/// Beside the code rather than in a manifest: a declaration in a second file is
+/// a second authority that drifts.
 ///
 /// **THE OPENER USED TO BE PART OF THE MARKER, AND THAT EXCLUDED AN ENTIRE
 /// IMPLEMENTATION LANGUAGE** (CLOUD-1369). These read `#MUTANT `, matched with

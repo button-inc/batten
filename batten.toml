@@ -18067,10 +18067,21 @@ repair = ["mise", "run", "install:local"]
 # repository at run time rather than compiling it. `test:bats`: its suites read
 # `mise.toml`, `hk.pkl`, workflows and fixture trees everywhere. `test:cargo`: its
 # tiers read `mise.toml`, `policy/`, `.github`, `hk.pkl` and `rules/` from the
-# checkout, well past `crates`. `batten-check`: `enforce` evaluates every
-# committed rule, whose globs cover the tree (hk selects it on `**`). The row
-# itself is key material too, so narrowing any row's set is a miss rather than a
-# receipt earned under the wider one answering for the narrower.
+# checkout, well past `crates`. The row itself is key material too, so narrowing
+# any row's set is a miss rather than a receipt earned under the wider one
+# answering for the narrower.
+#
+# A ROW KEYS ONLY WHAT IT CAN NAME: index entries, tool answers, arguments. A
+# step whose verdict reads anything else has no honest row. `batten-check` is
+# GONE from the table for that reason (CLOUD-843 review): `enforce` reads the
+# record and capture stores under the git directory (`input.tree.records`), so a
+# record flipping to a deny value with no tracked change hit a `.`-keyed receipt
+# and skipped the gate. The retired table carried the same hole.
+#
+# A caller whose shell computes an `--arg` (`semver`, `darwin-link`) also keys
+# its own task declaration, so an edit to that shell misses even where the
+# computed values come out byte-identical, as the retired table's `mise tasks
+# info` of every step did.
 #
 # `lint:fmt` and `zizmor` are GONE from the table rather than carried: both steps
 # cost a second or two, the cache is an engine build, and the first runs at commit
@@ -18123,17 +18134,17 @@ tools = [
 [[step]]
 id = "darwin-link"
 inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml"]
-tools = [["cargo-zigbuild", "--version"], ["zig", "version"], ["rustc", "--version"]]
+tools = [
+  ["cargo-zigbuild", "--version"],
+  ["zig", "version"],
+  ["rustc", "--version"],
+  ["mise", "tasks", "info", "darwin-link", "--json"],
+]
 
 [[step]]
 id = "deny"
 inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml", "deny.toml"]
 tools = [["cargo", "deny", "--version"]]
-
-[[step]]
-id = "batten-check"
-inputs = ["."]
-tools = [["rustc", "--version"], ["cargo", "--version"]]
 
 [[step]]
 id = "test:bats"
@@ -18146,7 +18157,11 @@ tools = [["bats", "--version"], ["mise", "tasks", "info", "test:bats", "--json"]
 [[step]]
 id = "semver"
 inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml"]
-tools = [["cargo", "semver-checks", "--version"], ["rustc", "--version"]]
+tools = [
+  ["cargo", "semver-checks", "--version"],
+  ["rustc", "--version"],
+  ["mise", "tasks", "info", "semver", "--json"],
+]
 
 # The three validator records are a function of committed bytes, so one run
 # answers for all (CLOUD-1891). The task's forge arm stays outside the key.

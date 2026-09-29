@@ -272,8 +272,8 @@ that touched a workflow still spent a runner and re-drafting did not close the
 tap (CLOUD-240).
 
 **The expensive steps answer from per-step receipts (CLOUD-424).** The cargo
-chain, `test:bats`, `deny`, `cross-check`, `darwin-link`, `semver` and
-`batten-check` route through `batten step`: a content-addressed receipt in the
+chain, `test:bats`, `deny`, `cross-check`, `darwin-link` and `semver` route
+through `batten step`: a content-addressed receipt in the
 keyed record store, keyed by the step's input files (index blob ids), each
 declared tool argv's stdout (a `--version`, or `mise tasks info` for a shell
 body), any `--arg`, and under `step run` the command itself. Same inputs, same
@@ -286,7 +286,10 @@ composed, so an argv caller writes no shell around it. The step table is
 `[[step]]` in `batten.toml`; the mechanism is `crates/batten/src/step.rs` and
 the decision table `crates/batten/tests/it/step_receipt.rs`. Wrap a step only
 when its cost dwarfs the engine call around it — `lint:fmt` and `zizmor` are not
-wrapped for exactly that reason.
+wrapped for exactly that reason — and only when a row can NAME everything its
+verdict reads. `batten-check` is not wrapped: `enforce` reads the record and
+capture stores under the git directory, which no pathspec keys, so a receipt
+over the tree answered `hit` after a record flipped to a deny value.
 
 Two defects got it here (CLOUD-235, then CLOUD-238), and the second is the
 instructive one. First the refusal was invisible — the predicate's history is in

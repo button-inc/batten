@@ -2854,7 +2854,11 @@ view` and no argument, which reads the CURRENT BRANCH — so under a detached
   or `BATTEN_STEP_RECEIPT_BYPASS`. The table is read from the committed authority
   alone; the retired `BATTEN_STEP_SPECS`/`BATTEN_STEP_TOOLS` overrides did not
   survive, because a caller naming its own inputs could key a receipt to files
-  the step never read.
+  the step never read. The row type and its load-time validator are the leaf
+  `step_table.rs` (`error` + `git` only), so `config` never reaches `step` and
+  through it `resolve`. A row keys only index entries, tool stdout and args, so
+  a step reading state outside the tree (`enforce`: record/capture stores under
+  the git dir) has no row — `batten-check` runs uncached.
 - `severity.rs` — the severity taxonomy (CLOUD-168): one rank table plus the
   adapter across the three axes — `RuleSeverity` (config, CLOUD-61),
   `AdvisoryTier` (the one _stored_ severity, CLOUD-80/78), `ReportLevel`

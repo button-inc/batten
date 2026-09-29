@@ -7814,8 +7814,7 @@ description = "Consumer #1: evaluate the committed batten.toml with batten's own
 # to route around. The task keeps its name: it is the consumer-#1 gate, not the
 # verb it happens to call.
 #
-# Receipt-gated (CLOUD-424); the key's specs mirror the hk step's glob, which
-# is the union of what `batten enforce` actually reads.
+# No longer receipt-gated (CLOUD-843): see the paragraph over `run` below.
 # `provision apply` first, since CLOUD-59: the `no-secrets` row runs a pinned
 # scanner the engine resolves from the provision cache, and an absent binary is
 # exit 1 naming this very verb rather than a silent pass. A warm cache is
@@ -7843,15 +7842,19 @@ description = "Consumer #1: evaluate the committed batten.toml with batten's own
 # installed is a fault of the environment, not a verdict about the tree, and `1` is
 # already what the engine emits for "a `command` rule whose binary cannot run".
 #
-# PROPAGATION IS NOW THE STEP VERB'S, NOT THIS BODY'S (CLOUD-843). `enforce` is
-# the command `batten step run` hands to `exec`, whose child code is the verb's
-# exit unchanged — a `2` stays `2` — and the receipt is written only after a
-# zero exit, so a denied run leaves none. The capture-and-re-exit above was the
-# shell spelling of exactly that. `provision apply` runs first on every pass: a
-# warm cache is a checksum read, and an array entry that fails stops the task.
+# NO RECEIPT ANY MORE, AND SO NO CAPTURE (CLOUD-843). The capture-and-re-exit
+# above existed so a receipt could be written after a zero exit. The receipt is
+# gone because it was never sound: `enforce` reads state no pathspec names — the
+# record stores under the git directory (`input.tree.records`), captures, the
+# forge's recorded answers — so a record flipping to a deny value with no
+# tracked change hit a tree-keyed receipt and skipped the gate. A `[[step]]` row
+# keys index entries, tool answers and arguments only, so this step has no row.
+# `enforce` is the chain's LAST entry, so its code is the task's with nothing
+# after it to replace one; `provision apply` runs first, and an array entry
+# that fails stops the task.
 run = [
   "cargo run --quiet -p batten -- provision apply",
-  "cargo run --quiet -p batten -- step run batten-check -- cargo run --quiet -p batten -- enforce",
+  "cargo run --quiet -p batten -- enforce",
 ]
 
 [tasks.policy-budget]
@@ -8282,6 +8285,11 @@ run = "cargo run --quiet -p batten -- doctor target"
 
 [tasks."darwin-link"]
 description = "Gate: the macOS targets actually LINK from Linux, which is what proves no dependency needs an Apple SDK"
+# `target-ensure` RUNS ON A HIT TOO, a change from the retired body (CLOUD-843),
+# which checked the receipt first and exited before installing anything. The
+# check now lives inside `batten step run`, after the install; `doctor target`
+# on a target already installed is a read under the toolchain lock, so a hit
+# costs that read and never a download. `cross-check` still checks first.
 run = "darwin_link() { t=\"${1:-${DARWIN_TARGET:-aarch64-apple-darwin}}\"; case \"$t\" in *-apple-darwin) ;; *) echo \"::error:: darwin-link: expected an *-apple-darwin target, got '$t'\" >&2; exit 2 ;; esac; mise run target-ensure \"$t\" || exit 1; cargo run --quiet -p batten -- step run darwin-link --arg \"$t\" -- cargo zigbuild --workspace --profile darwin-link --target \"$t\" || exit 1; echo \"darwin-link: $t links with no macOS SDK\"; }; darwin_link"
 
 [tasks."cross-turn"]
@@ -9178,10 +9186,12 @@ description = "Record what a long-running task is doing, so its liveness and pha
 # CLOUD-425's writer half, ported off `mise-tasks/task-registry.sh` under
 # CLOUD-843 and retired onto the `task` noun.
 #
-# THE TASK NAME SURVIVES THE MIGRATION, for `claim-check`'s reason: `land.sh` and
-# `step-receipt` both call `mise run task-registry <verb> ...` and neither may
-# be edited, so keeping the name is what makes this retirement reach exactly the
-# two programs it claims.
+# THE TASK NAME SURVIVES THE MIGRATION, for `claim-check`'s reason: `land.sh`
+# calls `mise run task-registry <verb> ...` and may not be edited, so keeping the
+# name is what makes this retirement reach the program it claims. The other
+# caller this paragraph once named, `step-receipt`, retired onto `batten step`
+# (CLOUD-843), which announces its phase through the `task` noun in-process
+# rather than through this task.
 #
 # THE EXIT CODES ARE TRANSLATED HERE rather than in the engine. The one contract
 # gives `1` to a usage error, `2` to a verdict and `3` to could-not-look; the

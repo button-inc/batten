@@ -54,6 +54,19 @@ fn batten_check_body() -> String {
     task_body("batten-check")
 }
 
+/// The `run` entries of `[tasks.batten-check]`, parsed: the body is an argv
+/// chain, so each entry is one command mise runs in order and stops on.
+fn batten_check_entries() -> Vec<String> {
+    let block = common::task_block("batten-check").expect("batten-check is a declared task");
+    let parsed: toml::Value = toml::from_str(&block).expect("a task block is a TOML table");
+    parsed["tasks"]["batten-check"]["run"]
+        .as_array()
+        .expect("batten-check's `run` is an argv chain")
+        .iter()
+        .map(|entry| entry.as_str().expect("each entry is a string").to_owned())
+        .collect()
+}
+
 /// ANTI-VACUITY, and it is not ceremony: every assertion below is over a string
 /// this file located by scanning, so a rename of the table or of the literal
 /// delimiter would leave them all passing over an empty body.
@@ -64,9 +77,26 @@ fn the_batten_check_body_was_found_at_all() {
         body.contains("enforce"),
         "the batten-check body invokes the engine"
     );
+}
+
+/// NOT RECEIPT-GATED, and the reason is what `enforce` reads (CLOUD-843 review).
+///
+/// CHANGED WITH CLOUD-843: the retired body skipped `enforce` on a
+/// `step-receipt` hit keyed to the tracked tree. But `enforce` also reads state
+/// no pathspec names: the record stores under the git directory
+/// (`input.tree.records`), captures, the forge's recorded answers. A record
+/// flipping to a deny value with no tracked change hit the receipt and skipped
+/// the gate. A `[[step]]` row can key only index entries, tool answers and
+/// arguments, so the honest cache for this step is none.
+#[test]
+fn the_engine_is_never_answered_from_a_step_receipt() {
+    let body = batten_check_body();
     assert!(
-        body.contains("step run batten-check --"),
-        "the batten-check body is receipt-gated through `batten step run`"
+        !body.contains("step run batten-check")
+            && !body.contains("step check batten-check")
+            && !body.contains("step-receipt"),
+        "batten-check must not be receipt-gated: `enforce` reads record and capture \
+         stores outside the tracked tree, which no `[[step]]` row can key"
     );
 }
 
@@ -94,32 +124,18 @@ fn the_engine_invocation_is_not_wrapped_in_a_replacing_guard() {
 /// deleting the invocation.
 ///
 /// CHANGED WITH CLOUD-843: the capture-and-re-exit (`verdict=$?` / `exit
-/// "$verdict"`) was the shell spelling of propagation, and it retired with the
-/// shell receipt around it. `enforce` is now the COMMAND `batten step run` hands to
-/// `exec`, whose child code is the verb's exit unchanged, and the receipt is
-/// written only after a zero exit. So the property is two facts: the engine
-/// invocation is the step's command on the same entry — nothing between them to
-/// replace a code — and the compiled verb passes a `2` through and records
-/// nothing, which `step_receipt::a_failing_command_passes_its_code_through_and_records_nothing`
-/// asserts over the binary rather than over this body.
+/// "$verdict"`) existed only so a receipt could be written after a zero exit.
+/// With no receipt, the engine is the chain's TERMINATING entry, so its code is
+/// the task's with nothing after it to replace one.
 #[test]
-fn the_engine_status_is_the_step_command_so_it_passes_through_unchanged() {
-    let body = batten_check_body();
-    let runner = body
-        .find("step run batten-check -- ")
-        .expect("the step verb brackets the engine");
-    let engine = body[runner..]
-        .find("-- enforce")
-        .map(|offset| runner + offset)
-        .expect("the engine is the step's command");
-    let entry_end = body[runner..]
-        .find('"')
-        .map_or(body.len(), |offset| runner + offset);
-    assert!(
-        engine < entry_end,
-        "`enforce` must be the command of the SAME `step run` entry — a separate \
-         entry would run the engine outside the verb that propagates its code"
+fn the_engine_status_is_the_chains_last_entry_so_it_passes_through_unchanged() {
+    let entries = batten_check_entries();
+    assert_eq!(
+        entries.last().map(String::as_str),
+        Some("cargo run --quiet -p batten -- enforce"),
+        "`enforce` must be the last entry, bare, so its code is the task's: {entries:?}"
     );
+    let body = batten_check_body();
     assert!(
         !body.contains("verdict=$?") && !body.contains("|| true"),
         "no shell remains between the engine and the task's exit to replace its code"
