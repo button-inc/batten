@@ -373,6 +373,42 @@ fn the_impersonation_detector_is_live_behind_this_row() {
     );
 }
 
+/// THE COMMITTED TABLE, NOT A FIXTURE'S (CLOUD-843 review). Every case above
+/// drives a fixture that declares the governed name, so all of them stay green
+/// while this repository's own `[mcp] permission_aliases` is absent — and absent,
+/// `mcp grant --guard` answers silence for every renamed key, committed denies
+/// included, and `mcp posture`'s grant census walks an empty list. The retired
+/// guard and finding are gone either way, so an inert replacement would be a
+/// deletion that reads as a port. This is the case that reddens on it.
+#[test]
+fn this_repository_declares_the_names_its_guard_translates() {
+    let text = std::fs::read_to_string(common::at_root("batten.toml")).expect("the config");
+    let config: toml::Value = toml::from_str(&text).expect("batten.toml parses");
+    let mcp = config.get("mcp").expect("an [mcp] table");
+    let aliases: Vec<&str> = mcp
+        .get("permission_aliases")
+        .and_then(toml::Value::as_array)
+        .map(|names| names.iter().filter_map(toml::Value::as_str).collect())
+        .unwrap_or_default();
+    assert!(
+        !aliases.is_empty(),
+        "batten.toml declares no [mcp] permission_aliases, so the committed guard translates nothing"
+    );
+    let sources = mcp
+        .get("source")
+        .and_then(toml::Value::as_array)
+        .expect("[[mcp.source]] rows");
+    for alias in aliases {
+        assert!(
+            sources.iter().any(|source| source
+                .get("endpoint_contains")
+                .and_then(|selectors| selectors.get(alias))
+                .is_some()),
+            "{alias} is a permission alias no endpoint_contains row declares"
+        );
+    }
+}
+
 #[test]
 fn a_name_the_guard_cannot_resolve_leaves_the_call_undecided() {
     // The load-bearing negative: a guard that refused everything would satisfy

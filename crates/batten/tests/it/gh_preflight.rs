@@ -207,6 +207,26 @@ fn no_resolvable_repository_is_a_failed_diagnosis() {
     assert!(text.contains("could not resolve owner/repo"), "{text}");
 }
 
+/// THE COMMITTED TABLE, NOT A FIXTURE'S (CLOUD-843 review). The retired task
+/// carried its table inline, so it could not lose it; the verb reads
+/// `[[forge.probe]]` rows, and with none committed `batten doctor forge` refuses
+/// on this repository and diagnoses nothing. Every case above declares its own
+/// table, so this is the one that reddens on the committed rows being absent.
+#[test]
+fn this_repository_declares_the_claims_its_tasks_need() {
+    let text = std::fs::read_to_string(common::at_root("batten.toml")).expect("the config");
+    let config: toml::Value = toml::from_str(&text).expect("batten.toml parses");
+    let probes = config
+        .get("forge")
+        .and_then(|forge| forge.get("probe"))
+        .and_then(toml::Value::as_array)
+        .map_or(0, Vec::len);
+    assert!(
+        probes > 0,
+        "batten.toml declares no [[forge.probe]] row, so `batten doctor forge` probes nothing here"
+    );
+}
+
 #[test]
 fn a_repository_declaring_no_probe_is_refused_rather_than_passed() {
     let (code, text) = Forge::new("undeclared", "version = 1\n", &[]).run();

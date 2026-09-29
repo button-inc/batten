@@ -5036,9 +5036,12 @@ continue_on_error = false
 # because a connector the host authorises at its own layer must not have its name
 # translated into a grant the host did not give. `Linear` below is declared for
 # DISPATCH (`mcp call`), not for this.
-# P5-SCHEMA-PENDING (CLOUD-843): uncomment once `schema/config.schema.json` is
-# regenerated from the merged binary; the committed schema predates the key, so
-# `taplo lint` refuses it until then.
+# P5-SCHEMA-PENDING (CLOUD-843): uncomment once `mise run schema` has regenerated
+# `schema/batten.schema.json` from the merged binary; the committed schema
+# predates the key, so the commit-time `taplo` step refuses it until then. NOT
+# OPTIONAL: commented out, the guard and the posture census decide nothing here,
+# and `connector_allow_door.rs`'s
+# `this_repository_declares_the_names_its_guard_translates` is red until it is.
 # [mcp]
 # permission_aliases = ["Claude_Code_Remote"]
 
@@ -10919,8 +10922,9 @@ credential_names = ["BATTEN_GITHUB_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN"]
 # endpoint — a write cannot be probed without performing one, and the jobs read
 # needs a run that exists. The rows are the retired table's, byte for byte in
 # endpoint and claim, in its order.
-# P5-SCHEMA-PENDING (CLOUD-843): uncomment once `schema/config.schema.json` is
-# regenerated from the merged binary; `taplo lint` refuses `forge.probe` until then.
+# P5-SCHEMA-PENDING (CLOUD-843): uncomment once `mise run schema` has regenerated
+# `schema/batten.schema.json` from the merged binary; the commit-time `taplo` step
+# refuses `forge.probe` until then.
 # [[forge.probe]]
 # endpoint = "repos/{owner}/{repo}"
 # claim = "metadata=read"
