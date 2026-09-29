@@ -889,11 +889,15 @@ asserted rather than tested.",
         patterns: &[],
     },
     // CLOUD-843's `supply-chain`: what a release and a commit claim about where
-    // they came from is checkable. Two modules here, and more ship with the SBOM
-    // readings beside them; each binds its own `package` so their helpers cannot
-    // collide. Both read records the ENGINE's own producers write under the
-    // producer's name (`record derive signing-posture`, `record attestation`),
-    // and git facts a row declares, so no consumer fact travels inside one.
+    // they came from is checkable. ONE MANIFEST FOR THE WHOLE BUNDLE: the SBOM
+    // readings (`binary-inventory-is-lockfile-bound.rego`, `cargo list empty`,
+    // `cargo list wrong`) are further modules and verdicts in THIS entry, never a
+    // second `Manifest` of the same name — `no_preset_is_declared_twice` refuses
+    // that, and `find` would answer with whichever came first. Each module binds
+    // its own `package` so their helpers cannot collide. These two read records
+    // the ENGINE's own producers write under the producer's name (`record derive
+    // signing-posture`, `record attestation`), and git facts a row declares, so no
+    // consumer fact travels inside one.
     Manifest {
         name: "supply-chain",
         version: 1,

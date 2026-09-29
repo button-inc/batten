@@ -6784,9 +6784,13 @@ writer = "mise run evaluator-io-record"
 #
 # THE `supply-chain` PRESET, ENABLED ONCE, and this is the row (CLOUD-843). Its
 # modules decide the signing posture AND a release's attestation — the second was
-# `release grade unsafe`'s own row, folded in here because two rows enabling one
-# preset at one scope would each evaluate every module and report each finding
-# twice. `release-assets.yml` names this row now.
+# `release grade unsafe`'s own row, folded in here because a second row enabling
+# one preset at one scope is refused at load (`policy::load`'s `seen` pair), and
+# were it not, each row would compile every module and report each finding
+# twice. The same holds for the SBOM half of the bundle: `cargo list other`'s
+# enablement folds into THIS row, carrying its `line_sources = ["Cargo.lock"]`
+# beside the columns below, so one row supplies every column any module in the
+# bundle reads. `release-assets.yml` names this row now.
 #
 # THE COLUMNS ARE WHAT THE SIGNING MODULE READS, and without them it ships dead:
 # `commit.gpgsign` per scope is the CONFLICT the retired task body computed in
