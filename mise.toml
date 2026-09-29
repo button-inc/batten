@@ -3352,7 +3352,7 @@ echo "sums=$SUMS"
 # the arm and the pull request appended to this argv.
 [tasks.pr-unsubscribed]
 description = "Gate: this session has dropped the PR's webhook subscription (records unsubscribe_pr_activity's answer, then decides) — CLOUD-518"
-run = "cargo run --quiet -p batten -- pr unsubscribed --session-env CLAUDE_CODE_REMOTE_SESSION_ID --token-env CLAUDE_SESSION_INGRESS_TOKEN_FILE --endpoint https://api.anthropic.com/v2/ccr-sessions/{session}/github/mcp --tool unsubscribe_pr_activity --family pr-unsubscribed --rule 'event watch other'"
+run = "cargo run --quiet -p batten -- pr unsubscribed --session-env CLAUDE_CODE_REMOTE_SESSION_ID --token-env CLAUDE_SESSION_INGRESS_TOKEN_FILE --endpoint https://api.anthropic.com/v2/ccr-sessions/{session}/github/mcp --tool unsubscribe_pr_activity --arguments '{\"owner\":\"{owner}\",\"repo\":\"{repo}\",\"pullNumber\":\"{pr}\"}' --family pr-unsubscribed --rule 'event watch other'"
 
 # CLOUD-258/262/278's reading half, ported off `mise-tasks/release-assets-check.sh`
 # under CLOUD-1717. The decisions are `policy/release-assets.rego`'s; this records

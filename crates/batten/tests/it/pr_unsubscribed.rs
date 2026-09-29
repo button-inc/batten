@@ -36,6 +36,7 @@
 // changed: "CLOUD-518: an empty answer is could-not-look, never a refusal" crates/batten/src/unsubscribe.rs still could-not-look and never a refusal, now spelled exit 3 on the engine's table where the body said 2
 // changed: "CLOUD-518: a bad verb or a non-numeric PR is could-not-look" crates/batten/src/unsubscribe.rs a malformed invocation is the engine's usage error, exit 1: one exit table, no per-verb exception
 // changed: "CLOUD-518: a session is the name of an injected client config under BATTEN_MCP_CONFIG_DIR" crates/batten/src/unsubscribe.rs a session is the value of the variable the task names with --session-env, the id the committed `[[mcp.source]] claude-code-remote` row spells its wiring file with; the engine expands a declared variable and never scans a directory
+// changed: "CLOUD-790: the call sends owner, repo and pullNumber" mise.toml the argument shape is the host's, so the task declares it with --arguments as a JSON template and the engine fills {owner}, {repo} and {pr}; a template naming the owner in a clone with no slug still sends nothing
 // changed: "CLOUD-790: an accepted call mints the receipt check demands, with no human in it" crates/batten/src/unsubscribe.rs the endpoint is HTTPS through the engine's own client, which no stub `curl` can stand in for; `accepted` and `mint` carry the arm in the module's own tests, and the composition is listed for the integrator's live replay
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
@@ -370,6 +371,17 @@ fn the_task_is_the_verb_and_land_still_names_it() {
     assert_eq!(
         argv.get(..2),
         Some(&["pr".to_owned(), "unsubscribed".to_owned()][..])
+    );
+    // The tool's argument shape is declared here, never spelled in the engine.
+    let at = argv
+        .iter()
+        .position(|word| word == "--arguments")
+        .expect("the task declares the tool's arguments");
+    let template: serde_json::Value =
+        serde_json::from_str(&argv[at + 1]).expect("the template is JSON");
+    assert_eq!(
+        template,
+        serde_json::json!({"owner":"{owner}","repo":"{repo}","pullNumber":"{pr}"})
     );
     let gates = common::task_env("LAND_ENTRY_GATES");
     assert!(gates.contains("mise run pr-unsubscribed drop"), "{gates}");

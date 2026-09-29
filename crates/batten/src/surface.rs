@@ -1315,6 +1315,14 @@ const UNSUBSCRIBED_ENDPOINT: FlagDecl = FlagDecl::valued(
 const UNSUBSCRIBED_TOOL: FlagDecl =
     FlagDecl::valued("tool", "tool", "The tool `drop` asks the endpoint to call");
 
+/// `--arguments <JSON>` on `pr unsubscribed`: the tool's argument shape is the
+/// HOST's, so the consumer writes it (non-negotiable rule 1).
+const UNSUBSCRIBED_ARGUMENTS: FlagDecl = FlagDecl::valued(
+    "arguments",
+    "arguments",
+    "The tool's arguments `drop` sends: a JSON object whose strings may name {owner}, {repo}, {pr} and {session}",
+);
+
 /// `--family <NAME>` on `pr unsubscribed`: the family `check` records, and the
 /// receipts' filename prefix.
 const UNSUBSCRIBED_FAMILY: FlagDecl = FlagDecl {
@@ -4771,6 +4779,7 @@ pub const SURFACE: &[CommandDecl] = &[
             UNSUBSCRIBED_TOKEN_ENV,
             UNSUBSCRIBED_ENDPOINT,
             UNSUBSCRIBED_TOOL,
+            UNSUBSCRIBED_ARGUMENTS,
             UNSUBSCRIBED_FAMILY,
             UNSUBSCRIBED_RULE,
         ],

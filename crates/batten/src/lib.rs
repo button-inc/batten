@@ -4001,6 +4001,7 @@ fn run_pr_unsubscribed(
         token_env: request.token_env.clone(),
         endpoint: request.endpoint.clone(),
         tool: request.tool.clone(),
+        arguments: request.arguments.clone(),
         family: record::safe_component("family", &request.family)?,
     };
     let git_dir = git::git_dir(Path::new(".")).map_err(|_| {

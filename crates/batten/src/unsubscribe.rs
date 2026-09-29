@@ -19,8 +19,11 @@
 //!
 //! Which environment variable carries the session id, which carries the PATH of
 //! the credential file, the endpoint's address (with `{session}` where the id
-//! goes), the tool's name and the record family are all arguments. The engine
-//! knows a JSON-RPC `tools/call` and a receipt's five lines, nothing else.
+//! goes), the tool's name, the tool's ARGUMENTS and the record family are all
+//! arguments. The arguments are a JSON template the consumer writes, with
+//! `{owner}`, `{repo}`, `{pr}` and `{session}` filled in ([`fill_arguments`]), so
+//! no host's argument shape is spelled here. The engine knows a JSON-RPC
+//! `tools/call`, those four words, and a receipt's five lines, nothing else.
 //!
 //! # Pointer-only (non-negotiable rule 4)
 //!
@@ -74,6 +77,8 @@ pub struct Host {
     pub endpoint: Option<String>,
     /// The tool the endpoint is asked to call.
     pub tool: Option<String>,
+    /// The tool's arguments, as a JSON object template ([`fill_arguments`]).
+    pub arguments: Option<String>,
     /// The record family, and the receipts' filename prefix.
     pub family: String,
 }
@@ -186,12 +191,91 @@ pub fn reading(git_dir: &Path, host: &Host, pr: u64) -> String {
 }
 
 /// Say why nothing was dropped, and pass: the manual path is unaffected.
+///
+/// FAILS OPEN, and that is the arm's whole contract (CLOUD-790): an actor that
+/// could refuse would put a second way to wedge a landing in front of the gate
+/// it exists to satisfy.
 fn give_up(out: &mut dyn Write, pr: u64, why: &str) -> Result<ExitCode> {
     writeln!(
         out,
         "pr unsubscribed: could not drop #{pr}'s webhook subscription ({why}) — the manual path is unaffected"
     )?;
-    Ok(ExitCode::Success)
+    let fails_open = ExitCode::Success;
+    Ok(fails_open)
+}
+
+/// The words a consumer's argument template may name.
+#[derive(Debug, Clone, Copy)]
+struct Words<'a> {
+    owner: Option<&'a str>,
+    repo: Option<&'a str>,
+    pr: u64,
+    session: &'a str,
+}
+
+/// Fill the consumer's argument template: a JSON object whose string leaves may
+/// name `{owner}`, `{repo}`, `{pr}` and `{session}`.
+///
+/// A leaf that is exactly `"{pr}"` becomes the NUMBER, since a tool's schema
+/// types a pull request as one. `slug` is this clone's `(owner, repo)`, and is
+/// only needed when the template names either.
+///
+/// `None` for a template that is not a JSON object, or that names `{owner}` or
+/// `{repo}` where the clone has no slug to fill them with: guessing either would
+/// send a call about some other repository.
+#[must_use]
+pub fn fill_arguments(
+    template: &str,
+    pr: u64,
+    session: &str,
+    slug: Option<&(String, String)>,
+) -> Option<serde_json::Value> {
+    let parsed: serde_json::Value = serde_json::from_str(template).ok()?;
+    if !parsed.is_object() {
+        return None;
+    }
+    let words = Words {
+        owner: slug.map(|(owner, _)| owner.as_str()),
+        repo: slug.map(|(_, repo)| repo.as_str()),
+        pr,
+        session,
+    };
+    fill(parsed, words)
+}
+
+/// [`fill_arguments`]' walk over one value.
+fn fill(value: serde_json::Value, words: Words<'_>) -> Option<serde_json::Value> {
+    use serde_json::Value;
+    Some(match value {
+        Value::String(text) if text == "{pr}" => Value::from(words.pr),
+        Value::String(text) => {
+            // `{owner}` and `{repo}` first: their values are held to a slug's
+            // characters, so no later word can be spelled by them.
+            let mut filled = text;
+            for (name, part) in [("{owner}", words.owner), ("{repo}", words.repo)] {
+                if filled.contains(name) {
+                    filled = filled.replace(name, part?);
+                }
+            }
+            Value::String(
+                filled
+                    .replace("{pr}", &words.pr.to_string())
+                    .replace("{session}", words.session),
+            )
+        }
+        Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .map(|item| fill(item, words))
+                .collect::<Option<Vec<_>>>()?,
+        ),
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(key, item)| Some((key, fill(item, words)?)))
+                .collect::<Option<serde_json::Map<_, _>>>()?,
+        ),
+        other => other,
+    })
 }
 
 /// `owner` and `repo` from a slug, or `None` for a shape not to guess about.
@@ -228,14 +312,22 @@ pub fn drop_subscription(
         return give_up(out, pr, "the credential file will not read");
     };
     let token = token.trim_end();
-    let (Some(endpoint), Some(tool)) = (host.endpoint.as_deref(), host.tool.as_deref()) else {
-        return give_up(out, pr, "no endpoint or tool declared");
+    let (Some(endpoint), Some(tool), Some(template)) = (
+        host.endpoint.as_deref(),
+        host.tool.as_deref(),
+        host.arguments.as_deref(),
+    ) else {
+        return give_up(out, pr, "no endpoint, tool or arguments declared");
     };
-    let Some((owner, repo)) = crate::repo_slug(Path::new("."))
+    let slug = crate::repo_slug(Path::new("."))
         .as_deref()
-        .and_then(owner_repo)
-    else {
-        return give_up(out, pr, "no owner/repo for this clone");
+        .and_then(owner_repo);
+    let Some(arguments) = fill_arguments(template, pr, &session, slug.as_ref()) else {
+        return give_up(
+            out,
+            pr,
+            "the arguments will not fill: not a JSON object, or no owner/repo for this clone",
+        );
     };
     let url = endpoint.replace("{session}", &session);
     let document = serde_json::json!({
@@ -244,7 +336,7 @@ pub fn drop_subscription(
         "method": "tools/call",
         "params": {
             "name": tool,
-            "arguments": {"owner": owner, "repo": repo, "pullNumber": pr},
+            "arguments": arguments,
         },
     });
     let Ok(bytes) = serde_json::to_vec(&document) else {
@@ -339,6 +431,10 @@ pub fn record(
 //MUTANT tool-error-ignored|s@^    !tool_refused$@    true@|a_refused_or_errored_call_is_not_accepted
 //MUTANT any-answer-names-the-pr|s@^    answer.contains(&format!("#{pr}"))$@    true@|an_answer_must_name_this_pr
 //MUTANT receipt-ignores-session|s@^        .join(format!("{}.{session}.{pr}", host.family))$@        .join(format!("{}.{pr}", host.family))@|a_receipt_is_this_sessions_for_this_pr
+//MUTANT pr-leaf-stays-text|s@^        Value::String(text) if text == "{pr}" => Value::from(words.pr),$@@|the_arguments_are_the_consumers_template_filled
+//MUTANT owner-guessed|s@^                    filled = filled.replace(name, part?);$@                    filled = filled.replace(name, part.unwrap_or_default());@|the_arguments_are_the_consumers_template_filled
+//MUTANT-SUITE crates/batten/tests/it/pr_unsubscribed.rs
+//MUTANT drop-blocks-on-failure|s@^    let fails_open = ExitCode::Success;$@    let fails_open = ExitCode::Usage;@|a_refused_or_unreachable_call_mints_nothing_and_drop_never_blocks
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
@@ -391,6 +487,31 @@ mod tests {
             "session\t-\npr\t489\nreceipt\tabsent\n"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_arguments_are_the_consumers_template_filled() {
+        let slug = ("o".to_owned(), "r".to_owned());
+        let filled = fill_arguments(
+            r##"{"owner":"{owner}","repo":"{repo}","pullNumber":"{pr}","note":"#{pr} in {session}"}"##,
+            489,
+            "cse_a",
+            Some(&slug),
+        )
+        .unwrap();
+        assert_eq!(
+            filled,
+            serde_json::json!({"owner":"o","repo":"r","pullNumber":489,"note":"#489 in cse_a"})
+        );
+        // A host with another shape names only what it needs, and needs no slug.
+        assert_eq!(
+            fill_arguments(r#"{"number":"{pr}"}"#, 7, "s", None).unwrap(),
+            serde_json::json!({"number": 7})
+        );
+        // Naming the owner with no slug to fill it is no call, never a guess.
+        assert_eq!(fill_arguments(r#"{"owner":"{owner}"}"#, 7, "s", None), None);
+        assert_eq!(fill_arguments("[1]", 7, "s", Some(&slug)), None);
+        assert_eq!(fill_arguments("not json", 7, "s", Some(&slug)), None);
     }
 
     #[test]

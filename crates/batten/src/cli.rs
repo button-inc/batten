@@ -1754,6 +1754,8 @@ pub struct UnsubscribedRequest {
     pub endpoint: Option<String>,
     /// The tool the endpoint is asked to call.
     pub tool: Option<String>,
+    /// The tool's arguments, as a JSON object template.
+    pub arguments: Option<String>,
     /// The record family, and the receipts' filename prefix.
     pub family: String,
     /// The rule `check` decides with.
@@ -2793,6 +2795,7 @@ fn pr_of(matches: &ArgMatches) -> Option<PrCommand> {
             token_env: matches.get_one::<String>("token_env").cloned(),
             endpoint: matches.get_one::<String>("endpoint").cloned(),
             tool: matches.get_one::<String>("tool").cloned(),
+            arguments: matches.get_one::<String>("arguments").cloned(),
             family: matches.get_one::<String>("family").cloned()?,
             rule: matches.get_one::<String>("rule").cloned(),
         })),
