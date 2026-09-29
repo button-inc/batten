@@ -7504,6 +7504,18 @@ documents = [".github/workflows/release-artifacts.yml", "mise.toml"]
 line_sources = [".github/workflows/release-artifacts.yml"]
 severity = "deny"
 
+# CLOUD-278's half of the same record, moved into the `release-hygiene` preset
+# under CLOUD-843: whether the published checksum manifest covers exactly the
+# release's assets and agrees with their bytes. The decision is generic, so it
+# ships vendored and this row is what enables it here; `mise run
+# release-assets-check` names both rows, and with no record it is silent.
+[[rule]]
+id = "release pin other"
+kind = "policy"
+scope = "tree"
+preset = "release-hygiene"
+severity = "deny"
+
 # CLOUD-319, ported off `mise-tasks/release-due.sh` under CLOUD-1717. A HOLD is
 # the finding: `auto-release-land.yml` runs `mise run release-due`, which records
 # the two `[[forge.query]]` windows then checks this one rule, and reads 2 as
