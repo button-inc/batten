@@ -358,8 +358,11 @@ fn done_pr(inputs: &BTreeMap<String, String>, stdin: &str) -> Result<String> {
     }
     let mut record = String::new();
     let mut counted = 0usize;
+    let mut seen: BTreeSet<String> = BTreeSet::new();
     for issue in &issues {
-        let Some(id) = id_of(issue) else {
+        // ONE LINE PER ISSUE: a payload piped twice would otherwise write two
+        // identical lines, which the module's set collapses into a torn census.
+        let Some(id) = id_of(issue).filter(|id| seen.insert(id.clone())) else {
             continue;
         };
         let numbers: BTreeSet<u64> = issue
@@ -478,6 +481,10 @@ fn duplicate_close(inputs: &BTreeMap<String, String>, stdin: &str) -> Result<Str
         })
         .collect();
     duplicates.sort_by_key(|(order, ..)| *order);
+    // One line per duplicate, for `done_pr`'s reason: a repeated payload must not
+    // write a second identical line and tear the census.
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    duplicates.retain(|(_, id, ..)| seen.insert(id.clone()));
     let mut record = String::new();
     let mut counted = 0usize;
     for (_, id, closed, target) in duplicates {
