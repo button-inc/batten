@@ -13084,7 +13084,7 @@ The cargo count is stated against `Cargo.lock`'s own `source = ` entries rather 
 [[verdict.route]]
 id = "source read first"
 kind = "document"
-target = "mise.toml"
+target = "crates/batten/src/sbom.rs"
 
 [[verdict]]
 id = "manifest state missing"
@@ -13096,7 +13096,7 @@ Supplier, originator, copyright and licence each have a source in this tree -- t
 [[verdict.route]]
 id = "source read first"
 kind = "document"
-target = "mise.toml"
+target = "crates/batten/src/sbom.rs"
 
 # CLOUD-667's table refusals, ported off `mise-tasks/sbom.sh` under CLOUD-1717.
 # The key shape is `owner/repo@<40-hex>`, spelled as a workflow's `uses:`, with an

@@ -89,12 +89,14 @@ use crate::resolve::Overrides;
 //MUTANT sbom-binary-stale-record-survives|s@^                    Mode::Binary . .. . => crate::record::clear_named.VERB, BINARY_FAMILY..,$@                    Mode::Binary { .. } => {}@|a_scan_that_cannot_look_removes_the_previous_record
 //MUTANT-SUITE crates/batten/tests/it/ntia.rs
 //MUTANT conformance-exit-code-dropped|s@^        let code = spawn_code@        let code = 0 * spawn_code@|a_nonconformant_document_fails
-// The three `[sbom]` keys that decide, as `config lint --config-from` compares
+// The five `[sbom]` keys that decide, as `config lint --config-from` compares
 // them: each comparison removed must leave its key unreported.
 //MUTANT-SUITE crates/batten/tests/it/config_trust.rs
 //MUTANT sbom-actions-removal-unreported|s@^    if base.actions.is_some.. && working@    if false \&\& working@|the_sbom_keys_that_decide_are_reported_as_weakenings
 //MUTANT sbom-checker-swap-unreported|s@^    if checker != base.checker .$@    if false {@|the_sbom_keys_that_decide_are_reported_as_weakenings
 //MUTANT sbom-standard-removal-unreported|s@^        if !asked.contains.&standard.as_str... .$@        if false {@|the_sbom_keys_that_decide_are_reported_as_weakenings
+//MUTANT sbom-inventory-rename-unreported|s@^        if named != declared .$@        if false {@|the_sbom_keys_that_decide_are_reported_as_weakenings
+//MUTANT sbom-record-rename-unreported|s@^    if record != base.record .$@    if false {@|the_sbom_keys_that_decide_are_reported_as_weakenings
 
 /// The verb, as its diagnostics name it.
 const VERB: &str = "sbom";
@@ -205,15 +207,18 @@ impl Declared {
     }
 }
 
-/// The three `[sbom]` keys that set a bar, compared for `config lint
+/// The five `[sbom]` keys that set a bar, compared for `config lint
 /// --config-from` (CLOUD-843); `trust::CENSUS` says why the rest of the table
 /// does not.
 ///
 /// `[sbom.conformance]`'s checker exit code IS the ntia verdict, so a different
 /// checker or a standard no longer asked lowers it; `actions` absent skips the
-/// pass that fills the pinned actions' licences. Only a base that DECLARED a
-/// key can lose it: `[sbom]` arriving where the base had none is a new
-/// producer, and a standard added is one more question.
+/// pass that fills the pinned actions' licences. The two names the verb stores
+/// under — `inventory` and `conformance.record` — are read back by consumer
+/// modules at a FIXED key, and a module finding no record there judges nothing,
+/// so a renamed or dropped name is the gate going blind. Only a base that
+/// DECLARED a key can lose it: `[sbom]` arriving where the base had none is a
+/// new producer, and a standard added is one more question.
 #[must_use]
 pub(crate) fn weakenings(
     base: Option<&Declared>,
@@ -232,10 +237,32 @@ pub(crate) fn weakenings(
             "absent",
         ));
     }
+    if let Some(declared) = base.inventory.as_deref() {
+        let named = working
+            .and_then(|sbom| sbom.inventory.as_deref())
+            .unwrap_or("absent");
+        if named != declared {
+            found.push(Weakening::new(
+                WeakeningKind::SbomInventoryChanged,
+                "sbom.inventory",
+                declared,
+                named,
+            ));
+        }
+    }
     let Some(base) = base.conformance.as_ref() else {
         return found;
     };
     let working = working.and_then(|sbom| sbom.conformance.as_ref());
+    let record = working.map_or("absent", |conformance| conformance.record.as_str());
+    if record != base.record {
+        found.push(Weakening::new(
+            WeakeningKind::SbomRecordChanged,
+            "sbom.conformance.record",
+            base.record.clone(),
+            record,
+        ));
+    }
     let checker = working.map_or("absent", |conformance| conformance.checker.as_str());
     if checker != base.checker {
         found.push(Weakening::new(

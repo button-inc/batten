@@ -468,6 +468,10 @@ local gate = new Mapping<String, Step> {
   // `ntia-check` on every enforce; since CLOUD-1717 the decision is a policy row
   // over a record, so this step is what produces it on the inputs that move the
   // document. The producer spawns syft and the checker, which `check` cannot.
+  // Since CLOUD-843 the derivation and the checker spawn are `batten sbom`
+  // (crates/batten/src/sbom.rs) and the checker and standards are batten.toml's
+  // `[sbom.conformance]`, so both select the step; mise.toml still carries the
+  // task's argv.
   ["ntia-check"] {
     // `slow` tier: it builds the engine, so a commit would pay a compile
     // (CLOUD-1397). It runs at `verify` and in CI, before merge.
@@ -478,6 +482,8 @@ local gate = new Mapping<String, Step> {
         "Cargo.lock",
         "crates/**/Cargo.toml",
         "mise.toml",
+        "batten.toml",
+        "crates/batten/src/sbom.rs",
         "policy/ntia.rego",
       )
     check = "mise run ntia-check"

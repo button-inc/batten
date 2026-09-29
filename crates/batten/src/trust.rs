@@ -983,6 +983,17 @@ pub enum WeakeningKind {
     /// asked, so the gate stops judging the document against it. The REMOVED
     /// direction only: a standard added is one more question. Appended, as above.
     SbomStandardRemoved,
+    /// `[sbom] inventory` names a different `[[rule.tools]]` row, or none. The
+    /// consumer's inventory module reads the reduction at the row it was written
+    /// for and treats an absent one as nothing to judge, so repointing the key
+    /// at a sibling row blinds the gate while `record` still accepts the write.
+    /// Appended, as above.
+    SbomInventoryChanged,
+    /// `[sbom.conformance] record` names a different family, or the table is
+    /// gone. The conformance module reads the family it was written for, and
+    /// raises only over lines it finds there, so a renamed family passes with
+    /// nothing judged. Appended, as above.
+    SbomRecordChanged,
 }
 
 impl WeakeningKind {
@@ -1058,6 +1069,8 @@ impl WeakeningKind {
         WeakeningKind::SbomActionsRemoved,
         WeakeningKind::SbomCheckerChanged,
         WeakeningKind::SbomStandardRemoved,
+        WeakeningKind::SbomInventoryChanged,
+        WeakeningKind::SbomRecordChanged,
     ];
 
     /// The stable, lowercase identifier used in machine output (§6).
@@ -1084,6 +1097,8 @@ impl WeakeningKind {
             WeakeningKind::SbomActionsRemoved => "sbom-actions-removed",
             WeakeningKind::SbomCheckerChanged => "sbom-checker-changed",
             WeakeningKind::SbomStandardRemoved => "sbom-standard-removed",
+            WeakeningKind::SbomInventoryChanged => "sbom-inventory-changed",
+            WeakeningKind::SbomRecordChanged => "sbom-record-changed",
             WeakeningKind::ReadyCutoverRelaxed => "ready-cutover-relaxed",
             WeakeningKind::PerfExemptionAdded => "perf-exemption-added",
             WeakeningKind::VerbRemoved => "verb-removed",
@@ -1509,11 +1524,14 @@ pub const CENSUS: &[FieldCoverage] = &[
     },
     FieldCoverage {
         field: "sbom",
-        // THREE KEYS SET A BAR, and the rest do not. `conformance.checker` and
+        // FIVE KEYS SET A BAR, and the rest do not. `conformance.checker` and
         // `conformance.standards` decide the ntia verdict — it is the checker's
         // exit code per standard — and `actions` decides whether the pinned
-        // actions' licences are filled at all. The subject, the directories, the
-        // exclusions and the record names produce: the gates over the output hold
+        // actions' licences are filled at all. `inventory` and
+        // `conformance.record` name where the verb stores what a module reads
+        // back at a FIXED key, and a module that finds nothing there judges
+        // nothing, so a rename blinds the gate. The subject, the directories and
+        // the exclusions produce: the gates over the output hold
         // the documents to committed text the producer cannot edit (`Cargo.lock`'s
         // sourced entries and the licence table's pins are `line_sources` the
         // modules read themselves), so an exclusion that dropped a component reads
@@ -1522,6 +1540,8 @@ pub const CENSUS: &[FieldCoverage] = &[
             WeakeningKind::SbomActionsRemoved,
             WeakeningKind::SbomCheckerChanged,
             WeakeningKind::SbomStandardRemoved,
+            WeakeningKind::SbomInventoryChanged,
+            WeakeningKind::SbomRecordChanged,
         ]),
     },
     FieldCoverage {
@@ -4159,23 +4179,76 @@ mod tests {
     }
 
     #[test]
+    fn a_renamed_sbom_store_name_is_a_weakening() {
+        // `[sbom] inventory` and `[sbom.conformance] record` name where
+        // `batten sbom` stores what a consumer module reads back at a FIXED key
+        // (CLOUD-843). A module finding nothing there judges nothing, so a
+        // rename or a drop blinds the gate while the producer still writes.
+        let named = |inventory: &str, record: &str| {
+            config(&format!(
+                "[sbom]\nsubject = \"s\"\nout_dir = \"d\"\nbinary_out_dir = \"d\"\n{inventory}\
+                 [sbom.conformance]\nrecord = \"{record}\"\nchecker = \"c\"\n\
+                 standards = [\"ntia\"]\n"
+            ))
+        };
+        let full = "inventory = \"inv\"\n";
+        let base = named(full, "r");
+        assert!(weakenings(&base, &base).is_empty());
+        // THE STORED NAMES: a module reads each back at a fixed key and judges
+        // nothing when it is absent, so a rename or a drop blinds it.
+        assert_eq!(
+            only(&base, &named(full, "x")),
+            Weakening::new(
+                WeakeningKind::SbomRecordChanged,
+                "sbom.conformance.record",
+                "r",
+                "x",
+            )
+        );
+        assert_eq!(
+            only(&base, &named("inventory = \"sibling\"\n", "r")),
+            Weakening::new(
+                WeakeningKind::SbomInventoryChanged,
+                "sbom.inventory",
+                "inv",
+                "sibling",
+            )
+        );
+        assert_eq!(
+            only(&base, &named("", "r")),
+            Weakening::new(
+                WeakeningKind::SbomInventoryChanged,
+                "sbom.inventory",
+                "inv",
+                "absent",
+            )
+        );
+    }
+
+    #[test]
     fn the_sbom_keys_that_decide_are_compared_and_the_rest_are_not() {
         // `[sbom.conformance]`'s checker exit code IS the ntia verdict, so a
         // swapped checker or a dropped standard lowers the bar; dropping
         // `actions` skips the pass that fills the pinned actions' licences
         // (CLOUD-843). BOTH DIRECTIONS, for the reason the disarm case states.
-        let table = |actions: &str, checker: &str, standards: &str| {
+        let named = |actions: &str, record: &str, checker: &str, standards: &str| {
             config(&format!(
                 "[sbom]\nsubject = \"s\"\nout_dir = \"d\"\nbinary_out_dir = \"d\"\n{actions}\
-                 [sbom.conformance]\nrecord = \"r\"\nchecker = \"{checker}\"\n\
+                 [sbom.conformance]\nrecord = \"{record}\"\nchecker = \"{checker}\"\n\
                  standards = [{standards}]\n"
             ))
         };
-        let base = table("actions = \"t.tsv\"\n", "sbomcheck", "\"ntia\", \"fsct\"");
+        let table =
+            |actions: &str, checker: &str, standards: &str| named(actions, "r", checker, standards);
+        let full = "actions = \"t.tsv\"\ninventory = \"inv\"\n";
+        let base = table(full, "sbomcheck", "\"ntia\", \"fsct\"");
         assert!(weakenings(&base, &base).is_empty());
 
         assert_eq!(
-            only(&base, &table("", "sbomcheck", "\"ntia\", \"fsct\"")),
+            only(
+                &base,
+                &table("inventory = \"inv\"\n", "sbomcheck", "\"ntia\", \"fsct\"")
+            ),
             Weakening::new(
                 WeakeningKind::SbomActionsRemoved,
                 "sbom.actions",
@@ -4184,10 +4257,7 @@ mod tests {
             )
         );
         assert_eq!(
-            only(
-                &base,
-                &table("actions = \"t.tsv\"\n", "true", "\"ntia\", \"fsct\"")
-            ),
+            only(&base, &table(full, "true", "\"ntia\", \"fsct\"")),
             Weakening::new(
                 WeakeningKind::SbomCheckerChanged,
                 "sbom.conformance.checker",
@@ -4196,10 +4266,7 @@ mod tests {
             )
         );
         assert_eq!(
-            only(
-                &base,
-                &table("actions = \"t.tsv\"\n", "sbomcheck", "\"fsct\"")
-            ),
+            only(&base, &table(full, "sbomcheck", "\"fsct\"")),
             Weakening::new(
                 WeakeningKind::SbomStandardRemoved,
                 "sbom.conformance.standards[ntia]",
@@ -4210,18 +4277,14 @@ mod tests {
 
         // The added direction is a new producer or one more question.
         assert!(weakenings(&config(""), &base).is_empty());
-        let wider = table(
-            "actions = \"t.tsv\"\n",
-            "sbomcheck",
-            "\"ntia\", \"fsct\", \"x\"",
-        );
+        let wider = table(full, "sbomcheck", "\"ntia\", \"fsct\", \"x\"");
         assert!(weakenings(&base, &wider).is_empty());
 
         // THE PRODUCING KEYS ARE NOT COMPARED: a renamed subject or a moved
         // directory is caught downstream as a count that disagrees.
         let moved = config(
             "[sbom]\nsubject = \"other\"\nout_dir = \"e\"\nbinary_out_dir = \"e\"\n\
-             actions = \"t.tsv\"\n[sbom.conformance]\nrecord = \"r\"\n\
+             actions = \"t.tsv\"\ninventory = \"inv\"\n[sbom.conformance]\nrecord = \"r\"\n\
              checker = \"sbomcheck\"\nstandards = [\"ntia\", \"fsct\"]\n",
         );
         assert!(weakenings(&base, &moved).is_empty());
@@ -4236,8 +4299,10 @@ mod tests {
             [
                 WeakeningKind::SbomActionsRemoved,
                 WeakeningKind::SbomCheckerChanged,
+                WeakeningKind::SbomRecordChanged,
                 WeakeningKind::SbomStandardRemoved,
                 WeakeningKind::SbomStandardRemoved,
+                WeakeningKind::SbomInventoryChanged,
             ]
         );
     }

@@ -1149,20 +1149,34 @@ fn turning_the_offline_fallback_on_is_reported_as_a_weakening() {
     );
 }
 
-/// An `[sbom]` table with every key that decides declared.
+/// An `[sbom]` table with every key that decides declared, the two stored
+/// names at their base values.
 fn sbom_table(actions: bool, checker: &str, standards: &str) -> String {
+    sbom_named(actions, "inv", "r", checker, standards)
+}
+
+/// An `[sbom]` table naming its inventory row and conformance family.
+fn sbom_named(
+    actions: bool,
+    inventory: &str,
+    record: &str,
+    checker: &str,
+    standards: &str,
+) -> String {
     let actions = if actions { "actions = \"t.tsv\"\n" } else { "" };
     format!(
         "version = 1\n[sbom]\nsubject = \"s\"\nout_dir = \"d\"\nbinary_out_dir = \"d\"\n{actions}\
-         [sbom.conformance]\nrecord = \"r\"\nchecker = \"{checker}\"\nstandards = [{standards}]\n"
+         inventory = \"{inventory}\"\n[sbom.conformance]\nrecord = \"{record}\"\n\
+         checker = \"{checker}\"\nstandards = [{standards}]\n"
     )
 }
 
 #[test]
 fn the_sbom_keys_that_decide_are_reported_as_weakenings() {
     // CLOUD-843: `[sbom.conformance]`'s checker exit code IS the ntia verdict,
-    // and `actions` absent skips the pass that fills the pinned actions'
-    // licences, so each is named when a branch lowers it.
+    // `actions` absent skips the pass that fills the pinned actions' licences,
+    // and a renamed stored name leaves the module reading nothing, so each is
+    // named when a branch lowers it.
     let base = sbom_table(true, "sbomcheck", "\"ntia\", \"fsct\"");
     for (name, working, line) in [
         (
@@ -1179,6 +1193,16 @@ fn the_sbom_keys_that_decide_are_reported_as_weakenings() {
             "trust-sbom-actions",
             sbom_table(false, "sbomcheck", "\"ntia\", \"fsct\""),
             "batten.toml:sbom.actions present→absent",
+        ),
+        (
+            "trust-sbom-record",
+            sbom_named(true, "inv", "x", "sbomcheck", "\"ntia\", \"fsct\""),
+            "batten.toml:sbom.conformance.record r→x",
+        ),
+        (
+            "trust-sbom-inventory",
+            sbom_named(true, "sibling", "r", "sbomcheck", "\"ntia\", \"fsct\""),
+            "batten.toml:sbom.inventory inv→sibling",
         ),
     ] {
         let repo = pr_fixture(name, &base, &working, &[]);

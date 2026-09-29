@@ -20,7 +20,7 @@
 //! `sbom-check.sh` re-ran `sbom.sh` twice and adjudicated the documents in shell.
 //! The scan stays outside — §9's prior art, and §5 makes `check` `read` — so
 //! `batten sbom --record` derives and records, and the adjudication moves here.
-//! The producer itself decides nothing: it became `[tasks.sbom]` under
+//! The producer itself decides nothing: it became a mise task body under
 //! CLOUD-1717 and the `batten sbom` verb under CLOUD-843; `sbom_producer.rs` is
 //! its tier.
 
@@ -43,16 +43,16 @@
 //! CHANGED — four cases whose SUBJECT moved from the gate to the producer, so the
 //! property is conserved where it is now decided rather than where it was.
 
-// changed: "THE NEGATIVE SELF-TEST: a renamed package still fails after normalization" crates/batten/tests/it/sbom_inventory.rs the shell drove a syft stub whose two runs differed in a package NAME and asserted the normalizer did not absorb it. That comparison is `record-sbom`'s `stable()` now — it normalises the four volatile leaves and `cmp`s the rest — and what reaches the module is a yes/no token. `an_unstable_scan_is_refused` drives the token; the discrimination it protects lives in the producer's `jq -S 'del(...)'`, which still names exactly four leaves
-// changed: "a syft that cannot run exits 2 — could not look is not a verdict" crates/batten/tests/it/sbom_inventory.rs deriving the document is the producer's job now, so a syft that cannot run fails `record-sbom` and writes NO record — leaving the id absent, which the module reads as could-not-look and refuses nothing. `an_unrecorded_scan_is_clean` is the successor; the exit code is the producer's rather than a gate's
+// changed: "THE NEGATIVE SELF-TEST: a renamed package still fails after normalization" crates/batten/tests/it/sbom_inventory.rs the shell drove a syft stub whose two runs differed in a package NAME and asserted the normalizer did not absorb it. That comparison is `batten sbom --record`'s `stable_form` now (crates/batten/src/sbom.rs) — it removes the four volatile leaves and compares the rest — and what reaches the module is a yes/no token. `an_unstable_scan_is_refused` drives the token; the discrimination it protects is `stable_form`'s, which still names exactly four leaves, and `sbom_producer.rs`'s `two_scans_that_differ_record_an_unstable_inventory` is its tier
+// changed: "a syft that cannot run exits 2 — could not look is not a verdict" crates/batten/tests/it/sbom_inventory.rs deriving the document is the producer's job now, so a syft that cannot run fails `batten sbom --record` with exit 3 and writes no new record — leaving the id absent, which the module reads as could-not-look and refuses nothing. `an_unrecorded_scan_is_clean` is the successor; the exit code is the producer's rather than a gate's
 // changed: "a missing Cargo.lock exits 2 rather than passing vacuously" crates/batten/tests/it/sbom_inventory.rs the module abstains from the count comparison when the lockfile was not read (`is_array(lock_lines)`) and `input.tree.missing` reports it, rather than the gate exiting 2 itself. Conserved as the module's `test_an_unreadable_lockfile_reports_no_drift` plus its `missing` clause — the vacuous PASS the case names is exactly what the guard prevents
-// changed: "this repo's real tree satisfies the gate — with the real syft" crates/batten/tests/it/sbom_inventory.rs a whole-tree `syft scan dir:.` inside a cargo test would put two minutes of scanning in the test tier for what the hk gate already does. The successor is the `record-sbom` step plus `batten-check` running on this repository's own globs, which is where the real syft belongs; `a_clean_scan_over_the_real_lockfile_is_clean` keeps the end-to-end shape over a recorded scan
+// changed: "this repo's real tree satisfies the gate — with the real syft" crates/batten/tests/it/sbom_inventory.rs a whole-tree `syft scan dir:.` inside a cargo test would put two minutes of scanning in the test tier for what the hk gate already does. The successor is the `batten sbom --record` step plus `batten-check` running on this repository's own globs, which is where the real syft belongs; `a_clean_scan_over_the_real_lockfile_is_clean` keeps the end-to-end shape over a recorded scan
 
 //! WITHDRAWN — two cases whose subject is unrepresentable in the successor, each
 //! because the engine makes the property structural rather than assertable.
 
 // withdrawn: "the failure names an asset, not a scratch path" the module never sees a scratch path: it receives counts and decides over `line_sources`, and its subjects are a tagged `{path}` naming the tracked lockfile or the tracked table. There is no filesystem path in the finding to get wrong, so the assertion has nothing left to discriminate
-// withdrawn: "the gate leaves the tree it judges unmodified, and fails twice" `check` is declared `read` and `evaluator-io-check` is the standing gate on the engine opening nothing, so a module that wrote to the tree is unrepresentable rather than merely untested. The producer's two runs still go to scratch directories, which is `record-sbom`'s own concern
+// withdrawn: "the gate leaves the tree it judges unmodified, and fails twice" `check` is declared `read` and `evaluator-io-check` is the standing gate on the engine opening nothing, so a module that wrote to the tree is unrepresentable rather than merely untested. The producer's two runs still go to scratch directories, which is `batten sbom --record`'s own concern
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -325,7 +325,7 @@ fn an_unstable_scan_is_refused() {
 #[test]
 fn an_inflated_component_set_is_refused() {
     // syft emits a component per REFERENCE SITE. Measured once at 340 entries for
-    // 290 distinct things; this is the clause that keeps `[tasks.sbom]`'s normalisation
+    // 290 distinct things; this is the clause that keeps `batten sbom`'s normalisation
     // honest without anyone having predicted which shape comes next.
     let dir = fixture("inflated", TABLE);
     assert_eq!(

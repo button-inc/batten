@@ -20,7 +20,7 @@
 // changed: "THE NEGATIVE SELF-TEST: an empty inventory must not report green" crates/batten/src/policy/presets/supply-chain/binary-inventory-is-lockfile-bound.rego refused as `cargo list empty` through `check`, exit 2 rather than 1; the `(0 rust-crate` sentence was the program's prose, and the count is the finding's second subject
 // carried: "ONE package is the other vacuous shape, and also fails" crates/batten/src/policy/presets/supply-chain/binary-inventory-is-lockfile-bound.rego kind:mechanism
 // carried: "the count is filtered to rust-crate, so a self-artifact cannot pad it" crates/batten/src/sbom.rs kind:verb
-// changed: "a refused inventory leaves no asset behind" mise.toml `[tasks.sbom-binary]` is argv now — produce, then `check` — so a refusal fails the step with the asset still on the runner's disk; it is the workflow's last step before the upload, and a failed step publishes nothing. `the_binary_task_produces_then_decides` asserts the order the property now rests on
+// changed: "a refused inventory leaves no asset behind" mise.toml `[tasks.sbom-binary]` is argv now — produce, then `check` — so a refusal fails the step with the asset still on the runner's disk; it is the workflow's last step before the upload, and a failed step publishes nothing. `the_binary_task_produces_then_decides` asserts the task's order and `the_release_workflow_uploads_the_binary_sbom_only_after_the_task_passes` the workflow's, the two halves the property now rests on
 // changed: "a crate absent from Cargo.lock fails, naming counts and not the crate" crates/batten/src/policy/presets/supply-chain/binary-inventory-is-lockfile-bound.rego refused as `cargo list wrong` through `check`; the count of foreign crates is the finding's subject where the program printed `1 of 2`, and the crate's name is still never printed
 // carried: "SUBSET, NOT EQUALITY: a lockfile larger than the recovery passes" crates/batten/src/policy/presets/supply-chain/binary-inventory-is-lockfile-bound.rego kind:mechanism
 // changed: "the asset name comes from dist's stem rule, so seven legs cannot race" crates/batten/src/sbom.rs the stem is `sbom::archive_stem` — `<subject>-v<version>-<target>`, the naming contract `dist.sh --stem` spells — computed in-process rather than by spawning the program, which the engine does not run
@@ -377,4 +377,54 @@ fn the_binary_task_produces_then_decides() {
         run[1].ends_with("check --rule 'cargo list other'"),
         "{run:?}"
     );
+}
+
+#[test]
+fn the_release_workflow_uploads_the_binary_sbom_only_after_the_task_passes() {
+    // The other half of "a refused inventory is never published": the asset
+    // stays on the runner's disk after a refusal, so what keeps it off the
+    // release is the WORKFLOW — the upload is a later step of the same job, it
+    // reads the task's own output, and neither step lets a failure through.
+    use yaml_rust2::{Yaml, YamlLoader};
+    let text = fs::read_to_string(at_root(".github/workflows/release-artifacts.yml"))
+        .expect("the release workflow");
+    let docs = YamlLoader::load_from_str(&text).expect("the workflow parses as YAML");
+    let field = |step: &Yaml, key: &str| step[key].as_str().unwrap_or_default().to_owned();
+    let mut judged = 0;
+    for (_, job) in docs[0]["jobs"].as_hash().expect("jobs") {
+        let Some(steps) = job["steps"].as_vec() else {
+            continue;
+        };
+        let Some(at) = steps
+            .iter()
+            .position(|step| field(step, "run").contains("mise run sbom-binary "))
+        else {
+            continue;
+        };
+        let produce = &steps[at];
+        let id = field(produce, "id");
+        assert!(!id.is_empty(), "the inventory step carries an id");
+        assert!(
+            produce["continue-on-error"].is_badvalue(),
+            "a refused inventory must fail its step"
+        );
+        let reads = format!("steps.{id}.outputs.sbom");
+        let uploads: Vec<usize> = steps
+            .iter()
+            .enumerate()
+            .filter(|(_, step)| field(step, "run").contains(&reads))
+            .map(|(index, _)| index)
+            .collect();
+        assert!(!uploads.is_empty(), "something uploads {reads}");
+        for index in uploads {
+            assert!(index > at, "the upload follows the inventory step");
+            let condition = field(&steps[index], "if");
+            assert!(
+                !condition.contains("always()") && !condition.contains("failure()"),
+                "the upload runs only on success: {condition}"
+            );
+        }
+        judged += 1;
+    }
+    assert!(judged > 0, "a job runs `mise run sbom-binary`");
 }
