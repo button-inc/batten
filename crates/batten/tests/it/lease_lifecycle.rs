@@ -39,10 +39,11 @@
 // AND ONE CASE FROM `tests/reclaim-census.bats`, which reached into
 // `mise-tasks/land-lock.sh` to count the hold loop's own beat records, so the
 // case moved with the program it was counting. The suite itself retired whole
-// under CLOUD-1717 onto `[tasks.reclaim-census]`; its one path-level row lives
-// in `reclaim_census.rs`, since a deleted path owes exactly one mapping.
+// under CLOUD-1717 onto `[tasks.reclaim-census]`, and that task retired in turn
+// onto `batten record census` (CLOUD-843); its one path-level row lives in
+// `reclaim_census.rs`, since a deleted path owes exactly one mapping.
 //
-// carried: "land-lock's hold loop records a beat and every stop it chooses" crates/batten/src/lease.rs kind:verb
+// changed: "land-lock's hold loop records a beat and every stop it chooses" crates/batten/src/lib.rs kind:mechanism this row used to read `carried` into lease.rs, and no code there or anywhere wrote the beat: `lease hold` renewed silently, so the census's positive reading was unreachable in production. Since CLOUD-843 the beat is `lease_renewed`, run once per APPLIED renewal after the receipt and pinned by `an_applied_renewal_writes_its_receipt_and_the_declared_beat`; the stop stays in `note_release` alone (CLOUD-491)
 //
 // The seventy-seven cases, one row each, keyed by TITLE — a row whose first
 // field is the suite path is indexed as another arm for it and the deletion

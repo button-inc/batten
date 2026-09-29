@@ -270,15 +270,10 @@ pub fn run(
         crate::cli::RecordCommand::Query { id, inputs } => {
             crate::forge_query::run(&id, &inputs, overrides, err)
         }
-        // CLOUD-843's foundation arms: final arguments, bodies owed by the
-        // packages retiring `land-divergence-record` and `reclaim-census`.
+        // CLOUD-843's foundation arm: final arguments, body owed by the package
+        // retiring `land-divergence-record`.
         crate::cli::RecordCommand::Divergence { .. } => crate::unimplemented("record divergence"),
-        crate::cli::RecordCommand::Census { command } => crate::unimplemented(match command {
-            crate::cli::RecordCensusCommand::Note { .. } => "record census note",
-            crate::cli::RecordCensusCommand::RecordBoot => "record census record-boot",
-            crate::cli::RecordCensusCommand::Report { .. } => "record census report",
-            crate::cli::RecordCensusCommand::Tally => "record census tally",
-        }),
+        crate::cli::RecordCommand::Census { command } => crate::reclaim::run(command, out, err),
     }
 }
 
@@ -588,6 +583,13 @@ const KEYED_STORE: &str = "batten-records";
 
 /// Where the append-and-fold family stores its shards.
 const JOURNAL_STORE: &str = "batten-journals";
+
+/// A journal family's store directory under `git_dir` — the one spelling of
+/// where `record journal` / `record fold` keep a family, so an in-process
+/// writer (the reclaim census) lands where `record fold` reads.
+pub(crate) fn journal_store(git_dir: &Path, family: &str) -> PathBuf {
+    git_dir.join(JOURNAL_STORE).join(family)
+}
 
 /// A family name that cannot escape its store.
 ///
@@ -1178,7 +1180,7 @@ pub fn run_journal(family: &str) -> Result<ExitCode> {
         )));
     }
     let git_dir = git::git_dir(Path::new("."))?;
-    let store_dir = git_dir.join(JOURNAL_STORE).join(&family);
+    let store_dir = journal_store(&git_dir, &family);
     let shard = crate::journal::shard_id(Path::new("."));
     crate::journal::append_line(&store_dir, &shard, record)?;
     Ok(ExitCode::Success)
@@ -1221,7 +1223,7 @@ pub fn run_keyed_show(family: &str, key: &str, out: &mut dyn std::io::Write) -> 
 pub fn run_journal_show(family: &str, out: &mut dyn std::io::Write) -> Result<ExitCode> {
     let family = safe_component("family", family)?;
     let git_dir = git::git_dir(Path::new("."))?;
-    let store_dir = git_dir.join(JOURNAL_STORE).join(&family);
+    let store_dir = journal_store(&git_dir, &family);
     match crate::journal::fold_lines(&store_dir) {
         crate::journal::Fold::Nothing => writeln!(out, "nothing")?,
         crate::journal::Fold::Records(records) => {

@@ -112,6 +112,7 @@ pub mod prune;
 pub mod race;
 pub mod ready;
 pub mod receipt;
+pub mod reclaim;
 pub mod record;
 pub mod recorder;
 pub mod redirect;
@@ -12275,6 +12276,8 @@ fn run_lease_hold(
         .and_then(|pid| pid.parse::<u32>().ok());
     let marker =
         std::env::var("LAND_LOCK_HOLDER_MARKER").unwrap_or_else(|_| String::from("batten land"));
+    // The consumer's reclaim-census beat, read once: see `lease_renewed`.
+    let beat_note = std::env::var("LEASE_BEAT_NOTE").unwrap_or_default();
     let mut misses = 0_u32;
     loop {
         // The interval is the lease's own `beat`, and the loop's exit condition is
@@ -12368,7 +12371,7 @@ fn run_lease_hold(
         let token = progress.map(lease::Progress::token);
         let renewed = lease::renewal(terms, body, token.as_deref(), now);
         if let Ok(lease::Outcome::Applied) = lease::cas(terms, &observed, &renewed, now) {
-            lease_receipt(root, &body.branch, now + terms.ttl);
+            lease_renewed(root, &body.branch, now + terms.ttl, &beat_note);
             misses = 0;
         } else {
             // A REJECTED SWAP AND A FAILED PUSH ARE ONE ARM HERE, deliberately.
@@ -12455,11 +12458,34 @@ fn lease_bail_reason(git_dir: &Path, why: &str) {
 /// Silent and best-effort in every direction. A census note that could not be
 /// written is not a reason to fail a release that already succeeded.
 fn note_release(root: &Path) {
-    let declared = std::env::var("LEASE_STOP_NOTE").unwrap_or_default();
-    let Some(argv) = land::body_gates(&declared).into_iter().next() else {
+    note_declared(root, &std::env::var("LEASE_STOP_NOTE").unwrap_or_default());
+}
+
+/// Spawn the first argv `declared` names, silently and best-effort.
+fn note_declared(root: &Path, declared: &str) {
+    let Some(argv) = land::body_gates(declared).into_iter().next() else {
         return;
     };
     let _ = exec::piped_argv(root, &argv, "", exec::Diagnostics::Keep, &[]);
+}
+
+//MUTANT-SUITE crates/batten/src/lib.rs
+//MUTANT renewal-writes-no-beat|s@^    note_declared(root, beat_note);$@@|an_applied_renewal_writes_its_receipt_and_the_declared_beat
+/// A renewal that applied: its receipt, then the consumer's reclaim-census beat
+/// (`$LEASE_BEAT_NOTE`, read once by the heartbeat and passed as `beat_note`).
+///
+/// **One beat per APPLIED renewal, and its absence was the live defect**
+/// (CLOUD-843): the heartbeat wrote none, so the census's positive reading — *a
+/// landing was in flight when the container went* — was unreachable in
+/// production, and every reclaim under a landing read as UNOBSERVED. After the
+/// receipt, so a beat never claims a hold the remote refused.
+///
+/// The argv is the consumer's for [`note_release`]'s reason: the beat and the
+/// stop are one census, and only the consumer knows it keeps one. The stop stays
+/// in [`note_release`] alone, never on an exit path (CLOUD-491).
+fn lease_renewed(root: &Path, branch: &str, expires: i64, beat_note: &str) {
+    lease_receipt(root, branch, expires);
+    note_declared(root, beat_note);
 }
 
 /// `lease release`: a tombstone, never a delete.
@@ -21877,5 +21903,34 @@ mod tests {
             clean_run_notice(false, false, true, 0, 0).unwrap(),
             "checked 0 rule(s) — nothing to report"
         );
+    }
+
+    /// THE LIVE DEFECT (CLOUD-843): an applied renewal wrote no census beat, so
+    /// "a landing was in flight" was unreachable in production. The renewal arm
+    /// is exercised here rather than through `lease hold`, because the hold loop
+    /// reaches its lease over smart HTTP and no offline seam exists
+    /// (`tests/it/lease_health.rs` states why none is added). What this pins is
+    /// the arm the loop calls on `Applied`: the receipt AND the declared beat.
+    #[cfg(unix)]
+    #[test]
+    fn an_applied_renewal_writes_its_receipt_and_the_declared_beat() {
+        let root =
+            std::env::temp_dir().join(format!("batten-lease-renewed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        crate::gitwrite::init_on_main(&root).unwrap();
+        let beat = root.join("beat");
+        lease_renewed(&root, "claude/x", 42, &format!("touch {}", beat.display()));
+        assert!(
+            beat.exists(),
+            "the declared beat ran on the applied renewal"
+        );
+        let receipt = lease_receipt_path(&root, "claude/x").unwrap();
+        assert_eq!(std::fs::read_to_string(receipt).unwrap(), "42\n");
+        // And a consumer that declares no beat gets nothing spawned.
+        let _ = std::fs::remove_file(&beat);
+        lease_renewed(&root, "claude/x", 43, "");
+        assert!(!beat.exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

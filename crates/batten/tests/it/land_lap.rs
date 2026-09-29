@@ -368,11 +368,11 @@ fn the_shipped_lap_validates_and_ends_at_the_commit_point() {
 /// as a container death.**
 ///
 /// `tests/reclaim-census.bats` carried this as *"land records the stop it causes
-/// itself"*, reading `mise-tasks/land.sh` for the note. Its subject
-/// (`mise-tasks/reclaim-census.sh`) is alive and the note moved rather than died:
-/// the lander used to spawn it inline, and the engine's `lease release` spawns
-/// what `$LEASE_STOP_NOTE` names. So the case is PORTED here rather than
-/// withdrawn.
+/// itself"*, reading `mise-tasks/land.sh` for the note. The note moved rather
+/// than died: the lander used to spawn it inline, and the engine's `lease
+/// release` spawns what `$LEASE_STOP_NOTE` names — since CLOUD-843 the argv of
+/// `batten record census note x`, the census having retired off its task. So the
+/// case is PORTED here rather than withdrawn.
 ///
 /// **The declaration is the subject, not the spawn.** The note's text is this
 /// consumer's — a census program's argv — so `crates/batten` may not carry it
@@ -400,6 +400,19 @@ fn the_landings_own_stop_note_is_still_declared() {
         declared[0].contains("land-stopped"),
         "the declared note must still mark a landing's own stop: {}",
         declared[0]
+    );
+    // AND ITS PAIR, the beat `lease hold` writes per applied renewal (CLOUD-843).
+    // A stop with no beats before it can only ever answer "stopped on purpose",
+    // which is how the census's positive reading was unreachable in production.
+    let beats: Vec<&str> = manifest
+        .lines()
+        .filter(|line| line.trim_start().starts_with("LEASE_BEAT_NOTE"))
+        .collect();
+    assert_eq!(beats.len(), 1, "exactly one beat note is declared");
+    assert!(
+        beats[0].contains("note h"),
+        "the declared beat must write an h: {}",
+        beats[0]
     );
 }
 

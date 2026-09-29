@@ -11972,7 +11972,7 @@ expires = "2027-02-28"
 [[hook.handler]]
 id = "session-census"
 on = "session-start"
-run = ["mise", "run", "session:census"]
+run = ["batten", "record", "census", "report", "--once"]
 # LAST, AND ONE OF THE TWO ROWS THAT MAY SPEAK ON THE NORMAL PATH. Its report is
 # something this hook has to say to a reader with an action to take — what was
 # running when the container we replaced went down (CLOUD-451) — so its stdout is
@@ -11996,9 +11996,9 @@ run = ["mise", "run", "session:census"]
 # what a row prints, so it is owed the same measurement the paragraph above
 # demanded of its predecessor rather than being read as settled here.
 #
-# It is also the only row that cannot fail the session: the task swallows both
-# its exits, because a verdict about a PAST container is not a provisioning
-# failure.
+# It is also the only row that cannot fail the session: `report --once` exits 0
+# on every reading (CLOUD-843, retiring `session:census`), because a verdict
+# about a PAST container is not a provisioning failure.
 timeout_ms = 30000
 owner = "CLOUD-312"
 expires = "2027-02-28"
@@ -17365,7 +17365,7 @@ target = "policy/spawn-adapters.rego"
 #      `AdvisoryReach` delivers on `SessionStart` for this host. So the failure
 #      detail gains reach: today it lands in a hook log, behind the door it is
 #      context the agent reads.
-#   3. The one other stdout writer is `reclaim-census report`, exit 0 with text →
+#   3. The one other stdout writer is `record census report --once`, exit 0 with text →
 #      `Advise`, delivered on the same channel. Unchanged.
 #   4. A timeout is `Outcome::Broke(TimedOut)`, which ALLOWS — the same fail-open
 #      a native SessionStart registration already has.

@@ -175,9 +175,18 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   exempt list is asserted equal to the ban's `stays_bash`. Not layered (§8): a
   local file able to add an exempt glob could make a wave read as progress. The
   other CLOUD-843 foundation verbs (`step check|record|run`, `sbom`, `dist`,
-  `mcp grant|posture`, `board check`, `record divergence`, `record census …`)
-  carry final arguments and answer `unimplemented` at exit 3 until their package
-  lands; the serena launcher's home is the existing `mcp spawn`.
+  `mcp grant|posture`, `board check`, `record divergence`) carry final arguments
+  and answer `unimplemented` at exit 3 until their package lands; the serena
+  launcher's home is the existing `mcp spawn`.
+- `reclaim.rs` — `record census note|record-boot|report|tally`, the reclaim
+  census (CLOUD-451) retired off `[tasks.reclaim-census]` and
+  `[tasks."session:census"]` by CLOUD-843. Two journal families
+  (`reclaim-beats`, `reclaim-boots`) through `journal::append_line`/`fold_lines`;
+  `boot_time()` is `BATTEN_BOOT_TIME` (malformed = could-not-look) then
+  `/proc/stat`. `classify`/`previous`/`tally` are pure. `report --once` records,
+  reads, and writes the per-boot mark itself. The beat is `lease hold`'s, once
+  per APPLIED renewal via the consumer's `$LEASE_BEAT_NOTE` (`lease_renewed`),
+  and the stop stays in `note_release` (CLOUD-491).
 - `claim.rs` — whether an issue is pullable, and the receipt that records the
   pull (CLOUD-272, CLOUD-431; ported off `mise-tasks/claim-check.sh` by
   CLOUD-1121). The tracker's automation fires on the PR event — the END of the
