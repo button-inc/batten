@@ -1933,6 +1933,16 @@ regex = 'mise exec -- [a-z][a-z0-9._-]*'
 # They are also better here than they were in a script: a list in a `[[pattern]]`
 # row is reviewable data a gate reads, which is rule 3 as well as rule 1.
 
+# A compiler diagnostic's POINTER line, as `--message-format=short` prints it:
+# `path:line:col: … error …` (CLOUD-1731). `batten singleton detach` keeps at most
+# three of these from a failed `cross-turn` run for the next turn to announce, so
+# a build log never reaches the window. `.*` between `: ` and `error` because
+# `CARGO_TERM_COLOR = "always"` puts escapes there; three drafts of the retired
+# one-liner died anchoring on a literal `: error`.
+[[pattern]]
+id = "compiler-error-pointer"
+regex = '^[^ :]+:[0-9]+:[0-9]+: .*error'
+
 # The package whose sub-closure `evaluator-closure` walks. Named ONCE: it is the
 # node the walk starts from AND the word the refusal uses, and two spellings of
 # it is how a rename turns that gate silent instead of red.

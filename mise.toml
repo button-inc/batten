@@ -8495,7 +8495,18 @@ run = [
 
 [tasks."cross-turn"]
 description = "One turn's cross-triple type-check, detached — reports the previous run's failure and never blocks the turn"
-run = "f=target/cross-turn.fail; if [ -f $f ]; then cat $f; rm -f $f; fi; if batten singleton acquire cross-turn $$ >/dev/null 2>&1; then (mise run cross-check >target/cross-turn.log 2>&1 || { echo '::error:: cross-turn: a declared target did not type-check'; grep -E '^[^ :]+:[0-9]+:[0-9]+: .*error' target/cross-turn.log | head -3 | sed 's/^/  /'; echo '  (full output: target/cross-turn.log)'; } >$f; batten singleton release cross-turn >/dev/null 2>&1) & fi; exit 0"
+# ONE ARGV SINCE CLOUD-1991: `batten singleton detach` is the whole shape the
+# one-liner spelled with `&`, `grep`, `head` and `sed`. It announces the previous
+# run's failure on STDOUT (the handler's advisory channel) and clears it, so one
+# failure is said once; it starts an attached copy and returns, so the turn never
+# waits on cargo; the copy takes the `cross-turn` lock for its OWN pid — a second
+# copy is refused by the lock, never by a process probe — runs `cross-check` with
+# the whole output in the log, and on a failure leaves at most three pointer
+# lines plus the log's path. Which lines are pointers is the
+# `compiler-error-pointer` `[[pattern]]` row, which tolerates the colour escapes
+# `CARGO_TERM_COLOR = "always"` puts between `: ` and `error`. Bare `batten`,
+# the handler's own rule: nothing on a turn compiles.
+run = "batten singleton detach cross-turn --marker target/cross-turn.fail --log target/cross-turn.log --pattern compiler-error-pointer -- mise run cross-check"
 
 [tasks.cross-check]
 description = "Type-check for other targets from Linux (no macOS runner needed)"

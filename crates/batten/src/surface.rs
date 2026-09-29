@@ -1424,6 +1424,58 @@ const SINGLETON_TASK: FlagDecl = FlagDecl::positional(
     "The task's name, which is what the lock is keyed by",
 );
 
+/// `--marker <path>` on `singleton detach`: where a failed run's pointers wait.
+const DETACH_MARKER: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued(
+        "marker",
+        "marker",
+        "Where a failed run's pointers wait, announced and cleared by the next invocation",
+    )
+};
+
+/// `--log <path>` on `singleton detach`: where the run's whole output goes.
+const DETACH_LOG: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued(
+        "log",
+        "log",
+        "Where the background run's whole output is written",
+    )
+};
+
+/// `--pattern <id>` on `singleton detach`: which output lines are pointers.
+///
+/// A `[[pattern]]` ID rather than a regex on argv: what a failure line looks
+/// like is the consumer's fact, declared once in its authority.
+const DETACH_PATTERN: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued(
+        "pattern",
+        "pattern",
+        "The `[[pattern]]` row whose matching output lines are the failure's pointers",
+    )
+};
+
+/// `--attached` on `singleton detach`: this invocation is the background copy.
+///
+/// HIDDEN, because no caller types it: the announcing invocation starts the
+/// copy with it, and it is the copy's whole difference.
+const DETACH_ATTACHED: FlagDecl = FlagDecl {
+    hidden: true,
+    ..FlagDecl::switch(
+        "attached",
+        "attached",
+        "Run as the background copy: take the lock, run the command, record a failure",
+    )
+};
+
+/// The command `singleton detach` runs in the background, after `--`.
+const DETACH_COMMAND: FlagDecl = FlagDecl::trailing(
+    "command",
+    "The command to run in the background, after `--`",
+);
+
 /// `--recheck-ms <n>` on `singleton acquire`: the pause between the two
 /// sightings a reclaim requires.
 ///
@@ -4856,6 +4908,30 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[SINGLETON_TASK],
+    },
+    // A BACKGROUND RUN UNDER THE TASK'S LOCK (CLOUD-1731's per-turn check,
+    // retiring `[tasks.cross-turn]` under CLOUD-1991). `unclassified`, for
+    // `exec`'s reason: it runs the command it is handed, so its reach is that
+    // command's. It announces the previous run's failure on stdout — the handler
+    // contract's advisory channel — clears it, starts an attached copy and
+    // returns, so a turn never waits on the command. The attached copy takes the
+    // lock for its own pid: a second copy is refused by the lock, never by a
+    // process probe, and a turn whose copy is still running starts none.
+    CommandDecl {
+        path: "singleton detach",
+        id: "singleton.detach",
+        about: "Run a command in the background under a task's lock, and report the previous run's failure",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Unclassified,
+        flags: &[
+            SINGLETON_TASK,
+            DETACH_MARKER,
+            DETACH_LOG,
+            DETACH_PATTERN,
+            DETACH_ATTACHED,
+            DETACH_COMMAND,
+        ],
     },
     // The `claim` noun (CLOUD-1121), ported off `mise-tasks/claim-check.sh` on the
     // same terms.

@@ -1212,6 +1212,9 @@ mod tests {
             "show agent".to_owned(),
             "singleton".to_owned(),
             "singleton acquire".to_owned(),
+            // The per-turn background run (CLOUD-1991, retiring `cross-turn`):
+            // unclassified, since it runs the command it is handed.
+            "singleton detach".to_owned(),
             "singleton release".to_owned(),
             "spec".to_owned(),
             // The container's declared preconditions (CLOUD-1324) — §9's

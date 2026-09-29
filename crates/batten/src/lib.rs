@@ -4013,6 +4013,27 @@ fn run_singleton(
             task::singleton_release(&git_dir, &task);
             Ok(ExitCode::Success)
         }
+        SingletonCommand::Detach {
+            task,
+            marker,
+            log,
+            pattern,
+            attached,
+            command,
+        } => {
+            let detach = Detach {
+                task: &task,
+                marker: Path::new(&marker),
+                log: Path::new(&log),
+                pattern: &pattern,
+                command: &command,
+            };
+            if attached {
+                run_detached_copy(&git_dir, &detach)
+            } else {
+                run_detach(&detach, out)
+            }
+        }
         SingletonCommand::Acquire {
             task,
             pid,
@@ -4032,6 +4053,146 @@ fn run_singleton(
         }
     }
 }
+
+/// One `singleton detach` request, borrowed from the parsed command.
+struct Detach<'a> {
+    task: &'a str,
+    marker: &'a Path,
+    log: &'a Path,
+    pattern: &'a str,
+    command: &'a [String],
+}
+
+/// How many pointer lines a failure carries into the next turn.
+///
+/// The window cost of a failing run is bounded here, and nowhere downstream:
+/// `hookcost::judge` REPORTS an over-budget hook rather than truncating it, so a
+/// compiler's whole output would otherwise reach the agent's context.
+const DETACH_POINTERS: usize = 3;
+
+/// The `[[pattern]]` row `singleton detach` selects pointer lines with.
+fn detach_pattern(id: &str) -> Result<regex::Regex> {
+    let config = resolve::resolve(Path::new("."), &Overrides::default())?;
+    let row = config
+        .patterns
+        .iter()
+        .find(|row| row.id == id)
+        .ok_or_else(|| {
+            UsageError::raise(format!(
+                "singleton detach: no `[[pattern]]` row declares `{id}`"
+            ))
+        })?;
+    regex::Regex::new(&row.regex).map_err(|_| {
+        UsageError::raise(format!(
+            "singleton detach: `[[pattern]]` row `{id}` will not compile"
+        ))
+    })
+}
+
+/// `singleton detach`: announce and clear the previous run's failure, start the
+/// attached copy, and return without waiting (CLOUD-1731, CLOUD-1991).
+///
+/// STDOUT, because a handler's advisory is its stdout and stderr goes to a log
+/// nobody opens. CLEARED once announced, so one failure is said once rather than
+/// every turn until it is fixed. The pattern is resolved HERE, before anything
+/// starts, so a misdeclared row is this invocation's usage error rather than a
+/// background copy failing where no one reads it. Starting the copy is silent on
+/// failure: a turn's own check must never be the reason the turn stops.
+///
+/// # Errors
+///
+/// A [`UsageError`] for a `[[pattern]]` id that resolves to no compiling row;
+/// an internal error when the announcement cannot be written.
+fn run_detach(request: &Detach<'_>, out: &mut dyn Write) -> Result<ExitCode> {
+    detach_pattern(request.pattern)?;
+    if let Ok(said) = std::fs::read_to_string(request.marker) {
+        write!(out, "{said}")?;
+        let _ = std::fs::remove_file(request.marker);
+    }
+    let Ok(program) = std::env::current_exe() else {
+        return Ok(ExitCode::Success);
+    };
+    let mut args: Vec<String> = vec![
+        "singleton".to_owned(),
+        "detach".to_owned(),
+        request.task.to_owned(),
+        "--marker".to_owned(),
+        request.marker.to_string_lossy().into_owned(),
+        "--log".to_owned(),
+        request.log.to_string_lossy().into_owned(),
+        "--pattern".to_owned(),
+        request.pattern.to_owned(),
+        "--attached".to_owned(),
+        "--".to_owned(),
+    ];
+    args.extend(request.command.iter().cloned());
+    exec::detached(&program, &args, &[]);
+    Ok(ExitCode::Success)
+}
+
+/// The attached copy: take the lock for THIS pid, run the command, write its
+/// whole output to the log, and on a failure leave the capped pointers for the
+/// next invocation to announce.
+///
+/// A lock another copy holds is not an error: that copy's run is this turn's
+/// check, and a second one would only race it. Every exit is `0` — nobody waits
+/// on this process, so a code would reach no one; what it has to say is the
+/// marker.
+///
+/// # Errors
+///
+/// A [`UsageError`] for a `[[pattern]]` id that resolves to no compiling row.
+fn run_detached_copy(git_dir: &Path, request: &Detach<'_>) -> Result<ExitCode> {
+    let pattern = detach_pattern(request.pattern)?;
+    let own = std::process::id().to_string();
+    match task::singleton_acquire(
+        git_dir,
+        request.task,
+        &own,
+        std::time::Duration::from_millis(100),
+    ) {
+        task::Claim::Taken | task::Claim::Reclaimed(_) => {}
+        _ => return Ok(ExitCode::Success),
+    }
+    let ran = exec::piped_argv(
+        Path::new("."),
+        request.command,
+        "",
+        exec::Diagnostics::Keep,
+        &[],
+    );
+    let (code, said) = ran.unwrap_or((-1, String::new()));
+    let _ = durable::replace(request.log, &said);
+    if code != 0 {
+        let mut marker = format!(
+            "::error:: {}: `{}` did not pass\n",
+            request.task,
+            request.command.join(" ")
+        );
+        for line in said
+            .lines()
+            .filter(|line| pattern.is_match(line))
+            .take(DETACH_POINTERS)
+        {
+            marker.push_str("  ");
+            marker.push_str(line);
+            marker.push('\n');
+        }
+        marker.push_str("  (full output: ");
+        marker.push_str(&request.log.to_string_lossy());
+        marker.push_str(")\n");
+        let _ = durable::replace(request.marker, marker);
+    }
+    task::singleton_release(git_dir, request.task);
+    Ok(ExitCode::Success)
+}
+
+// The per-turn run's mutation rows, each caught by the compiled case it names
+// in the tier that drives both halves over a scratch repository.
+//MUTANT-SUITE crates/batten/tests/it/turn_cross_check.rs
+//MUTANT marker-not-cleared|s@^        let _ = std::fs::remove_file(request.marker);$@        let _ = request.marker;@|the_failure_is_announced_on_stdout_and_then_cleared
+//MUTANT pointers-uncapped|s@^            .take(DETACH_POINTERS)$@            .take(usize::MAX)@|the_pointers_are_capped_and_name_the_full_log
+//MUTANT lock-not-consulted|s@^        _ => return Ok(ExitCode::Success),$@        _ => {}@|a_copy_already_holding_the_lock_leaves_the_run_to_it
 
 /// The boundary's own clock, as whole seconds since the epoch.
 ///
