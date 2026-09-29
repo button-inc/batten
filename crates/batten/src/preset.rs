@@ -290,14 +290,24 @@ or give it a fresh run.",
             },
             VendoredVerdict {
                 id: "check read partial",
-                gloss: "the check-runs record is a truncated window or carries no single closing line",
-                class: "A prefix of a commit's check-runs is never judged as all of them: the run \
-that decides a name may sit past the page budget. Raise the query's page budget, or narrow it \
-to the names that carry a verdict, and read it again.",
-                routes: &[read(
-                    "source read first",
-                    "the query row that writes the family",
-                )],
+                gloss: "the check-runs record is a truncated window, lacks one closing line, or holds a torn row",
+                class: "A part of a commit's check-runs is never judged as all of them. Three \
+shapes are partial. A truncated window: the run that decides a name may sit past the page \
+budget, so raise the query's page budget, or narrow it to the names that carry a verdict, and \
+read it again. A record with no single closing line, or a row torn mid-JSON: something other \
+than the query wrote or cut the family, so no page budget clears it; find that writer, stop it \
+writing the family, and re-mint the record from the query.",
+                routes: &[
+                    read("source read first", "the query row that writes the family"),
+                    read(
+                        "record read first",
+                        "every writer of the family besides its query row",
+                    ),
+                    run(
+                        "task run first",
+                        "batten record query check-runs, for the same commit, then this rule again",
+                    ),
+                ],
                 applicability: crate::verdict::Applicability::Advice,
             },
         ],

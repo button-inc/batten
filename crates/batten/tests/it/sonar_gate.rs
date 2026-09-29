@@ -824,6 +824,22 @@ fn a_row_torn_mid_json_is_partial() {
         "row\t{\"status\": \"compl\nwindow\tstate=whole\tread=1\tkept=1\n",
     );
     assert_partial(&dir, &forge);
+    // THE TOKEN'S MEANING COVERS THIS SOURCE TOO. A torn row is the third way to
+    // `check read partial`, and no page budget clears it: the class a reader
+    // reaches from the refusal names the torn row and routes to the writer that
+    // tore it, not only to the query row's budget.
+    let explained = common::batten()
+        .args(["policy", "explain", "check read partial"])
+        .current_dir(&dir)
+        .output()
+        .expect("the compiled binary runs");
+    assert_eq!(explained.status.code(), Some(0), "{}", said(&explained));
+    let class = String::from_utf8_lossy(&explained.stdout);
+    assert!(class.contains("torn mid-JSON"), "{class}");
+    assert!(
+        class.contains("every writer of the family besides its query row"),
+        "{class}"
+    );
 }
 
 /// Write the `check-runs` record through `batten record named`, which stores its
