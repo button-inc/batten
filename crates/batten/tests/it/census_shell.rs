@@ -271,6 +271,46 @@ fn the_census_counts_the_fixture_as_the_shapes_say() {
 }
 
 #[test]
+fn a_linked_worktree_is_measured_and_not_the_main_checkout_beside_it() {
+    // The files a census counts are the ones this BRANCH changes, so a linked
+    // worktree must read its own. Rooted on the repository's common dir instead,
+    // a retirement package's worktree reported its base's census unchanged
+    // while every unit it retired was gone from its tree — the measurement a
+    // wave's "moved down" claim rests on, silently taken from the wrong tree.
+    let dir = repo("census-worktree", &plain_manifest(1), &plain_workflow(1));
+    let base = census(&dir);
+    let linked = dir.with_file_name(format!(
+        "{}-linked",
+        dir.file_name().unwrap().to_string_lossy()
+    ));
+    let _ = std::fs::remove_dir_all(&linked);
+    git_in(
+        &dir,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "change",
+            linked.to_str().unwrap(),
+        ],
+    );
+    tricky_head(&linked);
+    let measured = census(&linked);
+    assert_eq!(total(&measured, "manifests"), 9, "{measured}");
+    assert_ne!(
+        total(&base, "manifests"),
+        9,
+        "the main checkout still carries the base manifest, so the two must differ: {base}"
+    );
+    assert_eq!(
+        census(&dir)["totals"],
+        base["totals"],
+        "and the main checkout's own census is unmoved by its sibling"
+    );
+}
+
+#[test]
 fn the_ban_counts_the_manifest_exactly_as_the_census_does() {
     // Equality through the gate's own predicate — see the module header. Nine is
     // the census's count, pinned by the case above.
