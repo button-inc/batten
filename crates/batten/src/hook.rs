@@ -5914,8 +5914,13 @@ fn followed_cd(
     {
         return None;
     }
+    // A LEADING `/` IS ABSOLUTE BECAUSE THE LINE IS SHELL, not because the host
+    // says so: on Windows `Path::is_absolute("/tmp/x")` is false (no drive), so the
+    // operand was joined UNDER the call's directory and `cd /tmp/x && wc a/b` read
+    // as a repository path on the one CI leg that runs there.
+    let absolute = target.starts_with('/');
     let target = Path::new(target);
-    if target.is_absolute() {
+    if absolute || target.is_absolute() {
         return Some(target.to_path_buf());
     }
     current.map(|here| here.join(target))
