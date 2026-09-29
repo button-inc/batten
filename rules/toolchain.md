@@ -5,11 +5,12 @@ These load when you touch the workshop; deeper detail is in
 
 **Use mise for everything** — tools via `[tools]`, env via `[env]`, commands as
 `[tasks]` run with `mise run`; never a bare `cargo`/`export`/one-off install, so
-CI, hk, and your shell run byte-identical commands. Per clone: `mise install`,
-`git submodule update --init` (bats, in `tests/bats`), and the git hooks — none
-of the three left to a human remembering a prose list, because each is a
-`session:*` task that `batten.toml` declares as a `[[hook.handler]] on =
+CI, hk, and your shell run byte-identical commands. Per clone: `mise install`
+and the git hooks — neither left to a human remembering a prose list, because
+each is a `session:*` task that `batten.toml` declares as a `[[hook.handler]] on =
 "session-start"` and `doctor` asserts afterwards (CLOUD-476, CLOUD-312 row 10).
+The third step was the vendored bats runner in `tests/bats`, which retired with
+the shell suite under CLOUD-843.
 
 **The provisioning order and its bounds are `batten.toml`'s, not a script's.**
 The `on = "session-start"` handler rows ARE the sequence: declaration order is running
@@ -272,7 +273,7 @@ that touched a workflow still spent a runner and re-drafting did not close the
 tap (CLOUD-240).
 
 **The expensive steps answer from per-step receipts (CLOUD-424).** The cargo
-chain, `test:bats`, `deny`, `zizmor`, `msrv`, `cross-check`, `darwin-link` and
+chain, `deny`, `zizmor`, `msrv`, `cross-check`, `darwin-link` and
 `batten-check` route through `mise run step-receipt`: a content-addressed
 receipt in the keyed record store (`batten record keyed|show steps`), keyed by the step's input files (index
 blob ids), its task body read from `mise tasks info`, its tools' live
@@ -792,7 +793,7 @@ hook and refuses before the commit exists. Findings are pointers (`<sha8>
 author`, `<sha8> trailer:<key>`) and never the matched text, because everything
 it reads is content someone wanted suppressed. The policy is `[attribution]` in
 `batten.toml` — patterns, the carve-out, and the accountable identity — never a
-literal in the crate, and `tests/commit-attribution.bats` asserts both the
+literal in the crate, and `crates/batten/tests/it/commit_wiring.rs` asserts both the
 wiring and that no configured pattern matches anything under `crates/`. **The
 emptiness of `trailer_allow` is this repo's posture**, not an unfinished config:
 silent-with-records, so every disclosure trailer is refused. `mise run
@@ -862,11 +863,12 @@ so it lives here with the rest of the workshop detail.)
 ## The gate
 
 `mise-tasks/` scripts are real programs and they are a **retiring** layer, not a
-maintained one: `shfmt`, `shellcheck` and `test:bats` run in the same hk gate as
-the Rust steps, and what those steps hold is the programs that are still there —
-never a licence to keep one alive by editing it. Touching one has two shapes and
-the section above is which. `mise run test` aggregates
-`test:cargo` + `test:bats`. Every config format is formatted and validated there
+maintained one: `shfmt` and `shellcheck` run in the same hk gate as the Rust
+steps, and what those steps hold is the programs that are still there — never a
+licence to keep one alive by editing it. Touching one has two shapes and the
+section above is which. `mise run test` is `test:cargo`: the shell suite
+(`test:bats`) retired under CLOUD-843, each of its suites onto a compiled tier
+under `crates/batten/tests/it` with its ledger. Every config format is formatted and validated there
 too — `taplo` (TOML), `pkl` + `pkl format` (`hk.pkl`, so a malformed gate fails
 at check time rather than when a hook tries to run), `prettier` (Markdown, with
 `CHANGELOG.md` in `.prettierignore` because release-plz owns it), `actionlint`
@@ -936,7 +938,8 @@ state it never refreshed, which is a silent false green and worse than no gate.
 how three wrong comments landed** (CLOUD-1085, measured 2026-09-01). A task that
 declares NO `shell =` gets the default and `-e` with it, so there a bare failing
 command aborts the body where it stands rather than falling through. `test:bats`
-is such a task and its own comments claimed the opposite for their whole life;
+was such a task until CLOUD-843 retired it, and its own comments claimed the
+opposite for their whole life;
 `verify` and `verify:gated` declare `shell = "bash -c"` and are the case this
 section is about. Guard either way — under `-e` the guard is what lets a step name
 its own failure instead of inheriting mise's — but do not carry "every line runs"

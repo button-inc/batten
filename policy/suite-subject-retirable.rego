@@ -139,15 +139,16 @@ declared[path] := parts if {
 # `// ported:` admits a deletion whose subject survives, and two rows have already
 # left this table by spending it.
 #
-# SO THE TABLE NOW HOLDS THREE KINDS, AND THIRTEEN OF THE SEVENTEEN ARE THE FIRST.
-# Counting them is the point: a reader who takes "exempt on cost" for the whole
-# table would conclude the other four are cheap ports nobody got to, which is the
-# opposite of true for every one of them.
+# SO THE TABLE HOLDS THREE KINDS. Naming them is the point: a reader who takes
+# "exempt on cost" for the whole table would conclude the others are cheap ports
+# nobody got to, which is the opposite of true for every one of them.
 #
-#   * COST (13 rows, 11.4s total). Portable today — each
-#     would owe a ledger block and a Rust port spawning whatever its subject is,
-#     for a sub-second yield. Unported, NOT unportable, and a row that wants one
-#     only has to be worth writing.
+#   * COST. Portable today — each would owe a ledger block and a Rust port
+#     spawning whatever its subject is, for a sub-second yield. Unported, NOT
+#     unportable, and a row that wants one only has to be worth writing. Nine of
+#     these rows were spent under CLOUD-843 exactly that way, each suite retired
+#     onto a `// ported:` ledger naming its surviving subject, and their rows left
+#     the table with them.
 #   * STRUCTURE (3 rows, 9.2s). `replay` subjects `mise-tasks/replay-pointers.py`,
 #     which `governed_when_deleted` excludes by extension; `release-tracking-check`
 #     and `remedy-payload-source` each name a subject that is GOVERNED and alive,
@@ -184,14 +185,7 @@ declared[path] := parts if {
 # read, and being the producer CLOUD-1154 needs), which is CLOUD-1174's
 # "blockers are a set, not a partition" in the concrete.
 exempt := {
-	"tests/commit-attribution.bats": "hk.pkl mise.toml",
-	"tests/commit-convention.bats": "batten.toml mise.toml",
-	"tests/cross-check.bats": "mise.toml",
 	"tests/fact-record-keying.bats": "crates/batten/src/facts.rs",
-	"tests/git-hook.bats": ".claude/hooks/git-hook.sh",
-	"tests/hk-selection.bats": "hk.pkl",
-	"tests/install.bats": "install.sh",
-	"tests/lint-rego.bats": "mise.toml",
 	# THE ROW THAT WAS HERE IS GONE BECAUSE ITS SUBJECT IS (CLOUD-1717).
 	#
 	# `tests/replay.bats` exempted itself over `mise-tasks/replay-pointers.py`,
@@ -207,10 +201,8 @@ exempt := {
 	# note in an exemption table.
 	"tests/remedy-payload-source.bats": "batten.toml — STRANDS mise-tasks/board-payloads.sh",
 	"tests/session-start.bats": ".claude/hooks/session-start.sh",
-	"tests/spawn-census.bats": "clippy.toml",
 	"tests/task-fail-closed.bats": "mise.toml",
 	"tests/verify.bats": "mise.toml",
-	"tests/zizmor-split.bats": "mise.toml",
 }
 
 # --- A: an immortal subject nobody declared ------------------------------------

@@ -37,12 +37,6 @@ local gate = new Mapping<String, Step> {
     glob = List("hk.pkl", "mise.toml")
     check = "mise run hk-version"
   }
-  ["suite-bench-check"] {
-    // `slow` tier: it builds the engine, so a commit would pay a compile
-    // (CLOUD-1397). It runs at `verify` and in CI, before merge.
-    profiles = List("slow")
-    check = "cargo run --quiet -p batten -- check --rule 'suite measure stale'"
-  }
   // CLOUD-266's rule reaches the one budget nobody had looked at (CLOUD-668).
   // The MCP startup budget was the host's 30000ms default, never measured, and
   // Serena's worst observed SUCCESSFUL connect is 52747ms — BELOW that default,
@@ -338,11 +332,11 @@ local gate = new Mapping<String, Step> {
   // THE STEP NAME SURVIVES THE MIGRATION, which is the campaign's own convention
   // and not a cosmetic choice — `claim-check`, `perf-pair`, `mutant`,
   // `target-prune` and `config-lint` all kept theirs for this reason. Here the
-  // binding reader is `tests/hk-selection.bats:129`, which names the slow tier's
-  // steps literally and asserts each is skipped at `!slow` and included under
-  // `check`. That suite is governed, so `shell edit refused` declares one route
-  // and no override: renaming this step would need an edit to a frozen file in
-  // order to land a retirement. Measured — the rename reddened both cases.
+  // binding reader is `crates/batten/tests/it/hk_selection.rs`'s `SLOW_TIER`,
+  // which names the slow tier's steps literally and asserts each is skipped at
+  // `!slow` and included under `check` — ported off `tests/hk-selection.bats`
+  // under CLOUD-843, where a rename needed an edit to a frozen file. Measured —
+  // the rename reddened both cases.
   ["sbom-check"] {
     // `slow` tier: two whole-tree `syft scan dir:.` passes.
     profiles = List("slow")
@@ -482,7 +476,7 @@ local gate = new Mapping<String, Step> {
     check = "mise run ntia-check"
   }
 
-  // --- shell: the mise-tasks/ programs and the bats suite -------------------
+  // --- shell: the mise-tasks/ programs --------------------------------------
 
   // The builtins match on shebang as well as extension, which is what the
   // extensionless `mise-tasks/*` programs need — a hand-written glob would
@@ -506,17 +500,6 @@ local gate = new Mapping<String, Step> {
     // -D warnings.
     check = "shellcheck --severity=style --external-sources {{files}}"
     exclude = generated
-  }
-  // The shell programs' test suite (bats), the counterpart to `test` for Rust.
-  // The gh guard ships with its gate this way: the policy table must block
-  // exactly the hand-rolled shapes and nothing else (non-negotiable 2).
-  ["test:bats"] {
-    // `slow` tier, and the pole of the whole gate: 100.3s of a 111.1s run at
-    // nproc=4 (mise.toml). See the `profiles` note at the foot of this file.
-    profiles = List("slow")
-    depends = List("shellcheck")
-    glob = List("mise-tasks/**", "tests/*.bats")
-    check = "mise run test:bats"
   }
 
   // --- config formats ----------------------------------------------------
@@ -583,7 +566,7 @@ local gate = new Mapping<String, Step> {
   // Hand-written rather than a builtin override because there is no
   // `Builtins.deno_fmt` — `hk builtins` carries `deno` and `deno_check` only.
   // So this SELECTOR IS OURS, unlike taplo's and actionlint's, and
-  // `tests/hk-selection.bats` asserts its reach rather than trusting it: a
+  // `crates/batten/tests/it/hk_selection.rs` asserts its reach rather than trusting it: a
   // builtin's glob is a coverage claim, and `Builtins.shellcheck` silently read
   // zero `.bats` files for its whole life.
   //
@@ -599,8 +582,8 @@ local gate = new Mapping<String, Step> {
   // editing one of those pays a sub-second run that correctly checks nothing of
   // theirs. Mirroring the exclusions here would buy that back at the price of a
   // second list to keep in sync, which is the drift this design is avoiding.
-  // `tests/hk-selection.bats` pins the measured statuses so a change to either
-  // side is visible rather than inferred.
+  // `crates/batten/tests/it/hk_selection.rs` pins the measured statuses so a
+  // change to either side is visible rather than inferred.
   //
   // THE `fix` ARM ARRIVED WITH CLOUD-681 AND ITS ABSENCE WAS THE DEFECT. `fmt`'s
   // task description has always named `deno fmt` among the fixers it runs, and
@@ -924,14 +907,12 @@ local fixers = new Mapping<String, Step> {
   ["cargo-fmt"] = gate["cargo-fmt"]
 }
 
-// The steps above marked `profiles = List("slow")` are the nine that dominate
-// the gate: 111.1s total, 100.3s of it `test:bats` at nproc=4. Counted from the
-// mapping rather than recalled — `coderabbit-config-check`, `hk-contract-check`,
-// `token-bench-check`, `sbom-check`, `test:bats`, `cargo-clippy`, `test`,
-// `batten-check`, `policy-test`. It said "six" from the tier's first shape and
-// three steps joined it afterwards without the count following, which is the
-// same drift `suite-bench-check` exists to keep out of the bats table: a number
-// in prose has no gate behind it and ages silently. They are not cheaper
+// The steps above marked `profiles = List("slow")` are the ones that dominate
+// the gate. When this was measured it was 111.1s total, 100.3s of it the shell
+// suite (`test:bats`, retired under CLOUD-843). No count is written here: it said
+// "six" from the tier's first shape, then "nine", and steps joined it afterwards
+// without the count following — a number in prose has no gate behind it and
+// ages silently. The mapping is the list. They are not cheaper
 // than they look and they are not optional — they simply do not belong on the
 // path a developer pays on every `git commit`, because `hk check --all` (which
 // `mise run ci`, and therefore `verify` and CI, drive over this same mapping)
@@ -984,17 +965,16 @@ hooks {
   // costs more than the whole budget before a task body runs, so only a step
   // calling the binary directly can land under it.
   //
-  // WHY THAT HALF IS NOT HERE, AND IT IS A GATE RATHER THAN A PREFERENCE.
-  // Respelling these two steps breaks `tests/commit-attribution.bats:19` and
-  // `tests/commit-convention.bats:42`, which pin the call site by its text --
-  // correctly, since CLOUD-216 found this gate wired to nothing. Following them
-  // means EDITING a governed bats suite, and `shell-retirement`'s edit arm
-  // refuses that with no override route and no `bypass_env`: the campaign admits
-  // deleting such a file whole, never changing it. Retiring those two suites into
-  // Rust is CLOUD-1748's work and is being done elsewhere; doing it here to buy
-  // 170ms would be taking that campaign's subject hostage to a latency fix.
+  // WHY THAT HALF IS NOT HERE YET. Respelling these two steps used to break
+  // `tests/commit-attribution.bats` and `tests/commit-convention.bats`, which
+  // pinned the call site by its text -- correctly, since CLOUD-216 found this
+  // gate wired to nothing -- and a governed bats suite could not be edited to
+  // follow. Both retired under CLOUD-843 onto
+  // `crates/batten/tests/it/commit_wiring.rs`, which pins the WIRING rather than
+  // the spelling: either `mise run <task>` or the engine's own `… check
+  // --message` satisfies it, and a step running neither is still refused.
   //
-  // So this waits on the suites, and CLOUD-1397 carries the remainder. What does
+  // So the respelling is unblocked, and CLOUD-1397 carries it. What does
   // NOT wait is the 8687ms case -- the first commit after touching one
   // `crates/batten/src` file, which was a hook running the compiler -- because
   // that lived in the task body and is gone.

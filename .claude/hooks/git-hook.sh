@@ -19,7 +19,8 @@
 #     session that hit it burned its remaining container lifetime polling the
 #     hung commit and died with the fix uncommitted.
 #
-# Being checked in also makes the body testable directly (tests/git-hook.bats)
+# Being checked in also makes the body testable directly
+# (crates/batten/tests/it/git_hook.rs)
 # instead of only through a hook installation.
 set -uo pipefail
 

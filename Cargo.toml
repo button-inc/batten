@@ -30,7 +30,7 @@ unreachable_pub = "warn"
 # annotation is red too — the census self-cleans in both directions, where a count
 # table catches additions only. But this lint is warn-by-default, so that second
 # direction rested entirely on `mise run lint:clippy`'s `-D warnings`. Measured on
-# a scratch crate (`tests/spawn-census.bats`): at the default level, an `#[expect]`
+# a scratch crate (`crates/batten/tests/it/spawn_census_clippy.rs`): at the default level, an `#[expect]`
 # over code with no spawn left is a WARNING and the run exits 0. Half a gate.
 unfulfilled_lint_expectations = "deny"
 

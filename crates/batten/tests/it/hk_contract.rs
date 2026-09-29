@@ -64,7 +64,8 @@ fn the_committed_contract_is_the_one_the_binary_derives() {
 /// shell that sets nothing.
 ///
 /// `.github/workflows/ci.yml`'s `ci` job hands the runner
-/// `HK_SKIP_STEPS: test:bats,batten-check`, so those two run in their own lanes.
+/// `HK_SKIP_STEPS: batten-check`, so that step runs in its own lane — and it
+/// carved the shell suite out beside it until CLOUD-843 retired that suite.
 /// Measured on `478a8482`: `hk drift` there reported both steps restatused on
 /// two surfaces and exited `2`, over an artifact and a config that had not
 /// moved. A contract that varied by caller could not be committed at all, so the
@@ -80,7 +81,7 @@ fn a_caller_suppressing_steps_does_not_drift_the_contract() {
     let output = common::batten_at_real_root()
         .args(["hk", "drift"])
         .current_dir(&root)
-        .env(hk::CALLER_SKIP, "test:bats,batten-check")
+        .env(hk::CALLER_SKIP, "sbom-check,batten-check")
         .output()
         .expect("run batten");
     assert_eq!(
