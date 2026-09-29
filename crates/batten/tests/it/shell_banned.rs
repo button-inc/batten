@@ -1,75 +1,94 @@
-//! `policy/shell-banned.rego` over the compiled binary (CLOUD-1925).
+//! The `shell-hygiene` preset's shell ban over the compiled binary, for a
+//! consumer that is not this repository (CLOUD-1994, lifting CLOUD-1925).
 //!
-//! The module's own `test_` rules pin the predicate over a fabricated input. What
-//! only this tier can show is that the ENGINE builds that input — `lines` for the
-//! head, `base-lines` for the base, `added` over the whole tree — for exactly the
-//! paths the row declares, so the refusals below come from a real diff against a
-//! real `origin/main` (CLOUD-845's class: a module can pass every `with input as`
-//! case and decide nothing on a real tree).
+//! # What only this tier can show
 //!
-//! The module was also replayed against this repository's history before it
-//! landed: #962's squash `4f61a1c` is refused (`task write refused` on
-//! `mise.toml` and 41 `task add refused` pointers, exit 2), as is `f8b18c5`;
+//! The module's own `test_` rules pin the predicate over a fabricated input.
+//! This tier shows the ENGINE builds that input — the consumer's `[census.shell]`
+//! table through `documents`, `lines` for the head, `base-lines` for the base,
+//! `added` over the whole tree — so the refusals below come from a real diff
+//! against a real `origin/main` (CLOUD-845's class: a module can pass every
+//! `with input as` case and decide nothing on a real tree).
+//!
+//! # The consumer is a stranger on purpose
+//!
+//! Every scratch repository here carries a `batten.toml` holding ONE policy row
+//! that enables the preset, and a `[census.shell]` table. No module is copied in,
+//! no `[[verdict]]` row is declared and no `[vocabulary]` exists: that is what a
+//! consumer who never saw this repository writes, and a preset that only decided
+//! with this repository's own vocabulary beside it would be a consumer module
+//! wearing a preset's name. Its exempt file is `bootstrap.sh`, which this
+//! repository does not exempt, and one case uses a manifest shape this
+//! repository does not have.
+//!
+//! # The replay the module carried before the lift
+//!
+//! The consumer module this preset replaced was replayed against this
+//! repository's history: #962's squash `4f61a1c` is refused (`task write refused`
+//! on `mise.toml` and 41 `task add refused` pointers, exit 2), as is `f8b18c5`;
 //! `771651d` and `c7ba001`, which added no shell, pass. That replay needs the
 //! real history, which a shallow runner does not carry, so its shapes are
 //! restated here as synthetic fixtures rather than read from git.
+//!
+//! # What the lift changed, stated rather than absorbed
+//!
+//! The consumer module's `stays_bash` literal and its hard-wired manifest and
+//! workflow paths became the consumer's `[census.shell]` table. Three behaviours
+//! follow: the ban reads EVERY declared manifest's command keys (in this
+//! repository that adds `hk.pkl`'s `check`/`fix` strings, which the census
+//! already counted), exempt entries are globs, and a consumer declaring no
+//! census is not banned at all.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
 use common::{Fixture, git_in, run, stdout};
 
-const RULE: &str = "shell write other";
+/// The enabling row's id, which is the consumer's to choose.
+const ROW: &str = "shell hygiene on";
 
-/// The four verdicts and the rule row, as this repository declares them — the
-/// module refuses to load against a registry that lacks any token it raises.
+/// The predicate the preset publishes, which every finding here names.
+const PREDICATE: &str = "shell write other";
+
+/// A stranger's whole configuration: one row enabling the preset, and the
+/// census table saying where its shell lives.
 fn config() -> String {
-    let mut text = String::from("version = 1\n");
-    for (id, gloss) in [
-        ("task write refused", "shell lines rose"),
-        ("task add refused", "a task gained shell"),
-        ("step write refused", "workflow shell rose"),
-        ("shell place refused", "a shell file was added"),
-    ] {
-        let _ = write!(
-            text,
-            "\n[[verdict]]\nid = \"{id}\"\ngloss = \"{gloss}\"\nclass = \"{gloss}.\"\n\n\
-             [[verdict.route]]\nid = \"rule read first\"\nkind = \"document\"\n\
-             target = \"policy/shell-banned.rego\"\n"
-        );
-    }
-    let _ = write!(
-        text,
-        "\n[[rule]]\nid = \"{RULE}\"\nkind = \"policy\"\nscope = \"tree\"\n\
+    format!(
+        "version = 1\n\
+         \n[[rule]]\nid = \"{ROW}\"\nkind = \"policy\"\nscope = \"tree\"\n\
+         preset = \"shell-hygiene\"\nseverity = \"deny\"\n\
          base = \"origin/main\"\ndelta_sources = [\"**\"]\n\
-         line_sources = [\"mise.toml\", \".github/workflows/*.yml\", \"mise-tasks/**\", \".claude/hooks/**\"]\n\
-         module = \"policy/shell-banned.rego\"\nseverity = \"deny\"\n"
-    );
-    text
+         documents = [\"batten.toml\"]\n\
+         line_sources = [\"mise.toml\", \"tasks.toml\", \".github/workflows/*.yml\", \"tools/**\"]\n\
+         \n[census.shell]\n\
+         workflows = [\".github/workflows/*.yml\"]\n\
+         exempt = [\"bootstrap.sh\"]\n\
+         \n[[census.shell.manifest]]\n\
+         path = \"mise.toml\"\n\
+         keys = [\"run\"]\n\
+         unit = \"[tasks.\"\n\
+         \n[[census.shell.manifest]]\n\
+         path = \"tasks.toml\"\n\
+         keys = [\"cmd\"]\n\
+         unit = \"[task.\"\n"
+    )
 }
 
-/// A repository whose `origin/main` holds `files`, with the real module.
+/// A repository whose `origin/main` holds `files` and the stranger's config.
 fn repo(name: &str, files: &[(&str, &str)]) -> PathBuf {
-    let mut fixture = Fixture::new(name).config(&config());
-    for (path, text) in files {
-        fixture = fixture.file(path, text);
-    }
-    let dir = fixture.git().build();
-    common::write(
-        &dir,
-        "policy/shell-banned.rego",
-        &std::fs::read_to_string(common::at_root("policy/shell-banned.rego")).unwrap(),
-    );
-    git_in(&dir, &["add", "-A"]);
-    git_in(&dir, &["commit", "-q", "-m", "base"]);
-    git_in(&dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
-    dir
+    Fixture::new(name)
+        .config(&config())
+        .files(files)
+        .git()
+        .base_commit()
+        .build()
 }
 
 /// Write `text` at `path` and commit it as the branch's change.
@@ -80,7 +99,7 @@ fn change(dir: &Path, path: &str, text: &str) {
 }
 
 fn check(dir: &Path) -> Output {
-    run(dir, &["check", "--rule", RULE])
+    run(dir, &["check", "--rule", ROW])
 }
 
 /// A `mise.toml` of `(name, body lines)` tasks, each a `'''` body.
@@ -97,20 +116,21 @@ fn manifest(tasks: &[(&str, &[&str])]) -> String {
     text
 }
 
-/// The refusals as `(path, line)` pointers, read off `-J`.
+/// The ban's refusals as `(path, line)` pointers, read off `-J`.
 ///
-/// The four arms are told apart by their pointer rather than by a verdict
-/// token, which `check` does not emit: `task write refused` points at
-/// `mise.toml` with no line, `task add refused` at the new task's header line,
-/// and the other two at their own paths.
+/// Filtered to the ban's own predicate: the same row enables the preset's two
+/// naming rules, and a finding of theirs is not this tier's subject. The four
+/// arms are told apart by their pointer: `task write refused` points at the
+/// manifest with no line, `task add refused` at the new unit's header line, and
+/// the other two at their own paths.
 fn findings(dir: &Path) -> (Option<i32>, Vec<(String, Option<u64>)>) {
-    let output = run(dir, &["check", "-J", "--rule", RULE]);
+    let output = run(dir, &["check", "-J", "--rule", ROW]);
     let report: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
     let found = report["findings"]
         .as_array()
         .unwrap()
         .iter()
-        .filter(|finding| finding["rule"] == RULE)
+        .filter(|finding| finding["rule"] == PREDICATE)
         .map(|finding| {
             (
                 finding["path"].as_str().unwrap_or_default().to_owned(),
@@ -122,13 +142,13 @@ fn findings(dir: &Path) -> (Option<i32>, Vec<(String, Option<u64>)>) {
 }
 
 /// `task write refused`'s pointer: the manifest, no line.
-fn grew(found: &[(String, Option<u64>)]) -> bool {
-    found.contains(&("mise.toml".to_owned(), None))
+fn grew(found: &[(String, Option<u64>)], path: &str) -> bool {
+    found.contains(&(path.to_owned(), None))
 }
 
-/// `task add refused`'s pointer: the manifest at the task header's line.
-fn gained_at(found: &[(String, Option<u64>)], line: u64) -> bool {
-    found.contains(&("mise.toml".to_owned(), Some(line)))
+/// `task add refused`'s pointer: the manifest at the unit header's line.
+fn gained_at(found: &[(String, Option<u64>)], path: &str, line: u64) -> bool {
+    found.contains(&(path.to_owned(), Some(line)))
 }
 
 #[test]
@@ -138,10 +158,10 @@ fn a_program_moved_inline_is_refused() {
         "shell-ban-moved-inline",
         &[
             ("mise.toml", &manifest(&[("a", &["echo a"])])),
-            ("mise-tasks/b.sh", "#!/usr/bin/env bash\nset -e\necho b\n"),
+            ("tools/b.sh", "#!/usr/bin/env bash\nset -e\necho b\n"),
         ],
     );
-    std::fs::remove_file(dir.join("mise-tasks/b.sh")).unwrap();
+    std::fs::remove_file(dir.join("tools/b.sh")).unwrap();
     change(
         &dir,
         "mise.toml",
@@ -150,8 +170,11 @@ fn a_program_moved_inline_is_refused() {
     // `a` spans lines 1-4 and a blank, so task `b`'s header is line 6.
     let (code, found) = findings(&dir);
     assert_eq!(code, Some(2), "{found:?}");
-    assert!(grew(&found), "the line count rose: {found:?}");
-    assert!(gained_at(&found, 6), "task b gained shell: {found:?}");
+    assert!(grew(&found, "mise.toml"), "the line count rose: {found:?}");
+    assert!(
+        gained_at(&found, "mise.toml", 6),
+        "task b gained shell: {found:?}"
+    );
 }
 
 #[test]
@@ -167,7 +190,7 @@ fn a_task_body_grown_by_one_line_is_refused() {
     );
     let (code, found) = findings(&dir);
     assert_eq!(code, Some(2), "{found:?}");
-    assert!(grew(&found), "{found:?}");
+    assert!(grew(&found, "mise.toml"), "{found:?}");
     assert!(
         !found.iter().any(|(_, line)| line.is_some()),
         "no task gained shell it did not have: {found:?}"
@@ -187,13 +210,31 @@ fn a_body_moved_into_a_new_task_is_refused_even_when_the_total_falls() {
     let (code, found) = findings(&dir);
     assert_eq!(code, Some(2), "{found:?}");
     assert!(
-        !grew(&found),
+        !grew(&found, "mise.toml"),
         "the total fell, so growth is not the arm: {found:?}"
     );
     assert!(
-        gained_at(&found, 1),
+        gained_at(&found, "mise.toml", 1),
         "the new task's header is the pointer: {found:?}"
     );
+}
+
+/// The manifest is the CONSUMER's: another file, another command key, another
+/// unit header, all read off `[census.shell]` rather than off anything the
+/// preset spells.
+#[test]
+fn a_manifest_of_the_consumers_own_shape_is_read_by_its_declaration() {
+    let base = "[task.build]\ncmd = \"cargo build\"\n";
+    let dir = repo("shell-ban-own-shape", &[("tasks.toml", base)]);
+    change(
+        &dir,
+        "tasks.toml",
+        &format!("{base}\n[task.ship]\ncmd = \"cargo build && ./ship\"\n"),
+    );
+    let (code, found) = findings(&dir);
+    assert_eq!(code, Some(2), "{found:?}");
+    assert!(grew(&found, "tasks.toml"), "{found:?}");
+    assert!(gained_at(&found, "tasks.toml", 4), "{found:?}");
 }
 
 #[test]
@@ -248,7 +289,10 @@ fn a_shell_one_liner_added_to_a_task_is_refused() {
     );
     let (code, found) = findings(&dir);
     assert_eq!(code, Some(2), "{found:?}");
-    assert!(gained_at(&found, 4), "task b's header: {found:?}");
+    assert!(
+        gained_at(&found, "mise.toml", 4),
+        "task b's header: {found:?}"
+    );
 }
 
 #[test]
@@ -260,13 +304,9 @@ fn a_workflow_run_block_grown_is_refused() {
         ".github/workflows/ci.yml",
         "jobs:\n  a:\n    steps:\n      - run: |\n          echo one\n          echo two\n      - uses: x\n",
     );
-    let output = check(&dir);
-    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
-    assert!(
-        stdout(&output).contains(".github/workflows/ci.yml"),
-        "{}",
-        stdout(&output)
-    );
+    let (code, found) = findings(&dir);
+    assert_eq!(code, Some(2), "{found:?}");
+    assert!(grew(&found, ".github/workflows/ci.yml"), "{found:?}");
 }
 
 #[test]
@@ -285,65 +325,135 @@ fn a_single_command_workflow_step_is_admitted() {
 fn an_added_shell_script_is_refused() {
     let dir = repo("shell-ban-script", &[("README.md", "x\n")]);
     change(&dir, "scripts/deploy.sh", "echo deploy\n");
-    let output = check(&dir);
-    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
-    assert!(
-        stdout(&output).contains("scripts/deploy.sh"),
-        "{}",
-        stdout(&output)
-    );
+    let (code, found) = findings(&dir);
+    assert_eq!(code, Some(2), "{found:?}");
+    assert!(grew(&found, "scripts/deploy.sh"), "{found:?}");
 }
 
 #[test]
 fn an_added_shebang_program_under_a_declared_directory_is_refused() {
     let dir = repo("shell-ban-shebang", &[("README.md", "x\n")]);
-    change(
-        &dir,
-        "mise-tasks/run-thing",
-        "#!/usr/bin/env bash\necho thing\n",
-    );
-    let output = check(&dir);
-    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    change(&dir, "tools/run-thing", "#!/usr/bin/env bash\necho thing\n");
+    let (code, found) = findings(&dir);
+    assert_eq!(code, Some(2), "{found:?}");
+    assert!(grew(&found, "tools/run-thing"), "{found:?}");
 }
 
 #[test]
 fn an_exempt_file_is_admitted() {
     let dir = repo("shell-ban-exempt", &[("README.md", "x\n")]);
-    change(&dir, "install.sh", "#!/bin/sh\necho install\n");
-    assert_eq!(check(&dir).status.code(), Some(0));
+    change(&dir, "bootstrap.sh", "#!/bin/sh\necho bootstrap\n");
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
 }
 
-/// THE EXEMPTION SET, ASSERTED EXACTLY. Growing it is how a ban becomes a
-/// hatch, so the set is pinned here and a change to it is a failing test a
-/// reviewer must read — never a quiet widening inside the module.
+/// NO DECLARATION, NO BAN. A consumer enabling `shell-hygiene` for its naming
+/// rules alone has not said where its shell lives, and must not be refused a
+/// shell file it never agreed to stop writing.
+#[test]
+fn a_consumer_declaring_no_census_is_not_banned() {
+    let dir = Fixture::new("shell-ban-undeclared")
+        .config(&format!(
+            "version = 1\n\n[[rule]]\nid = \"{ROW}\"\nkind = \"policy\"\nscope = \"tree\"\n\
+             preset = \"shell-hygiene\"\nseverity = \"deny\"\n\
+             base = \"origin/main\"\ndelta_sources = [\"**\"]\n\
+             documents = [\"batten.toml\"]\nline_sources = [\"tools/**\"]\n"
+        ))
+        .file("README.md", "x\n")
+        .git()
+        .base_commit()
+        .build();
+    change(&dir, "scripts/deploy.sh", "echo deploy\n");
+    let (code, found) = findings(&dir);
+    assert!(found.is_empty(), "{found:?}");
+    assert_eq!(code, Some(0));
+}
+
+/// THE EXEMPTION SET, ASSERTED EXACTLY. It is this repository's
+/// `[census.shell] exempt`, the one list both the census and the ban read, and
+/// growing it is how a ban becomes a hatch — so it is pinned here, and a change
+/// to it is a failing test a reviewer must read.
 #[test]
 fn the_exemption_set_is_exactly_the_files_that_must_be_shell() {
-    let module = std::fs::read_to_string(common::at_root("policy/shell-banned.rego")).unwrap();
-    let start = module.find("stays_bash := {").unwrap();
-    let end = start + module[start..].find('}').unwrap();
-    let mut declared: Vec<&str> = module[start..end]
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            line.strip_prefix('"')?.strip_suffix("\",")
-        })
+    let authority: toml::Value =
+        toml::from_str(&std::fs::read_to_string(common::at_root("batten.toml")).unwrap()).unwrap();
+    let exempt: BTreeSet<&str> = authority["census"]["shell"]["exempt"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|glob| glob.as_str().unwrap())
         .collect();
-    declared.sort_unstable();
     assert_eq!(
-        declared,
-        [
+        exempt,
+        BTreeSet::from([
             ".claude/hooks/git-hook.sh",
             "completions/batten.bash",
             "install.sh",
             "setup.sh",
-        ]
+        ])
     );
 }
 
+/// THIS REPOSITORY'S ROW READS EVERY HOME ITS CENSUS DECLARES. A manifest or a
+/// workflow glob the enabling row does not hand over as lines is a home the ban
+/// cannot see, and it would pass silently over every change to it — the census
+/// would count a home the gate never judged.
+#[test]
+fn this_repositorys_ban_reads_every_declared_home() {
+    let authority: toml::Value =
+        toml::from_str(&std::fs::read_to_string(common::at_root("batten.toml")).unwrap()).unwrap();
+    let row = authority["rule"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|rule| rule.get("preset").and_then(toml::Value::as_str) == Some("shell-hygiene"))
+        .expect("this repository enables the shell-hygiene preset");
+    let strings = |key: &str| -> BTreeSet<String> {
+        row.get(key)
+            .and_then(toml::Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(|value| value.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    assert!(
+        strings("documents").contains("batten.toml"),
+        "the row hands the ban no census declaration"
+    );
+    assert!(
+        row.get("base").is_some() && strings("delta_sources").contains("**"),
+        "the row gives the ban no diff to judge"
+    );
+    let lines = strings("line_sources");
+    let census = &authority["census"]["shell"];
+    for manifest in census["manifest"].as_array().unwrap() {
+        let path = manifest["path"].as_str().unwrap();
+        assert!(lines.contains(path), "the ban cannot read `{path}`");
+    }
+    for glob in census["workflows"].as_array().unwrap() {
+        let glob = glob.as_str().unwrap();
+        assert!(lines.contains(glob), "the ban cannot read `{glob}`");
+    }
+}
+
 /// The real tree, against its own base: this repository is clean today, so a
-/// module that refused its own checkout would be switched off on the first run.
+/// ban that refused its own checkout would be switched off on the first run.
 #[test]
 fn this_repositorys_own_tree_passes() {
-    let output = run(&common::at_root("."), &["check", "--rule", RULE]);
+    let root = common::at_root(".");
+    let authority: toml::Value =
+        toml::from_str(&std::fs::read_to_string(root.join("batten.toml")).unwrap()).unwrap();
+    let row = authority["rule"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|rule| rule.get("preset").and_then(toml::Value::as_str) == Some("shell-hygiene"))
+        .and_then(|rule| rule["id"].as_str())
+        .expect("this repository enables the shell-hygiene preset")
+        .to_owned();
+    let output = run(&root, &["check", "--rule", row.as_str()]);
     assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
 }

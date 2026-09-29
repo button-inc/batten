@@ -23,7 +23,8 @@
 //!   shebang names a shell. Its code lines.
 //!
 //! The first two are EXACTLY the detection a line-unit ban over the same files
-//! applies — this repository's `policy/shell-banned.rego` — down to its quirks:
+//! applies — the `shell-hygiene` preset's `no-new-shell` module, which reads
+//! this same `[census.shell]` table as its list of homes — down to its quirks:
 //! a one-liner's first word is read with its quote still attached, and an array
 //! entry is judged without a comment test. That is deliberate. A census that
 //! counted differently from the gate would make "the census reads 0" and "the

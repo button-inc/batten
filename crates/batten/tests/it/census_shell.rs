@@ -3,7 +3,9 @@
 //! # The case the verb exists for: the census and the ban agree
 //!
 //! The retirement's rule is that every wave moves the census down, and the ban
-//! (`policy/shell-banned.rego`) is what refuses a wave that moves it up. Two
+//! (`shell-hygiene`'s `no-new-shell` preset module) is what refuses a wave that
+//! moves it up. Since CLOUD-1994 both read one `[census.shell]` table, so they
+//! cannot disagree about WHERE; this tier proves they agree about WHAT. Two
 //! readings of "a shell line" would make those claims able to disagree — a wave
 //! could read as progress to one and as growth to the other. So the census does
 //! not choose its own detection; it carries the ban's, and this tier proves the
@@ -32,34 +34,26 @@ use std::path::{Path, PathBuf};
 
 use common::{Fixture, git_in, run, stdout};
 
-const RULE: &str = "shell write other";
+/// The row enabling the ban's preset.
+const RULE: &str = "shell hygiene on";
 
-/// The ban's row and vocabulary as this repository declares them, plus the
-/// census table over the same files.
+/// The predicate the ban publishes, which its findings name.
+const PREDICATE: &str = "shell write other";
+
+/// The row enabling the preset, plus the census table both readings share.
 ///
-/// `exempt` is `install.sh` alone — a member of the ban's own `stays_bash` — so
-/// the one exemption the fixture exercises is one BOTH readings exempt.
+/// No `[[verdict]]` row: the ban's classes are vendored by the preset, and a
+/// consumer declaring them again is refused at load.
 fn config() -> String {
     let mut text = String::from("version = 1\n");
-    for (id, gloss) in [
-        ("task write refused", "shell lines rose"),
-        ("task add refused", "a task gained shell"),
-        ("step write refused", "workflow shell rose"),
-        ("shell place refused", "a shell file was added"),
-    ] {
-        let _ = write!(
-            text,
-            "\n[[verdict]]\nid = \"{id}\"\ngloss = \"{gloss}\"\nclass = \"{gloss}.\"\n\n\
-             [[verdict.route]]\nid = \"rule read first\"\nkind = \"document\"\n\
-             target = \"policy/shell-banned.rego\"\n"
-        );
-    }
     let _ = write!(
         text,
         "\n[[rule]]\nid = \"{RULE}\"\nkind = \"policy\"\nscope = \"tree\"\n\
+         preset = \"shell-hygiene\"\n\
          base = \"origin/main\"\ndelta_sources = [\"**\"]\n\
+         documents = [\"batten.toml\"]\n\
          line_sources = [\"mise.toml\", \".github/workflows/*.yml\", \"mise-tasks/**\", \".claude/hooks/**\"]\n\
-         module = \"policy/shell-banned.rego\"\nseverity = \"deny\"\n\
+         severity = \"deny\"\n\
          \n[census.shell]\n\
          workflows = [\".github/workflows/*.yml\"]\n\
          exempt = [\"install.sh\"]\n\
@@ -169,25 +163,17 @@ jobs:
       - uses: x
 ";
 
-/// A repository whose `origin/main` carries `manifest` and `workflow`, with the
-/// real module.
+/// A repository whose `origin/main` carries `manifest` and `workflow`. The ban
+/// ships inside the binary, so nothing else is installed.
 fn repo(name: &str, manifest: &str, workflow: &str) -> PathBuf {
-    let dir = Fixture::new(name)
+    Fixture::new(name)
         .config(&config())
         .file("mise.toml", manifest)
         .file(".github/workflows/ci.yml", workflow)
         .file("README.md", "x\n")
         .git()
-        .build();
-    common::write(
-        &dir,
-        "policy/shell-banned.rego",
-        &std::fs::read_to_string(common::at_root("policy/shell-banned.rego")).unwrap(),
-    );
-    git_in(&dir, &["add", "-A"]);
-    git_in(&dir, &["commit", "-q", "-m", "base"]);
-    git_in(&dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
-    dir
+        .base_commit()
+        .build()
 }
 
 /// Commit the tricky head over whatever the base carried: the manifest, the
@@ -224,7 +210,7 @@ fn ban(dir: &Path) -> (Option<i32>, Vec<(String, Option<u64>)>) {
         .as_array()
         .unwrap()
         .iter()
-        .filter(|finding| finding["rule"] == RULE)
+        .filter(|finding| finding["rule"] == PREDICATE)
         .map(|finding| {
             (
                 finding["path"].as_str().unwrap_or_default().to_owned(),
@@ -453,31 +439,32 @@ fn the_census_is_byte_stable() {
     assert_eq!(first, second);
 }
 
-/// THIS REPOSITORY'S EXEMPTIONS ARE THE BAN'S, EXACTLY. The census reads its
-/// exempt list from `[census.shell]` and the ban from `stays_bash`; two lists that
-/// could drift apart would let a file be exempt from the count and refused by the
-/// gate, or the reverse.
+/// THIS REPOSITORY'S BAN READS THE CENSUS'S OWN DECLARATION. There used to be a
+/// second exempt list inside the ban's module, pinned equal to this table's;
+/// since CLOUD-1994 the ban reads this table, so the property to hold is that
+/// the enabling row hands it over at all. `shell_banned.rs` pins the exempt set
+/// itself, and that every declared home is a line source.
 #[test]
-fn this_repositorys_exempt_list_is_the_bans_stays_bash() {
-    let module = std::fs::read_to_string(common::at_root("policy/shell-banned.rego")).unwrap();
-    let start = module.find("stays_bash := {").unwrap();
-    let end = start + module[start..].find('}').unwrap();
-    let banned: BTreeSet<String> = module[start..end]
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            Some(line.strip_prefix('"')?.strip_suffix("\",")?.to_owned())
-        })
-        .collect();
+fn this_repositorys_ban_reads_the_census_declaration() {
     let authority: toml::Value =
         toml::from_str(&std::fs::read_to_string(common::at_root("batten.toml")).unwrap()).unwrap();
-    let exempt: BTreeSet<String> = authority["census"]["shell"]["exempt"]
+    let row = authority["rule"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|glob| glob.as_str().unwrap().to_owned())
+        .find(|rule| rule.get("preset").and_then(toml::Value::as_str) == Some("shell-hygiene"))
+        .expect("this repository enables the shell-hygiene preset");
+    let documents: BTreeSet<&str> = row["documents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(toml::Value::as_str)
         .collect();
-    assert_eq!(exempt, banned);
+    assert!(documents.contains("batten.toml"), "{documents:?}");
+    assert!(
+        authority["census"]["shell"]["exempt"].as_array().is_some(),
+        "the census declares the exempt set the ban reads"
+    );
 }
 
 /// The real tree, under its own declaration: the census answers, and every
