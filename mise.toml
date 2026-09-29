@@ -7524,10 +7524,6 @@ fi
 printf '%s' "$probe" | cargo run --quiet -p batten -- doctor toolchain mise.toml
 """
 
-[tasks."session:submodules"]
-description = "Session start: check out any vendored submodules — none since the bats runner retired (CLOUD-843), so this answers at once"
-run = "git submodule update --init --recursive >/tmp/session-start-submodules.log 2>&1 || { echo '::error:: session-start: submodules failed — see /tmp/session-start-submodules.log' >&2; tail -5 /tmp/session-start-submodules.log >&2; exit 1; }"
-
 [tasks."session:doctor"]
 description = "Session start: provision what mise does not own — the rustup cross targets above all (CLOUD-218)"
 # AFTER `session:install` AND BEFORE THE PREFLIGHT, and both halves of that

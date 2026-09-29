@@ -62,9 +62,13 @@ jobs:
           # is a separate resolution the digest does not reach.
           version: 2026.9.1
           # cargo-llvm-cov drives cargo; rust supplies the compiler and the
-          # rustup that fetches llvm-tools-preview. Nothing else is invoked.
+          # rustup that fetches llvm-tools-preview. The workspace suite also
+          # resolves two pinned instruments through `mise which`, and fails
+          # rather than skips without them: hk (`hk_selection.rs`, the retired
+          # hk-selection bats suite) and opa (`lint_rego.rs`), so both are
+          # installed here as on rust.yml's legs (CLOUD-843).
           # `mise run ci-tools-check` fails if a name here drifts from mise.toml.
-          install_args: rust aqua:taiki-e/cargo-llvm-cov
+          install_args: rust aqua:taiki-e/cargo-llvm-cov hk aqua:open-policy-agent/opa
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # Instrumented builds are a different profile from every other job's,

@@ -330,8 +330,13 @@ fn a_suite_that_hangs_is_ended_by_the_sweeps_own_bound() {
     let waited = started.elapsed();
 
     // The window holds the toy's one cold build as well as the bound, so it is
-    // wider than a bats run needed — and still two orders of magnitude inside
-    // the hour the case sleeps, which is the discrimination this asserts.
+    // wider than a bats run needed — and still an order of magnitude inside the
+    // hour the case sleeps, which is the discrimination this asserts.
+    //
+    // CHANGED ASSERTION, RECORDED (CLOUD-843): over the bats toy this window was
+    // 60s and the bound 2s; over the Rust toy they are 300s and 10s, here and in
+    // the mirror below. It is a loosening of the assertion's numbers, not of what
+    // it separates: a bound that never fires still waits the full 3600s sleep.
     assert!(
         waited < std::time::Duration::from_secs(300),
         "the sweep waited {waited:?} on a suite that never returns, so the bound \

@@ -1,16 +1,6 @@
 #MUTANT-SUITE crates/batten/tests/it/hook_skip_local.rs
 #MUTANT skip-assignment-unread|s@^\tsome word in segment.words$@\tsome word in []@|a_local_step_skip_is_refused
-# INVERTED RATHER THAN FALSIFIED, and the difference is the whole row (CLOUD-1444).
-# This mutation used to substitute `false`, which removes the last conjunct and so
-# removes EVERY violation — and the case it names asserts the carve is ALLOWED. A
-# mutation that denies nothing cannot be observed by a case asserting nothing is
-# denied, so it reported `SURVIVED` on every sweep and blamed a suite that was
-# structurally unable to see it.
-#
-# `ci_lane` inverts the exemption instead: under mutation the carve is the one
-# thing REFUSED, which is exactly what `the_declared_ci_carve_is_not_judged_here`
-# checks. Same conjunct, same case, and now falsifiable.
-#MUTANT ci-carve-unread|s@^\tnot ci_lane$@\tci_lane@|the_declared_ci_carve_is_not_judged_here
+#MUTANT skip-pattern-unread|s@^\tregex.match(data.batten.patterns\["hook-step-skip-assignment"\], word)$@\tfalse@|the_retired_carve_is_refused_like_any_other
 # Switching a gate off for a local commit is a decision, not a flag (CLOUD-1340).
 #
 # MEASURED ON THE BRANCH THAT FILED IT, and the incident is the whole reason this
@@ -23,9 +13,9 @@
 # say so.
 #
 # THE ASYMMETRY IS THE FINDING. `ci-suite-lane` already governs `HK_SKIP_STEPS`
-# where CI sets it -- `input.tree.documents` over the workflow files, refusing the
-# `test:bats` carve coming apart -- so the DECLARED use is gated and the ad-hoc
-# one was not. A variable a repository deliberately depends on in one place and
+# where CI sets it -- `input.tree.documents` over the workflow files, refusing a
+# carve no other job answers -- so the DECLARED use is gated and the ad-hoc one
+# was not. A variable a repository deliberately depends on in one place and
 # refuses nowhere else is a hole shaped exactly like its own legitimate use, which
 # is why this reads the mediated call rather than widening that row.
 #
@@ -72,18 +62,13 @@ import rego.v1
 
 rules contains "hook skip unseen"
 
-# The declared carve, which is CI's and is judged by `ci-suite-lane` instead.
-#
-# NARROW ON PURPOSE AND ANCHORED AT BOTH ENDS. This exempts the one spelling the
-# `ci` job actually hands hk, and nothing that merely contains it -- so
-# `HK_SKIP_STEPS=test:bats,batten-check` is still refused, which is the shape an
-# author reaches for when adding "just one more" to a line they found in a
-# workflow. A prefix test here would hand back the whole hole.
-ci_lane if {
-	some segment in input.call.segments
-	some word in segment.words
-	word == "HK_SKIP_STEPS=test:bats"
-}
+# NO CARVE ANY MORE (CLOUD-843). This module used to exempt the one spelling the
+# `ci` job handed hk, `HK_SKIP_STEPS=test:bats`, so a local reproduction of that
+# job was not refused. The step retired with the shell suite, so the exemption
+# admitted a skip of nothing. The `ci` job's carve is now `batten-check`, and that
+# is not exempted in its place: it is the step this module's own incident class
+# reaches for. CI sets it in the workflow's `env:`, which never crosses the
+# mediated-call surface, and `ci-suite-lane` judges it there.
 
 violation contains {
 	"rule": "hook skip unseen",
@@ -104,14 +89,11 @@ violation contains {
 	# see this at all.
 	some word in segment.words
 	regex.match(data.batten.patterns["hook-step-skip-assignment"], word)
-
-	not ci_lane
 }
 
-# The predicate's own tests. The exemption case is the one that matters: a module
-# that only proved the deny fires would be satisfied by a build that refuses the
-# `ci` job's own line, which is the shape that gets a guard switched off rather
-# than satisfied.
+# The predicate's own tests. The anti-vacuity cases are the ones that matter: a
+# module that only proved the deny fires would be satisfied by a build that
+# refuses every command.
 #
 # EVERY CASE PASSES SEGMENTS AND AT LEAST ONE IS COMPOUND (CLOUD-857):
 # `batten policy test` refuses a mediated-call module whose cases all pass a bare
@@ -135,22 +117,23 @@ test_a_step_skip_in_a_compound_command_is_refused if {
 	]}}
 }
 
-# THE EXEMPTION, AND IT IS EXACT. `ci.yml` hands hk this precise value; anything
-# else is an author's own decision and is judged.
-test_the_declared_ci_carve_is_not_judged_here if {
-	count(violation) == 0 with input as {"call": {"segments": [{
+# THE RETIRED EXEMPTION IS GONE, NOT KEPT AS DEAD SURFACE (CLOUD-843). The spelling
+# this module once admitted names a step that no longer exists, so it is judged like
+# any other skip.
+test_the_retired_carve_is_refused_like_any_other if {
+	some _ in violation with input as {"call": {"segments": [{
 		"words": ["HK_SKIP_STEPS=test:bats", "mise", "run", "ci"],
 		"raw": "HK_SKIP_STEPS=test:bats mise run ci",
 		"terminator": null,
 	}]}}
 }
 
-# A VALUE THAT MERELY CONTAINS THE CARVE IS STILL A DECISION. This is the arm a
-# prefix test would lose, and it is the one an author actually reaches for.
-test_the_carve_with_a_step_appended_is_refused if {
+# THE CI JOB'S CURRENT CARVE IS NOT EXEMPTED EITHER: it is set in the workflow's
+# `env:`, which this surface never sees, and typed locally it is the incident.
+test_the_ci_jobs_carve_typed_locally_is_refused if {
 	some _ in violation with input as {"call": {"segments": [{
-		"words": ["HK_SKIP_STEPS=test:bats,batten-check", "mise", "run", "ci"],
-		"raw": "HK_SKIP_STEPS=test:bats,batten-check mise run ci",
+		"words": ["HK_SKIP_STEPS=batten-check", "mise", "run", "ci"],
+		"raw": "HK_SKIP_STEPS=batten-check mise run ci",
 		"terminator": null,
 	}]}}
 }

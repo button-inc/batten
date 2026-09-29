@@ -11,16 +11,16 @@
 //! by `hk`, which batten never sees, so a switched-off gate and a satisfied one
 //! were byte-identical from here.
 //!
-//! # Why the exemption case is the load-bearing one
+//! # Why there is no exemption any more (CLOUD-843)
 //!
 //! `job select missing` already governs this variable where CI sets it, so the
 //! DECLARED use is gated and the ad-hoc one was free — a hole shaped exactly like
-//! the repository's own legitimate use. That shape is what makes the exemption
-//! assertion matter more than the deny: a row that refused the `ci` job's own line
-//! would be a guard people switch off rather than satisfy, which is the failure
-//! this whole family exists to avoid. So `HK_SKIP_STEPS=test:bats` must be
-//! allowed, and `HK_SKIP_STEPS=test:bats,batten-check` must not — the second is
-//! what an author reaches for after finding the first in a workflow file.
+//! the repository's own legitimate use. The module used to exempt the one
+//! spelling the `ci` job handed hk, `HK_SKIP_STEPS=test:bats`. That step retired
+//! with the shell suite, so the exemption admitted a skip of nothing, and it went
+//! with the step. The `ci` job's carve is now `batten-check`, which CI sets in a
+//! workflow `env:` this surface never sees; typed by an agent it is the incident
+//! itself, so it is refused and not exempted in the old one's place.
 //!
 //! # This is the tier that proves the key exists
 //!
@@ -124,18 +124,20 @@ fn a_step_skip_behind_a_compound_command_is_still_reached() {
 }
 
 #[test]
-fn the_declared_ci_carve_is_not_judged_here() {
-    // THE CASE THAT KEEPS THIS FROM BEING SWITCHED OFF. `.github/workflows/ci.yml`
-    // hands hk exactly this, and `job select missing` is the row that governs it. A
-    // guard refusing the repository's own declared invocation gets disabled, and
-    // then it enforces nothing at all.
-    allowed_backgrounded("HK_SKIP_STEPS=test:bats mise run ci");
+fn the_retired_carve_is_refused_like_any_other() {
+    // The spelling the module once exempted names a step that no longer exists
+    // (CLOUD-843), so an exemption for it would be dead policy surface. The
+    // mutant `skip-pattern-unread` names this case: with the pattern unread,
+    // nothing here is refused.
+    denied_by_this_row("HK_SKIP_STEPS=test:bats mise run ci");
+    // The `ci` job's current carve, typed by an agent rather than set in the
+    // workflow's `env:`, is the incident this row was filed from.
+    denied_by_this_row("HK_SKIP_STEPS=batten-check mise run ci");
 }
 
 #[test]
 fn the_carve_with_a_step_appended_is_refused() {
-    // The arm a prefix test would lose, and the one an author actually reaches
-    // for: find the line in a workflow, add "just one more" step to it.
+    // Find the line in a workflow, add "just one more" step to it.
     denied_by_this_row("HK_SKIP_STEPS=test:bats,batten-check mise run ci");
     denied_by_this_row("HK_SKIP_STEPS=test:bats,hooks-wiring-check mise run verify");
 }

@@ -11590,16 +11590,6 @@ owner = "CLOUD-312"
 expires = "2027-02-28"
 
 [[hook.handler]]
-id = "session-submodules"
-on = "session-start"
-run = ["mise", "run", "session:submodules"]
-# A shallow network clone of `tests/bats`. Two minutes is generous for one small
-# repository and short enough that a hung transport does not hold the session.
-timeout_ms = 120000
-owner = "CLOUD-312"
-expires = "2027-02-28"
-
-[[hook.handler]]
 id = "session-doctor"
 on = "session-start"
 run = ["mise", "run", "session:doctor"]
