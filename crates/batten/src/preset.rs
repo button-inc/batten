@@ -431,6 +431,79 @@ value is what does the work, and it is a boolean rather than the string `true`."
         ],
         patterns: &[],
     },
+    // CLOUD-843. What the CI signal says about a consumer's own configuration
+    // over a window: a job's committed timeout budget still matches its measured
+    // p95. The records are `batten record query`'s, under the family names the
+    // module reads; the endpoints, windows and credential are the consumer's
+    // `[[forge.query]]` rows and the budgets are its workflows' own lines, so
+    // nothing here names a repository, a workflow or a job.
+    Manifest {
+        name: "ci-signal",
+        version: 1,
+        modules: &[PresetModule {
+            scope: RuleScope::Tree,
+            // A job key two spaces under `jobs:`, a job-level `timeout-minutes:`
+            // at four, and a matrix leg reported as `<key> (<axis>)` are GitHub
+            // Actions' grammar and its jobs endpoint's naming. Another provider's
+            // documents carry no `jobs:` mapping in that shape, so the module
+            // would read no budget and report a clean tree it never read
+            // (CLOUD-1625).
+            provider: Some("github-actions"),
+            pointer: "<preset:ci-signal>/timeout-tracks-its-measurement.rego",
+            source: include_str!("policy/presets/ci-signal/timeout-tracks-its-measurement.rego"),
+        }],
+        verdicts: &[
+            VendoredVerdict {
+                id: "bound pin loose",
+                gloss: "a job's declared timeout sits well above what its measurement justifies",
+                class: "A budget is a ceiling rather than a target, so headroom is correct and a slack \
+allowance keeps this off a job that merely got a little faster. Past that allowance the number has \
+gone slack, which is the direction a report that only complained about tightness would let rot \
+upward forever. Nothing is broken and no branch is at fault: re-derive the number and commit the \
+new comment.",
+                routes: &[run("task run first", "batten record query drift-jobs")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "bound pin wrong",
+                gloss: "a job's measurement has outgrown its declared timeout",
+                class: "The p95 of recent successful runs, times the headroom multiplier, is already \
+above the committed budget. Raise it before it starts failing healthy runs — this is the direction \
+that turns into a red job nobody caused.",
+                routes: &[run("task run first", "batten record query drift-jobs")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "bound pin stale",
+                gloss: "a dated debt entry now has a usable sample and can become a measured budget",
+                class: "The prompt, never the conversion. A bot re-baselining the number it is supposed \
+to defend is the one move a budget exists to forbid, so this reports that the debt is now \
+convertible and a deliberate commit does the converting.",
+                routes: &[run("task run first", "batten record query drift-jobs")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "bound measure partial",
+                gloss: "too few successful runs to characterise a job, or a measurement that did not \
+close, so no budget is proposed",
+                class: "Below the minimum a job is uncharacterised rather than fast, and saying so is \
+itself the useful signal: jobs that run weekly or on release have a handful of runs in any window, \
+so a naive percentile would compute a confident value from two samples and propose tightening a \
+release job on it. A family present without exactly one closing line was torn by something other \
+than its producer, which writes whole or removes, and reads the same way.",
+                routes: &[run("task run first", "batten record query drift-jobs")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+        ],
+        // The provider grammar the module writes inline, for the reason
+        // `Manifest::patterns` gives.
+        patterns: &[
+            "workflow-job-key",
+            "workflow-top-level-key",
+            "job-timeout-line",
+            "timeout-budget-grandfathered",
+        ],
+    },
     // CLOUD-1949. The host never halts on a prompt: in plan mode a call reads or
     // is refused, and a read — or a `batten` lifecycle verb outside plan mode —
     // is pre-approved. Claude Code's tool names and plan-file path are the

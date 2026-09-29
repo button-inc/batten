@@ -1,15 +1,25 @@
-//! `bound grade other` over the compiled binary (CLOUD-266, CLOUD-1717; the
-//! producer retired into forge queries under CLOUD-843).
+//! `ci-signal`'s timeout arm over the compiled binary (CLOUD-266, CLOUD-1717;
+//! the producer retired into forge queries, and the decision out of a consumer
+//! module into the vendored preset, under CLOUD-843).
 //!
 //! # Why this tier and not the module's own `test_` rules
 //!
-//! Every case in `policy/timeout-drift.rego` fabricates its input with
-//! `with input as`, which cannot see a fact the engine never projects — the state
-//! `policy/branch-age.rego` sat in for a whole session while its own suite stayed
-//! green (CLOUD-1810). These run the REAL producer — the three declared
-//! `[[forge.query]]` reads, against the `BATTEN_REST_FIXTURE` forge — and then the
-//! real module over what it wrote, and one of them asserts the thing no load-time
-//! case can: that a `warn` row REPORTS without failing the run.
+//! Every case in `<preset:ci-signal>/timeout-tracks-its-measurement.rego`
+//! fabricates its input with `with input as`, which cannot see a fact the engine
+//! never projects — the state `policy/branch-age.rego` sat in for a whole session
+//! while its own suite stayed green (CLOUD-1810). These run the REAL producer —
+//! the three declared `[[forge.query]]` reads, against the `BATTEN_REST_FIXTURE`
+//! forge — and then the real preset over what it wrote, and one of them asserts
+//! the thing no load-time case can: that a `warn` row REPORTS without failing the
+//! run.
+//!
+//! # A CONSUMER THAT IS NOT THIS REPOSITORY
+//!
+//! The scratch repository enables the preset with one row and declares no
+//! `[[pattern]]` and no `[[verdict]]` row at all: the provider grammar is the
+//! preset's, the four readings are its manifest's vocabulary, and the only
+//! consumer facts are its `[[forge.query]]` rows and its workflow's lines. That is
+//! the proof the decision is generic rather than this repository's.
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
@@ -17,26 +27,27 @@
 //! `[tasks.timeout-drift-record]`'s shell body for the measurement. The body is
 //! gone: the reads are `[[forge.query]]` rows walked by `record query`, the one
 //! subtraction the module cannot make is a `span` the producer computes, and the
-//! pooling and the p95 moved into the module beside the classification.
+//! pooling, the p95 and the classification are the `ci-signal` preset's, which
+//! every consumer on GitHub Actions can enable.
 //!
 //! THE POSTURE IS PRESERVED BY SEVERITY. `severity = "warn"` is the retired
 //! program's report-never-block posture on the engine's contract, and
 //! `a_drifted_budget_reports_without_failing_the_run` holds it there.
 //!
-// carried: mise-tasks/timeout-drift.sh policy/timeout-drift.rego kind:mechanism crates/batten/tests/it/timeout_drift.rs
-// carried: tests/timeout-drift.bats policy/timeout-drift.rego kind:mechanism crates/batten/tests/it/timeout_drift.rs
+// carried: mise-tasks/timeout-drift.sh crates/batten/src/policy/presets/ci-signal/timeout-tracks-its-measurement.rego kind:mechanism crates/batten/tests/it/timeout_drift.rs
+// carried: tests/timeout-drift.bats crates/batten/src/policy/presets/ci-signal/timeout-tracks-its-measurement.rego kind:mechanism crates/batten/tests/it/timeout_drift.rs
 // carried: "[tasks.timeout-drift-record]" crates/batten/src/forge_query.rs kind:mechanism crates/batten/tests/it/timeout_drift.rs
-// carried: "a measured budget matching its measurement reports clean" policy/timeout-drift.rego kind:mechanism
-// carried: "a budget the measurement has outgrown reports drift-tight, naming both numbers" policy/timeout-drift.rego kind:mechanism
-// carried: "a budget gone slack because the job got faster reports drift-loose — the ratchet" policy/timeout-drift.rego kind:mechanism
-// carried: "a small slack is not drift — a budget is a ceiling, not a target" policy/timeout-drift.rego kind:mechanism
-// carried: "a job with fewer than the minimum samples reports unmeasurable, never a number" policy/timeout-drift.rego kind:mechanism
-// carried: "a grandfathered entry with a usable sample is prompted for conversion" policy/timeout-drift.rego kind:mechanism
-// carried: "a grandfathered entry with too small a sample is unmeasurable, not a conversion prompt" policy/timeout-drift.rego kind:mechanism
-// carried: "matrix legs pool into one distribution — one timeout bounds them all" policy/timeout-drift.rego kind:mechanism
+// carried: "a measured budget matching its measurement reports clean" crates/batten/src/policy/presets/ci-signal/timeout-tracks-its-measurement.rego kind:mechanism
+// carried: "a budget the measurement has outgrown reports drift-tight, naming both numbers" crates/batten/src/policy/presets/ci-signal/timeout-tracks-its-measurement.rego kind:mechanism
+// carried: "a budget gone slack because the job got faster reports drift-loose — the ratchet" crates/batten/src/policy/presets/ci-signal/timeout-tracks-its-measurement.rego kind:mechanism
+// carried: "a small slack is not drift — a budget is a ceiling, not a target" crates/batten/src/policy/presets/ci-signal/timeout-tracks-its-measurement.rego kind:mechanism
+// carried: "a job with fewer than the minimum samples reports unmeasurable, never a number" crates/batten/src/policy/presets/ci-signal/timeout-tracks-its-measurement.rego kind:mechanism
+// carried: "a grandfathered entry with a usable sample is prompted for conversion" crates/batten/src/policy/presets/ci-signal/timeout-tracks-its-measurement.rego kind:mechanism
+// carried: "a grandfathered entry with too small a sample is unmeasurable, not a conversion prompt" crates/batten/src/policy/presets/ci-signal/timeout-tracks-its-measurement.rego kind:mechanism
+// carried: "matrix legs pool into one distribution — one timeout bounds them all" crates/batten/src/policy/presets/ci-signal/timeout-tracks-its-measurement.rego kind:mechanism
 // changed: "a failed API query is exit 2, never a drift verdict" crates/batten/src/forge_query.rs a forge that will not answer is `record query`'s could-not-look: exit 3, and the family is REMOVED, so the module reads an absent record and says nothing — `a_forge_that_will_not_answer_leaves_nothing_to_report_on` holds it
 // changed: "an absent gh is exit 2, never a pass" crates/batten/src/forge_query.rs the producer spawns no `gh`: the forge is read in process, and a missing credential is the forge's refusal, which is the could-not-look above
-// changed: "a missing workflow directory is exit 2, never a pass" policy/timeout-drift.rego the budgets are the workflows' own lines, read by the module; a tree with no workflow declares no budget, so there is nothing to report on
+// changed: "a missing workflow directory is exit 2, never a pass" crates/batten/src/policy/presets/ci-signal/timeout-tracks-its-measurement.rego the budgets are the workflows' own lines, read by the module; a tree with no workflow declares no budget, so there is nothing to report on
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -46,77 +57,24 @@ use crate::common;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{at_root, git_in, init_repo, run_with_stdin, scratch, stderr, stdout, write};
+use common::{git_in, init_repo, run_with_stdin, scratch, stderr, stdout, write};
 
 /// The repository the fixture forge answers for.
 const REPO: &str = "acme/widgets";
 
-/// The consumer's config: the committed module's row, the three families, and
-/// the three forge reads exactly as `batten.toml` declares them.
+/// The consumer's config: ONE row enabling the preset, the three families, and
+/// the three forge reads exactly as `batten.toml` declares them — and no
+/// `[[pattern]]` or `[[verdict]]` row, because a consumer of a preset writes
+/// none.
 const CONFIG: &str = r#"version = 1
 scope = ["**"]
-
-[[pattern]]
-id = "workflow-job-key"
-regex = '^  [A-Za-z0-9_-]+:[[:space:]]*$'
-
-[[pattern]]
-id = "workflow-top-level-key"
-regex = '^[a-z][A-Za-z0-9_-]*:'
-
-[[pattern]]
-id = "job-timeout-line"
-regex = '^    timeout-minutes:[[:space:]]*[0-9]+'
-
-[[pattern]]
-id = "timeout-budget-grandfathered"
-regex = '^#[[:space:]]*budget:[[:space:]]*grandfathered[[:space:]]+measured=[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]]*$'
-
-[[verdict]]
-id = "bound pin loose"
-gloss = "a job's declared timeout sits well above what its measurement justifies"
-class = "A budget is a ceiling rather than a target, and past the slack it has gone slack."
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run timeout-drift-record"
-
-[[verdict]]
-id = "bound pin wrong"
-gloss = "a job's measurement has outgrown its declared timeout"
-class = "Raise it before it starts failing healthy runs."
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run timeout-drift-record"
-
-[[verdict]]
-id = "bound pin stale"
-gloss = "a dated debt entry now has a usable sample"
-class = "The prompt, never the conversion."
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run timeout-drift-record"
-
-[[verdict]]
-id = "bound measure partial"
-gloss = "too few successful runs to characterise a job"
-class = "Below the minimum a job is uncharacterised rather than fast."
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run timeout-drift-record"
 
 [[rule]]
 id = "bound grade other"
 kind = "policy"
 scope = "tree"
-module = "policy/timeout-drift.rego"
+preset = "ci-signal"
+provider = "github-actions"
 line_sources = [".github/workflows/*.yml"]
 severity = "warn"
 
@@ -171,11 +129,6 @@ fn consumer(name: &str, declared: u32) -> (PathBuf, PathBuf) {
     let dir = scratch(&format!("timeout-drift-{name}"));
     init_repo(&dir);
     write(&dir, "batten.toml", CONFIG);
-    write(
-        &dir,
-        "policy/timeout-drift.rego",
-        &std::fs::read_to_string(at_root("policy/timeout-drift.rego")).expect("the module"),
-    );
     write(
         &dir,
         ".github/workflows/ci.yml",
