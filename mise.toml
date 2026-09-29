@@ -655,7 +655,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,land-divergence,task-linear-check,macos-link,task-mcp-allow-check,nonverdict,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census"
+MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,task-connector-allow-resolve,task-mcp-attach-check,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,land-divergence,task-linear-check,macos-link,task-mcp-allow-check,nonverdict,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,tracker-hygiene,engine-tracker-reading"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -3179,61 +3179,6 @@ prs=$(gh pr list --state merged --limit 200 --json headRefName --jq '.[].headRef
 } | cargo run --quiet -p batten -- record named branch-age
 """
 
-# CLOUD-192's reading half, ported off `mise-tasks/done-check.sh` under
-# CLOUD-1717. The decision is `policy/done.rego`; this reads the piped
-# `get_issue` payloads and resolves each issue against git, because `check`
-# cannot spawn `git log`. Every refusal the retired program made is kept here and
-# writes nothing: a record over an unread board, a missing `origin/main` (every
-# Done would look unlanded — a false green) or a tagless clone (every Done would
-# look unreleased — a false red) would each be a verdict about a fetch problem.
-[tasks.done-record]
-description = "Effect: record each piped issue's status and whether a release, main, or nothing carries a commit naming it (CLOUD-192)"
-shell = "bash -c"
-run = '''
-set -euo pipefail
-if ! payload=$(cat) || [[ -z "${payload//[[:space:]]/}" ]]; then
-  echo "::error:: done-record: stdin is empty; expected get_issue payloads. Nothing recorded." >&2
-  exit 2
-fi
-if ! issues=$(jq -sc 'if length == 1 and (.[0] | type == "array") then .[0] else . end' <<<"$payload" 2>/dev/null) ||
-  ! jq -e 'all(.[]; has("id") and has("status"))' <<<"$issues" >/dev/null 2>&1; then
-  echo "::error:: done-record: stdin is not a set of get_issue payloads (need id and status per issue). Nothing recorded." >&2
-  exit 2
-fi
-if ! git rev-parse --verify -q origin/main >/dev/null 2>&1; then
-  echo "::error:: done-record: origin/main does not resolve, so landedness cannot be read. Nothing recorded." >&2
-  exit 2
-fi
-if [[ -z "$(git tag -l 'v[0-9]*')" ]]; then
-  echo "::error:: done-record: no v* tags in this clone, so releasedness cannot be read. Fetch tags. Nothing recorded." >&2
-  exit 2
-fi
-# Each log read ONCE into a variable: `git log | grep -q` under pipefail reports
-# SIGPIPE even when grep matches, which read as a clean board.
-released=$(git log --format='%B' --tags='v[0-9]*')
-unreleased=$(git log --format='%B' origin/main --not --tags='v[0-9]*')
-# Bounded on both sides so CLOUD-17 is not matched by a commit naming CLOUD-179.
-names() { grep -qE "(^|[^0-9A-Za-z-])$2([^0-9]|$)" <<<"$1"; }
-rows=$(jq -r '.[] | [.id, .status] | @tsv' <<<"$issues" | sort -u | sort -t- -k2,2n)
-out=""
-n=0
-while IFS=$'\t' read -r id status; do
-  [[ -n "$id" ]] || continue
-  if names "$released" "$id"; then shipped=shipped
-  elif names "$unreleased" "$id"; then shipped=landed
-  else shipped=unlanded
-  fi
-  out+="issue"$'\t'"$id"$'\t'"$status"$'\t'"$shipped"$'\n'
-  n=$((n + 1))
-done <<<"$rows"
-if [[ -n "${BATTEN_BIN:-}" ]]; then
-  record=("$BATTEN_BIN" record named done)
-else
-  record=(cargo run --quiet -p batten -- record named done)
-fi
-printf '%scensus\tissues=%d\n' "$out" "$n" | "${record[@]}"
-'''
-
 [tasks."render:cli"]
 description = "Effect: render the CLI reference from the command surface — the publish-time artifact, never committed (CLOUD-171)"
 shell = "bash -c"
@@ -4371,79 +4316,21 @@ exit 1
 '''
 
 # An issue may become Done only if none of its own pull requests is still open
-# (CLOUD-468) — retired off `mise-tasks/done-pr-check.sh` under CLOUD-1752. A
-# merged PR completes a DIFF, and the board read it as completing an ISSUE; those
-# coincide only at N=1. Measured: CLOUD-420 carried four PRs, one an open draft,
-# read Done for 35 minutes, was reversed by hand, and the inference was made again.
+# (CLOUD-468). CLOUD-843 retired the bash body: the reading is `batten record
+# derive done-pr` (`crates/batten/src/tracker_reading.rs`) and the decision is the
+# `tracker-hygiene` preset's `done-has-no-open-pull` module, checked by the one
+# `issue state other` row. Payloads on stdin carry `.pulls` ({number, state,
+# draft}) beside each issue's attachments; an attached PR with no state is
+# could-not-look and records nothing.
 #
-# NOT `done-check` (CLOUD-192, release containment): that caller pipes rows with
-# no `.pulls`, which this reads as could-not-look, so the two stay two gates.
-#
-# ARITHMETIC ONLY: N attached pull requests, k open => not Done. Whether the
-# merged ones did the work is not computable and is not judged. A PR is an
-# attachment URL on GitHub — `claim-check`'s filter, character for character. A
-# DRAFT is open, and named so. Closed-unmerged is a DECIDED outcome, never a
-# refusal. An attached PR with no piped state is exit 2: an unread PR must not be
-# the cheapest route to Done. Pure function of stdin; pointer-only (id, rule, #n).
-#
-# Exit 0 licensed / 1 refused / 2 unreadable stdin.
+# Exit 0 licensed / 2 refused / 1 could not look — the engine's table.
 [tasks.done-pr-check]
-#MUTANT-SUITE crates/batten/tests/it/done_pr_check.rs
-#MUTANT draft-not-open|s/^\t\tif \[\[ "\$(jq -r '\.draft \/\/ false' <<<"\$pull")" = true \]\]; then$/\t\tif false; then/|the_defect_a_draft_pull_request_refuses_named_as_a_draft
-#MUTANT open-state-ignored|s/^\t\tif \[\[ "\$(jq -r '\.state \/\/ ""' <<<"\$pull")" = open \]\]; then$/\t\tif false; then/|an_open_pull_request_refuses_naming_its_number
-#MUTANT no-pr-licensed|s/^\tif \[\[ -z "\$numbers" \]\]; then$/\tif false; then/|no_pull_request_at_all_is_refused
-#MUTANT absent-state-licensed|s/^\t\tif \[\[ -z "\$pull" \]\]; then$/\t\tif false; then/|an_attached_pr_with_no_state_is_could_not_look
-#MUTANT filter-host-unanchored|s@github\\\\\.com/\.+/pull/@pull/@|a_pr_shaped_url_on_another_host_is_not_a_pr
 description = "Gate: an issue may become Done only if none of its own pull requests is still open (reads get_issue payloads on stdin)"
-shell = "bash -c"
 dir = "{{cwd}}"
-run = '''
-{% raw %}
-set -euo pipefail
-if ! issues=$(jq -sc 'if length == 1 and (.[0] | type == "array") then .[0] else . end' 2>/dev/null) ||
-	[[ "$(jq 'length' <<<"$issues")" = 0 ]] ||
-	! jq -e 'all(.[]; has("id"))' <<<"$issues" >/dev/null 2>&1; then
-	echo "::error:: stdin is not a set of get_issue payloads (need id per issue)" >&2
-	exit 2
-fi
-blocked=0
-report() {
-	echo "$1 $2" >&2
-	blocked=$((blocked + 1))
-}
-while read -r id; do
-	[[ -n "$id" ]] || continue
-	payload=$(jq -c --arg id "$id" '.[] | select(.id == $id)' <<<"$issues")
-	numbers=$(jq -r '[.attachments // [] | .[] | .url
-	                  | select(test("github\\.com/.+/pull/[0-9]+"))
-	                  | capture("/pull/(?<n>[0-9]+)").n] | unique | .[]' <<<"$payload")
-	# `graph-check` requires a PR to enter In Review, so Done cannot need less.
-	if [[ -z "$numbers" ]]; then
-		report "$id" "no-pr"
-		continue
-	fi
-	while read -r n; do
-		[[ -n "$n" ]] || continue
-		pull=$(jq -c --argjson n "$n" '(.pulls // []) | .[] | select(.number == $n)' <<<"$payload")
-		if [[ -z "$pull" ]]; then
-			echo "::error:: done-pr-check: $id names PR #$n and stdin carries no state for it. Fetch it and pipe it under .pulls — a Done over an unread PR is the defect this gate exists to refuse." >&2
-			exit 2
-		fi
-		if [[ "$(jq -r '.draft // false' <<<"$pull")" = true ]]; then
-			report "$id" "open-pr (#$n, draft)"
-			continue
-		fi
-		if [[ "$(jq -r '.state // ""' <<<"$pull")" = open ]]; then
-			report "$id" "open-pr (#$n)"
-		fi
-	done <<<"$numbers"
-done <<<"$(jq -r '.[].id' <<<"$issues")"
-if [[ "$blocked" -ne 0 ]]; then
-	echo "::error:: done-pr-check: not Done — an issue still has a pull request open. A merged PR completes a diff, not an issue; an issue is done when every PR it carries has landed." >&2
-	exit 1
-fi
-{% endraw %}
-'''
+run = [
+  "cargo run --quiet -p batten -- record derive done-pr",
+  "cargo run --quiet -p batten -- check --rule 'issue state other'",
+]
 
 # Apply the committed `.claude/settings.json` permissions to whichever server
 # name the host exposed (CLOUD-191) — retired off `mise-tasks/connector-allow-
@@ -5780,179 +5667,57 @@ echo "board-sweep: every gate ran and none names dissonance ($count issue(s))"
 {% endraw %}
 '''
 
-# CLOUD-829's reading half, ported off `mise-tasks/duplicate-close-check.sh` under
-# CLOUD-1752. The decision is `policy/duplicate-close.rego`. This reads the piped
-# `get_issue` payloads and records one `dup` line per duplicate close, both stamps
-# truncated to the window, then a census. Every could-not-look the program had is
-# a refusal here that writes nothing: an unread set, no payload carrying
-# `duplicateOf` at all (a projection that dropped the relation reads as "no
-# duplicates"), a close with no `canceledAt`, a target outside the piped set.
+# A duplicate close decided in the same operation as its target's own close
+# (CLOUD-829). CLOUD-843 retired both bash bodies: the reading is `batten record
+# derive duplicate-close`, which truncates both stamps to 19 characters (the
+# second) and refuses — recording nothing — on a set with no `duplicateOf` key
+# anywhere, a close with no stamp, or a target nobody piped; the decision is the
+# `tracker-hygiene` preset's `duplicate-close-is-argued` module.
 #
-# The window is a count of leading ISO-8601 characters, `19` being the second:
-# no date arithmetic, because this must stay portable. Two closes 400ms apart
-# across a second boundary are missed, and `DUPLICATE_CLOSE_WINDOW` widens it.
-[tasks.duplicate-close-record]
-#MUTANT-SUITE crates/batten/tests/it/duplicate_close.rs
-#MUTANT absent-key-reads-as-clean|s@^\[\[ "\$keyed" -gt 0 \]\]@[[ "$keyed" -ge 0 ]]@|a_set_with_no_duplicateof_key_anywhere_is_could_not_look
-#MUTANT target-outside-the-set-passes|s@refuse "\$id is a duplicate of \$target, which was not piped@continue # "@|a_duplicate_whose_target_was_not_piped_is_unjudgeable
-#MUTANT unstamped-close-passes|s@refuse "\$id is a duplicate of \$target and carries no canceledAt@continue # "@|a_duplicate_close_with_no_stamp_is_unjudgeable
-description = "Effect: record each piped duplicate close beside its target's completion, truncated to the window (CLOUD-829)"
-shell = "bash -c"
-dir = "{{cwd}}"
-run = '''
-{% raw %}
-set -uo pipefail
-if [[ -n "${BATTEN_BIN:-}" ]]; then batten=("$BATTEN_BIN"); else batten=(cargo run --quiet -p batten --); fi
-refuse() { echo "::error:: duplicate-close-record: $*. Nothing recorded." >&2; exit 2; }
-window="${DUPLICATE_CLOSE_WINDOW:-19}"
-[[ "$window" =~ ^[0-9]+$ ]] || refuse "DUPLICATE_CLOSE_WINDOW is not a whole number"
-if ! payload=$(cat) || [[ -z "${payload//[[:space:]]/}" ]]; then
-	refuse "stdin is empty; expected get_issue payload(s)"
-fi
-if ! issues=$(jq -sc 'if length == 1 and (.[0] | type == "array") then .[0] else . end' <<<"$payload" 2>/dev/null) ||
-	! jq -e 'type == "array" and length > 0' <<<"$issues" >/dev/null 2>&1; then
-	refuse "stdin is not a get_issue payload set. Recover it with \`mise run board-payloads <id>...\` (CLOUD-526)"
-fi
-# THE ANTI-VACUITY TERM: a set in which NO payload carries the key was fetched
-# without relations. An explicit `null` is data; only total absence refuses.
-keyed=$(jq '[.[] | select((try (.relations | has("duplicateOf")) catch false))] | length' <<<"$issues" 2>/dev/null) || keyed=0
-[[ "$keyed" -gt 0 ]] || refuse "no payload carries relations.duplicateOf — re-fetch with get_issue(includeRelations: true)"
-# `-` for an absent field, never empty: tab is whitespace to `read`, so an
-# empty column collapses and shifts every field after it.
-rows=$(jq -r '.[] | [(.id // "-"), (.canceledAt // "-"), (.relations.duplicateOf.id // .relations.duplicateOf // "-")] | @tsv' <<<"$issues" | sort -t- -k2,2n)
-ids=$'\n'"$(jq -r '.[].id // empty' <<<"$issues")"$'\n'
-out=""
-n=0
-while IFS=$'\t' read -r id closed target; do
-	[[ -n "$id" && "$target" != - && "$target" != null ]] || continue
-	[[ "$closed" != - && "$closed" != null ]] || refuse "$id is a duplicate of $target and carries no canceledAt, so its close cannot be compared"
-	[[ "$ids" == *$'\n'"$target"$'\n'* ]] || refuse "$id is a duplicate of $target, which was not piped — a question nobody asked is not a clean answer"
-	target_at=$(jq -r --arg t "$target" 'first(.[] | select(.id == $t) | .completedAt // empty)' <<<"$issues")
-	[[ -n "$target_at" ]] || continue
-	out+="dup"$'\t'"$id"$'\t'"${closed:0:$window}"$'\t'"$target"$'\t'"${target_at:0:$window}"$'\n'
-	n=$((n + 1))
-done <<<"$rows"
-printf '%scensus\tduplicates=%d\n' "$out" "$n" | "${batten[@]}" record named duplicate-close ||
-	refuse "could not write the record"
-{% endraw %}
-'''
-
-# The name `board-sweep` composes, kept, and kept on the composers' exit table:
-# 0 clean, 1 a refusal, 2 could not look. The engine answers a violation with 2,
-# so the one mapping lives here. The producer refuses at 2 before any check, so
-# a module finding can only ever be the refusal lane.
+# Exit 0 clean / 2 refused / 1 could not look — the engine's table.
 [tasks.duplicate-close-check]
 description = "Gate: a duplicate close decided in the same operation as its target's close (reads get_issue payloads on stdin) — CLOUD-829"
-shell = "bash -c"
 dir = "{{cwd}}"
-run = '''
-{% raw %}
-set -uo pipefail
-if [[ -n "${BATTEN_BIN:-}" ]]; then batten=("$BATTEN_BIN"); else batten=(cargo run --quiet -p batten --); fi
-manifest="${MISE_CONFIG_FILE:-${MISE_PROJECT_ROOT:-$PWD}/mise.toml}"
-MISE_CONFIG_FILE="$manifest" mise run -q duplicate-close-record || exit 2
-rc=0
-"${batten[@]}" check --rule 'issue answer other' || rc=$?
-case "$rc" in
-0) echo "duplicate-close-check: no duplicate close shares an operation with its target's" ;;
-2)
-	echo "::error:: duplicate-close-check: a duplicate close was decided in the same operation as its target's own close. The gate does not know which row was right, and is not claiming to: what it refuses is TWO decisions taken as one. Argue the close on its own." >&2
-	exit 1
-	;;
-*) exit 2 ;;
-esac
-{% endraw %}
-'''
+run = [
+  "cargo run --quiet -p batten -- record derive duplicate-close",
+  "cargo run --quiet -p batten -- check --rule 'issue state other'",
+]
 
 # THE NAME STAYS CALLABLE: `AGENTS.md` and the release workflow's summary tell a
 # reader to run `mise run done-check`, and it keeps meaning the same gate — read
 # the piped board, then decide over what was read.
 [tasks.done-check]
 description = "Gate: no issue sits Done while no release tag contains its commits (reads get_issue payloads on stdin)"
+# CLOUD-843: the reading is `batten record derive done`, over this repository's
+# release tags, its trunk and its Done column; the decision is the
+# `tracker-hygiene` preset's `done-is-released` module.
 run = [
-  "mise run done-record",
-  "cargo run --quiet -p batten -- check --rule 'issue grade other'",
+  "cargo run --quiet -p batten -- record derive done --input 'released=v[0-9]*' --input landed=origin/main --input done=Done",
+  "cargo run --quiet -p batten -- check --rule 'issue state other'",
 ]
 
-# CLOUD-323's reading half, ported off `mise-tasks/deferral-check.sh` under
-# CLOUD-1717. The decision is `policy/deferral.rego`. This finds the two measured
-# deferral shapes per paragraph, outside code spans, and records the paragraph's
-# NUMBER and the keys it names — never its prose (rule 4) — plus the keys the PR
-# already claims, which the module subtracts. An empty body is a clean record,
-# not an error: the retired program passed it.
-[tasks.deferral-record]
-description = "Effect: record each PR-body paragraph using a deferral shape, with the keys it names and the keys the PR claims (CLOUD-323)"
-shell = "bash -c"
-run = '''
-set -euo pipefail
-if [[ -n "${BATTEN_BIN:-}" ]]; then batten=("$BATTEN_BIN"); else batten=(cargo run --quiet -p batten --); fi
-body=$(cat) || body=""
-claimed=$(printf '%s' "$body" | "${batten[@]}" claim keys 2>/dev/null | tr '\n' ' ' | sed 's/ *$//' || true)
-out="claimed"$'\t'"${claimed:--}"$'\n'
-n=0
-paragraph=0
-backtick='`'
-if [[ -n "${body//[[:space:]]/}" ]]; then
-  while IFS= read -r para; do
-    paragraph=$((paragraph + 1))
-    # A span NAMING the phrase is not a paragraph USING it.
-    prose=$(sed -E "s/${backtick}[^${backtick}]*${backtick}/CODESPAN/g" <<<"$para")
-    grep -qiE 'judge?ment call|not verified' <<<"$prose" || continue
-    keys=$(grep -oE 'CLOUD-[0-9]+' <<<"$para" | sort -u | tr '\n' ' ' | sed 's/ *$//' || true)
-    out+="deferral"$'\t'"$paragraph"$'\t'"${keys:--}"$'\n'
-    n=$((n + 1))
-  # One paragraph per LINE, never NUL-separated: BSD awk cannot emit a NUL
-  # through ORS, which on macOS read no paragraph at all and recorded nothing.
-  done < <(tr -d '\r' <<<"$body" | awk 'BEGIN { RS = "" } { gsub(/\n/, " "); print }')
-fi
-printf '%scensus\tdeferrals=%d\n' "$out" "$n" | "${batten[@]}" record named deferral
-'''
-
+# CLOUD-323's gate. CLOUD-843 retired the bash reading into `batten record derive
+# deferral`: the paragraph split, the code-span neutralisation and the claimed
+# keys are the engine's, the two measured shapes are `[[pattern]] deferral-shape`,
+# and the decision is the `tracker-hygiene` preset's `deferral-has-an-owner`.
 [tasks.deferral-check]
 description = "Gate: a PR body that defers a decision without naming the issue that owns it (reads the body on stdin; pointer-only)"
 run = [
-  "mise run deferral-record",
-  "cargo run --quiet -p batten -- check --rule 'prose own other'",
+  "cargo run --quiet -p batten -- record derive deferral --input shape=deferral-shape --input base=origin/main",
+  "cargo run --quiet -p batten -- check --rule 'issue state other'",
 ]
 
-# CLOUD-192's reading half, ported off `mise-tasks/closing-key-check.sh` under
-# CLOUD-1717. The decision is `policy/closing-key.rego`. Four key sets, never a
-# line of the body: what it NAMES (bounded, so CLOUD-17 is not CLOUD-179), what
-# it CLOSES (the engine grammar, the same authority the `pr-closes` recorder
-# asks), what the branch SERVED (the first key of each `Refs:` trailer — source 3
-# alone, so the comparison is not circular), and what a line-anchored
-# `DO-NOT-CLOSE` holds. An empty body is could-not-look: exit 2, nothing written.
-[tasks.closing-key-record]
-description = "Effect: record the keys a PR body names and closes, the keys its branch served, and any DO-NOT-CLOSE hold (CLOUD-192, CLOUD-674)"
-shell = "bash -c"
-run = '''
-set -euo pipefail
-if [[ -n "${BATTEN_BIN:-}" ]]; then batten=("$BATTEN_BIN"); else batten=(cargo run --quiet -p batten --); fi
-if ! body=$(cat) || [[ -z "${body//[[:space:]]/}" ]]; then
-  echo "::error:: closing-key-record: stdin is empty; expected a PR body. Nothing recorded." >&2
-  exit 2
-fi
-join() { sort -u | sort -t- -k2,2n | tr '\n' ' ' | sed 's/ *$//'; }
-named=$(grep -oiE '(^|[^0-9A-Za-z-])CLOUD-[0-9]+' <<<"$body" | grep -oiE 'CLOUD-[0-9]+' | tr '[:lower:]' '[:upper:]' | join || true)
-closing=$(printf '%s' "$body" | "${batten[@]}" claim keys --closing-only --branch "" --title "" --log "" 2>/dev/null | join || true)
-served=$("${batten[@]}" claim keys --refs-first-only 2>/dev/null </dev/null | join || true)
-# NO TRAILING BOUNDARY GROUP (#1036): `[0-9]+` is greedy, so it already stops
-# at the first non-digit, and a group consuming that character ate the next
-# key's leading boundary -- `grep -o` then dropped every second key of a list.
-hold=none
-if grep -qE '^[[:space:]]*DO-NOT-CLOSE' <<<"$body"; then
-  held=$(grep -E '^[[:space:]]*DO-NOT-CLOSE' <<<"$body" | grep -oiE '(^|[^0-9A-Za-z-])CLOUD-[0-9]+' | grep -oiE 'CLOUD-[0-9]+' | tr '[:lower:]' '[:upper:]' | join || true)
-  hold=${held:-global}
-fi
-printf 'named\t%s\nclosing\t%s\nserved\t%s\nhold\t%s\n' "${named:--}" "${closing:--}" "${served:--}" "$hold" |
-  "${batten[@]}" record named closing-key
-'''
-
+# CLOUD-192's and CLOUD-674's gate. CLOUD-843 retired the bash reading into
+# `batten record derive closing-key`: what the body names and closes is the
+# engine grammar's, what the branch served is `claim keys`' refs-first source
+# since `origin/main`, the marker is `[[pattern]] closing-hold-marker`, and the
+# decision is the `tracker-hygiene` preset's `closing-key-closes`. An empty body
+# is could-not-look.
 [tasks.closing-key-check]
 description = "Gate: a PR body that names its issue but never in closing form, so the merge will not move the board (reads the body on stdin; pointer-only)"
 run = [
-  "mise run closing-key-record",
-  "cargo run --quiet -p batten -- check --rule 'diff key other'",
+  "cargo run --quiet -p batten -- record derive closing-key --input hold=closing-hold-marker --input base=origin/main",
+  "cargo run --quiet -p batten -- check --rule 'issue state other'",
 ]
 
 [tasks.nonverdict-record]

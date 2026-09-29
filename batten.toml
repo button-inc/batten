@@ -2027,6 +2027,24 @@ regex = "(?i)worth (noting|flagging|mentioning|naming)|one thing (I would|I['’
 id = "deferral-offered"
 regex = "Your call, |(?i:waiting on your call|both your call|a checkpoint with you)"
 
+# CLOUD-323's two measured deferral shapes in a PR body, which `record derive
+# deferral --input shape=deferral-shape` matches per paragraph outside code
+# spans (CLOUD-843 moved the literal here from `[tasks.deferral-record]`).
+# Measured over 60 merged PR bodies: `worth checking` and `deliberate` fired on
+# review prompts and were dropped; these two survived.
+[[pattern]]
+id = "deferral-shape"
+regex = '(?i)judge?ment call|not verified'
+
+# The line-anchored marker a PR body uses to decline completing its issue
+# (CLOUD-192, CLOUD-674): `record derive closing-key --input
+# hold=closing-hold-marker` reads the keys on every line it matches, and a bare
+# one declines the whole body. Anchored, so a body MENTIONING the marker has not
+# used it; leading whitespace is not a mention.
+[[pattern]]
+id = "closing-hold-marker"
+regex = '^[[:space:]]*DO-NOT-CLOSE'
+
 # The §1 span, narrowed before the paths are read (CLOUD-854).
 #
 # The fifth column holds every path the BODY names, and a path-name intersection
@@ -2414,28 +2432,29 @@ writer = "mise run timeout-drift-record"
 record = "nonverdict"
 writer = "mise run nonverdict-record"
 
-# CLOUD-192's reading half, ported off `done-check.sh` under CLOUD-1717. The
-# decision is `policy/done.rego`; the reading needs stdin payloads and `git log`.
+# The `tracker-hygiene` preset's five families (CLOUD-843). Each is written by
+# `batten record derive <family>` — the engine's reading of the piped board or
+# PR body, `crate::tracker_reading` — which the named task runs before it
+# checks. The decisions are the preset's.
 [[record]]
 record = "done"
-writer = "mise run done-record"
+writer = "mise run done-check"
 
-# CLOUD-829's reading half, ported off `duplicate-close-check.sh` under
-# CLOUD-1752. The decision is `policy/duplicate-close.rego`.
+[[record]]
+record = "done-pr"
+writer = "mise run done-pr-check"
+
 [[record]]
 record = "duplicate-close"
-writer = "mise run duplicate-close-record"
+writer = "mise run duplicate-close-check"
 
-# The two landing body gates' reading halves, ported off `deferral-check.sh` and
-# `closing-key-check.sh` under CLOUD-1717. Their decisions are
-# `policy/deferral.rego` and `policy/closing-key.rego`.
 [[record]]
 record = "deferral"
-writer = "mise run deferral-record"
+writer = "mise run deferral-check"
 
 [[record]]
 record = "closing-key"
-writer = "mise run closing-key-record"
+writer = "mise run closing-key-check"
 
 # CLOUD-518's reading, ported off `pr-unsubscribed.sh`'s `check` under CLOUD-1717.
 [[record]]
@@ -7419,44 +7438,23 @@ scope = "tree"
 module = "policy/nonverdict.rego"
 severity = "warn"
 
-# CLOUD-192, ported off `mise-tasks/done-check.sh` under CLOUD-1717. `deny`, as
-# the retired gate's exit 1 was: a Done no release carries is the board lying,
-# and the one who set it can move it back. It fires only over a record someone
-# produced by piping the board in, so an ordinary `check` with no record is
-# silent rather than red.
+# CLOUD-843: the board's own claims, held to what git and the forge already
+# say, as the vendored `tracker-hygiene` preset. It carries the five decisions
+# that were four consumer modules and one shell body — `done-check` (CLOUD-192),
+# `done-pr-check` (CLOUD-468), `duplicate-close-check` (CLOUD-829),
+# `deferral-check` (CLOUD-323) and `closing-key-check` (CLOUD-192, CLOUD-674) —
+# none of which named anything only this repository has once the readings
+# moved into `record derive`.
+#
+# `deny`, as every one of the five was. Each fires only over a record its task
+# produced by piping the board or a PR body in, so an ordinary `check` with no
+# record is silent rather than red; and each task's producer clears the other
+# four families first, so the one row judges the question just asked.
 [[rule]]
-id = "issue grade other"
+id = "issue state other"
 kind = "policy"
 scope = "tree"
-module = "policy/done.rego"
-severity = "deny"
-
-# CLOUD-829, ported off `duplicate-close-check.sh` under CLOUD-1752. Silent with
-# no record, like its siblings: the record is produced by piping the board in.
-[[rule]]
-id = "issue answer other"
-kind = "policy"
-scope = "tree"
-module = "policy/duplicate-close.rego"
-severity = "deny"
-
-# CLOUD-323 and CLOUD-192, ported off the two landing body gates under
-# CLOUD-1717. `deny`, as each program's exit 1 was: `land` pipes the PR body
-# through `mise run deferral-check` and `mise run closing-key-check` before
-# readying, and each wrapper produces its record and checks its one rule. With
-# no record they are silent, so an ordinary `check` is unaffected.
-[[rule]]
-id = "prose own other"
-kind = "policy"
-scope = "tree"
-module = "policy/deferral.rego"
-severity = "deny"
-
-[[rule]]
-id = "diff key other"
-kind = "policy"
-scope = "tree"
-module = "policy/closing-key.rego"
+preset = "tracker-hygiene"
 severity = "deny"
 
 # CLOUD-518, ported off `mise-tasks/pr-unsubscribed.sh` under CLOUD-1717. `deny`,
@@ -15620,133 +15618,9 @@ id = "task run first"
 kind = "command"
 target = "mise run pr-unsubscribed check"
 
-# CLOUD-323's readings, ported off `deferral-check.sh` under CLOUD-1717.
-[[verdict]]
-id = "prose own unnamed"
-gloss = "a PR-body paragraph defers a decision and names no issue that owns it, other than the one the PR claims"
-class = """
-A PR body is not a durable home: nothing sweeps merged bodies, and the board is \
-what others read. File the decision and name its key in the same paragraph; the \
-key this PR claims names the work in hand, not a home for what it leaves open.
-"""
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run deferral-record"
-
-[[verdict]]
-id = "prose read partial"
-gloss = "the deferral record carries no closing census, or one that disagrees with its lines"
-class = """
-A record torn mid-write judges part of a body as if it were all of it.
-"""
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run deferral-record"
-
-# CLOUD-192's and CLOUD-674's readings, ported off `closing-key-check.sh` under
-# CLOUD-1717.
-[[verdict]]
-id = "diff key missing"
-gloss = "the PR body names its issue but never in closing form, so the merge moves nothing"
-class = """
-The tracker's merged-event automation fires only for a closing pull request: \
-`Refs: CLOUD-192` merged and never moved, `Closes CLOUD-192` moved in two \
-seconds. Write `Closes <key>`, or a line-anchored `DO-NOT-CLOSE` if this PR is \
-not meant to complete it.
-"""
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run closing-key-record"
-
-[[verdict]]
-id = "diff key dropped"
-gloss = "the PR body closes some of the keys its commits served and strands the rest"
-class = """
-A served key the body does not close never reaches In Review while its work is \
-on main. Write `Closes <key>` for each, or `DO-NOT-CLOSE <key>` on its own line \
-to decline just that one.
-"""
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run closing-key-record"
-
-[[verdict]]
-id = "diff read partial"
-gloss = "the closing-key record is missing one of its four readings"
-class = """
-A record missing a reading decides over part of the answer.
-"""
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run closing-key-record"
-
-# CLOUD-192's two readings, ported off `done-check.sh` under CLOUD-1717.
-[[verdict]]
-id = "issue ship ahead"
-gloss = "an issue reads Done while its commits are on main and no release tag contains them"
-class = """
-`Done` on this board means released, and landed-but-unreleased is In Review. \
-Refs come from commit messages, so a ref inside a tag cannot confirm a Done — \
-but a ref on `main` that no `v*` tag reaches is conclusive: nothing shipped it.
-"""
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run done-record"
-
-[[verdict]]
-id = "issue grade twice"
-gloss = "a duplicate close was decided in the same operation as its target's own close"
-class = """
-Whether two rows contradict is not computable, and this does not claim to. A \
-duplicate close whose target entered a completed state in the same second is \
-two decisions taken as one, and one was never argued. Argue the close on its \
-own: either the rows really say the same thing, or the closed one carries a \
-finding about the survivor and needs reopening.
-"""
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run duplicate-close-record"
-
-[[verdict]]
-id = "issue count partial"
-gloss = "the duplicate-close record carries no closing census, or one that disagrees with its lines"
-class = """
-A record torn mid-write judges part of a board as if it were all of it. The \
-census is written last and counts the lines above it.
-"""
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run duplicate-close-record"
-
-[[verdict]]
-id = "issue read partial"
-gloss = "the done record carries no closing census, or one that disagrees with its lines"
-class = """
-A record torn mid-write judges part of a board as if it were all of it. The \
-census is written last and counts the lines above it, so a missing or wrong \
-one is a write that did not finish rather than a clean board.
-"""
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run done-record"
+# The nine classes CLOUD-192, CLOUD-323, CLOUD-674 and CLOUD-829 raised are the
+# `tracker-hygiene` preset's since CLOUD-843, declared in its manifest
+# (`crates/batten/src/preset.rs`) beside the modules that raise them.
 
 # CLOUD-484's two readings, ported off `nonverdict-assert.sh` under CLOUD-1717.
 [[verdict]]

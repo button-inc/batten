@@ -689,6 +689,16 @@ declared_modules := {
 	# mints no `Finding` and reaches no decider, and it starts no program, which
 	# is what keeps the verb on the derived read-only allowlist.
 	"census",
+	# `tracker_reading` arrived with CLOUD-843 and is `probe_verdict`'s class one
+	# size up: a READING the `record derive` dispatch calls, for the five tracker
+	# families the `tracker-hygiene` preset decides over. It reaches `git` for the
+	# release and trunk walks, `ready` and `race` for the one key grammar and the
+	# one claimed-key authority, `landed` for the one pull-request URL spelling,
+	# and `error` for its refusals. IT DECIDES NOTHING — the preset's modules do —
+	# so its `rules` and `hook` edges are forbidden below for `forge_query`'s
+	# reason: a producer that reached the engine deciding over its record would
+	# be a measurement that knew which verdict it was feeding.
+	"tracker_reading",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
@@ -892,6 +902,8 @@ forbidden[from] contains to if {
 		# producer that reached the engine deciding over its record would be a
 		# measurement that knew which verdict it was feeding (CLOUD-843).
 		"forge_query": {"rules", "hook"},
+		# `tracker_reading -> {rules, hook}`, `forge_query`'s pair for its reason.
+		"tracker_reading": {"rules", "hook"},
 	}
 	some to in targets
 }
@@ -1137,6 +1149,27 @@ test_the_forge_query_producer_reaches_what_it_composes if {
 	count(violation) == 0 with input as judging(
 		"crates/batten/src/record.rs",
 		[internal("forge_query", 20)],
+	)
+}
+
+# CLOUD-843's tracker readings, both directions: the reading must not reach the
+# engine deciding over its record, and it may reach what it composes.
+test_the_tracker_reading_must_not_reach_the_engine_it_feeds if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/tracker_reading.rs",
+		[internal("rules", 12)],
+	)
+}
+
+test_the_tracker_reading_reaches_what_it_composes if {
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/tracker_reading.rs",
+		[internal("git", 10), internal("ready", 11), internal("race", 12), internal("landed", 13)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/record.rs",
+		[internal("tracker_reading", 20)],
 	)
 }
 
