@@ -431,6 +431,162 @@ value is what does the work, and it is a boolean rather than the string `true`."
         ],
         patterns: &[],
     },
+    // CLOUD-843. What the CI signal says about a landing loop over a window: it
+    // stays linear (one matrix per landing, run to green), and a required job's
+    // failure reaches a verdict. The records are `batten record divergence`'s and
+    // `batten record nonverdict`'s, under the families those verbs name; every
+    // consumer fact — workflows, roster, fan-in, verdict spellings — was spent by
+    // the producer, so nothing here names one. Two modules, ONE enabling row: a
+    // consumer that runs only one producer has only one family, and the other
+    // module is silent.
+    Manifest {
+        name: "ci-signal",
+        version: 1,
+        modules: &[
+            PresetModule {
+                scope: RuleScope::Tree,
+                // Reads a record of counts, not a workflow document: no provider's
+                // expression language is in it.
+                provider: None,
+                pointer: "<preset:ci-signal>/landing-stays-linear.rego",
+                source: include_str!("policy/presets/ci-signal/landing-stays-linear.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:ci-signal>/required-failures-reach-a-verdict.rego",
+                source: include_str!(
+                    "policy/presets/ci-signal/required-failures-reach-a-verdict.rego"
+                ),
+            },
+        ],
+        verdicts: &[
+            VendoredVerdict {
+                id: "lane read partial",
+                gloss: "the measurement could not read part of its window, so a green verdict would cover \
+less than it claims",
+                class: "A runs endpoint that caps pagination while still reporting the true total lets a \
+walk that stops on a short page read a PREFIX and look like a clean finish. Measured: 1000 of 1446 \
+runs collected, reporting zero fast-forward refusals over a window carrying 598. Narrow the window.",
+                routes: &[run(
+                    "task run first",
+                    "batten record divergence --ci-workflow <file> --land-workflow <file>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "lane count spent",
+                gloss: "the landing loop bought more CI matrices per landing than its budget",
+                class: "The ideal is 1.00 — one matrix, run to green, landed. The budget is 2.00 because \
+the second run is a lease precondition cancelling an unauthorised matrix, which is the mechanism \
+working.",
+                routes: &[run(
+                    "task run first",
+                    "batten record divergence --ci-workflow <file> --land-workflow <file>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "lane grade red",
+                gloss: "red CI runs per landing are over budget",
+                class: "A red run means local verification was skipped or disagreed with CI, and each one \
+spent a full matrix to say so.",
+                routes: &[run(
+                    "task run first",
+                    "batten record divergence --ci-workflow <file> --land-workflow <file>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "lane reach late",
+                gloss: "cancelled runs have a median lifetime past the budget",
+                class: "LATENCY, NEVER COUNT. An early cancellation is a lease precondition stopping an \
+unauthorised matrix for ~20 runner-seconds instead of billing ~500; a late one is a matrix billed \
+for a verdict nobody reads.",
+                routes: &[run(
+                    "task run first",
+                    "batten record divergence --ci-workflow <file> --land-workflow <file>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "lease guard dropped",
+                gloss: "more CI matrices ran concurrently than the lease admits",
+                class: "Landing is serialised behind a lease, so concurrency above the admitted-successor \
+bound means something is spending CI without holding it.",
+                routes: &[run(
+                    "task run first",
+                    "batten record divergence --ci-workflow <file> --land-workflow <file>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "lane measure late",
+                gloss: "runs waited past the budget at p90 before starting",
+                class: "The runner pool saturating, which is a different defect from contention and must \
+not be read as one.",
+                routes: &[run(
+                    "task run first",
+                    "batten record divergence --ci-workflow <file> --land-workflow <file>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "job measure late",
+                gloss: "individual matrix legs waited past the budget at p90 before starting",
+                class: "A run's own figure is its FIRST job's start, so this is the one that sees a leg \
+queueing behind its siblings — the two disagreeing is what tells a wide matrix apart from a \
+saturated pool.",
+                routes: &[run(
+                    "task run first",
+                    "batten record divergence --ci-workflow <file> --land-workflow <file>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "branch reach stale",
+                gloss: "the fast-forward bot refused a branch that had gone behind",
+                class: "A refusal means the branch went behind before the bot answered — the thundering \
+herd a landing lease exists to remove (243:5 before, 0:5 after). Any refusal at all is a \
+divergence, so the budget is zero.",
+                routes: &[run(
+                    "task run first",
+                    "batten record divergence --ci-workflow <file> --land-workflow <file>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "job read partial",
+                gloss: "the scan could not read part of its window, so a green verdict would cover less \
+than it claims",
+                class: "A run that measured two of three paths and reported green over the two is exactly \
+the partial-coverage false green. It fires whatever the count is, because a budget met over part \
+of a window is a budget met over nothing in particular. A persistent read failure is a token or \
+rate-limit problem, not a clean window.",
+                routes: &[run(
+                    "task run first",
+                    "batten record nonverdict --required-check <job> --verdict-step <prefix>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "job answer missing",
+                gloss: "a required job failed before reaching any verdict-bearing step",
+                class: "The run spent its minutes, redded the branch, and answered nothing. Every \
+occurrence then costs a human or an agent the time to discover it was never a verdict at all — \
+measured as an agent sent to reproduce a lint failure that passed locally because the lint never \
+ran.",
+                routes: &[run(
+                    "task run first",
+                    "batten record nonverdict --required-check <job> --verdict-step <prefix>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+        ],
+        // Both modules would cite `whole-number` if a preset could read one; each
+        // writes the literal inline instead (`rules/policy-modules.md`).
+        patterns: &["whole-number"],
+    },
     // CLOUD-1949. The host never halts on a prompt: in plan mode a call reads or
     // is refused, and a read — or a `batten` lifecycle verb outside plan mode —
     // is pre-approved. Claude Code's tool names and plan-file path are the

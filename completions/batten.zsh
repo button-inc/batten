@@ -6050,10 +6050,43 @@ trace\:"Add everything"))' \
 ;;
 (divergence)
 _arguments "${_arguments_options[@]}" : \
-'--ci-workflow=[The workflow file whose runs are the graded CI runs]:ci_workflow:_default' \
-'--land-workflow=[The workflow file whose runs are the landing bot'\''s answers]:land_workflow:_default' \
+'--ci-workflow=[The workflow file whose runs are the graded CI runs (default\: \$LAND_CI_WORKFLOW)]:ci_workflow:_default' \
+'--land-workflow=[The workflow file whose runs are the landing bot'\''s answers (default\: \$LAND_WORKFLOW)]:land_workflow:_default' \
 '--since=[The window'\''s start, ISO-8601 (default\: 24 hours before now)]:since:_default' \
 '--max-pages=[Pages of runs to read per workflow before the window reads as truncated (default\: 10)]:max_pages:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(nonverdict)
+_arguments "${_arguments_options[@]}" : \
+'--window=[How many recent failed runs to read, 1 to 100 (default\: 30)]:window:_default' \
+'*--required-check=[A required job, by exact name; only these are counted (repeatable; default\: \$CI_REQUIRED_CHECKS)]:required_check:_default' \
+'*--exclude-job=[A job never counted, such as a fan-in whose failure its siblings cause (repeatable; default\: \$CI_FANIN_CHECK)]:exclude_job:_default' \
+'*--verdict-step=[A step-name prefix that marks a failed step as verdict-bearing (repeatable; default\: \$CI_VERDICT_STEPS)]:verdict_step:_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
@@ -6338,6 +6371,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (divergence)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(nonverdict)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -8731,6 +8768,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(nonverdict)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (census)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__help__subcmd__record__subcmd__census_commands" \
@@ -10686,6 +10727,7 @@ _batten__subcmd__help__subcmd__record_commands() {
 'closes:Record which rows this branch'\''s pull request body closes, read on stdin' \
 'query:Run a declared \`\[\[forge.query\]\]\` read and record its reduction as the family it names' \
 'divergence:Record how far the landing loop diverged from linear over a window of runs' \
+'nonverdict:Record which recent required-check failures never reached a verdict' \
 'census:Record whether a landing was in flight when a container was replaced, and read the verdict back' \
     )
     _describe -t commands 'batten help record commands' commands "$@"
@@ -10759,6 +10801,11 @@ _batten__subcmd__help__subcmd__record__subcmd__keyed_commands() {
 _batten__subcmd__help__subcmd__record__subcmd__named_commands() {
     local commands; commands=()
     _describe -t commands 'batten help record named commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__record__subcmd__nonverdict_commands] )) ||
+_batten__subcmd__help__subcmd__record__subcmd__nonverdict_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help record nonverdict commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__record__subcmd__plan_commands] )) ||
 _batten__subcmd__help__subcmd__record__subcmd__plan_commands() {
@@ -11993,6 +12040,7 @@ _batten__subcmd__record_commands() {
 'closes:Record which rows this branch'\''s pull request body closes, read on stdin' \
 'query:Run a declared \`\[\[forge.query\]\]\` read and record its reduction as the family it names' \
 'divergence:Record how far the landing loop diverged from linear over a window of runs' \
+'nonverdict:Record which recent required-check failures never reached a verdict' \
 'census:Record whether a landing was in flight when a container was replaced, and read the verdict back' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -12106,6 +12154,7 @@ _batten__subcmd__record__subcmd__help_commands() {
 'closes:Record which rows this branch'\''s pull request body closes, read on stdin' \
 'query:Run a declared \`\[\[forge.query\]\]\` read and record its reduction as the family it names' \
 'divergence:Record how far the landing loop diverged from linear over a window of runs' \
+'nonverdict:Record which recent required-check failures never reached a verdict' \
 'census:Record whether a landing was in flight when a container was replaced, and read the verdict back' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -12186,6 +12235,11 @@ _batten__subcmd__record__subcmd__help__subcmd__named_commands() {
     local commands; commands=()
     _describe -t commands 'batten record help named commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__record__subcmd__help__subcmd__nonverdict_commands] )) ||
+_batten__subcmd__record__subcmd__help__subcmd__nonverdict_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten record help nonverdict commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__record__subcmd__help__subcmd__plan_commands] )) ||
 _batten__subcmd__record__subcmd__help__subcmd__plan_commands() {
     local commands; commands=()
@@ -12225,6 +12279,11 @@ _batten__subcmd__record__subcmd__keyed_commands() {
 _batten__subcmd__record__subcmd__named_commands() {
     local commands; commands=()
     _describe -t commands 'batten record named commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__record__subcmd__nonverdict_commands] )) ||
+_batten__subcmd__record__subcmd__nonverdict_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten record nonverdict commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__record__subcmd__plan_commands] )) ||
 _batten__subcmd__record__subcmd__plan_commands() {

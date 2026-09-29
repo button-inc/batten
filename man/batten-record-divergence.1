@@ -4,16 +4,16 @@
 .SH NAME
 batten\-record\-divergence \- Record how far the landing loop diverged from linear over a window of runs
 .SH SYNOPSIS
-\fBbatten record divergence\fR [\fB\-\-since\fR] [\fB\-\-max\-pages\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-ci\-workflow\fR> <\fB\-\-land\-workflow\fR> 
+\fBbatten record divergence\fR [\fB\-\-ci\-workflow\fR] [\fB\-\-land\-workflow\fR] [\fB\-\-since\fR] [\fB\-\-max\-pages\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .SH DESCRIPTION
 Record how far the landing loop diverged from linear over a window of runs
 .SH OPTIONS
 .TP
 \fB\-\-ci\-workflow\fR \fI<ci_workflow>\fR
-The workflow file whose runs are the graded CI runs
+The workflow file whose runs are the graded CI runs (default: $LAND_CI_WORKFLOW)
 .TP
 \fB\-\-land\-workflow\fR \fI<land_workflow>\fR
-The workflow file whose runs are the landing bot\*(Aqs answers
+The workflow file whose runs are the landing bot\*(Aqs answers (default: $LAND_WORKFLOW)
 .TP
 \fB\-\-since\fR \fI<since>\fR
 The window\*(Aqs start, ISO\-8601 (default: 24 hours before now)

@@ -21,7 +21,7 @@ name: nonverdict-rate
 # a branch must not go red because the platform had a bad afternoon —
 # coverage.yml:15-18 states the same boundary for the same reason. What IS gated is
 # the decision: `crates/batten/tests/it/nonverdict.rs` and
-# `policy/nonverdict.rego`'s own cases run on every commit, because the decider
+# the `ci-signal` preset's own cases run on every commit, because the decider
 # is a pure function of records.
 #
 # Failure here is informational: it means the rate crossed its budget and wants
@@ -75,15 +75,18 @@ jobs:
       # expansion is textual substitution into the shell script, which zizmor gates
       # at high severity.
       # THE SPLIT THE PORT FORCED (CLOUD-1717). The producer makes the
-      # conditional `gh` reads and classifies each failed job from its own
+      # conditional forge reads and classifies each failed job from its own
       # per-step conclusions; the engine adjudicates what it recorded. Neither
       # half can hold the other: section 5 makes `check` `read` and incapable of
-      # spawning the reads below.
+      # spawning the reads below. The producer is `batten record nonverdict`
+      # (CLOUD-843), and this repository's facts are `mise.toml [env]`'s, never
+      # the engine's literals: the roster `CI_REQUIRED_CHECKS`, the fan-in
+      # `CI_FANIN_CHECK` and the verdict spellings `CI_VERDICT_STEPS`.
       - name: Measure which required-check failures never reached a verdict
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: mise run nonverdict-record > "$RUNNER_TEMP/nonverdict.txt"
+        run: mise run batten -- record nonverdict > "$RUNNER_TEMP/nonverdict.txt"
       - name: Publish the records
         shell: bash
         run: |
@@ -107,4 +110,4 @@ jobs:
       - name: Judge the rate against its budget
         if: always()
         shell: bash
-        run: mise run batten -- check --rule 'job grade other' --fail-on-warning
+        run: mise run batten -- check --rule 'workflow measure other' --fail-on-warning

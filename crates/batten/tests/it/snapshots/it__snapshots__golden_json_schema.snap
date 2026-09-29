@@ -2984,7 +2984,7 @@ expression: stdout_of(&output)
               "long": "ci-workflow",
               "takes_value": true,
               "positional": false,
-              "help": "The workflow file whose runs are the graded CI runs"
+              "help": "The workflow file whose runs are the graded CI runs (default: $LAND_CI_WORKFLOW)"
             },
             {
               "name": "land_workflow",
@@ -2992,7 +2992,7 @@ expression: stdout_of(&output)
               "long": "land-workflow",
               "takes_value": true,
               "positional": false,
-              "help": "The workflow file whose runs are the landing bot's answers"
+              "help": "The workflow file whose runs are the landing bot's answers (default: $LAND_WORKFLOW)"
             },
             {
               "name": "max_pages",
@@ -3107,6 +3107,48 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": true,
               "help": "The record family, which is the key a module reads it under"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "record nonverdict",
+          "id": "record.nonverdict",
+          "about": "Record which recent required-check failures never reached a verdict",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "exclude_job",
+              "short": null,
+              "long": "exclude-job",
+              "takes_value": true,
+              "positional": false,
+              "help": "A job never counted, such as a fan-in whose failure its siblings cause (repeatable; default: $CI_FANIN_CHECK)"
+            },
+            {
+              "name": "required_check",
+              "short": null,
+              "long": "required-check",
+              "takes_value": true,
+              "positional": false,
+              "help": "A required job, by exact name; only these are counted (repeatable; default: $CI_REQUIRED_CHECKS)"
+            },
+            {
+              "name": "verdict_step",
+              "short": null,
+              "long": "verdict-step",
+              "takes_value": true,
+              "positional": false,
+              "help": "A step-name prefix that marks a failed step as verdict-bearing (repeatable; default: $CI_VERDICT_STEPS)"
+            },
+            {
+              "name": "window",
+              "short": null,
+              "long": "window",
+              "takes_value": true,
+              "positional": false,
+              "help": "How many recent failed runs to read, 1 to 100 (default: 30)"
             }
           ],
           "subcommands": []

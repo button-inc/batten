@@ -1158,6 +1158,9 @@ mod tests {
             // branch, which `Fact::Records` projects. The two leaves above it
             // are task stores read back only by `record show`/`record fold`.
             "record named".to_owned(),
+            // The non-verdict producer (CLOUD-843, retiring `nonverdict-record`),
+            // a forge-window write beside `record divergence`.
+            "record nonverdict".to_owned(),
             // The plan a branch declared, so `plan-complete` decides over a
             // record rather than over a transcript it cannot re-read.
             "record plan".to_owned(),

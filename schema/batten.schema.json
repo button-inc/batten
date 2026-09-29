@@ -4133,6 +4133,7 @@
           ],
           "enum": [
             "ci-hygiene",
+            "ci-signal",
             "claude-code-cloud",
             "commit-hygiene",
             "landing-loop",

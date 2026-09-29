@@ -31,6 +31,9 @@ pub mod carry;
 pub mod census;
 pub mod checks_green;
 pub mod ci;
+/// The CI-signal producers — landing divergence and non-verdict failures —
+/// walked over the forge and recorded for a module to decide over (CLOUD-843).
+pub mod ci_signal;
 pub mod claim;
 pub mod cli;
 pub mod commit;
@@ -455,11 +458,16 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             cli::BoardCommand::Check { .. } => unimplemented("board check"),
         },
         // The census is the one foundation verb that answers today: the §8 chain
-        // supplies the declaration, and the tree is the repository root's.
+        // supplies the declaration, and the tree is the WORKING TREE's — the
+        // manifests and workflows it counts are files this branch changes, so a
+        // linked worktree is measured, never the main checkout beside it
+        // (`git::worktree_root`'s rule: committed files are the working tree's,
+        // state is the repository's). Measured: rooted on `repo_root`, a
+        // retirement package's worktree reported its base's census unchanged.
         Some(Command::Census { command }) => match command {
             cli::CensusCommand::Shell { json } => {
                 let resolved = resolve::resolve(Path::new("."), &overrides)?;
-                let root = git::repo_root(Path::new("."))?;
+                let root = git::worktree_root(Path::new("."))?;
                 let declared = resolved
                     .census
                     .as_ref()

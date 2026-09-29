@@ -772,6 +772,14 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // `doctor target` reaches rustup and the network. A fixture that made it
     // answer would be installing a toolchain target.
     "doctor target",
+    // The divergence producer (CLOUD-843) reaches the forge for a window of runs,
+    // and this corpus names no forge remote and carries no credential — so where
+    // an inherited `$LAND_CI_WORKFLOW` names its workflows it answers
+    // could-not-look at exit 3, on `claim merged`'s terms. Its body is filled;
+    // this is the forge's bar, not the skeleton bar below. Its sibling `record
+    // nonverdict` is NOT here: `run_in` clears `$CI_REQUIRED_CHECKS`, so it
+    // refuses with `Usage` before any request.
+    "record divergence",
     // CLOUD-843's FOUNDATION SKELETONS, here on a bar of their own and named as
     // such rather than waved through under the one above: each row's arguments
     // are final and its body lands with the package retiring the shell it
@@ -787,7 +795,6 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     "mcp grant",
     "mcp posture",
     "board check",
-    "record divergence",
     "record census note",
     "record census record-boot",
     "record census report",
@@ -1754,6 +1761,12 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "record divergence",
         args: &["--ci-workflow", "ci.yml", "--land-workflow", "land.yml"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "record nonverdict",
+        args: &["--exclude-job", "final", "--verdict-step", "Run mise run "],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
