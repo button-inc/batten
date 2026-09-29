@@ -10014,11 +10014,26 @@ keep = 2
 # 337, live 348, tolerance 10`: the staleness arm, not the disk (22246 MB free).
 # 45.65 per stem x 348 is 15886, derived by the same stem model and said so;
 # cold's basis moves and its floor does not.
+#
+# THE 2026-09-29 WARM MEASUREMENT, 15886 -> 10935, AND IT ENDS THE RESCALES ABOVE
+# (CLOUD-2018). Every move from 11642 was the stem model applied to a count the
+# basis block itself says stopped driving bytes when CLOUD-1210 grouped the tests
+# into two targets — five proxy rescales in four days, until the declared floor
+# refused six consecutive `land` laps on a container whose laps all fit: closes of
+# 15278-15537 MB free against 15886, each lap having consumed 6612-10319 MB.
+#
+# THIS IS A MEASUREMENT, and the method is the engine's own: the lap journal's
+# `ratchet.warm` in `$GIT_DIR/batten-prune/laps.json` read `mb 10935, head
+# 7884c984, measured 2026-09-29, capped false` — the cost a warm verify lap on this
+# tree was observed to spend, `perf-pair` included, which is what `floor_mb =
+# declared.max(observed)` defends. The ratchet still climbs above this if a later
+# lap costs more, so nothing here lowers the floor below a measured cost. Cold is
+# not measured here and does not move (CLOUD-1685 owns it).
 [prune.warm]
-mb = 15886
-worst_mb = 15886
+mb = 10935
+worst_mb = 10935
 multiplier = 1
-measured = "2026-09-28"
+measured = "2026-09-29"
 
 [prune.cold]
 mb = 21455

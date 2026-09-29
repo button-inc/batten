@@ -458,6 +458,18 @@ pub struct BasisDrift {
 impl BasisDrift {
     /// The refusal, pointer-only: two counts, a tolerance and a date.
     ///
+    /// # It never prescribes the floor (CLOUD-2018)
+    ///
+    /// It used to assert `keep x stems x size` and say "re-measure the floor and
+    /// move `count` and `measured` together". A session holding no measurement
+    /// met that by SCALING the floor by the count, five times in four days, until
+    /// the declared warm floor stood 45% above the journal's measured warm lap and
+    /// refused every close on a container whose laps fit. The count is a trend
+    /// counter since CLOUD-1210; the remedy says so, and names where a real
+    /// measurement lives.
+    //MUTANT-SUITE crates/batten/src/prune.rs
+    //MUTANT drift-refusal-prescribes-rescale|s@ in `$GIT_DIR/batten-prune/laps.json` is one@ is one@|a_drift_refusal_names_a_measurement_and_never_the_stem_model
+    ///
     /// NEVER A FILE LISTING (non-negotiable rule 4). The count IS the finding, and
     /// the paths behind it are unbounded — a caller who wants them can run the
     /// same glob themselves.
@@ -468,7 +480,7 @@ impl BasisDrift {
   basis {glob}
   declared {declared}, live {live}, tolerance {tolerance}
   measured {measured}
-  Retained bytes are `keep x stems x size`, so a floor taken against a smaller stem count passes and then lets the build write more than it budgeted for — which arrives as a rustc IO error inside a test run rather than as a disk fault. Re-measure the floor and move `count` and `measured` together: a count refreshed without a new measurement is the same staleness wearing a newer number.",
+  Move `count` to the live figure. The floor moves only from a MEASUREMENT — the lap journal's `ratchet.{floor}.mb` in `$GIT_DIR/batten-prune/laps.json` is one — and never by scaling it by this count: since the tests were grouped into two targets the count no longer drives the bytes the floor budgets, and a floor scaled by it climbs past what the volume can present.",
             floor = self.floor,
             glob = self.glob,
             declared = self.declared,
@@ -3507,6 +3519,36 @@ mod tests {
         );
         assert!(!said.contains("COLD"), "the basis did not move: {said}");
         assert!(warm.clears_the_floor(), "and the warm floor is what it met");
+    }
+
+    #[test]
+    fn a_drift_refusal_names_a_measurement_and_never_the_stem_model() {
+        // CLOUD-2018. The old remedy asserted `keep x stems x size` and asked for
+        // the floor to move with the count, and sessions with no measurement in
+        // hand met it by scaling — the declared warm floor climbed 11642 -> 15886
+        // on a tree whose measured warm lap is 10935. The remedy must point at
+        // where a measurement lives, and must not restate the refuted model.
+        let refusal = BasisDrift {
+            floor: "warm".to_owned(),
+            glob: "crates/batten/tests/**/*.rs".to_owned(),
+            declared: 337,
+            live: 348,
+            tolerance: 10,
+            measured: "2026-09-28".to_owned(),
+        }
+        .refusal();
+        assert!(
+            refusal.contains("`ratchet.warm.mb` in `$GIT_DIR/batten-prune/laps.json`"),
+            "names the journal reading a floor may move from: {refusal}"
+        );
+        assert!(
+            !refusal.contains("keep x stems x size"),
+            "the stem model the grouping refuted is not restated: {refusal}"
+        );
+        assert!(
+            refusal.contains("declared 337, live 348, tolerance 10"),
+            "the finding's own numbers stay: {refusal}"
+        );
     }
 
     #[test]
