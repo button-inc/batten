@@ -1318,6 +1318,78 @@ const QUERY_INPUT: FlagDecl = FlagDecl {
     value: ValueDecl::StrMany,
 };
 
+/// The probe command on `record probe`, after the mandatory `--` (CLOUD-843).
+const PROBE_COMMAND: FlagDecl = FlagDecl::trailing(
+    "command",
+    "The probe command, after `--`: its exit status is the `status` input and its output the document",
+);
+
+/// `--rule <id>` on `record decide`: `check`'s narrowing, and REQUIRED, because a
+/// decision with no rule to make it would be a silent pass (CLOUD-843).
+const DECIDE_RULE: FlagDecl = FlagDecl {
+    help: "The declared rule that decides over the record just written (repeatable, at least one)",
+    required: true,
+    ..CHECK_RULE
+};
+
+/// `<verb>` on `pr unsubscribed`: which of its three arms runs.
+const UNSUBSCRIBED_VERB: FlagDecl = FlagDecl::positional("verb", "drop | record | check");
+
+/// `--session-env <NAME>` on `pr unsubscribed`: the NAME of the variable, never
+/// its value, on `[[mcp.source]]`'s discipline (non-negotiable rule 1).
+const UNSUBSCRIBED_SESSION_ENV: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued(
+        "session_env",
+        "session-env",
+        "The name of the environment variable holding this host's session id; unset is no session",
+    )
+};
+
+/// `--token-env <NAME>` on `pr unsubscribed`: the credential is named, never carried.
+const UNSUBSCRIBED_TOKEN_ENV: FlagDecl = FlagDecl::valued(
+    "token_env",
+    "token-env",
+    "The name of the environment variable holding the path of the credential file `drop` sends",
+);
+
+/// `--endpoint <URL>` on `pr unsubscribed`: the host's address, with `{session}`.
+const UNSUBSCRIBED_ENDPOINT: FlagDecl = FlagDecl::valued(
+    "endpoint",
+    "endpoint",
+    "The endpoint `drop` calls, with `{session}` where the session id goes",
+);
+
+/// `--tool <NAME>` on `pr unsubscribed`: the tool `drop` asks the endpoint to call.
+const UNSUBSCRIBED_TOOL: FlagDecl =
+    FlagDecl::valued("tool", "tool", "The tool `drop` asks the endpoint to call");
+
+/// `--arguments <JSON>` on `pr unsubscribed`: the tool's argument shape is the
+/// HOST's, so the consumer writes it (non-negotiable rule 1).
+const UNSUBSCRIBED_ARGUMENTS: FlagDecl = FlagDecl::valued(
+    "arguments",
+    "arguments",
+    "The tool's arguments `drop` sends: a JSON object whose strings may name {owner}, {repo}, {pr} and {session}",
+);
+
+/// `--family <NAME>` on `pr unsubscribed`: the family `check` records, and the
+/// receipts' filename prefix.
+const UNSUBSCRIBED_FAMILY: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued(
+        "family",
+        "family",
+        "The record family `check` writes, and the prefix of this session's receipts",
+    )
+};
+
+/// `--rule <id>` on `pr unsubscribed`: the rule `check` decides with.
+const UNSUBSCRIBED_RULE: FlagDecl = FlagDecl::valued(
+    "rule",
+    "rule",
+    "The declared rule `check` decides with over the record it writes",
+);
+
 /// `--rule <id>` on `enforce`: the same narrowing, on the verb that spawns.
 ///
 /// # This reverses a recorded decision, and that decision named its condition
@@ -5135,6 +5207,31 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Unclassified,
         flags: &[PR_NUMBER],
     },
+    // CLOUD-518's gate and CLOUD-790's actor (CLOUD-843, retiring
+    // `[tasks.pr-unsubscribed]`). ONE leaf with a verb positional rather than
+    // three, because its callers name the three arms as one task with the arm
+    // and the pull request appended. `write`: every arm writes — `drop` a
+    // receipt after a network call, `record` a receipt, `check` a record — and
+    // `EXITS_VERDICT` because `check` is the decision over what it recorded.
+    CommandDecl {
+        path: "pr unsubscribed",
+        id: "pr.unsubscribed",
+        about: "Drop this session's webhook subscription to a pull request, attest it, or record and decide the reading",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Write,
+        flags: &[
+            UNSUBSCRIBED_VERB,
+            PR_NUMBER,
+            UNSUBSCRIBED_SESSION_ENV,
+            UNSUBSCRIBED_TOKEN_ENV,
+            UNSUBSCRIBED_ENDPOINT,
+            UNSUBSCRIBED_TOOL,
+            UNSUBSCRIBED_ARGUMENTS,
+            UNSUBSCRIBED_FAMILY,
+            UNSUBSCRIBED_RULE,
+        ],
+    },
     // The `task` noun (CLOUD-425), ported off `mise-tasks/task-registry.sh` and
     // `mise-tasks/alive.sh` under CLOUD-843. Both halves, because the registry is
     // one mechanism read from both ends.
@@ -6402,6 +6499,46 @@ pub const SURFACE: &[CommandDecl] = &[
                 "The `[[forge.query]]` id, which is also the record family written",
             ),
             QUERY_INPUT,
+        ],
+    },
+    // `record derive` with the producer moved IN (CLOUD-843, retiring
+    // `[tasks.evaluator-io-record]`): it runs the command after `--` and derives
+    // the family's reading from its exit status and output. `unclassified`, and
+    // stated: it runs a program the caller chose, which is `exec`'s reading.
+    CommandDecl {
+        path: "record probe",
+        id: "record.probe",
+        about: "Run a probe command and record the family's reading of its exit status and output",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Unclassified,
+        flags: &[
+            FlagDecl::positional(
+                "family",
+                "The record family, which selects the reading and is the key a module reads it under",
+            ),
+            DERIVE_INPUT,
+            PROBE_COMMAND,
+        ],
+    },
+    // Derive, write SILENTLY, then decide with the named rules (CLOUD-843,
+    // retiring `[tasks.finding-sink-check]`). Silent because its caller is a
+    // `stop` handler, whose stdout on a pass the host shows; `write` for the
+    // record, `EXITS_VERDICT` for the decision.
+    CommandDecl {
+        path: "record decide",
+        id: "record.decide",
+        about: "Derive a family's reading, record it without echoing it, and decide over it with the named rules",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Write,
+        flags: &[
+            FlagDecl::positional(
+                "family",
+                "The record family, which selects the reading and is the key a module reads it under",
+            ),
+            DERIVE_INPUT,
+            DECIDE_RULE,
         ],
     },
     // A NEW NOUN rather than a flag on an existing verb, and two shapes were

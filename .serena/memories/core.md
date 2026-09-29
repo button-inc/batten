@@ -3013,6 +3013,31 @@ record nonverdict` classifies failed required jobs by their failed steps and
   `attestation-is-verified.rego` does. No declared credential, no remote, a
   posture neither 200 nor 404, a failed download or unpack: exit 3 and the stale
   record removed.
+- `turn.rs`, `unsubscribe.rs`, `probe.rs` — package p11-records of CLOUD-843,
+  retiring the `finding-sink-check`, `pr-unsubscribed` and `evaluator-io-record`
+  bodies. `turn.rs` READS a session's last turn (main thread, `tool_result` is
+  not a boundary) for `batten record decide turn-writes`: `turns`, whether its
+  prose matched the declared `[[pattern]] finding-citation` (a boolean, never a
+  byte of prose), and one `call<TAB>name<TAB>key<TAB>column` line per call, the
+  column read from the consumer-named read receipt. **Which call is a home is
+  `policy/finding-sink.rego`'s**, over `[[pattern]] finding-home-*` rows.
+  A mediated call is named `mcp call <server> <method>`, so the module credits
+  only its filing arms (`[[pattern]] finding-mediated-call`), never a mediated
+  memory write. `record decide` writes SILENTLY (a stop handler's stdout is
+  advice), runs `check --rule`, then REMOVES the record, so a firing never
+  refuses a later `check`/`enforce`; could-not-look removes it and exits 0.
+  `unsubscribe.rs` is `batten pr unsubscribed <drop|record|check> <pr>`: every
+  host fact (session variable, credential-file variable, endpoint with
+  `{session}`, tool, the tool's `--arguments` JSON template filled with
+  `{owner}/{repo}/{pr}/{session}`, family, rule) is an argument in the task's
+  argv; `drop` fails open and mints only on `accepted` (200, a body, no
+  `isError`); `check` records `session/pr/receipt` and decides with
+  `policy/pr-unsubscribed.rego`. `probe.rs` is
+  `batten record probe <family> -- <cmd>`: it runs the probe through
+  `exec::piped_argv` (the placed adapter, never its own spawn) and feeds its
+  exit as `status` and its combined output as the document to `record derive`'s
+  own reading; a caller-supplied `status` is refused, and a signal-ended probe
+  is exit 3.
 - `severity.rs` — the severity taxonomy (CLOUD-168): one rank table plus the
   adapter across the three axes — `RuleSeverity` (config, CLOUD-61),
   `AdvisoryTier` (the one _stored_ severity, CLOUD-80/78), `ReportLevel`

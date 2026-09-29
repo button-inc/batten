@@ -706,6 +706,17 @@ pub fn run(
         crate::cli::RecordCommand::Query { id, inputs } => {
             crate::forge_query::run(&id, &inputs, overrides, err)
         }
+        crate::cli::RecordCommand::Probe {
+            family,
+            inputs,
+            command,
+        } => run_probe(&family, &inputs, &command, overrides, out),
+        // `record decide` writes here and then DECIDES, which needs the check
+        // runner and the output mode this dispatcher is not handed; the binary's
+        // own dispatch takes the arm before it reaches this one.
+        crate::cli::RecordCommand::Decide { .. } => Err(UsageError::raise(
+            "record decide: reached without its decision; it is dispatched by the binary",
+        )),
         crate::cli::RecordCommand::Divergence {
             ci_workflow,
             land_workflow,
@@ -1182,8 +1193,8 @@ fn declared_pattern(
 /// nothing when the document will not parse, because an absent record means
 /// "the producer did not run" and must not be spelled the same way as a graph
 /// that resolved and found nothing.
-fn graph_on_stdin(family: &str) -> Result<crate::cargo_graph::Graph> {
-    let raw = verdict_lines()?;
+fn graph_on_stdin(family: &str, document: Option<&str>) -> Result<crate::cargo_graph::Graph> {
+    let raw = document_or_stdin(document)?;
     let meta: serde_json::Value = serde_json::from_str(&raw).map_err(|_| {
         UsageError::raise(format!(
             "record derive {family}: stdin is not a `cargo metadata` document"
@@ -1286,10 +1297,197 @@ pub fn run_derive(
             clear_named("record derive", sibling)?;
         }
     }
-    let derived = derive_reading(family, &inputs, overrides)?;
+    let derived = derive_reading(family, &inputs, overrides, None)?;
     let family = safe_component("family", family)?;
     store_derived(&family, &derived)?;
     emit_derived(&derived, out)
+}
+
+/// The input a reading consumes: the document a caller already holds, or stdin.
+///
+/// `record derive` reads its document from stdin because the producer that
+/// wrote it ran in a task. `record probe` runs the producer itself and hands its
+/// output here instead, so the reading is one function over either source.
+fn document_or_stdin(document: Option<&str>) -> Result<String> {
+    match document {
+        Some(given) => Ok(given.to_owned()),
+        None => verdict_lines(),
+    }
+}
+
+/// The input key a probe's exit status is supplied under.
+const PROBE_STATUS: &str = "status";
+
+/// Run a probe command and derive a family's reading from what it answered
+/// (CLOUD-843, retiring `[tasks.evaluator-io-record]`).
+///
+/// [`run_derive`] with the producer moved IN: the command's exit status is the
+/// `status` input and its combined output is the document, so a caller needs no
+/// temporary file, no captured status and no pipe. The reading, the store and
+/// the emitted tokens are `record derive`'s own.
+///
+/// # Errors
+///
+/// A [`UsageError`] for a `status` the caller tried to supply (it is the
+/// command's to answer), an empty command, an unknown family or a malformed
+/// input; an internal error for a command that will not start or a store that
+/// cannot be written. NOTHING is written on any error, so a stale record is
+/// never refreshed by a probe that did not run.
+pub fn run_probe(
+    family: &str,
+    inputs: &[String],
+    command: &[String],
+    overrides: &Overrides,
+    out: &mut dyn std::io::Write,
+) -> Result<ExitCode> {
+    let mut inputs = inputs_of("record probe", inputs)?;
+    if inputs.contains_key(PROBE_STATUS) {
+        return Err(UsageError::raise(
+            "record probe: `status` is the command's own exit, never an input",
+        ));
+    }
+    let family = safe_component("family", family)?;
+    let ran = crate::probe::run(command)?;
+    inputs.insert(PROBE_STATUS.to_owned(), ran.status.to_string());
+    let derived = derive_reading(&family, &inputs, overrides, Some(&ran.log))?;
+    store_derived(&family, &derived)?;
+    emit_derived(&derived, out)
+}
+
+/// The family whose reading is a session's judged turn (CLOUD-843, retiring
+/// `[tasks.finding-sink-check]`).
+///
+/// Its own name here for the reason every family arm below carries one: the
+/// reading is this engine's, and the consumer names the rule that decides.
+const TURN_FAMILY: &str = "turn-writes";
+
+/// What `record decide` wrote before the caller decides over it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decision {
+    /// The reading is recorded.
+    Recorded,
+    /// The reading is recorded and holds no turn, so there is nothing to judge.
+    Empty,
+    /// Nothing could be read, and any stale record is removed, so the module is
+    /// silent. The reason is a fixed pointer, never a byte of the input.
+    Abstained(&'static str),
+}
+
+/// Derive one family's reading and write it WITHOUT emitting it, for a caller
+/// that decides over it next (`record decide`).
+///
+/// **Silent on stdout, unlike `record derive`, and that is the point.** A
+/// `stop` handler's stdout on a passing exit is advisory text the host shows,
+/// so a reading echoed there would be said on every turn. The decision's own
+/// output is the only thing this verb says.
+///
+/// **Transient**: the dispatcher removes the record once the decision is made
+/// ([`clear_named`]), so a reading never answers a later `check` or `enforce`.
+///
+/// # Errors
+///
+/// As [`run_derive`]: a [`UsageError`] for an unknown family, a malformed input
+/// or a tree with no branch to key on; an internal error for an unwritable store.
+pub fn decide_record(family: &str, inputs: &[String], overrides: &Overrides) -> Result<Decision> {
+    let inputs = inputs_of("record decide", inputs)?;
+    let family = safe_component("family", family)?;
+    if family != TURN_FAMILY {
+        let derived = derive_reading(&family, &inputs, overrides, None)?;
+        store_named("record decide", &family, &derived)?;
+        return Ok(Decision::Recorded);
+    }
+    // OUTSIDE A CHECKOUT THERE IS NO STORE TO DECIDE OVER, and a `stop` handler
+    // runs wherever the session stands: could-not-look, which the handler door
+    // reads as a pass, never a usage error said on every turn.
+    if git::git_dir(Path::new(".")).is_err() {
+        return Ok(Decision::Abstained(
+            "not a git repository, so no record store",
+        ));
+    }
+    match turn_reading(&family, &inputs, overrides)? {
+        None => {
+            clear_named("record decide", &family)?;
+            Ok(Decision::Abstained("no readable transcript"))
+        }
+        Some((body, turns)) => {
+            store_named("record decide", &family, &body)?;
+            Ok(if turns == 0 {
+                Decision::Empty
+            } else {
+                Decision::Recorded
+            })
+        }
+    }
+}
+
+/// The judged turn's reading, or `None` where the transcript could not be read.
+///
+/// Every input names a consumer fact (non-negotiable rule 1): `citation` and
+/// `key` are `[[pattern]]` row ids — the second must carry a `key` group —
+/// `fields` the comma-separated input fields a direct call names its row by,
+/// `receipt` the read-receipt family, and `field` the 1-indexed field of it that
+/// holds the row's column.
+///
+/// # Errors
+///
+/// A [`UsageError`] for a missing, unaccepted or malformed input, or an
+/// undeclared pattern row.
+fn turn_reading(
+    family: &str,
+    inputs: &BTreeMap<String, String>,
+    overrides: &Overrides,
+) -> Result<Option<(String, usize)>> {
+    only_these_inputs(
+        inputs,
+        family,
+        &["citation", "key", "fields", "receipt", "field"],
+    )?;
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    let citation = declared_pattern(
+        &config.patterns,
+        family,
+        required_input(inputs, family, "citation")?,
+    )?;
+    let key_row = required_input(inputs, family, "key")?;
+    let key = declared_pattern(&config.patterns, family, key_row)?;
+    if !key.capture_names().any(|name| name == Some("key")) {
+        return Err(UsageError::raise(format!(
+            "record derive {family}: `[[pattern]]` row `{key_row}` has no `key` group"
+        )));
+    }
+    let fields: Vec<String> = required_input(inputs, family, "fields")?
+        .split(',')
+        .map(str::trim)
+        .filter(|field| !field.is_empty())
+        .map(str::to_owned)
+        .collect();
+    let receipt = safe_component("receipt", required_input(inputs, family, "receipt")?)?;
+    let raw = required_input(inputs, family, "field")?;
+    let field: usize = raw.parse().ok().filter(|field| *field > 0).ok_or_else(|| {
+        UsageError::raise(format!(
+            "record derive {family}: field `{raw}` is not a 1-indexed field number"
+        ))
+    })?;
+    let stdin = verdict_lines()?;
+    let Some(path) = crate::turn::transcript_of(&stdin) else {
+        return Ok(None);
+    };
+    let Ok(body) = std::fs::read_to_string(&path) else {
+        return Ok(None);
+    };
+    let vocabulary = crate::turn::Vocabulary {
+        citation: &citation,
+        key: &key,
+        fields: &fields,
+    };
+    let crate::turn::Reading::Read(turn) = crate::turn::read(&body, &vocabulary) else {
+        return Ok(None);
+    };
+    let git_dir = git::git_dir(Path::new(".")).ok();
+    let rendered = crate::turn::render(&turn, &|row: &str| {
+        crate::turn::column(git_dir.as_deref(), &receipt, field, row)
+    });
+    Ok(Some((rendered, turn.turns)))
 }
 
 /// The READING for one family, from its declared inputs and whatever is on stdin.
@@ -1304,10 +1502,14 @@ pub fn run_derive(
 ///
 /// A [`UsageError`] for an unknown family, or a malformed, missing or
 /// unaccepted input.
+///
+/// `document` is the input a family reads from stdin when the caller already
+/// holds it — `record probe`'s captured output — and `None` reads stdin.
 fn derive_reading(
     family: &str,
     inputs: &BTreeMap<String, String>,
     overrides: &Overrides,
+    document: Option<&str>,
 ) -> Result<String> {
     let derived = match family {
         "evaluator-io-probe" => {
@@ -1319,7 +1521,7 @@ fn derive_reading(
                 ))
             })?;
             let test = required_input(inputs, family, "test")?;
-            let log = verdict_lines()?;
+            let log = document_or_stdin(document)?;
             format!(
                 "{}\n",
                 crate::probe_verdict::verdict(status, &log, test).token()
@@ -1369,8 +1571,8 @@ fn derive_reading(
             let sessions = crate::transcript::census(root, exclude);
             format!("sessions {sessions}\nthreshold {threshold}\n")
         }
-        "evaluator-closure" => evaluator_closure_reading(inputs, family, overrides)?,
-        "macos-link" => macos_link_reading(inputs, family, overrides)?,
+        "evaluator-closure" => evaluator_closure_reading(inputs, family, overrides, document)?,
+        "macos-link" => macos_link_reading(inputs, family, overrides, document)?,
         // The `tracker-hygiene` preset's five readings (CLOUD-843). The module
         // owns the reading; this arm hands it the consumer's pattern table, the
         // checkout it walks, and stdin — nothing here spawns.
@@ -1416,6 +1618,7 @@ fn evaluator_closure_reading(
     inputs: &BTreeMap<String, String>,
     family: &str,
     overrides: &Overrides,
+    document: Option<&str>,
 ) -> Result<String> {
     only_these_inputs(inputs, family, &["roots", "bears", "resolve"])?;
     let config = resolve::resolve(Path::new("."), overrides)?;
@@ -1429,7 +1632,7 @@ fn evaluator_closure_reading(
         family,
         required_input(inputs, family, "bears")?,
     )?;
-    let graph = graph_for(inputs, family)?;
+    let graph = graph_for(inputs, family, document)?;
 
     // THE SCOPE IS THE EVALUATOR'S SUB-CLOSURE, NOT THE WORKSPACE'S, and
     // that was measured before it was written because the obvious
@@ -1480,6 +1683,7 @@ fn macos_link_reading(
     inputs: &BTreeMap<String, String>,
     family: &str,
     overrides: &Overrides,
+    document: Option<&str>,
 ) -> Result<String> {
     only_these_inputs(inputs, family, &["framework", "vendored", "resolve"])?;
     let config = resolve::resolve(Path::new("."), overrides)?;
@@ -1493,7 +1697,7 @@ fn macos_link_reading(
         family,
         required_input(inputs, family, "vendored")?,
     )?;
-    let graph = graph_for(inputs, family)?;
+    let graph = graph_for(inputs, family, document)?;
 
     // THE WALK STARTS AT THE WORKSPACE MEMBERS, because the question is
     // about everything this tree builds — unlike `evaluator-closure`,
@@ -1565,10 +1769,11 @@ fn emit_derived(derived: &str, out: &mut dyn std::io::Write) -> Result<ExitCode>
     // `record named` prints nothing and this does: `named` cannot tell a verdict
     // from a payload, because it never looked at one.
     //
-    // It matters beyond symmetry. A producer task composes: `evaluator-io-record`
-    // branches on `probe failed` to mint its step receipt, and a verb that
-    // swallowed its own answer would force the task to read the record store back
-    // — a second reader of a path `recorder::record_path` is the one authority on.
+    // It matters beyond symmetry. A producer task composes: a caller that
+    // branches on the reading it just derived reads it here, and a verb that
+    // swallowed its own answer would force the caller to read the record store
+    // back — a second reader of a path `recorder::record_path` is the one
+    // authority on.
     out.write_all(derived.as_bytes())?;
     Ok(ExitCode::Success)
 }

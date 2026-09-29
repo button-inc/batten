@@ -2293,6 +2293,41 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-843's probe door. The command is `true`, which reads nothing and
+    // prints nothing; the family is one no reading declares, so the verb answers
+    // its usage refusal naming the family and never a byte of the probe's output.
+    Verb {
+        path: "record probe",
+        args: &["census", "--", "true"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // CLOUD-843's decide door, over a family no reading declares: the usage
+    // refusal, before anything is written or decided.
+    Verb {
+        path: "record decide",
+        args: &["census", "--rule", "census"],
+        stdin: Stdin::ToolVerdict,
+        disposition: Disposition::PointerOnly,
+    },
+    // CLOUD-518's gate. `check` with a session variable no host sets: the
+    // reading is `-`, and the rule it names is not declared, so the answer is the
+    // rule refusal — naming the id it was given and nothing it read.
+    Verb {
+        path: "pr unsubscribed",
+        args: &[
+            "check",
+            "1",
+            "--session-env",
+            "BATTEN_POINTER_ONLY_NEVER_SET",
+            "--family",
+            "census",
+            "--rule",
+            "census",
+        ],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // Their READ halves. Over this corpus the stores are empty, so the answers
     // are `miss` and `nothing` — which is the state that matters most here: a
     // reader that cannot find a record is exactly where a program is tempted to

@@ -114,6 +114,7 @@ pub mod policy;
 pub mod pr_watch;
 pub mod preflight;
 pub mod preset;
+pub mod probe;
 pub mod probe_verdict;
 pub mod provision;
 pub mod prune;
@@ -181,6 +182,8 @@ pub mod tracker_reading;
 pub mod transcript;
 pub mod traversal;
 pub mod trust;
+pub mod turn;
+pub mod unsubscribe;
 /// The `use` graph: which module reaches which, resolved through the root's own
 /// re-export table.
 pub mod uses;
@@ -458,6 +461,16 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // input, which is exactly the committed authority a `--config-from` is
         // meant to pin. That is also what stops a caller keying a record to
         // anything the config does not already declare (CLOUD-1265).
+        // `record decide` writes and then DECIDES, so it is taken here, where the
+        // check runner and the output mode are in hand (CLOUD-843).
+        Some(Command::Record {
+            command:
+                cli::RecordCommand::Decide {
+                    family,
+                    inputs,
+                    rules,
+                },
+        }) => run_record_decide(&family, &inputs, &rules, mode, &overrides, out, err),
         Some(Command::Record { command }) => record::run(command, &overrides, out, err),
         Some(Command::Ci { command }) => run_ci(&command, &overrides, out, err),
         // `install` is the engine's own contract check; the leaves CLOUD-843
@@ -4682,6 +4695,100 @@ fn supplied_epoch(raw: Option<&str>) -> Result<u64> {
         .map_err(|_| UsageError::raise("--instant takes a whole number of seconds since the epoch"))
 }
 
+/// `record decide`: derive and write a family's reading, then decide over it
+/// with the named rules, exactly as `check --rule` would (CLOUD-843).
+///
+/// An abstention is could-not-look: the stale record is gone, the reason goes to
+/// stderr as a fixed pointer, and nothing is decided — exit `0` with nothing on
+/// stdout, which a `stop` handler's door reads as a pass.
+fn run_record_decide(
+    family: &str,
+    inputs: &[String],
+    rules: &[String],
+    mode: Mode,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    match record::decide_record(family, inputs, overrides)? {
+        record::Decision::Abstained(why) => {
+            writeln!(err, "batten: record decide {family}: abstained — {why}")?;
+            return Ok(ExitCode::Success);
+        }
+        // ANTI-VACUITY: a reading that holds nothing to judge says so, so a gate
+        // that cannot fire is never mistaken for one that found nothing.
+        record::Decision::Empty => {
+            writeln!(
+                err,
+                "batten: record decide {family}: no turns — nothing to judge"
+            )?;
+        }
+        record::Decision::Recorded => {}
+    }
+    let flags = cli::CheckFlags {
+        rule: rules.to_vec(),
+        ..cli::CheckFlags::default()
+    };
+    let decided = run_check(&flags, mode, overrides, out, err);
+    // THE READING ANSWERS THE DECISION IT WAS WRITTEN FOR, AND NO LATER ONE.
+    // Left in the store, a firing's record went on refusing every `check` and
+    // `enforce` over the whole ruleset until the next `stop` rewrote it — the
+    // previous turn's stranding turned into a blocker at `verify` and `land`,
+    // which the retired body (stderr and an exit code, no record) never was.
+    // Removed whatever the decision said, so no rule reads it afterwards.
+    //MUTANT-SUITE crates/batten/tests/it/finding_sink.rs
+    //MUTANT decided-record-kept|s@^    record::clear_named("record decide", \&record::safe_component("family", family)?)?;$@@|a_decided_record_never_answers_a_later_check
+    record::clear_named("record decide", &record::safe_component("family", family)?)?;
+    decided
+}
+
+/// `pr unsubscribed <drop|record|check> <pr>` (CLOUD-518, CLOUD-790; retired off
+/// `[tasks.pr-unsubscribed]` under CLOUD-843). The mechanism is
+/// [`unsubscribe`]'s; `check`'s decision is the consumer's rule.
+fn run_pr_unsubscribed(
+    request: &cli::UnsubscribedRequest,
+    overrides: &Overrides,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let verb = unsubscribe::Verb::parse(&request.verb)?;
+    let pr = unsubscribe::pr_number(&request.pr)?;
+    let host = unsubscribe::Host {
+        session_env: request.session_env.clone(),
+        token_env: request.token_env.clone(),
+        endpoint: request.endpoint.clone(),
+        tool: request.tool.clone(),
+        arguments: request.arguments.clone(),
+        family: record::safe_component("family", &request.family)?,
+    };
+    let git_dir = git::git_dir(Path::new(".")).map_err(|_| {
+        UsageError::raise("pr unsubscribed: not a git repository, so there is no receipt store")
+    })?;
+    match verb {
+        unsubscribe::Verb::Drop => unsubscribe::drop_subscription(&git_dir, &host, pr, out),
+        unsubscribe::Verb::Record => {
+            let mut answer = String::new();
+            std::io::stdin().read_to_string(&mut answer)?;
+            unsubscribe::record(&git_dir, &host, pr, &answer, out, err)
+        }
+        unsubscribe::Verb::Check => {
+            let Some(rule) = request.rule.clone() else {
+                return Err(UsageError::raise(
+                    "pr unsubscribed check: needs `--rule <id>`, the rule that decides over the record",
+                ));
+            };
+            let reading = unsubscribe::reading(&git_dir, &host, pr);
+            record::store_named("pr unsubscribed", &host.family, &reading)?;
+            let flags = cli::CheckFlags {
+                rule: vec![rule],
+                ..cli::CheckFlags::default()
+            };
+            run_check(&flags, mode, overrides, out, err)
+        }
+    }
+}
+
 fn run_pr(
     command: PrCommand,
     overrides: &Overrides,
@@ -4696,6 +4803,9 @@ fn run_pr(
             PrCommand::Link { pr, key } => return run_pr_link(&pr, &key, overrides, mode, err),
             PrCommand::Ensure { pr } => return run_pr_ensure(&pr, overrides, mode, err),
             PrCommand::Closes { pr } => return run_pr_closes(&pr, overrides, mode, err),
+            PrCommand::Unsubscribed(request) => {
+                return run_pr_unsubscribed(&request, overrides, mode, out, err);
+            }
             PrCommand::Watch {
                 sha,
                 repo,
