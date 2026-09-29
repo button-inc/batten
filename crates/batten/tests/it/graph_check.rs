@@ -65,7 +65,7 @@
 // carried: "wip counts In Progress only" crates/batten/tests/it/graph_check.rs
 // carried: "output ordering is byte-stable and numeric" crates/batten/tests/it/graph_check.rs
 // carried: "an array input works the same as a stream" crates/batten/tests/it/graph_check.rs
-// carried: "unparseable stdin exits 2, not 1" crates/batten/tests/it/graph_check.rs
+// carried: "graph-check.bats::unparseable stdin exits 2, not 1" crates/batten/tests/it/graph_check.rs
 // carried: "an unjudgeable payload and a failing Ready block do not produce the same output" crates/batten/tests/it/graph_check.rs
 // carried: "a payload ready-lint cannot read is reported and exits 2" crates/batten/tests/it/graph_check.rs
 // carried: "a genuinely failing Ready block is attributed and refused" crates/batten/tests/it/graph_check.rs
@@ -1638,12 +1638,34 @@ fn a_child_carrying_a_different_milestone_is_the_declared_re_phase_and_passes() 
 
 #[test]
 fn a_child_whose_parent_carries_no_milestone_is_clean_no_pair_can_diverge() {
+    // THE SET MUST BE JUDGEABLE, or this passes for the wrong reason: with no
+    // row carrying `projectMilestone` the whole milestone arm abstains as
+    // `unjudgeable-milestone` and never looks at the child. CLOUD-3 carries the
+    // key so the arm runs; the parent sits in Backlog so it is not itself
+    // `unmilestoned`, leaving the pair as the only thing under judgement.
     let dir = repo("graph-child-unphased-parent");
     let mut board = Board::default();
-    board.no_milestone("CLOUD-1", "Todo", "someone", "");
+    board.no_milestone("CLOUD-1", "Backlog", "", "");
     child_no_milestone(&mut board, "CLOUD-2", "CLOUD-1");
+    board.issue("CLOUD-3", "Backlog", "", "", &[]);
     let out = check(&dir, &board);
+    assert_eq!(code(&out), COHERENT, "{}", all(&out));
     assert!(!all(&out).contains("child-unmilestoned"), "{}", all(&out));
+}
+
+// A SET WHOSE EVERY STATUS IS EMPTY HAS NO COLUMN TO CLAIM. Composed anyway, the
+// alphabet is `(?:)` and every key mention reads as a claim of the column "".
+#[test]
+fn an_empty_status_alphabet_scans_no_claim() {
+    let dir = repo("graph-empty-alphabet");
+    let mut board = Board::default();
+    board.issue("CLOUD-1", "", "", "", &[]);
+    board.issue("CLOUD-2", "", "", "", &[]);
+    // A key OUTSIDE the set: the empty "claim" of it reads as
+    // `status-claim-unjudgeable`, where a key in the set would agree with "".
+    board.describe("CLOUD-1", "Follows CLOUD-9 closely.");
+    let out = check(&dir, &board);
+    assert!(!all(&out).contains("status-claim"), "{}", all(&out));
 }
 
 #[test]

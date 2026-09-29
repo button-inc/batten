@@ -819,9 +819,16 @@ impl Scan {
         let mut columns: Vec<String> = payloads
             .iter()
             .filter_map(|row| row.get("status").map(text))
+            .filter(|column| !column.is_empty())
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
+        // AN EMPTY ALPHABET SCANS NOTHING. Composed anyway it is `(?:)`, which
+        // matches the empty string, so every key mention in every body would read
+        // as a claim naming the column "" — refusals with no claim behind them.
+        if columns.is_empty() {
+            return None;
+        }
         // LONGEST FIRST, so a leftmost-first engine picks what a leftmost-longest
         // one would: a column that is a prefix of another never wins over it.
         columns.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));

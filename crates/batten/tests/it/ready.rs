@@ -131,7 +131,7 @@
 // carried: "clauses inside a parent block are still checked" crates/batten/tests/it/ready.rs
 // carried: "a parent's §8 claim is held to the board like a leaf's" crates/batten/tests/it/ready.rs
 // carried: "prose merely discussing refinement is not a Ready block" crates/batten/tests/it/ready.rs
-// carried: "unparseable stdin exits 2, not 1" crates/batten/tests/it/ready.rs
+// carried: "ready-lint.bats::unparseable stdin exits 2, not 1" crates/batten/tests/it/ready.rs
 // carried: "output is pointer-only — no issue prose echoed" crates/batten/tests/it/ready.rs
 // carried: "a blocker claimed under a §8 HEADING with no relation is reported" crates/batten/tests/it/ready.rs
 // carried: "the same claim with the relation present passes" crates/batten/tests/it/ready.rs
