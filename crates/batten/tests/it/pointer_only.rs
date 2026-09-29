@@ -1751,6 +1751,16 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Board,
         disposition: Disposition::PointerOnly,
     },
+    // The board sweep (CLOUD-843, retiring `[tasks.board-sweep]`). The corpus
+    // declares no `[board] sweep` table, so its answer here is the named refusal
+    // — and the pointer-only assertions run over that refusal, which is where a
+    // composer is most tempted to echo the payload it was handed.
+    Verb {
+        path: "board sweep",
+        args: &[],
+        stdin: Stdin::Board,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "record divergence",
         args: &["--ci-workflow", "ci.yml", "--land-workflow", "land.yml"],

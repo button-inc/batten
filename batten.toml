@@ -1408,8 +1408,7 @@ captures, grep them for the id to find a handle, then \
 `batten capture show <handle> --raw` — because finding a handle is itself a \
 read, and a remedy for "this payload should not have to be in context" should \
 not begin by putting a listing there. Those commands still work and are still \
-how you browse. On a host with a transcript, `mise run board-payloads <id>` \
-works too.
+how you browse.
 
 If the row has never been read here, nothing is stored yet: read it \
 (`batten mcp call Linear get_issue '{"id":"<KEY>"}'`) and the capture mints itself. Every route hands over \
@@ -2309,7 +2308,7 @@ regex = 'CLOUD-[0-9]+'
 #     CLOUD-223 taught `.claude/hooks/session-start.sh` …
 #
 # A heading ending in "the fix", a blank line, then a citation — read as a claim.
-# The harm runs the dangerous way: a false CLAIM tells `in-progress-drain` a row
+# The harm runs the dangerous way: a false CLAIM tells `landed abandoned` a row
 # landed, and it drains a row that is still live.
 #
 # `[[:blank:]]` is space and tab and nothing else, so the verb must sit on the
@@ -3466,13 +3465,12 @@ closure, then move it: `batten mcp call Linear get_issue` for each row with \
 `includeRelations: true`, KEEPING attachments, then pipe that array to `mise run graph-check`. Exit 0 \
 records which ids it judged and that is what authorises the move; exit 1 means the \
 board is signalling falsely, so fix that first; exit 2 means it could not look, so \
-re-fetch with attachments. The payload comes from `mise run board-payloads <key>` \
-on a host with a transcript, or from the capture store on any host (CLOUD-990): \
-`batten capture list`, then `batten capture show <handle> --grep '"id":"<key>"'` \
-to find it, then `batten capture show <handle> --raw | mise run graph-check`. A \
-CCR container writes no transcript, so there the capture store is the only route — \
-and it hands over bytes the tracker returned, so it is as valid as a recovered \
-payload. Do not re-type a payload by hand. Measured 2026-08-13: a bulk sweep moved \
+re-fetch with attachments. The payload comes from the capture store on any host \
+(CLOUD-990): `batten capture list`, then \
+`batten capture show <handle> --grep '"id":"<key>"'` to find it, then \
+`batten capture show <handle> --raw | mise run graph-check`. It hands over bytes \
+the tracker returned, so it is as valid as a fresh read. Do not re-type a payload \
+by hand. Measured 2026-08-13: a bulk sweep moved \
 fifteen rows to In Review, CLOUD-480 among them with nothing of it landed, and it \
 sat wrong for 4.5 hours — `graph-check` refused it in one invocation the moment it \
 was finally asked (CLOUD-512). Every other column is a different question with a \
@@ -16722,7 +16720,7 @@ class = """
 `land` and every reader following this tree's filter convention drop an \
 unprefixed line. A refusal line without the prefix is ABSENT, not quiet — \
 measured, a reader received the diagnosis and a paraphrase and never received the \
-route. Prefix it, as `board-payloads` does for every line of its own recipe block.
+route. Prefix it on every line of a recipe block, not only the first.
 """
 
 [[verdict.route]]

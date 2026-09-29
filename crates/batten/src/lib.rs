@@ -3239,6 +3239,15 @@ struct Gathered {
     refs: Option<std::collections::BTreeSet<String>>,
 }
 
+// The gather's mutations (CLOUD-843, retiring `[tasks.in-progress-drain]`). Each
+// drops one gathered arm, and the named case is the compiled tier that stops
+// discriminating; `board sweep`'s `--issue` read is the last row.
+//MUTANT gather-trunk-ignored|s@        evidence.claimed.extend(keys.iter().cloned());@        let _ = keys;@|an_in_progress_issue_whose_commits_are_on_main_is_landed_unswept
+//MUTANT gather-merged-ignored|s@        evidence.merged.extend(keys.iter().cloned());@        let _ = keys;@|the_merged_set_is_gathered_when_no_file_names_it
+//MUTANT gather-refs-ignored|s@            Ok(names) => gathered.refs = Some(names),@            Ok(_) => {}@|the_remote_branch_list_is_gathered_and_an_empty_one_could_not_look
+//MUTANT gather-trunk-unread-is-empty|s@git::messages_reachable(root, TRUNK)@Some(String::new())@|a_gather_that_cannot_read_the_trunk_is_could_not_look
+//MUTANT sweep-issue-read-dropped|s@        stream.push_str(&text);@        let _ = \&text;@|several_ids_are_resolved_in_one_sweep
+
 /// Acquire every evidence arm the caller named no file for.
 ///
 /// **Each arm is the authority its file used to come from, consulted rather
