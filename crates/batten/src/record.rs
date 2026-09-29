@@ -279,6 +279,9 @@ pub fn run(
             crate::cli::RecordCensusCommand::Report { .. } => "record census report",
             crate::cli::RecordCensusCommand::Tally => "record census tally",
         }),
+        crate::cli::RecordCommand::Release { tag, manifest } => {
+            crate::release::run_record(tag.as_deref(), &manifest, err)
+        }
     }
 }
 

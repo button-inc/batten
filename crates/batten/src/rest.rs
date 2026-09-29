@@ -527,6 +527,50 @@ pub fn post_json(path: &str, body: &serde_json::Value) -> Option<Answer> {
     exchange(path, None, Some(&encoded), false)
 }
 
+/// One asset's BYTES, from an API-relative asset path, or `None` where the
+/// exchange could not happen at all (CLOUD-843, retiring `[tasks.checksums]`).
+///
+/// **The one read here that is not JSON, and the reason it is a separate door.**
+/// A release asset is served by the same endpoint family as its metadata, told
+/// apart only by `Accept: application/octet-stream`, and the forge answers it
+/// with a redirect to a storage host. [`crate::fetch`] follows that redirect and
+/// DROPS `Authorization` when the host changes, so the credential never reaches
+/// the storage host — the property `fetch::exchange` records being added for
+/// exactly "the next asset or download endpoint added here".
+///
+/// Bytes rather than an [`Answer`], because an [`Answer`] carries its body as
+/// text and a lossy decode of an archive would hash to something the release
+/// never published. A non-200 status travels with the (empty or error) body so
+/// the caller decides; it is never read as the asset.
+///
+/// Under [`FIXTURE`] the canned response's body is served as the bytes, so a
+/// suite's assets are text files it wrote — which is all a hash needs.
+#[must_use]
+pub fn download(path: &str) -> Option<(u16, Vec<u8>)> {
+    let url = format!("{API}/{path}");
+    if let Some(dir) = std::env::var_os(FIXTURE) {
+        let answer = from_fixture(
+            std::path::Path::new(&dir),
+            &Request {
+                method: "GET",
+                url: &url,
+                body: None,
+            },
+            None,
+            crate::now_unix(),
+        )?;
+        return Some((answer.status, answer.body.into_bytes()));
+    }
+    let mut headers = headers(None, false);
+    for (name, value) in &mut headers {
+        if name.eq_ignore_ascii_case("accept") {
+            *value = String::from("application/octet-stream");
+        }
+    }
+    let response = fetch::get(&url, &headers).ok()?;
+    Some((response.status, response.body))
+}
+
 /// One PATCH carrying a JSON body — [`post_json`]'s twin for an update the forge
 /// takes only as a `PATCH`, such as rewriting a pull request's body (CLOUD-1924).
 #[must_use]

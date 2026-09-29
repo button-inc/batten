@@ -2731,6 +2731,99 @@ const DIVERGENCE_MAX_PAGES: FlagDecl = FlagDecl::valued(
     "Pages of runs to read per workflow before the window reads as truncated (default: 10)",
 );
 
+/// `[tag]` on `release sums` and `record release`: the release to read.
+///
+/// Optional, and EMPTY reads as absent: a workflow passes the tag quoted, so the
+/// argument always arrives, and "no tag" there means the latest release.
+const RELEASE_TAG: FlagDecl = FlagDecl::positional_optional(
+    "tag",
+    "The release's tag; empty or absent is the latest release",
+);
+
+/// `--manifest <name>` on `release sums` and `record release`.
+///
+/// REQUIRED, and a flag rather than a literal: the manifest's file name is the
+/// consumer's (rule 1), declared once in its own configuration and handed here.
+const RELEASE_MANIFEST: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued(
+        "manifest",
+        "manifest",
+        "The checksum manifest's file name, as the release carries it",
+    )
+};
+
+/// `--out-dir <dir>` on `release sums`.
+const RELEASE_OUT_DIR: FlagDecl = FlagDecl::valued(
+    "out_dir",
+    "out-dir",
+    "Write the manifest under this directory (default: checksums)",
+);
+
+/// `--names` on `release sums`: answer the manifest's path and nothing else.
+const RELEASE_NAMES: FlagDecl = FlagDecl::switch(
+    "names",
+    "names",
+    "Print the manifest's path as sums=<path> and exit, with no tag, network or download",
+);
+
+/// `--tag <tag>` on `release backfill`, repeatable and ordered.
+const BACKFILL_TAG: FlagDecl = FlagDecl {
+    value: ValueDecl::StrMany,
+    ..FlagDecl::valued(
+        "tag",
+        "tag",
+        "A release tag to record (repeatable); absent, every tag the pattern selects, oldest first",
+    )
+};
+
+/// `--workflow <file>` on `release backfill`: the consumer's workflow, required.
+const BACKFILL_WORKFLOW: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued(
+        "workflow",
+        "workflow",
+        "The workflow file dispatched once per tag",
+    )
+};
+
+/// `--ref <branch>` on `release backfill`: where the dispatched runs execute.
+const BACKFILL_REF: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued("ref", "ref", "The branch the dispatched runs execute on")
+};
+
+/// `--pattern <glob>` on `release backfill`: what a release tag is.
+const BACKFILL_PATTERN: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued(
+        "pattern",
+        "pattern",
+        "The glob a release tag matches, as `git tag --list` matches it",
+    )
+};
+
+/// `--dry-run` on `release backfill`.
+const BACKFILL_DRY_RUN: FlagDecl = FlagDecl::switch(
+    "dry_run",
+    "dry-run",
+    "Print the plan, oldest first, and dispatch nothing",
+);
+
+/// `--poll-interval <seconds>` on `release backfill`.
+const BACKFILL_POLL_INTERVAL: FlagDecl = FlagDecl::valued(
+    "poll_interval",
+    "poll-interval",
+    "Seconds between polls; the forge's own interval raises it (default: 5)",
+);
+
+/// `--max-polls <n>` on `release backfill`: a COUNT backstop, never a clock.
+const BACKFILL_MAX_POLLS: FlagDecl = FlagDecl::valued(
+    "max_polls",
+    "max-polls",
+    "Polls per tag before its run reads as never finishing (default: 240)",
+);
+
 /// `<kind>` on `record census note`.
 const CENSUS_KIND: FlagDecl =
     FlagDecl::positional("kind", "h for a landing's beat, x for a deliberate stop");
@@ -3465,7 +3558,7 @@ pub const SURFACE: &[CommandDecl] = &[
     CommandDecl {
         path: "release",
         id: "release",
-        about: "Answer whether a release is installable as it says it is",
+        about: "Answer whether a release is installable as it says it is, hash its assets, and backfill its tracking",
         data_channel: false,
         exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
@@ -3484,6 +3577,45 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_VERDICT,
         effect: Effect::Unclassified,
         flags: &[],
+    },
+    // A release's checksum manifest, retiring `[tasks.checksums]` (CLOUD-843).
+    // `write`: it writes one file, and it reaches the network, which the derived
+    // read-only allowlist must never advertise. A release it could not read, or
+    // one with nothing to hash, is exit 3 with nothing written.
+    CommandDecl {
+        path: "release sums",
+        id: "release.sums",
+        about: "Hash a published release's own assets into a checksum manifest, never the manifest itself",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[
+            RELEASE_TAG,
+            RELEASE_MANIFEST,
+            RELEASE_OUT_DIR,
+            RELEASE_NAMES,
+        ],
+    },
+    // The release pipeline's backfill sweep, retiring `[tasks.release-backfill]`
+    // (CLOUD-843). `unclassified` rather than `write`: every dispatch starts a
+    // run of the consumer's own workflow, whose effect is whatever that
+    // workflow does — `exec`'s reading, one host over.
+    CommandDecl {
+        path: "release backfill",
+        id: "release.backfill",
+        about: "Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Unclassified,
+        flags: &[
+            BACKFILL_TAG,
+            BACKFILL_WORKFLOW,
+            BACKFILL_REF,
+            BACKFILL_PATTERN,
+            BACKFILL_DRY_RUN,
+            BACKFILL_POLL_INTERVAL,
+            BACKFILL_MAX_POLLS,
+        ],
     },
     CommandDecl {
         path: "config",
@@ -6490,6 +6622,19 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[],
+    },
+    // What a published release carries and what its manifest says about it,
+    // retiring `[tasks.release-assets-record]`'s reading half (CLOUD-843).
+    // `write`: it records a family and reaches the network. Could-not-look is
+    // exit 3 and removes any stale record.
+    CommandDecl {
+        path: "record release",
+        id: "record.release",
+        about: "Record a published release's assets, its checksum manifest's entries, and the entries whose bytes disagree",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[RELEASE_TAG, RELEASE_MANIFEST],
     },
     // The `census` noun. `read` because its whole subtree is, `commit`'s reading.
     CommandDecl {

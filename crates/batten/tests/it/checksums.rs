@@ -1,29 +1,29 @@
-//! `[tasks.checksums]` — CLOUD-278's release manifest, over the task's own body
-//! (CLOUD-1717).
+//! `batten release sums` — CLOUD-278's release manifest, over the compiled binary
+//! and a fixture forge (CLOUD-1717, CLOUD-843).
 //!
-//! The program moved whole into `mise.toml`: it is an effect with no decision in
-//! it, so there was nothing for a module to take. This tier runs the body the
-//! manifest declares, exactly as mise does — the `usage` spec's `usage_names` and
-//! `usage_tag` in the environment, the `{% raw %}` fence stripped — against a
-//! stub `gh` serving a fixture release. The properties are the ones a packager
-//! depends on: `sha256sum -c` reads the manifest with no flags, two runs are
-//! identical bytes, it never hashes itself, and it is never written empty.
+//! The body moved whole into `mise.toml` under CLOUD-1717 and off it onto the
+//! engine under CLOUD-843: an effect with no decision in it, so there is still
+//! nothing for a module to take. This tier runs the verb the task declares
+//! against `BATTEN_REST_FIXTURE`, which serves a release's metadata and each
+//! asset's bytes by endpoint. The properties are the ones a packager depends on:
+//! `sha256sum -c` reads the manifest with no flags, two runs are identical bytes,
+//! it never hashes itself, and it is never written empty.
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
-// carried: mise-tasks/checksums.sh policy/release-assets.rego kind:mechanism crates/batten/tests/it/checksums.rs
-// carried: tests/checksums.bats policy/release-assets.rego kind:mechanism crates/batten/tests/it/checksums.rs
-// carried: "--names answers with no tag, no network and no download" mise.toml kind:mechanism
-// carried: "the manifest covers every asset the release carries" mise.toml kind:mechanism
-// carried: "the manifest never lists itself" mise.toml kind:mechanism
-// carried: "two runs over one release produce identical bytes" mise.toml kind:mechanism
-// carried: "sha256sum -c accepts the manifest with no flags, in a directory of assets" mise.toml kind:mechanism
-// carried: "corrupting one byte of one asset makes that check fail" mise.toml kind:mechanism
-// carried: "a release carrying no assets writes no manifest" mise.toml kind:mechanism
-// carried: "an unreadable release exits 2, not 1" mise.toml kind:mechanism
-// carried: "checksums.bats::no tag given falls back to the latest release" mise.toml kind:mechanism
-// carried: "an EMPTY tag argument falls back too, which is what the workflow passes" mise.toml kind:mechanism
-// carried: "no tag resolvable exits 2 rather than hashing nothing" mise.toml kind:mechanism
+// carried: mise-tasks/checksums.sh crates/batten/src/release.rs kind:verb crates/batten/tests/it/checksums.rs
+// carried: tests/checksums.bats crates/batten/src/release.rs kind:verb crates/batten/tests/it/checksums.rs
+// carried: "--names answers with no tag, no network and no download" crates/batten/src/release.rs kind:verb
+// carried: "the manifest covers every asset the release carries" crates/batten/src/release.rs kind:verb
+// carried: "the manifest never lists itself" crates/batten/src/release.rs kind:verb
+// carried: "two runs over one release produce identical bytes" crates/batten/src/release.rs kind:verb
+// carried: "sha256sum -c accepts the manifest with no flags, in a directory of assets" crates/batten/src/release.rs kind:verb
+// carried: "corrupting one byte of one asset makes that check fail" crates/batten/src/release.rs kind:verb
+// changed: "a release carrying no assets writes no manifest" crates/batten/src/release.rs kind:verb nothing is written, as before, and the exit is 3 rather than 1: under the engine's table 1 is a malformed invocation, and a release with nothing to hash is the world not answering, which is could-not-look
+// changed: "an unreadable release exits 2, not 1" crates/batten/src/release.rs kind:verb could-not-look is the engine's 3; the distinction the case protects — lookup failure is not a refusal — is carried exactly
+// carried: "checksums.bats::no tag given falls back to the latest release" crates/batten/src/release.rs kind:verb
+// carried: "an EMPTY tag argument falls back too, which is what the workflow passes" crates/batten/src/release.rs kind:verb
+// changed: "no tag resolvable exits 2 rather than hashing nothing" crates/batten/src/release.rs kind:verb the same move to the engine's could-not-look code, 3, with nothing written
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -33,71 +33,79 @@ use crate::common;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{scratch, task_bash, task_body, write};
+use common::{scratch, stderr, stdout, write};
 
-/// A scratch directory with a stub `gh` whose `release download` copies
-/// `release/` into `--dir`, and whose tag lookup answers `v9.9.9`. A marker file
-/// makes either half fail.
-fn bench(name: &str, assets: &[&str]) -> PathBuf {
-    let dir = scratch(&format!("checksums-{name}"));
-    std::fs::create_dir_all(dir.join("release")).expect("release dir");
-    for asset in assets {
-        write(
-            &dir,
-            &format!("release/{asset}"),
-            &format!("bytes of {asset}\n"),
-        );
-    }
-    let root = dir.display();
+/// The repository a case names — deliberately not this one.
+const REPO: &str = "acme/widgets";
+
+/// The manifest's name, as `[env]` declares it for the task.
+fn manifest_name() -> String {
+    common::task_env("BATTEN_CHECKSUM_MANIFEST")
+}
+
+/// A fixture forge serving one release: its metadata by tag or as the latest,
+/// and each asset's bytes by id. Ids start at 10 so no route's needle is a
+/// prefix of another's.
+fn serve(forge: &Path, tag: &str, assets: &[(String, String)]) {
+    let listing: Vec<serde_json::Value> = assets
+        .iter()
+        .enumerate()
+        .map(|(index, (name, _))| serde_json::json!({"id": 10 + index, "name": name}))
+        .collect();
+    let body = serde_json::json!({"tag_name": tag, "assets": listing}).to_string();
     write(
-        &dir,
-        "bin/gh",
-        &format!(
-            r#"#!/usr/bin/env bash
-[ ! -f "{root}/gh.fails" ] || exit 1
-case "$*" in
-  *"release download"*)
-    [ ! -f "{root}/download.fails" ] || exit 1
-    dir=""
-    while [ $# -gt 0 ]; do [ "$1" != --dir ] || dir="$2"; shift; done
-    mkdir -p "$dir"
-    cp -R "{root}/release/." "$dir/"
-    ;;
-  *tagName*) printf 'v9.9.9\n' ;;
-esac
-"#
-        ),
+        forge,
+        "release",
+        &format!("HTTP/2 200\ncontent-type: application/json\n\n{body}\n"),
     );
-    make_executable(&dir.join("bin/gh"));
-    dir
-}
-
-#[cfg_attr(not(unix), allow(unused_variables))]
-fn make_executable(path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        let mut permissions = std::fs::metadata(path).expect("stat").permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(path, permissions).expect("chmod");
+    let mut routes = String::from("/releases/tags/\trelease\n/releases/latest\trelease\n");
+    for (index, (_, bytes)) in assets.iter().enumerate() {
+        let file = format!("asset.{}", 10 + index);
+        write(
+            forge,
+            &file,
+            &format!("HTTP/2 200\ncontent-type: application/octet-stream\n\n{bytes}"),
+        );
+        routes.push_str(&format!("/releases/assets/{}\t{file}\n", 10 + index));
     }
+    write(forge, "routes", &routes);
 }
 
-/// Run the body in `dir`, with `names`/`tag` as the `usage` spec delivers them.
-fn run_task(dir: &Path, names: bool, tag: Option<&str>) -> Output {
-    let mut command = task_bash(dir, &task_body("checksums"));
-    command
-        .env("CHECKSUMS_OUT_DIR", dir.join("out"))
-        .env("usage_names", if names { "true" } else { "false" });
-    match tag {
-        Some(tag) => command.env("usage_tag", tag),
-        None => command.env_remove("usage_tag"),
-    };
-    command.output().expect("run the task body")
+/// A working directory and a fixture forge serving `assets` on `v9.9.9`.
+fn bench(name: &str, assets: &[&str]) -> (PathBuf, PathBuf) {
+    let dir = scratch(&format!("checksums-{name}"));
+    let forge = scratch(&format!("checksums-{name}-forge"));
+    let served: Vec<(String, String)> = assets
+        .iter()
+        .map(|asset| ((*asset).to_owned(), format!("bytes of {asset}\n")))
+        .collect();
+    serve(&forge, "v9.9.9", &served);
+    (dir, forge)
+}
+
+/// `batten release sums [tag] --manifest <name> --out-dir out` in `dir`.
+fn run_sums(dir: &Path, forge: &Path, extra: &[&str]) -> Output {
+    let manifest = manifest_name();
+    let out = dir.join("out");
+    let mut args = vec!["release", "sums"];
+    args.extend_from_slice(extra);
+    args.extend(["--manifest", manifest.as_str(), "--out-dir"]);
+    common::batten()
+        .args(&args)
+        .arg(&out)
+        .env("GH_REPO", REPO)
+        .env("BATTEN_REST_FIXTURE", forge)
+        .current_dir(dir)
+        .output()
+        .expect("the compiled binary runs")
 }
 
 fn sums(dir: &Path) -> String {
-    std::fs::read_to_string(dir.join("out/SHA256SUMS")).unwrap_or_default()
+    std::fs::read_to_string(dir.join("out").join(manifest_name())).unwrap_or_default()
+}
+
+fn requests(forge: &Path) -> String {
+    std::fs::read_to_string(forge.join("args")).unwrap_or_default()
 }
 
 const RELEASE: &[&str] = &[
@@ -107,51 +115,74 @@ const RELEASE: &[&str] = &[
 ];
 
 #[test]
+fn the_committed_task_is_the_verb_and_carries_no_shell() {
+    let block = common::task_block("checksums").expect("[tasks.checksums]");
+    let run = common::task_value(&block, "run");
+    assert!(run.contains("release sums"), "{run}");
+    assert!(
+        run.contains("{{env.BATTEN_CHECKSUM_MANIFEST}}"),
+        "one declaration of the name: {run}"
+    );
+    assert!(!block.contains("'''"), "no body: {block}");
+}
+
+#[test]
 fn names_answers_with_no_tag_no_network_and_no_download() {
-    let dir = bench("names", RELEASE);
-    write(&dir, "gh.fails", "");
-    let out = run_task(&dir, true, None);
-    assert!(out.status.success(), "{out:?}");
-    assert!(String::from_utf8_lossy(&out.stdout).contains("sums="));
+    let (dir, forge) = bench("names", RELEASE);
+    let out = run_sums(&dir, &forge, &["--names"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(stdout(&out).starts_with("sums="), "{}", stdout(&out));
     assert!(!dir.join("out").exists(), "nothing written");
+    assert!(requests(&forge).is_empty(), "nothing asked of the forge");
 }
 
 #[test]
 fn the_manifest_covers_every_asset_never_itself_and_is_byte_stable() {
-    let dir = bench("covers", RELEASE);
     // A manifest already on the release must not be hashed into the next one.
-    write(&dir, "release/SHA256SUMS", "stale\n");
-    assert!(run_task(&dir, false, Some("v9.9.9")).status.success());
+    let manifest = manifest_name();
+    let mut assets: Vec<&str> = RELEASE.to_vec();
+    assets.push(manifest.as_str());
+    let (dir, forge) = bench("covers", &assets);
+    let first_run = run_sums(&dir, &forge, &["v9.9.9"]);
+    assert_eq!(first_run.status.code(), Some(0), "{}", stderr(&first_run));
+    assert_eq!(
+        stdout(&first_run).lines().count(),
+        1,
+        "stdout is the one output line: {}",
+        stdout(&first_run)
+    );
     let first = sums(&dir);
     for asset in RELEASE {
         assert!(first.contains(asset), "{asset} in {first}");
     }
-    assert!(!first.contains("SHA256SUMS"), "never lists itself: {first}");
-    assert!(run_task(&dir, false, Some("v9.9.9")).status.success());
+    assert!(!first.contains(&manifest), "never lists itself: {first}");
+    assert_eq!(run_sums(&dir, &forge, &["v9.9.9"]).status.code(), Some(0));
     assert_eq!(first, sums(&dir), "two runs, identical bytes");
 }
 
 #[test]
 fn sha256sum_accepts_the_manifest_and_a_corrupted_asset_fails_it() {
-    let dir = bench("verify", RELEASE);
-    assert!(run_task(&dir, false, Some("v9.9.9")).status.success());
-    std::fs::copy(dir.join("out/SHA256SUMS"), dir.join("release/SHA256SUMS")).expect("copy");
-    assert!(
-        sums_hold(&dir.join("release")),
-        "every line verifies as written"
-    );
-    write(&dir, &format!("release/{}", RELEASE[0]), "tampered\n");
-    assert!(
-        !sums_hold(&dir.join("release")),
-        "one corrupt byte fails the check"
-    );
+    let (dir, forge) = bench("verify", RELEASE);
+    assert_eq!(run_sums(&dir, &forge, &["v9.9.9"]).status.code(), Some(0));
+    let release = dir.join("release");
+    for asset in RELEASE {
+        write(&release, asset, &format!("bytes of {asset}\n"));
+    }
+    std::fs::copy(
+        dir.join("out").join(manifest_name()),
+        release.join(manifest_name()),
+    )
+    .expect("copy");
+    assert!(sums_hold(&release), "every line verifies as written");
+    write(&release, RELEASE[0], "tampered\n");
+    assert!(!sums_hold(&release), "one corrupt byte fails the check");
 }
 
-/// What `sha256sum -c SHA256SUMS` decides, in-process: every line is
-/// `<64 hex>  <name>` and the hex is the named file's digest.
-fn sums_hold(release: &std::path::Path) -> bool {
+/// What `sha256sum -c` decides, in-process: every line is `<64 hex>  <name>`
+/// and the hex is the named file's digest.
+fn sums_hold(release: &Path) -> bool {
     use sha2::Digest as _;
-    let manifest = std::fs::read_to_string(release.join("SHA256SUMS")).expect("the manifest");
+    let manifest = std::fs::read_to_string(release.join(manifest_name())).expect("the manifest");
     manifest.lines().all(|line| {
         let Some((hex, name)) = line.split_once("  ") else {
             return false;
@@ -173,34 +204,53 @@ fn sums_hold(release: &std::path::Path) -> bool {
 
 #[test]
 fn a_release_with_no_assets_writes_no_manifest() {
-    let dir = bench("empty", &[]);
-    let out = run_task(&dir, false, Some("v9.9.9"));
-    assert_eq!(out.status.code(), Some(1), "{out:?}");
-    assert!(!dir.join("out/SHA256SUMS").exists());
+    // Nothing but a previous manifest is nothing to hash.
+    let manifest = manifest_name();
+    let (dir, forge) = bench("empty", &[manifest.as_str()]);
+    let out = run_sums(&dir, &forge, &["v9.9.9"]);
+    assert_eq!(out.status.code(), Some(3), "{}", stderr(&out));
+    assert!(!dir.join("out").join(&manifest).exists());
 }
 
 #[test]
-fn an_unreadable_release_exits_2_not_1() {
-    let dir = bench("unreadable", RELEASE);
-    write(&dir, "download.fails", "");
-    assert_eq!(run_task(&dir, false, Some("v9.9.9")).status.code(), Some(2));
+fn an_unreadable_asset_is_could_not_look_and_writes_nothing() {
+    let (dir, forge) = bench("unreadable", RELEASE);
+    write(&forge, "asset.10", "HTTP/2 404\n\n{}");
+    let out = run_sums(&dir, &forge, &["v9.9.9"]);
+    assert_eq!(out.status.code(), Some(3), "{}", stderr(&out));
+    assert!(!dir.join("out").join(manifest_name()).exists());
+    assert!(
+        !stderr(&out).contains("{}"),
+        "rule 4: no body reaches the report: {}",
+        stderr(&out)
+    );
 }
 
 #[test]
 fn no_tag_or_an_empty_tag_falls_back_to_the_latest_release() {
     for (name, tag) in [("absent", None), ("empty", Some(""))] {
-        let dir = bench(&format!("latest-{name}"), RELEASE);
-        let out = run_task(&dir, false, tag);
-        assert!(out.status.success(), "{name}: {out:?}");
+        let (dir, forge) = bench(&format!("latest-{name}"), RELEASE);
+        let extra: Vec<&str> = tag.into_iter().collect();
+        let out = run_sums(&dir, &forge, &extra);
+        assert_eq!(out.status.code(), Some(0), "{name}: {}", stderr(&out));
         assert!(sums(&dir).contains(RELEASE[0]), "{name}");
+        assert!(
+            requests(&forge).contains("/releases/latest"),
+            "{name}: {}",
+            requests(&forge)
+        );
     }
 }
 
 #[test]
-fn no_tag_resolvable_exits_2_rather_than_hashing_nothing() {
-    let dir = bench("unresolvable", RELEASE);
-    write(&dir, "gh.fails", "");
-    let out = run_task(&dir, false, None);
-    assert_eq!(out.status.code(), Some(2), "{out:?}");
-    assert!(!dir.join("out/SHA256SUMS").exists());
+fn no_release_resolvable_is_could_not_look_rather_than_hashing_nothing() {
+    let (dir, forge) = bench("unresolvable", RELEASE);
+    write(
+        &forge,
+        "release",
+        "HTTP/2 404\n\n{\"message\": \"Not Found\"}",
+    );
+    let out = run_sums(&dir, &forge, &[]);
+    assert_eq!(out.status.code(), Some(3), "{}", stderr(&out));
+    assert!(!dir.join("out").join(manifest_name()).exists());
 }

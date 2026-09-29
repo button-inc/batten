@@ -1165,6 +1165,10 @@ mod tests {
             // reason, and more so: it reaches the network as well as the store,
             // so it is absent from the read-only allowlist above.
             "record query".to_owned(),
+            // A release's assets and its manifest's verdict (CLOUD-843, retiring
+            // `release-assets-record`'s reading): a forge read and a store write,
+            // so off the allowlist for `record query`'s reason.
+            "record release".to_owned(),
             "record show".to_owned(),
             // The per-suite cost corpus (CLOUD-352), whose store is a COMMITTED
             // file rather than the out-of-tree record tree: its reader is a
@@ -1178,7 +1182,13 @@ mod tests {
             // absent from the read-only allowlist because it still runs the two
             // interim programs it compares.
             "release".to_owned(),
+            // The backfill sweep (CLOUD-843, retiring `release-backfill`): every
+            // dispatch runs the consumer's own workflow, so it is unclassified.
+            "release backfill".to_owned(),
             "release install".to_owned(),
+            // The checksum manifest (CLOUD-843, retiring `checksums`): a forge
+            // read and a file write, off the allowlist.
+            "release sums".to_owned(),
             // The SBOM producer (CLOUD-843): a write verb, off the allowlist.
             "sbom".to_owned(),
             // The API-compatibility noun (CLOUD-1050), ported off

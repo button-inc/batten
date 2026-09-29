@@ -91,7 +91,6 @@ mod captured_facts;
 mod census_shell;
 mod cfg_gated_test;
 mod checks_green;
-#[cfg(unix)]
 mod checksums;
 mod ci_cache_declared;
 mod ci_hygiene;
@@ -317,12 +316,10 @@ mod redirect_resolves;
 mod reference_coverage;
 mod refusal_ceiling;
 mod refusal_render_bench;
-#[cfg(unix)]
 mod release_assets;
-#[cfg(unix)]
 mod release_backfill;
-#[cfg(unix)]
 mod release_due;
+mod release_hygiene;
 mod release_install;
 mod release_provision_parity;
 mod release_token_precedence;

@@ -4891,7 +4891,11 @@ pub fn tag_facts(dir: &Path, declared: &[String]) -> Result<BTreeMap<String, Vec
 }
 
 /// Whether `glob` selects `tag` the way `git tag --list` does.
-fn tag_glob_matches(glob: &str, tag: &str) -> bool {
+///
+/// `pub(crate)` for `release backfill` (CLOUD-843): an explicitly named tag is
+/// held to the same glob the listing selects by, so the two routes to a tag
+/// list cannot disagree about what a release tag is.
+pub(crate) fn tag_glob_matches(glob: &str, tag: &str) -> bool {
     gix::glob::wildmatch(glob.into(), tag.into(), gix::glob::wildmatch::Mode::empty())
 }
 

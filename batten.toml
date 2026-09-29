@@ -2442,10 +2442,14 @@ writer = "mise run closing-key-record"
 record = "pr-unsubscribed"
 writer = "mise run pr-unsubscribed check"
 
-# CLOUD-258/262/278's reading, ported off `release-assets-check.sh` under CLOUD-1717.
+# CLOUD-258/262/278's reading, ported off `release-assets-check.sh` under
+# CLOUD-1717, and off `[tasks.release-assets-record]`'s body onto the engine's
+# own producer under CLOUD-843. The family is the engine's name for the record;
+# `policy/release-assets.rego` reads it by name and the `release-hygiene` preset
+# by its lines' kinds.
 [[record]]
 record = "release-assets"
-writer = "mise run release-assets-record"
+writer = "batten record release"
 
 # CLOUD-319's readings, one family per `[[forge.query]]` row above (CLOUD-843).
 [[record]]
@@ -2462,6 +2466,14 @@ writer = "batten record query release-due-latest"
 [[pattern]]
 id = "release-archive"
 regex = '[.](tar[.]gz|zip)$'
+
+# A literal asset operand on a `gh release upload` line, as
+# `policy/release-assets.rego` reads one: a path ending `.json` or `.sh`, quoted
+# or bare. The shell's own `sed` spelled this in the body CLOUD-843 retired; a
+# variable (`"$SPDX"`) carries a `$` and is never one.
+[[pattern]]
+id = "release-upload-operand"
+regex = '^"?[A-Za-z0-9_./-]+[.](json|sh)"?$'
 
 # `policy/release-tracking.rego`'s readings of a workflow's lines (CLOUD-618,
 # ported off `release-tracking-check.sh` under CLOUD-1717). YAML's comment rule
@@ -7474,14 +7486,22 @@ module = "policy/pr-unsubscribed.rego"
 severity = "deny"
 
 # CLOUD-258, ported off `mise-tasks/release-assets-check.sh` under CLOUD-1717.
-# `deny`, as the program's exit 1 was: it runs on `release-assets.yml`'s clock via
-# `mise run release-assets-check`, which produces then checks this one rule. A
-# property of the world, so with no record it is silent and no branch is judged.
+# `deny`, as the program's exit 1 was: it runs on `release-assets.yml`'s clock,
+# after `mise run release-assets-record` has recorded the release, via
+# `mise run release-assets-check`. A property of the world, so with no record it
+# is silent and no branch is judged.
+#
+# THE TWO DOCUMENTS ARE WHERE THE EXPECTED LIST COMES FROM (CLOUD-843): the
+# build workflow's matrix and upload lines, and `mise.toml`'s `[env]` for the
+# reference's name. The body that retired derived the list with `sed` and `awk`
+# and recorded it; the module derives it from the parsed documents now.
 [[rule]]
 id = "release grade other"
 kind = "policy"
 scope = "tree"
 module = "policy/release-assets.rego"
+documents = [".github/workflows/release-artifacts.yml", "mise.toml"]
+line_sources = [".github/workflows/release-artifacts.yml"]
 severity = "deny"
 
 # CLOUD-319, ported off `mise-tasks/release-due.sh` under CLOUD-1717. A HOLD is
@@ -15607,24 +15627,19 @@ id = "task run first"
 kind = "command"
 target = "mise run release-assets-record"
 
-[[verdict]]
-id = "release pin broken"
-gloss = "a release's checksum manifest is missing, lists itself, covers nothing, omits or orphans an asset, or disagrees on bytes"
-class = """
-A manifest a packager cannot trust pins nothing. Uploads are `--clobber` \
-idempotent and the recovery is a per-target re-run, so an asset can be replaced \
-after the manifest was cut; re-run `mise run checksums <tag>` and re-upload it.
-"""
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run release-assets-record"
+# `release pin broken` MOVED into the `release-hygiene` preset's manifest under
+# CLOUD-843, with the decision it names: a vendored class and a consumer row may
+# not share a token, so this table no longer declares it.
 
 [[verdict]]
 id = "release read partial"
-gloss = "the release-assets record carries no census, or one that disagrees with its lines"
-class = "A record torn mid-write judges part of a release as if it were all of it."
+gloss = "the list of assets a release must carry could not be derived from the build workflow"
+class = """
+The expected list is read off `release-artifacts.yml`'s matrix and upload lines \
+and `mise.toml`'s reference name. A workflow that did not parse, a matrix naming \
+no target, no upload line, or a record carrying no tag leaves that list unknown, \
+and a gate over an unknown list must not report a complete release.
+"""
 
 [[verdict.route]]
 id = "task run first"

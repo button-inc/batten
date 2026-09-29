@@ -110,12 +110,17 @@ jobs:
       # and redundant. Suppressing that needs the tag at the triggering commit,
       # which is exactly the task edit this shape exists to avoid. CLOUD-1777
       # carries the follow-up.
+      # TWO TASKS, BECAUSE THE TAG BELONGS TO THE RECORD (CLOUD-843): the reading
+      # is `batten record release` and the decision is `check`, and an argument
+      # appended to a task reaches its LAST command. `BATTEN_GITHUB_TOKEN` is the
+      # name `[forge] credential_names` reads.
       - name: Check the release carries one archive per matrix target
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BATTEN_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
-        run: mise run release-assets-check "$TAG"
+        run: mise run release-assets-record "$TAG" && mise run release-assets-check
       # The provenance half of the same question (CLOUD-583), on this clock for
       # the same reason the step above is: whether a published release is attested
       # changes with no diff, so it is a property of the WORLD and belongs nowhere

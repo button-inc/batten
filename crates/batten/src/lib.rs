@@ -116,6 +116,7 @@ pub mod record;
 pub mod recorder;
 pub mod redirect;
 pub mod refusal;
+pub mod release;
 pub mod render;
 pub mod repair;
 pub mod resolve;
@@ -439,7 +440,12 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // anything the config does not already declare (CLOUD-1265).
         Some(Command::Record { command }) => record::run(command, &overrides, out, err),
         Some(Command::Ci { command }) => run_ci(&command, &overrides, out, err),
-        Some(Command::Release { command }) => run_release(&command, &overrides, out, err),
+        // `install` is the engine's own contract check; the leaves CLOUD-843
+        // retired onto (`sums`, `backfill`) are `release.rs`'s.
+        Some(Command::Release { command }) => match command {
+            cli::ReleaseCommand::Install => run_release(&overrides, out, err),
+            other => release::run(other, out, err),
+        },
         Some(Command::Bench { command }) => run_bench(command, out, err),
         // CLOUD-843's foundation surface: the arguments are final, and each body
         // lands with the package that retires the shell it replaces. Until then
@@ -763,12 +769,10 @@ fn release_survey(
 /// `Internal` rather than a refusal, because a gate that could not look must not
 /// report a contract it never checked.
 fn run_release(
-    command: &cli::ReleaseCommand,
     overrides: &Overrides,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let cli::ReleaseCommand::Install = *command;
     let root = git::repo_root(Path::new("."))?;
     let root = Path::new(&root);
 

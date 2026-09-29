@@ -1707,6 +1707,16 @@ pub enum RecordCommand {
         /// The sub-verb selected.
         command: RecordCensusCommand,
     },
+    /// Record what a published release carries and what its checksum manifest
+    /// says about it (CLOUD-258/278, retiring `[tasks.release-assets-record]`).
+    ///
+    /// APPENDED LAST, for the reason every enum here records.
+    Release {
+        /// The release; empty or absent is the latest.
+        tag: Option<String>,
+        /// The manifest's file name — the consumer's, never a literal here.
+        manifest: String,
+    },
 }
 
 /// Subcommands of `receipt`.
@@ -1800,6 +1810,38 @@ pub enum BenchCommand {
 pub enum ReleaseCommand {
     /// Whether the install path resolves the assets a release publishes.
     Install,
+    /// Hash a release's own assets into a checksum manifest (CLOUD-278,
+    /// retiring `[tasks.checksums]` under CLOUD-843).
+    ///
+    /// APPENDED LAST, for the reason every enum here records.
+    Sums {
+        /// The release; empty or absent is the latest.
+        tag: Option<String>,
+        /// The manifest's file name — the consumer's, never a literal here.
+        manifest: String,
+        /// Where the manifest is written.
+        out_dir: Option<String>,
+        /// Print the manifest's path and exit, with no network.
+        names: bool,
+    },
+    /// Dispatch a backfill workflow once per release tag, oldest first, waiting
+    /// on each run (CLOUD-618, retiring `[tasks.release-backfill]`).
+    Backfill {
+        /// Tags named on the command line; empty is every tag the glob selects.
+        tags: Vec<String>,
+        /// The workflow file to dispatch.
+        workflow: String,
+        /// The branch the dispatched runs execute on.
+        reference: String,
+        /// The glob a release tag matches, as `git tag --list` matches it.
+        pattern: String,
+        /// Print the plan and dispatch nothing.
+        dry_run: bool,
+        /// Seconds between polls, as written; the verb reads the number.
+        poll_interval: Option<String>,
+        /// The poll COUNT per tag before a run reads as never finishing.
+        max_polls: Option<String>,
+    },
 }
 
 /// The `ci` sub-verbs.
@@ -2314,6 +2356,26 @@ fn bench_of(matches: &ArgMatches) -> Option<BenchCommand> {
 fn release_of(matches: &ArgMatches) -> Option<ReleaseCommand> {
     match matches.subcommand()? {
         ("install", _) => Some(ReleaseCommand::Install),
+        // `--manifest` is required by the surface, so clap has refused an argv
+        // without it before this runs.
+        ("sums", matches) => Some(ReleaseCommand::Sums {
+            tag: matches.get_one::<String>("tag").cloned(),
+            manifest: matches.get_one::<String>("manifest")?.clone(),
+            out_dir: matches.get_one::<String>("out_dir").cloned(),
+            names: flag(matches, "names"),
+        }),
+        ("backfill", matches) => Some(ReleaseCommand::Backfill {
+            tags: matches
+                .get_many::<String>("tag")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
+            workflow: matches.get_one::<String>("workflow")?.clone(),
+            reference: matches.get_one::<String>("ref")?.clone(),
+            pattern: matches.get_one::<String>("pattern")?.clone(),
+            dry_run: flag(matches, "dry_run"),
+            poll_interval: matches.get_one::<String>("poll_interval").cloned(),
+            max_polls: matches.get_one::<String>("max_polls").cloned(),
+        }),
         _ => None,
     }
 }
@@ -3072,6 +3134,10 @@ fn record_of(matches: &ArgMatches) -> Option<RecordCommand> {
         ("census", matches) => {
             record_census_of(matches).map(|command| RecordCommand::Census { command })
         }
+        ("release", matches) => Some(RecordCommand::Release {
+            tag: matches.get_one::<String>("tag").cloned(),
+            manifest: matches.get_one::<String>("manifest")?.clone(),
+        }),
         _ => None,
     }
 }
