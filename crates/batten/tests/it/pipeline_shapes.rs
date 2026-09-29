@@ -471,11 +471,14 @@ fn a_target_outside_the_repository_is_not_a_substitution() {
 fn a_leading_cd_out_of_the_repository_moves_the_containment_check() {
     assert_allowed("cd /tmp/batten-scratch && wc -c phase1/corpus.tsv");
     assert_allowed("cd /tmp/batten-scratch; head -5 notes/a.md");
+    // SINGLE-QUOTED because the line is shell: on Windows the canonical root is
+    // `\\?\D:\…`, and unquoted its backslashes are escapes that mangle the
+    // operand before any containment check sees it.
     let inside = root().canonicalize().expect("the repository root resolves");
-    assert_denied(&format!("cd {} && wc -l AGENTS.md", inside.display()));
+    assert_denied(&format!("cd '{}' && wc -l AGENTS.md", inside.display()));
     // Back out and in again: the LAST `cd` decides.
     assert_denied(&format!(
-        "cd /tmp/batten-scratch && cd {} && head -5 AGENTS.md",
+        "cd /tmp/batten-scratch && cd '{}' && head -5 AGENTS.md",
         inside.display()
     ));
 }
