@@ -2,7 +2,7 @@
 
 Read when: running more than one agent session against this repo at once, or
 deciding whether to. The gates this protocol leans on are `batten ready lint`
-(never the frozen `mise run ready-lint`, which passes rows it refuses) and `mise run graph-check` (CLOUD-179, CLOUD-175); the board model is
+and `batten board check` (CLOUD-179, CLOUD-175; both shell ancestors retired under CLOUD-1221); the board model is
 `mem:workflow/board-states`.
 
 ## GOVERNING RULE: one container, one checkout, one branch — implement serially
@@ -107,7 +107,7 @@ work, it only makes work _claimable_. Coordination is entirely board state.
   the race — write **nothing** (nulling the winner's assignee would clobber the
   claim) and take the next frontier issue.
 - **The frontier is computed, never guessed**: pipe the active columns'
-  `get_issue(includeRelations: true)` payloads to `mise run graph-check`. Every
+  `get_issue(includeRelations: true)` payloads to `batten board check`. Every
   session computing it independently gets the same answer; that shared
   determinism is what replaces a dispatcher.
 - **Ready-block edits go through anchored `patch` ops only** — a whole-

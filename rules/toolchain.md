@@ -301,26 +301,23 @@ assertion, so an unexercised path cannot go dead again.
 The board gates follow the agents-fetch-gates-decide pattern — each is a pure
 function of stdin (`get_issue` payloads piped in by the caller, since no tracker
 credential exists), so live runs need board data but their bats suites run
-unconditionally in the gate. `mise-tasks/` is the authoritative list; don't
+unconditionally in the gate. `batten --help` is the authoritative list; don't
 restate a count here, which is how "three `PreToolUse` hooks" went stale. `batten ready lint --issue <key>` is the Ready
-gate; `mise run ready-lint` is its frozen shell ancestor, lacks the claims-block clause, and passes rows the
-compiled gate refuses (CLOUD-1395) — never cite it as the verdict. The ancestor validates an issue's Ready
+gate, the one definition of Ready (its shell ancestor retired under CLOUD-1221). It validates an issue's Ready
 block: only the clauses _present_ (restating all eight is forbidden by the DoR
 doc), and it holds §8 to `blockedBy` _claims_ against the real relations. Every
 token it anchors on — which openers name a block, which line is the `(§6)`
 clause rather than a house-style cross-reference, which code span is the commit
-type — is defined once, in `mise-tasks/ready-lint.sh`'s comments beside the pattern
-that implements it. Read it there; a restatement here is a copy that drifts, and
-CLOUD-290 was an author rediscovering the real grammar by experiment. **Reading
-that file is free and editing it is a governed act** — it is a `mise-tasks/*.sh`
-under `shell-retirement`, so the two shapes above are the whole of what a change
-to it may be. `mise run
+type — is a `[[pattern]]` row in `batten.toml`, commented beside the expression,
+and `crates/batten/src/ready.rs` holds the predicate. Read them there; a
+restatement here is a copy that drifts, and CLOUD-290 was an author rediscovering
+the real grammar by experiment. `mise run
 claim-check` is the pull-time half: pipe the payload for the issue you mean to
 pull and it exits non-zero on `not-todo`, `assigned`, or `has-pr` (a PR already
 attached — someone published before the column moved). The automation will not
-claim for you; it fires on the PR event, which is the end of the work. `mise run
-graph-check` enforces the board discipline (`In Progress ⇒ assignee`,
-`In Review ⇒ a linked PR attachment`, `Todo ⇒ ready-lint exits 0` — the queue is
+claim for you; it fires on the PR event, which is the end of the work. `batten
+board check` enforces the board discipline (`In Progress ⇒ assignee`,
+`In Review ⇒ a linked PR attachment`, `Todo ⇒ ready lint passes` — the queue is
 a column claim like the other two, CLOUD-375 — acyclic and non-dangling
 `blockedBy`) and
 emits the ready frontier + WIP count on stdout — the same command gates and
@@ -767,16 +764,16 @@ mentions this issue", which is not "work began" — a commit can continue,
 document, cite or defer. It only ever moves forward into In Progress, so it
 dragged an issue back out of In Review and left two others stranded (CLOUD-186).
 
-`mise run spec-ref-check` is the same pattern aimed at the tree rather than the
+`batten board check --refs` is the same pattern aimed at the tree rather than the
 board: it refuses a `CLOUD-<n> §N` citation in a tracked file when the piped issue
 declares no clause `N`. Enumerate what to fetch with
 `git grep -hoE "CLOUD-[0-9]+'?s? §[0-9]+"` and pipe those `get_issue` payloads.
 It **refutes and never confirms**, which is load-bearing rather than stylistic: a
 Ready block may legitimately omit a clause — CLOUD-45 has no §4, CLOUD-80 no §3 or
 §5 — so a sparse set is not a defect and a citation of a missing one is. Sub-numbers
-resolve to their parent. An issue cited but absent from the payload is exit `2`,
+resolve to their parent. An issue cited but absent from the payload is exit `3`,
 never a silent pass. The transcription hazard CLOUD-469 records runs the OPPOSITE
-way here than in `graph-check`: a shortened body carries fewer clause labels, so it
+way here than in the graph: a shortened body carries fewer clause labels, so it
 manufactures findings rather than hiding them — which is why a projected
 `list_issues` is not a valid input, its descriptions being truncated.
 

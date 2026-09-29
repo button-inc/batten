@@ -114,6 +114,18 @@ err)` takes **both** channels and the resolved `Mode`, so a verb can write a
   `-J`?), and a flag carries `hidden` plus `Rung` — which §3 ladder rung it
   selects — so "is this a ladder flag" is a column rather than a naming
   convention, and the ladder's totality is a census test.
+- `board_check.rs` — `batten board check` (CLOUD-1221), retiring `graph-check`,
+  `ready-cites-check` and `spec-ref-check` in one delta. Over ONE reading of a
+  payload set it judges the graph (column claims, `blockedBy` acyclicity, status
+  glosses, milestones) and prints the ready frontier, asking `ready::lint` for the
+  one definition of Ready rather than spawning a second; `--cites` judges each
+  live Ready block's citations against the tracked tree, `--refs` the tree's
+  clause citations against the payloads. Every vocabulary is `batten.toml`'s:
+  columns, settled/retired status types, the move receipt and the citation
+  corpus in `[board]`, expressions in `[[pattern]]`. `write`, because a coherent
+  graph mints one `board-move.<key>` receipt per judged id (CLOUD-512). Exits:
+  `2` a lying board or a refuted citation, `3` could-not-look (which outranks a
+  violation in the graph and not in the citation directions).
 - `board.rs` — the board's COLUMN VOCABULARY, resolved from the `[board]` table
   rather than held as engine constants (CLOUD-1623, non-negotiable rule 1).
   `landed` and `claim` decided over one tracker's words — Linear's
@@ -175,7 +187,7 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   exempt list is asserted equal to the ban's `stays_bash`. Not layered (§8): a
   local file able to add an exempt glob could make a wave read as progress. The
   other CLOUD-843 foundation verbs (`step check|record|run`, `sbom`, `dist`,
-  `mcp grant|posture`, `board check`, `record divergence`, `record census …`)
+  `mcp grant|posture`, `record divergence`, `record census …`)
   carry final arguments and answer `unimplemented` at exit 3 until their package
   lands; the serena launcher's home is the existing `mcp spawn`.
 - `claim.rs` — whether an issue is pullable, and the receipt that records the
