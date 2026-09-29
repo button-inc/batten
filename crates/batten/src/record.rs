@@ -1224,9 +1224,13 @@ fn graph_on_stdin(family: &str, document: Option<&str>) -> Result<crate::cargo_g
 /// COULD-NOT-LOOK IS AN INTERNAL ERROR (exit `3`), never an empty graph: a
 /// resolution that failed or answered something unparseable writes nothing, so
 /// the module reads an absent record as "the producer did not run".
-fn graph_for(inputs: &BTreeMap<String, String>, family: &str) -> Result<crate::cargo_graph::Graph> {
+fn graph_for(
+    inputs: &BTreeMap<String, String>,
+    family: &str,
+    document: Option<&str>,
+) -> Result<crate::cargo_graph::Graph> {
     let Some(platform) = inputs.get("resolve") else {
-        return graph_on_stdin(family);
+        return graph_on_stdin(family, document);
     };
     if platform.trim().is_empty() {
         return Err(UsageError::raise(format!(
