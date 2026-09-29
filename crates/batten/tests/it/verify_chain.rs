@@ -357,6 +357,69 @@ fn no_kind_valid_is_the_verdict() {
     }
 }
 
+/// Mint the branch-keyed claim receipt the way `claim-check` does, against the
+/// `origin/main` of the moment: `claim_receipt.rs`' `mint`, for its reason — a
+/// receipt with no `base` line is void by design, so omitting it would test a
+/// receipt no real claim resembles.
+fn mint_claim(dir: &Path, branch: &str) {
+    let git_dir = git_in(dir, &["rev-parse", "--absolute-git-dir"]);
+    let base = git_in(dir, &["rev-parse", "origin/main"]);
+    let receipts = Path::new(git_dir.trim()).join("batten-receipts");
+    std::fs::create_dir_all(&receipts).expect("create the receipt store");
+    std::fs::write(
+        receipts.join(format!("claim.{}", branch.replace('/', "-"))),
+        format!("CLOUD-843\nready-lint pass\nbase {}\n", base.trim()),
+    )
+    .expect("mint the receipt");
+}
+
+/// The one line of `out` that reports `check`'s verdict.
+fn line_of<'a>(out: &'a str, check: &str) -> &'a str {
+    let prefix = format!("{check} ");
+    let found: Vec<&str> = out
+        .lines()
+        .filter(|line| line.starts_with(&prefix))
+        .collect();
+    assert_eq!(found.len(), 1, "exactly one `{check}` line: {out}");
+    found[0]
+}
+
+/// THE REFUSAL TELLS A RE-CLAIM APART FROM A FIRST CLAIM, through the very step
+/// `verify` runs (`tests/verify.bats`' case of that name). The restart —
+/// `checkout -B <name> origin/main` after the claimed work merged — leaves a
+/// receipt on disk that describes work which is gone: `claim` must answer
+/// `stale-main`, never `missing`, because the two send the reader to different
+/// remedies. The kinds that were never minted still answer `missing`, so the two
+/// words are told apart in one run rather than across fixtures.
+#[test]
+fn a_restarted_branch_is_a_re_claim_and_not_a_first_claim() {
+    let dir = repo("verify-chain-or-restart");
+    let branch = "user/cloud-843-restart";
+    git_in(&dir, &["checkout", "-q", "-b", branch]);
+    mint_claim(&dir, branch);
+    common::write(&dir, "src.rs", "fn main() { /* landed */ }\n");
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "landed work"]);
+    git_in(&dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git_in(&dir, &["checkout", "-q", "-B", branch, "origin/main"]);
+
+    let (code, out) = status(
+        &dir,
+        &["claim", "--or", "bot", "--or", "carry", "--key", "branch"],
+    );
+    assert_eq!(code, 2, "the restart is refused: {out}");
+    let claim = line_of(&out, "claim");
+    assert!(claim.ends_with(" stale-main"), "a re-claim: {claim}");
+    assert!(
+        !claim.contains("missing"),
+        "the receipt EXISTS; `missing` would name the wrong remedy: {claim}"
+    );
+    for never_minted in ["bot", "carry"] {
+        let line = line_of(&out, never_minted);
+        assert!(line.ends_with(" missing"), "a first claim: {line}");
+    }
+}
+
 /// ONE DOCUMENT OR NONE: `--json` answers one receipt, so beside `--or` it is a
 /// usage error rather than several documents on one stream.
 #[test]
