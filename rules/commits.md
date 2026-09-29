@@ -15,8 +15,9 @@ chore, ci, docs, feat, fix, perf, refactor, revert, style, test`. Enforced
   reports through, which is what branch protection requires so that adding a job
   never needs a ruleset change. That indirection is also what let an EXTERNAL
   check block a merge with no ruleset edit at all (CLOUD-441) — and why it no
-  longer does: `final` cannot `needs:` an app-posted check-run, and it finished
-  before the analyzer started, so CLOUD-897 took the read out of `final`;
+  longer does: `final` cannot `needs:` an app-posted check-run, and CLOUD-897
+  took the read out of `final` on a race diagnosis `mem:workflow/sonar-scope`
+  has since refuted (the late rows were the branch analysis, not a race);
   `mise run sonar-gate <sha>` is the by-hand reading now. The host still requires
   exactly `final`. Which legs feed it is `ci.yml`'s business, and
   which check-runs carry a verdict for `ci-wait` is `CI_REQUIRED_CHECKS`'s; the

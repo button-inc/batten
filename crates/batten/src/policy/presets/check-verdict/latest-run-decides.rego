@@ -33,8 +33,8 @@
 # THE THREE VERDICTS. `check grade red` is an objection, pointing at the name
 # and the conclusion. `check grade early` is no answer yet — running, skipped,
 # cancelled — pointing at the name and the status or conclusion. `check read
-# partial` is a window the query could not finish, or a record torn without its
-# one closing line, which is never judged as the whole.
+# partial` is a window the query could not finish, a record torn without its
+# one closing line, or a row line torn mid-JSON, none ever judged as the whole.
 #
 # EVERY NAME IS PREFIXED `verdict_`: a preset's modules share one `package`, and
 # a sibling added later must not collide with these.
@@ -51,6 +51,8 @@
 #MUTANT unanswered-displaces-a-verdict|s@^\tverdict_key(older) != verdict_key(newest)$@\tfalse@|a_later_unstamped_skip_does_not_erase_a_verdict
 #MUTANT truncated-window-judged|s@^\tverdict_truncated$@\tfalse@|a_truncated_window_is_partial_never_a_pass
 #MUTANT torn-record-judged|s@^\tverdict_closes != 1$@\tfalse@|a_record_torn_without_its_closing_line_is_partial
+#MUTANT torn-row-faults|s@^\tjson.is_valid(text)$@\ttrue@|a_row_torn_mid_json_is_partial
+#MUTANT torn-row-dropped|s@^\tverdict_torn_row$@\tfalse@|a_row_torn_mid_json_is_partial
 
 # METADATA
 # description: |
@@ -88,11 +90,34 @@ verdict_lines := lines if {
 	is_array(lines)
 }
 
+# A `row` line's JSON text, or undefined for any other line.
+verdict_row_text(line) := trim_prefix(line, "row\t") if {
+	is_string(line)
+	startswith(line, "row\t")
+}
+
+# A row text that reads as one JSON object. `json.is_valid` is FIRST because
+# `json.unmarshal` of a torn text is an evaluation fault under regorus's strict
+# builtin errors, and a fault takes the whole bundle down — the same reason
+# `verdict_lines` guards with `is_object`.
+verdict_row_object(text) if {
+	json.is_valid(text)
+	is_object(json.unmarshal(text))
+}
+
 verdict_rows contains row if {
 	some line in verdict_lines
-	startswith(line, "row\t")
-	row := json.unmarshal(trim_prefix(line, "row\t"))
-	is_object(row)
+	text := verdict_row_text(line)
+	verdict_row_object(text)
+	row := json.unmarshal(text)
+}
+
+# A `row` line that does not read as one object was torn mid-write by something
+# other than the producer: never dropped quietly, never judged as the whole.
+verdict_torn_row if {
+	some line in verdict_lines
+	text := verdict_row_text(line)
+	not verdict_row_object(text)
 }
 
 # A name a run can be judged under: a non-empty string. The engine's reading of
@@ -257,6 +282,15 @@ violation contains {
 	verdict_closes != 1
 }
 
+# A row line torn mid-JSON: the rest of the record is not the whole reading.
+violation contains {
+	"rule": "check read partial",
+	"verdict": "check read partial",
+	"subjects": [{"artifact": verdict_family}],
+} if {
+	verdict_torn_row
+}
+
 # --- the load-time tier ------------------------------------------------------
 #
 # These pin the PREDICATE. `crates/batten/tests/it/sonar_gate.rs` drives the
@@ -367,6 +401,23 @@ test_a_truncated_window_is_partial if {
 
 test_a_record_with_no_closing_line_is_partial if {
 	found := violation with input as {"tree": {"records": {"check-runs": [verdict_case_row("completed", "success", "lint", "2026-08-12T03:00:00Z", "2026-08-12T03:01:00Z", 1)]}}}
+	verdict_case_tokens(found) == {"check read partial"}
+}
+
+test_a_row_torn_mid_json_is_partial_not_a_fault if {
+	found := violation with input as {"tree": {"records": {"check-runs": [
+		"row\t{\"status\": \"compl",
+		verdict_case_whole,
+	]}}}
+	verdict_case_tokens(found) == {"check read partial"}
+}
+
+test_a_row_that_is_json_but_no_object_is_partial if {
+	found := violation with input as {"tree": {"records": {"check-runs": [
+		"row\t[1, 2]",
+		verdict_case_row("completed", "success", "lint", "2026-08-12T03:00:00Z", "2026-08-12T03:01:00Z", 1),
+		verdict_case_whole,
+	]}}}
 	verdict_case_tokens(found) == {"check read partial"}
 }
 

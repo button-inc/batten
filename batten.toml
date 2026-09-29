@@ -2458,7 +2458,7 @@ writer = "mise run release-due-record"
 # contract, which is why it is spelled exactly so.
 [[record]]
 record = "check-runs"
-writer = "mise run sonar-gate"
+writer = "mise run sonar-gate <sha>"
 
 # A release ARCHIVE, as `policy/release-assets.rego` reads one: the name ends in
 # a packed extension. A composed leg's `<stem>.spdx.json` carries the same triple,

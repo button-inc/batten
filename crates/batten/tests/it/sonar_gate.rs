@@ -44,8 +44,8 @@
 // changed: "a success superseded by a FAILURE is red" crates/batten/src/policy/presets/check-verdict/latest-run-decides.rego red still, at exit 2 where the body used 1
 // changed: "a success superseded by a re-run in flight is not an answer yet" crates/batten/src/policy/presets/check-verdict/latest-run-decides.rego `check grade early` at exit 2, where the body used 3
 // "the id breaks a tie between two runs started in the same second" shares its title with a case already ledgered in `checks_green.rs`; a title owes exactly one arm, so that row answers for both suites.
-// carried: "a reading with no ordering key fails closed — the least conclusive wins" crates/batten/src/policy/presets/check-verdict/latest-run-decides.rego
-// carried: "output is a pointer — a conclusion and a name, never the analysis" crates/batten/src/policy/presets/check-verdict/latest-run-decides.rego
+// changed: "a reading with no ordering key fails closed — the least conclusive wins" crates/batten/src/policy/presets/check-verdict/latest-run-decides.rego still closed on the least conclusive run, now red at exit 2 through `check` where the body used 1
+// changed: "output is a pointer — a conclusion and a name, never the analysis" crates/batten/src/policy/presets/check-verdict/latest-run-decides.rego still a pointer, but its shape moved: a finding naming the check and its conclusion beside the `check grade red` token at exit 2, where the body printed a stdout `failure<TAB>NAME` line at exit 1
 // carried: "the verdict is byte-identical across two runs on identical input" crates/batten/src/policy/presets/check-verdict/latest-run-decides.rego
 // changed: "a SHA the remote has never seen is NO ANSWER YET, not a failed reading" mise.toml the forge's refusal is the query's could-not-look at exit 3, and it records nothing. The body told a missing commit from any other refusal by reading `gh`'s error text; the vendored client reports a status and never the body (non-negotiable rule 4), so the two are one answer now — never a pass either way, which is the half of the property that mattered
 // changed: "any other fetch failure is COULD NOT LOOK — a reading we cannot take is not a pass" mise.toml the query's exit 3, where the body used 2
@@ -809,10 +809,29 @@ fn a_record_torn_without_its_closing_line_is_partial() {
         "completed_at": "2026-08-12T03:01:00Z",
         "id": 1,
     });
-    let body = format!("row\t{row}\n");
+    record_by_hand(&dir, &format!("row\t{row}\n"));
+    assert_partial(&dir, &forge);
+}
+
+#[test]
+fn a_row_torn_mid_json_is_partial() {
+    // A row line cut off inside its JSON, beside a whole closing line: the preset
+    // must neither fault (which would read as could-not-look) nor drop the row
+    // quietly and judge what is left as the whole reading.
+    let (dir, forge) = consumer("torn-row");
+    record_by_hand(
+        &dir,
+        "row\t{\"status\": \"compl\nwindow\tstate=whole\tread=1\tkept=1\n",
+    );
+    assert_partial(&dir, &forge);
+}
+
+/// Write the `check-runs` record through `batten record named`, which stores its
+/// stdin verbatim — the one writer that can hand the preset a torn record.
+fn record_by_hand(dir: &Path, body: &str) {
     let mut writer = common::batten()
         .args(["record", "named", FAMILY])
-        .current_dir(&dir)
+        .current_dir(dir)
         .stdin(Stdio::piped())
         .spawn()
         .expect("the compiled binary runs");
@@ -823,9 +842,13 @@ fn a_record_torn_without_its_closing_line_is_partial() {
         .write_all(body.as_bytes())
         .expect("the torn record reaches the child");
     assert_eq!(writer.wait().expect("the writer answers").code(), Some(0));
+}
+
+/// The gate's decision step over whatever is recorded is `check read partial` at 2.
+fn assert_partial(dir: &Path, forge: &Path) {
     let decided = step(
-        &dir,
-        &forge,
+        dir,
+        forge,
         &[
             "check".to_owned(),
             "--rule".to_owned(),
