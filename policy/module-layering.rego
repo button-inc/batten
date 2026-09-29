@@ -689,6 +689,22 @@ declared_modules := {
 	# mints no `Finding` and reaches no decider, and it starts no program, which
 	# is what keeps the verb on the derived read-only allowlist.
 	"census",
+	# `turn` arrived with CLOUD-843's retirement of `finding-sink-check`. It is a
+	# READING in `probe_verdict`'s class: a pure reduction of a transcript body to
+	# counts, a boolean and call names, plus one receipt read. It decides nothing
+	# — which call is a home is `policy/finding-sink.rego`'s — so it reaches no
+	# decider, and `record` is its only caller.
+	"turn",
+	# `unsubscribe` arrived with the same campaign, retiring `pr-unsubscribed`.
+	# A PRODUCER in `forge_query`'s class: it reaches `fetch` for the one call its
+	# `drop` arm makes and `durable`/`receipt` for the receipt, and decides
+	# nothing — `check`'s verdict is the consumer's module. It reaches the network,
+	# so its `hook`, `repair` and `check` edges are forbidden below.
+	"unsubscribe",
+	# `probe` arrived with the same campaign, retiring `evaluator-io-record`. It
+	# runs the caller's probe command and hands back its status and output, which
+	# is `exec`'s class of effect, so the mediated path must not reach it.
+	"probe",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
@@ -751,9 +767,12 @@ forbidden[from] contains to if {
 		# `forge_query` joins for `rest`'s reason one hop further out (CLOUD-843):
 		# it reaches `rest`, so a mediated call able to reach it reaches the
 		# network by the route the `rest` entry refuses, one name later.
+		# `unsubscribe` and `probe` join for CLOUD-843: the first reaches the
+		# network through `fetch`, the second runs a caller's program.
 		"hook": {
 			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
 			"pr_watch", "fast_forward", "main_watch", "forge_query",
+			"unsubscribe", "probe",
 		},
 		# `repair` RUNS A CONSUMER'S DECLARED COMMAND ON THE MEDIATED PATH
 		# (CLOUD-1639), so it inherits `hook`'s set entire and for the same
@@ -777,6 +796,7 @@ forbidden[from] contains to if {
 		"repair": {
 			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
 			"pr_watch", "fast_forward", "main_watch", "forge_query",
+			"unsubscribe", "probe",
 		},
 		# `check` NAMES NO MODULE TODAY, so this row is INERT — and that is worth
 		# stating rather than leaving a reader to infer enforcement from a table
@@ -793,6 +813,7 @@ forbidden[from] contains to if {
 		"check": {
 			"lease", "gitwrite", "land",
 			"pr_watch", "fast_forward", "main_watch", "forge_query",
+			"unsubscribe", "probe",
 		},
 		# And the other direction, which is `symbols`' and `pinned`'s row again: the
 		# dispatcher sits below the engine and must not reach the module that
@@ -892,6 +913,12 @@ forbidden[from] contains to if {
 		# producer that reached the engine deciding over its record would be a
 		# measurement that knew which verdict it was feeding (CLOUD-843).
 		"forge_query": {"rules", "hook"},
+		# `turn`, `unsubscribe` and `probe` -> {rules, hook}, `forge_query`'s pair
+		# for its reason (CLOUD-843): a reading or a producer that reached the
+		# engine deciding over its record would know which verdict it fed.
+		"turn": {"rules", "hook"},
+		"unsubscribe": {"rules", "hook"},
+		"probe": {"rules", "hook"},
 	}
 	some to in targets
 }

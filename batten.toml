@@ -2442,6 +2442,12 @@ writer = "mise run closing-key-record"
 record = "pr-unsubscribed"
 writer = "mise run pr-unsubscribed check"
 
+# The judged turn's reading, `record decide turn-writes` (CLOUD-843, retiring
+# `[tasks.finding-sink-check]`'s body).
+[[record]]
+record = "turn-writes"
+writer = "mise run finding-sink-check"
+
 # CLOUD-258/262/278's reading, ported off `release-assets-check.sh` under CLOUD-1717.
 [[record]]
 record = "release-assets"
@@ -7469,6 +7475,17 @@ scope = "tree"
 module = "policy/pr-unsubscribed.rego"
 severity = "deny"
 
+# CLOUD-252/475/775, the decision half of `[tasks.finding-sink-check]`, retired
+# under CLOUD-843. `deny` so `record decide` exits 2 on a firing, which the
+# `finding-sink` stop handler's door reads as its rung's advice. Silent with no
+# record, so an ordinary `check` is unaffected.
+[[rule]]
+id = "turn file other"
+kind = "policy"
+scope = "tree"
+module = "policy/finding-sink.rego"
+severity = "deny"
+
 # CLOUD-258, ported off `mise-tasks/release-assets-check.sh` under CLOUD-1717.
 # `deny`, as the program's exit 1 was: it runs on `release-assets.yml`'s clock via
 # `mise run release-assets-check`, which produces then checks this one rule. A
@@ -11533,13 +11550,17 @@ expires = "2027-02-28"
 # the measured rule. The engine used to spawn the file by path, which put this
 # repository's program inside `crates/batten`; declared here, it is the
 # consumer's. With no transcript it abstains at exit 0 with nothing on stdout,
-# which the door reads as a pass: its table has no abstention code.
+# which the door reads as a pass: its table has no abstention code. Since
+# CLOUD-843 the task is one argv, `batten record decide turn-writes`, and a
+# firing is `policy/finding-sink.rego`'s exit 2, which this door says as advice
+# exactly as it said the retired body's exit 1.
 [[hook.handler]]
 id = "finding-sink"
 on = "stop"
 run = ["mise", "run", "-q", "finding-sink-check"]
-# Two streamed jq passes over the transcript: measured 338ms on 2.9MB. Ten
-# seconds is headroom for a long session's transcript, and a timeout is silence.
+# One in-process pass over the transcript (the retired body's two `jq` passes
+# measured 338ms on 2.9MB). Ten seconds is headroom for a long session's
+# transcript and for `cargo run`'s freshness check, and a timeout is silence.
 timeout_ms = 10000
 owner = "CLOUD-1717"
 expires = "2027-02-28"
@@ -15620,6 +15641,23 @@ id = "task run first"
 kind = "command"
 target = "mise run pr-unsubscribed check"
 
+# CLOUD-252/475/775's reading, retired off `[tasks.finding-sink-check]` under
+# CLOUD-843. The class carries #1052's remedy: a row's column is known only from
+# a READ receipt, which a listing never mints.
+[[verdict]]
+id = "turn file missing"
+gloss = "a turn cited path:line evidence and gave it no OPEN row"
+class = """
+Recorded is not scheduled. Writing to a row that is closed — or to one this \
+clone has recorded no read of — records the finding without scheduling it. \
+A read is recorded by batten mcp call <server> get_issue on that row; a listing records none.
+"""
+
+[[verdict.route]]
+id = "issue file first"
+kind = "command"
+target = "file an open issue linked relatedTo the source, or amend a row that is still open"
+
 # CLOUD-323's readings, ported off `deferral-check.sh` under CLOUD-1717.
 [[verdict]]
 id = "prose own unnamed"
@@ -17522,6 +17560,43 @@ regex = '^[0-9]+(\.[0-9]+)*$'
 [[pattern]]
 id = "pr-partition-prose"
 regex = '(lands? as (its|their) own (PR|pull request)|(PR|pull request) with its own ledger|one (PR|pull request) per unit|an? (PR|pull request) per unit|each .{0,60} own (PR|pull request))'
+
+# THE STRANDED-FINDING VOCABULARY (CLOUD-252/475/775), moved out of
+# `[tasks.finding-sink-check]`'s body under CLOUD-843. The engine's
+# `record decide turn-writes` reads the turn and knows none of these; the first
+# two it applies (by id, named in the task's argv), the rest
+# `policy/finding-sink.rego` decides with.
+#
+# A citation: a path separator or a known source extension, so a duration, ratio
+# or port is not read as evidence; the extensionless `mise-tasks/` files need the
+# first arm.
+[[pattern]]
+id = "finding-citation"
+regex = '([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+|[A-Za-z0-9_-]+\.(rs|toml|yml|yaml|bats|md|json|pkl|sh|lock)):[0-9]+'
+
+# The row a mediated `batten mcp call` names, as the `key` group.
+[[pattern]]
+id = "finding-mediated-key"
+regex = '(?:id|issueId)[^A-Z]{0,4}(?P<key>[A-Z]+-[0-9]+)'
+
+# Matched on the tool-name SUFFIX: the server prefix changes on reconnect. A row
+# that OPENS is the opening tool naming no row; an amendment names one.
+[[pattern]]
+id = "finding-home-opens"
+regex = 'save_issue$'
+
+[[pattern]]
+id = "finding-home-amends"
+regex = 'save_(issue|comment)$'
+
+[[pattern]]
+id = "finding-home-durable"
+regex = '(save_document|write_memory|edit_memory|rename_memory)$'
+
+# The OPEN set is enumerated; an unknown column is not a home.
+[[pattern]]
+id = "finding-open-column"
+regex = '^(backlog|todo|in-progress|in-review)$'
 
 [[verdict]]
 id = "prose state other"

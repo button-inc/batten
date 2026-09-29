@@ -405,8 +405,9 @@ emitted"_, because a transcript is the richest source of secrets the engine can
 be pointed at. So the stream a member reduces holds no prose to match.
 
 `finding-sink-check` is the measured instance and its first arm is a regex over
-assistant prose (the `CITATION` match in `[tasks.finding-sink-check]`), joined per turn
-against that turn's own tool calls with a negated arm. An extraction expressing
+assistant prose (`[[pattern]] finding-citation`, which `record decide
+turn-writes` applies in `crates/batten/src/turn.rs` and keeps only as a
+boolean), joined per turn against that turn's own tool calls with a negated arm. An extraction expressing
 that join would have to retain the prose to match it — and a predicate built on
 prose is a classifier wearing a gate's clothes, which is non-negotiable rule 3
 and which `transcript.rs` refuses at its own header. The refusal is therefore
