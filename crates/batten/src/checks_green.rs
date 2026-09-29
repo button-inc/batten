@@ -346,7 +346,7 @@ fn winner<'a>(runs: &[&'a Run], answered: &[String]) -> Option<&'a Run> {
     // Without the column the key falls back to `started_at`, the concurrent twin
     // can win it, and this guard is what keeps a green head landable — the
     // measured six-hour stall. A five-field reading is a live shape, not a legacy
-    // one: `sonar-gate.sh` emits precisely that.
+    // one: `[tasks.checks-green]`'s own fetch emits precisely that.
     if !latest.completed_at.is_empty() {
         return Some(latest);
     }

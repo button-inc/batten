@@ -2452,6 +2452,13 @@ writer = "mise run release-assets-record"
 record = "release-due"
 writer = "mise run release-due-record"
 
+# CLOUD-441's reading, retired off `[tasks."sonar-gate"]`'s bash body under
+# CLOUD-843: the `check-runs` `[[forge.query]]` row writes it and
+# `policy/sonar-gate.rego` decides over it.
+[[record]]
+record = "check-runs"
+writer = "mise run sonar-gate"
+
 # A release ARCHIVE, as `policy/release-assets.rego` reads one: the name ends in
 # a packed extension. A composed leg's `<stem>.spdx.json` carries the same triple,
 # so it must not satisfy this, and the extension is what keeps it out.
@@ -7490,6 +7497,23 @@ scope = "tree"
 module = "policy/release-due.rego"
 severity = "deny"
 
+# CLOUD-441, retired off `[tasks."sonar-gate"]`'s bash body under CLOUD-843.
+# `mise run sonar-gate <sha>` records the commit's check-runs, then checks this one
+# rule with `--fail-on-warning`, which is what keeps the gate a gate.
+#
+# `warn` BECAUSE THE RECORD IS BRANCH-KEYED AND THE SHA IS NOT. The task judges
+# whatever commit it is handed, by hand (nothing in the landing path reads it
+# since CLOUD-897), and its record then stays on the branch it was run from. Under
+# `deny`, one red reading of some other SHA would fail every later `check` on that
+# branch; under `warn` an ordinary `check` reports it and passes, and only the
+# task's own `--fail-on-warning` step exits 2.
+[[rule]]
+id = "check grade other"
+kind = "policy"
+scope = "tree"
+module = "policy/sonar-gate.rego"
+severity = "warn"
+
 # CLOUD-492, ported off `mise-tasks/land-divergence-assert.sh` under CLOUD-1717.
 #
 # `warn` FOR THE REASON `job grade other` ABOVE CARRIES, one surface over. Every
@@ -10861,6 +10885,22 @@ names = ["GITHUB_PERSONAL_ACCESS_TOKEN", "BATTEN_GITHUB_TOKEN"]
 # needed" — there is deliberately no fallback in the engine to fall back to.
 [forge]
 credential_names = ["BATTEN_GITHUB_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN"]
+
+# One commit's check-runs, as `policy/sonar-gate.rego` reads them (CLOUD-441,
+# retired off `[tasks."sonar-gate"]`'s bash body under CLOUD-843). `sha` is the
+# one input; the slug is the engine's. The endpoint's default `filter=latest` is
+# kept, as the retired `gh api` call kept it. Six fields per run and nothing else:
+# `completed_at` is the ordering key `checks green` leads with (CLOUD-1662), which
+# the retired five-column reading never carried. Three pages of 100 is well past
+# any single head's run count here; a head past it records a truncated window,
+# which the module refuses to judge as the whole.
+[[forge.query]]
+id = "check-runs"
+endpoint = "repos/{owner}/{repo}/commits/{sha}/check-runs"
+rows = "check_runs"
+per_page = 100
+max_pages = 3
+select = ["status", "conclusion", "name", "started_at", "completed_at", "id"]
 
 # --- the scripts the launcher re-arms every spawn (CLOUD-1704) -----------------
 #
@@ -15525,6 +15565,46 @@ class = "A record missing a reading decides over part of the answer."
 id = "task run first"
 kind = "command"
 target = "mise run release-due-record"
+
+# CLOUD-441's readings, retired off `[tasks."sonar-gate"]`'s bash body under
+# CLOUD-843. The pointer is the conclusion or status, never the analysis.
+[[verdict]]
+id = "check grade red"
+gloss = "the external analyzer's latest run on this commit concluded with an objection"
+class = """
+The analyzer graded the commit and objected. Read the analysis on the \
+check-run's details page — its scope is the pull request or the branch, and only \
+`details_url` says which — and fix it locally.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/sonar-gate.rego"
+
+[[verdict]]
+id = "check grade early"
+gloss = "the external analyzer has no verdict on this commit yet: running, skipped or cancelled"
+class = """
+Not an answer, and so never a pass: a run still in flight, or one that \
+completed without judging anything. Ask again once the analyzer has graded the \
+commit.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run sonar-gate"
+
+[[verdict]]
+id = "check read partial"
+gloss = "the check-runs record is a truncated window or carries no closing line"
+class = "A prefix of a commit's check-runs is never judged as all of them."
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run sonar-gate"
 
 # CLOUD-618's readings, ported off `release-tracking-check.sh` under CLOUD-1717.
 # The second subject names which shape; the module's header says what each means.
