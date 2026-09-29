@@ -11,13 +11,13 @@
 #     are not on PATH in a cloud container, so the generated form fails every
 #     commit with `hk: not found` — the exact failure that made
 #     `.claude/hooks/session-start.sh` decline to install a hook at all.
-#   * THE GATE MUST NOT RE-ENTER ITSELF. `doctor` runs inside the gate
-#     (`test:bats` depends on it, mise.toml), so anything inside the gate that
-#     executes this hook re-enters `hk run pre-commit`, which runs `test:bats`,
-#     which runs `doctor`, which executes the hook: unbounded recursion with no
-#     exit condition. Measured 2026-08-12 — it hung a `git commit`, and the
-#     session that hit it burned its remaining container lifetime polling the
-#     hung commit and died with the fix uncommitted.
+#   * THE GATE MUST NOT RE-ENTER ITSELF. Anything a pre-commit step runs that
+#     executes this hook re-enters `hk run pre-commit`, which runs that step
+#     again: unbounded recursion with no exit condition. The measured instance
+#     was `doctor` running inside the gate through the since-retired shell-suite
+#     step (CLOUD-843), which executed the hook. Measured 2026-08-12 — it hung a
+#     `git commit`, and the session that hit it burned its remaining container
+#     lifetime polling the hung commit and died with the fix uncommitted.
 #
 # Being checked in also makes the body testable directly
 # (crates/batten/tests/it/git_hook.rs)

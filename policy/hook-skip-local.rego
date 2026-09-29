@@ -138,6 +138,17 @@ test_the_ci_jobs_carve_typed_locally_is_refused if {
 	}]}}
 }
 
+# A LIST IS JUDGED LIKE A SINGLE STEP. Restored after round 2 dropped it with the
+# `ci` carve (CLOUD-843): the retired spelling with a step appended was the case
+# that proved no prefix of the value escapes, and the pattern reads the whole word.
+test_the_carve_with_a_step_appended_is_refused if {
+	some _ in violation with input as {"call": {"segments": [{
+		"words": ["HK_SKIP_STEPS=test:bats,batten-check", "mise", "run", "ci"],
+		"raw": "HK_SKIP_STEPS=test:bats,batten-check mise run ci",
+		"terminator": null,
+	}]}}
+}
+
 test_an_ordinary_commit_is_allowed if {
 	count(violation) == 0 with input as {"call": {"segments": [{
 		"words": ["git", "commit", "-m", "x"],
