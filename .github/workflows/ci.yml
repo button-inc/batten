@@ -542,6 +542,16 @@ jobs:
           # `hook-profile-check` reads `hk check --all --plan` and cannot see
           # what a workflow job passes.
           HK_SKIP_STEPS: test:bats,batten-check
+      # THE GATES LEFT THE CHECKOUT AS THEY FOUND IT (CLOUD-1953). `test:cargo`'s
+      # retired shell body compared tracked state before and after the suite, and
+      # that comparison fired here, inside `mise run ci`. The body is one argv now
+      # (CLOUD-843) and the check is `receipt clean`'s predicate after the lap —
+      # which `verify:gated` reaches through `receipt record`, and which this job
+      # reaches through the same task `verify:gated` names, so `ci-local-parity`
+      # property 3 holds. Gated on the same verdict as the step above: the quick
+      # tier runs no suite that could write.
+      - run: mise run tree-clean
+        if: steps.slow.outputs.needed == 'true'
       # THE OTHER BRANCH, and it is not merely `ci` minus the slow steps.
       #
       # `batten-check` USED TO RUN HERE UNCONDITIONALLY and now runs in the

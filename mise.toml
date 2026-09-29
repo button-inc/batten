@@ -1290,8 +1290,16 @@ run = "cargo nextest run --workspace --no-fail-fast"
 [tasks."test:cargo"]
 description = "Run the Rust workspace test suite"
 # ONE ARGV (CLOUD-843, CLOUD-1990). The cargo statement was always the task; the
-# shell around it did two jobs that belong elsewhere, and both moved:
+# shell around it did three jobs that belong elsewhere, and all three moved:
 #
+# * THE STEP RECEIPT (CLOUD-424, CLOUD-1891). Same sources, same command, same
+#   toolchain => same verdict, so a hit answers from the receipt instead of
+#   rebuilding the workspace. The retired body bracketed the statement with
+#   `step-receipt check` and `step-receipt record`; `batten step run` IS that
+#   bracket — a hit exits 0, a miss runs the command after its `--` and records
+#   only when it passes — so the `test:cargo` arm of the step table keeps its
+#   caller. `cargo run` rather than a bare `batten`, the spelling `deny` and
+#   `lint:clippy` use: this task must run in a clone that has built nothing yet.
 # * NO `batten` RESOLVABLE BY NAME WHILE THE SUITE RUNS (CLOUD-1951). CI's test
 #   job has neither `target/release` nor an installed release on PATH, so a case
 #   or hook spawning a bare `batten` passed here and failed there. The mask is
@@ -1305,15 +1313,22 @@ description = "Run the Rust workspace test suite"
 #   PATH, is no longer covered. Cases reach the tree's own binary through
 #   `CARGO_BIN_EXE_batten`.
 # * THE SUITE LEAVES THE CHECKOUT AS IT FOUND IT (CLOUD-1953). The before/after
-#   comparison of tracked state is `receipt record`'s refusal of a tree that
-#   differs from HEAD, at the end of `verify:gated` — which is where the #928
-#   rewrite would have had to be caught to cost nothing, and which covers every
-#   gate that lap runs rather than this one suite.
+#   comparison of tracked state is `receipt clean`'s predicate, run after the
+#   lap's gates in BOTH places the suite runs as a gate: locally it is
+#   `receipt record`'s refusal of a tree that differs from HEAD, at the end of
+#   `verify:gated`; on CI it is the `mise run tree-clean` step `ci.yml` runs right
+#   after `mise run ci`. Either covers every gate that lap ran rather than this
+#   one suite. STRICTER THAN THE RETIRED BODY, which read `--untracked-files=no`:
+#   a case that leaves a new untracked, unignored file behind now refuses too.
+#   What it no longer catches is a bare `mise run test:cargo` outside either lap,
+#   which no gate reads.
 #
-# THE STATEMENT STAYS BARE, and `ci-local-parity` property 16 is why (CLOUD-662):
-# a foreign CI leg's line must be `mise exec -- ` plus exactly this. The fail-fast
-# posture rides `NEXTEST_PROFILE` in `[env]`, which every leg inherits.
-run = "cargo nextest run --workspace"
+# THE STATEMENT AFTER THE `--` STAYS BARE, and `ci-local-parity` property 16 is
+# why (CLOUD-662): a foreign CI leg's line must be `mise exec -- ` plus exactly
+# that tail, and `task_cargo` in `policy/ci-parity.rego` lifts it off the
+# `step run test:cargo -- ` wrapper. The fail-fast posture rides
+# `NEXTEST_PROFILE` in `[env]`, which every leg inherits.
+run = "cargo run --quiet -p batten -- step run test:cargo -- cargo nextest run --workspace"
 
 # --- the four tiers `hk` reaches by name (CLOUD-1164) ---------------------------
 #
@@ -9355,7 +9370,7 @@ description = "Record what a long-running task is doing, so its liveness and pha
 # could-not-look, never a verdict about a registry entry. Every caller here is
 # `|| true`, so this one never stops a land — which is exactly why it would
 # otherwise go unnoticed, and why the diagnosis is worth printing.
-run = "translate() { batten task \"$@\" || case $? in 2) exit 1 ;; 3) exit 2 ;; 126 | 127) echo '::error:: task-registry: batten is not on PATH, so nothing could look. Run `mise run install:local`.' >&2; exit 2 ;; *) exit $? ;; esac; }; translate"
+run = "translate() { batten task \"$@\" || case $? in 2) exit 1 ;; 3) exit 2 ;; 126 | 127) echo '::error:: task-registry: batten is not on PATH, so nothing could look. Run `cargo build --release -p batten` or `./install.sh`; `mise run install:local` cannot, since `target-prune` needs batten first.' >&2; exit 2 ;; *) exit $? ;; esac; }; translate"
 
 [tasks.singleton]
 description = "Refuse to start a task that is already running in this clone, naming the process that holds it"
@@ -9387,7 +9402,7 @@ description = "Refuse to start a task that is already running in this clone, nam
 # `land.sh` is a governed program and every non-zero reaches the same `die` — so
 # the diagnosis is printed HERE, above the line that misreads it. Distinguishing
 # the two in the CALLER needs the retirement CLOUD-1338 owns.
-run = "translate() { batten singleton \"$@\" || case $? in 2) exit 1 ;; 3) exit 2 ;; 126 | 127) echo '::error:: singleton: batten is not on PATH, so nothing could look. Run `mise run install:local`. Any refusal printed below this line is NOT a second land.' >&2; exit 2 ;; *) exit $? ;; esac; }; translate"
+run = "translate() { batten singleton \"$@\" || case $? in 2) exit 1 ;; 3) exit 2 ;; 126 | 127) echo '::error:: singleton: batten is not on PATH, so nothing could look. Run `cargo build --release -p batten` or `./install.sh`; `mise run install:local` cannot, since `target-prune` needs batten first. Any refusal printed below this line is NOT a second land.' >&2; exit 2 ;; *) exit $? ;; esac; }; translate"
 
 [tasks.alive]
 description = "What batten tasks are running right now, and what phase each is in — one call, no log reading"

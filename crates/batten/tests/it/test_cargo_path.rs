@@ -12,15 +12,24 @@
 //! PATHs they construct.
 //!
 //! THE OTHER HALF OF THAT BODY, CLOUD-1953's before/after comparison of tracked
-//! state, moved to `receipt record`'s refusal of a tree that differs from HEAD at
-//! the end of `verify:gated`, which covers every gate the lap runs rather than
-//! this one suite; `receipt_clean.rs` is where that refusal is pinned.
+//! state, moved to `receipt clean`'s predicate after the lap's gates: locally
+//! `receipt record`'s refusal at the end of `verify:gated`, on CI the
+//! `mise run tree-clean` step after `mise run ci`. Both cover every gate the lap
+//! runs rather than this one suite; `receipt_clean.rs` is where the predicate is
+//! pinned.
 
 // Its mutations are declared HERE, for the reason `target_prune.rs` gives for its
 // own: `test name undefined` reads `crates/batten/tests/**` for the row, and the
 // expression belongs to `common/mod.rs`, which is no gate's source — so the rows
 // are INERT under the sweep and are applied BY HAND against `common/mod.rs`, the
 // named case run, the file restored.
+//
+// SO NEITHER ROW IS ENFORCED, stated rather than implied by the row syntax:
+// `mutate::sources_for` routes a gate name only to `mise-tasks/`, `policy/`, the
+// engine, a preset or the task manifest, so no `MUTANT_GATES` entry can reach
+// `common/mod.rs` and `mutant-census` counts neither. The narrowed CLOUD-1951
+// mask is guarded by a hand application at integration until the sweep grows a
+// route to test-support sources.
 /*
 #MUTANT-SUITE crates/batten/tests/it/test_cargo_path.rs
 #MUTANT installed-batten-visible|s@^        if name == "batten" {$@        if name == "not-batten" {@|the_mask_hides_every_batten_and_keeps_the_rest

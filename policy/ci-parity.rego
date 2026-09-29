@@ -43,6 +43,8 @@
 #MUTANT dist-list-unread|s@\tnot provisions_from_a_list(job)@\tfalse@|a_release_leg_that_installs_everything_is_refused
 #MUTANT sequence-body-unread|s@^body_text(run) := concat@body_text_retired(run) := concat@|a_sequence_body_is_read_entry_by_entry
 #MUTANT bare-cargo-statement-unread|s@^\tstartswith(trimmed, "cargo ")$@\tfalse@|a_test_cargo_body_that_is_the_statement_is_read
+#MUTANT wrapped-cargo-statement-unread|s@^\tstartswith(cmd, "cargo ")$@\tfalse@|a_test_cargo_body_the_step_cache_wraps_is_read
+#MUTANT wrapper-read-as-the-statement|s@^\tnot contains(trimmed, " step run ")$@\ttrue@|a_test_cargo_body_the_step_cache_wraps_is_read
 #MUTANT-SUITE crates/batten/tests/it/ci_parity.rs
 
 # METADATA
@@ -1062,22 +1064,27 @@ task_cargo contains cmd if {
 	cmd := trim_suffix(trim_prefix(trimmed, "if ! "), "; then exit 1; fi")
 }
 
-# THE BODY THAT IS THE STATEMENT (CLOUD-843). `test:cargo` is one argv since its
-# shell retired, so the line needs no guard lifted off it — the whole line is the
-# statement a foreign leg must spell after `mise exec -- `.
+# THE BODY THAT IS THE STATEMENT (CLOUD-843). A one-argv `test:cargo` needs no
+# guard lifted off it — the whole line is the statement a foreign leg must spell
+# after `mise exec -- `. A step-cache line is EXCLUDED: it starts `cargo run` too,
+# and read whole it would demand the foreign leg spell the cache it has no use for.
 task_cargo contains trimmed if {
 	some raw in split(task_run("test:cargo"), "\n")
 	trimmed := trim_space(raw)
 	startswith(trimmed, "cargo ")
+	not contains(trimmed, " step run ")
 }
 
-# AND THE STATEMENT A WRAPPER RUNS, after the mandatory `--` (CLOUD-843). A
-# verb that runs a command it was handed — `batten step run <step> -- <cmd>`, the
-# step cache — carries the task's cargo statement as its tail, and that tail is
-# what a foreign leg without the wrapper must still spell.
+# AND THE STATEMENT THE STEP CACHE RUNS (CLOUD-843, CLOUD-1891). `test:cargo`
+# ships as `cargo run --quiet -p batten -- step run test:cargo -- <cmd>`: the
+# receipt bracket the retired body spelled in shell, as one verb. Its tail after
+# `step run test:cargo -- ` is what a foreign leg, which has no receipt to
+# consult, must still spell. Split on the WHOLE wrapper rather than on ` -- `,
+# because the `cargo run` spelling carries two of them and the statement may
+# carry a third of its own.
 task_cargo contains cmd if {
 	some raw in split(task_run("test:cargo"), "\n")
-	parts := split(trim_space(raw), " -- ")
+	parts := split(trim_space(raw), " step run test:cargo -- ")
 	count(parts) == 2
 	cmd := parts[1]
 	startswith(cmd, "cargo ")
@@ -1364,13 +1371,24 @@ test_a_foreign_leg_drifting_from_a_bare_statement_is_refused if {
 	f.verdict == "cargo spelling other"
 }
 
-# A WRAPPER'S TAIL IS THE STATEMENT, after its mandatory `--`.
+# THE STEP CACHE'S TAIL IS THE STATEMENT, in the spelling the tree ships.
 test_a_wrapped_statement_yields_its_tail if {
 	wrapped := object.union(
 		sound_manifest.tasks,
-		{"test:cargo": {"run": "batten step run test:cargo -- cargo nextest run --workspace"}},
+		{"test:cargo": {"run": "cargo run --quiet -p batten -- step run test:cargo -- cargo nextest run --workspace"}},
 	)
 	count(violation) == 0 with input as swap("mise.toml", object.union(sound_manifest, {"tasks": wrapped}))
+}
+
+# AND IT IS STILL COMPARED: a foreign leg drifting from the wrapped tail refuses.
+test_a_foreign_leg_drifting_from_a_wrapped_statement_is_refused if {
+	wrapped := object.union(
+		sound_manifest.tasks,
+		{"test:cargo": {"run": "cargo run --quiet -p batten -- step run test:cargo -- cargo nextest run --workspace --locked"}},
+	)
+	found := violation with input as swap("mise.toml", object.union(sound_manifest, {"tasks": wrapped}))
+	some f in found
+	f.verdict == "cargo spelling other"
 }
 
 # A SEQUENCE BODY IS READ ENTRY BY ENTRY: `test:musl` as a `run` array still

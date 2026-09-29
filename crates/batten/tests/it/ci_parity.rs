@@ -527,6 +527,27 @@ fn a_test_cargo_body_that_is_the_statement_is_read() {
     );
 }
 
+/// `#MUTANT wrapped-cargo-statement-unread` and `#MUTANT
+/// wrapper-read-as-the-statement` redden here: the step cache's tail is the
+/// statement a foreign leg spells, and the wrapper line read whole is not.
+#[test]
+fn a_test_cargo_body_the_step_cache_wraps_is_read() {
+    let root = sound("wrapped-statement");
+    common::write(
+        &root,
+        "mise.toml",
+        &manifest_with(
+            "run = \"\"\"\nif ! cargo nextest run --workspace; then exit 1; fi\n\"\"\"",
+            "run = \"cargo run --quiet -p batten -- step run test:cargo -- cargo nextest run --workspace\"",
+        ),
+    );
+    assert!(
+        findings(&root).is_empty(),
+        "a body the step cache wraps is read as its tail: {:?}",
+        findings(&root)
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The defects, each shown able to fail (CLOUD-418).
 // ---------------------------------------------------------------------------
