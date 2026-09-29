@@ -144,6 +144,87 @@ fn declared(overrides: &Overrides) -> Result<Vec<ToolQuery>> {
 /// line carries no token. An internal error when the store cannot be written.
 pub fn run_tool(id: &str, overrides: &Overrides) -> Result<ExitCode> {
     let text = verdict_lines()?;
+    store_tool(id, &text, overrides)
+}
+
+/// Record a declared tool row's verdict out of `key=value` measurement lines
+/// (CLOUD-1991, retiring `[tasks.record-perf]`'s `awk` reduction).
+///
+/// `pick` is `<name-key>=<token-key>`: every stdin line that OPENS with
+/// `<name-key>=` and carries both fields becomes the record line
+/// `<name> <token>`, and every other line is skipped — a measurement's own
+/// output shape, reduced by the writer rather than by a pipeline in front of
+/// it. The keys are the caller's, so no producer's field names reach the core.
+///
+/// # Errors
+///
+/// A [`UsageError`] for a `pick` that is not two non-empty keys, and every
+/// refusal [`run_tool`] makes. An internal error (could-not-look, exit `3`) when
+/// no line reduces: an empty record would be a PRESENT record carrying no name,
+/// which a module reads as a finding whose cause is the producer.
+pub fn run_tool_picked(id: &str, pick: &str, overrides: &Overrides) -> Result<ExitCode> {
+    let Some((name, token)) = pick
+        .split_once('=')
+        .filter(|(name, token)| !name.is_empty() && !token.is_empty())
+    else {
+        return Err(UsageError::raise(format!(
+            "record tool {id}: `--pick {pick}` is not `<name-key>=<token-key>`"
+        )));
+    };
+    let text = picked(&verdict_lines()?, name, token);
+    if text.is_empty() {
+        return Err(anyhow::anyhow!(
+            "record tool {id}: could not look: no line on stdin opens with `{name}=` and carries `{token}=`; nothing recorded"
+        ));
+    }
+    store_tool(id, &text, overrides)
+}
+
+/// The `<name> <token>` lines `pick` reduces `raw` to, in order.
+///
+/// A line counts only when it OPENS with `<name>=` — so a paired record
+/// (`arm=… path=…`) is not taken for an absolute one — and carries a non-empty
+/// value for both keys. A key given twice on one line reads its LAST value, the
+/// reading the retired `awk` program made.
+fn picked(raw: &str, name: &str, token: &str) -> String {
+    let opener = format!("{name}=");
+    let mut reduced = String::new();
+    for line in raw.lines().filter(|line| line.starts_with(&opener)) {
+        let mut named = None;
+        let mut value = None;
+        for (key, field) in line
+            .split_whitespace()
+            .filter_map(|field| field.split_once('='))
+        {
+            if key == name {
+                named = Some(field);
+            }
+            if key == token {
+                value = Some(field);
+            }
+        }
+        if let (Some(named), Some(value)) = (named, value)
+            && !named.is_empty()
+            && !value.is_empty()
+        {
+            reduced.push_str(named);
+            reduced.push(' ');
+            reduced.push_str(value);
+            reduced.push('\n');
+        }
+    }
+    reduced
+}
+
+// The reduction's mutation rows, each caught by the compiled case it names in
+// the perf tier, which drives the real writer and reads the record back.
+//MUTANT-SUITE crates/batten/tests/it/perf_assert.rs
+//MUTANT pick-any-line|s@^    for line in raw.lines().filter(|line| line.starts_with(&opener)) {$@    for line in raw.lines() {@|a_picked_measurement_skips_a_line_that_does_not_open_with_the_name
+//MUTANT pick-empty-recorded|s@^    if text.is_empty() {$@    if false {@|a_picked_measurement_with_no_record_line_is_could_not_look
+
+/// Store one reduced verdict under `id`'s key: [`run_tool`]'s tail, shared with
+/// [`run_tool_picked`] so the two cannot compose different keys.
+fn store_tool(id: &str, text: &str, overrides: &Overrides) -> Result<ExitCode> {
     let rows = declared(overrides)?;
     let Some(row) = rows.into_iter().find(|row| row.id == id) else {
         return Err(UsageError::raise(format!(
@@ -166,7 +247,7 @@ pub fn run_tool(id: &str, overrides: &Overrides) -> Result<ExitCode> {
 
     let key = tools::record_key(&row, &tools::digest(&bytes));
     let git_dir = git::git_dir(Path::new("."))?;
-    store(&tools::record_path(&git_dir, &key), validated(&text)?)?;
+    store(&tools::record_path(&git_dir, &key), validated(text)?)?;
     Ok(ExitCode::Success)
 }
 
@@ -258,6 +339,9 @@ pub fn run(
     match command {
         crate::cli::RecordCommand::Suites { write } => run_suites(write, out, err),
         crate::cli::RecordCommand::Tool { id } => run_tool(&id, overrides),
+        crate::cli::RecordCommand::ToolPicked { id, pick } => {
+            run_tool_picked(&id, &pick, overrides)
+        }
         crate::cli::RecordCommand::Forge { reference } => run_forge(&reference, overrides),
         crate::cli::RecordCommand::Plan => run_plan(),
         crate::cli::RecordCommand::Closes => run_closes(overrides),

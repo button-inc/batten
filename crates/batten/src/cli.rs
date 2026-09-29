@@ -1760,6 +1760,19 @@ pub enum RecordCommand {
         /// The sub-verb selected.
         command: RecordCensusCommand,
     },
+    /// [`RecordCommand::Tool`] over `key=value` measurement lines, reduced by the
+    /// writer (CLOUD-1991, retiring `[tasks.record-perf]`'s `awk` reduction).
+    ///
+    /// `record tool <id> --pick <name>=<token>` parses to this. A VARIANT rather
+    /// than a field on `Tool`, and APPENDED, so the public enum gains no field
+    /// and no existing discriminant moves.
+    ToolPicked {
+        /// The `[[rule.tools]]` id whose verdict is being recorded.
+        id: String,
+        /// `<name-key>=<token-key>`: which field of a measurement line names the
+        /// record line and which carries its token.
+        pick: String,
+    },
 }
 
 /// Subcommands of `receipt`.
@@ -3113,9 +3126,18 @@ fn record_of(matches: &ArgMatches) -> Option<RecordCommand> {
         ("suites", matches) => Some(RecordCommand::Suites {
             write: flag(matches, "write"),
         }),
-        ("tool", matches) => Some(RecordCommand::Tool {
-            id: matches.get_one::<String>("id")?.clone(),
-        }),
+        ("tool", matches) => {
+            let id = matches.get_one::<String>("id")?.clone();
+            // `--pick` selects the reducing writer; absent, the lines are
+            // already `<name> <token>` and are recorded as they came.
+            Some(match matches.get_one::<String>("pick") {
+                Some(pick) => RecordCommand::ToolPicked {
+                    id,
+                    pick: pick.clone(),
+                },
+                None => RecordCommand::Tool { id },
+            })
+        }
         ("forge", matches) => Some(RecordCommand::Forge {
             reference: matches.get_one::<String>("ref")?.clone(),
         }),

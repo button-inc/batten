@@ -1480,6 +1480,27 @@ const TASK_PROGRAM_ROOT: FlagDecl = FlagDecl {
 /// **An unresolvable rev is a usage error, never a clean run over nothing**, for
 /// the reason [`CHECK_RULE`] states at greater length: a narrowing that matched
 /// nothing and exited `0` reads to its caller as a gate that passed.
+/// `record tool --pick <name>=<token>` (CLOUD-1991): reduce `key=value`
+/// measurement lines to `<name> <token>` in the writer.
+///
+/// ONE VALUE CARRYING BOTH KEYS rather than two flags, because the pair is one
+/// decision — which field names a line and which one scores it — and two flags
+/// could be half-given. Optional: absent, stdin is already record lines, which
+/// is every caller this leaf had before it.
+const TOOL_PICK: FlagDecl = FlagDecl {
+    id: "pick",
+    long: Some("pick"),
+    short: None,
+    help: "Reduce `key=value` lines: `<name-key>=<token-key>` names the field that labels a record line and the one that scores it",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const CHECK_SINCE: FlagDecl = FlagDecl {
     id: "since",
     long: Some("since"),
@@ -4043,7 +4064,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Measure this binary's invocation cost on every path and print one record per path",
         // **NO DATA CHANNEL**, for `ci suites`' reason and stated in this row's
         // own `about`: it prints ONE RECORD PER PATH — `path=… p50=… p95=…
-        // mean=… runs=…` — which `batten record tool perf-p95` parses. That line
+        // mean=… runs=…` — which `batten record tool perf-p95 --pick path=p95` reduces. That line
         // format IS the contract with the frozen caller, so a JSON rendering
         // would be a second output nothing reads, and declaring a channel the
         // verb does not implement is what the two `cli` surface cases caught.
@@ -5711,10 +5732,13 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Write,
-        flags: &[FlagDecl::positional(
-            "id",
-            "The `[[rule.tools]]` id whose verdict is being recorded",
-        )],
+        flags: &[
+            FlagDecl::positional(
+                "id",
+                "The `[[rule.tools]]` id whose verdict is being recorded",
+            ),
+            TOOL_PICK,
+        ],
     },
     // The sibling half, and what keeps this noun from being the thirteenth singleton
     // CLOUD-1184 counts. The two stores differ in their KEY and in nothing else

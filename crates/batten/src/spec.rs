@@ -1149,7 +1149,8 @@ mod tests {
             // CLOUD-1717's READING door, and the write band is where it belongs:
             // it applies a reading the engine owns and WRITES the result, so it
             // is absent from the read-only allowlist above for `record named`'s
-            // reason. The spawn its input comes from stays in the task.
+            // reason. The spawn its input comes from stays in the task, except the
+            // `cargo metadata` a graph family may `resolve` itself (CLOUD-1991).
             "record derive".to_owned(),
             // The land-divergence producer (CLOUD-843), a forge-window write.
             "record divergence".to_owned(),
