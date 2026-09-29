@@ -143,6 +143,7 @@ const PRESET_SCOPES: &[(&str, bool)] = &[
     ("ci-hygiene", true),
     ("landing-loop", true),
     ("claude-code-cloud", false),
+    ("check-verdict", true),
 ];
 
 /// A row enabling `name` at the scope it is really enabled with.
@@ -676,6 +677,62 @@ fn the_landing_loop_preset_refuses_a_regrade_and_is_green_by_turns() {
     );
     assert!(
         decided(&bundle, r#"{"tree":{"forge":null}}"#).is_empty(),
+        "could-not-look allows, and without the module's own guard this FAULTS"
+    );
+}
+
+/// (CLOUD-843) `check-verdict` decides for a consumer with no vocabulary of its
+/// own and a check name this repository never posts: an objection is red and
+/// named, a skip is not an answer, a truncated window is never the whole, and a
+/// tree whose producer never ran is silent.
+#[test]
+fn the_check_verdict_preset_decides_for_a_consumer_that_is_not_this_one() {
+    let bundle = loaded("check-verdict", tree_preset_row("verdict", "check-verdict"));
+    let family = |conclusion: &str, window: &str| {
+        let row = serde_json::json!({
+            "status": "completed",
+            "conclusion": conclusion,
+            "name": "lint",
+            "started_at": "2026-08-12T03:00:00Z",
+            "completed_at": "2026-08-12T03:01:00Z",
+            "id": 1,
+        });
+        serde_json::json!({"tree": {"records": {"check-runs": [
+            format!("row\t{row}"),
+            window,
+        ]}}})
+        .to_string()
+    };
+    let whole = "window\tstate=whole\tread=1\tkept=1";
+
+    let red = decided(&bundle, &family("failure", whole));
+    assert_eq!(red.len(), 1, "one objection, one finding");
+    assert_eq!(bundle.attribute(&red[0]), "check grade red");
+
+    let early = decided(&bundle, &family("skipped", whole));
+    assert_eq!(early.len(), 1, "a skip judged nothing");
+    assert_eq!(bundle.attribute(&early[0]), "check grade early");
+
+    // THE ANTI-VACUITY MIRROR, then the two readings that are not verdicts.
+    assert!(
+        decided(&bundle, &family("success", whole)).is_empty(),
+        "a pass is clean"
+    );
+    let partial = decided(
+        &bundle,
+        &family(
+            "success",
+            "window\tstate=truncated\tread=1\tkept=1\ttotal=9\tpages=1",
+        ),
+    );
+    assert_eq!(partial.len(), 1, "a prefix is never the whole");
+    assert_eq!(bundle.attribute(&partial[0]), "check read partial");
+    assert!(
+        decided(&bundle, r#"{"tree":{"records":{}}}"#).is_empty(),
+        "no producer ran, so nothing is judged"
+    );
+    assert!(
+        decided(&bundle, r#"{"tree":{"records":null}}"#).is_empty(),
         "could-not-look allows, and without the module's own guard this FAULTS"
     );
 }

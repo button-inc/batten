@@ -240,6 +240,69 @@ impl Manifest {
 /// never a hand-maintained second list, which is `surface::SURFACE`'s discipline
 /// and the reason a preset cannot be enabled that does not exist.
 pub const MANIFESTS: &[Manifest] = &[
+    // CLOUD-843, carrying CLOUD-441's decision out of a consumer module. A
+    // check's verdict on one commit is its latest run, absent is no veto and
+    // "not yet" is never a pass. The record is `batten record query`'s, under the
+    // family name the module reads; which commit, which repository and which
+    // check names are the consumer's `[[forge.query]]` row, so nothing here names
+    // a repository, an analyzer or a check.
+    //
+    // ITS OWN PRESET RATHER THAN A MODULE OF A WIDER CI BUNDLE, and the engine is
+    // the reason. A row selects a preset's modules by scope and provider, never
+    // one by one, so this per-commit gate beside a scheduled report would make
+    // each row's `--fail-on-warning` fail on the other's findings — and two tree
+    // rows over one preset collide on its predicate ids at load.
+    Manifest {
+        name: "check-verdict",
+        version: 1,
+        modules: &[PresetModule {
+            scope: RuleScope::Tree,
+            // Reads a record, not a workflow document, so no provider's
+            // expression language. The conclusion words are the forge's
+            // check-run vocabulary; on a forge speaking another one every run
+            // reads as no answer yet, which fails closed rather than clean.
+            provider: None,
+            pointer: "<preset:check-verdict>/latest-run-decides.rego",
+            source: include_str!("policy/presets/check-verdict/latest-run-decides.rego"),
+        }],
+        verdicts: &[
+            VendoredVerdict {
+                id: "check grade red",
+                gloss: "a check's latest run on this commit concluded with an objection",
+                class: "The check graded the commit and objected. The pointer is the check's name \
+and its conclusion, never its report: read the run's own details page and fix it locally. A \
+later run of the same name supersedes this one, so an older success does not answer for it.",
+                routes: &[read("source read first", "the check-run's details page")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "check grade early",
+                gloss: "a check has no verdict on this commit yet: running, skipped or cancelled",
+                class: "Not an answer, and so never a pass: a run still in flight, or one that \
+completed without judging anything. A skipped or cancelled run cannot be waited out, since \
+nothing further is minted for it; re-read the commit's check-runs once the check has graded it, \
+or give it a fresh run.",
+                routes: &[run(
+                    "task run first",
+                    "batten record query check-runs, for the same commit, then this rule again",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "check read partial",
+                gloss: "the check-runs record is a truncated window or carries no single closing line",
+                class: "A prefix of a commit's check-runs is never judged as all of them: the run \
+that decides a name may sit past the page budget. Raise the query's page budget, or narrow it \
+to the names that carry a verdict, and read it again.",
+                routes: &[read(
+                    "source read first",
+                    "the query row that writes the family",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+        ],
+        patterns: &[],
+    },
     Manifest {
         name: "ci-hygiene",
         version: 1,
