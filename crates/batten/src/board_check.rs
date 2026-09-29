@@ -38,9 +38,10 @@
 //! Every consumer fact arrives from `batten.toml`: which columns are the ready
 //! queue, pulled and landed (`[board]`), which status types settle a blocker,
 //! which receipt a coherent board mints, which paths a citation resolves
-//! against, and every expression — the issue key, the pull-request attachment,
-//! the status connective, the clause citation — from the `[[pattern]]`
-//! registry. An undeclared one is could-not-look, NAMED, never a default: a
+//! against, and every expression — the issue key, the status connective, the
+//! clause citation — from the `[[pattern]]` registry. A linked pull request is
+//! `landed`'s one reading of a pull-request URL rather than a host literal. An
+//! undeclared one is could-not-look, NAMED, never a default: a
 //! default would put one tracker's vocabulary back in the engine and make the
 //! dead path byte-identical to the working one, which is the failure
 //! `crate::board` exists to refuse.
@@ -83,7 +84,7 @@ use crate::pattern::NamedPattern;
 use crate::ready::Grammar;
 
 /// The `[[pattern]]` rows the graph reads.
-pub const GRAPH_PATTERNS: &[&str] = &["board-pr-attachment", "board-status-connective"];
+pub const GRAPH_PATTERNS: &[&str] = &["board-status-connective"];
 
 /// The `[[pattern]]` rows `--cites` reads, beyond the Ready grammar.
 pub const CITES_PATTERNS: &[&str] = &[
@@ -312,7 +313,6 @@ pub struct Vocabulary {
     review: String,
     settled_types: Vec<String>,
     retired_types: Vec<String>,
-    pr_attachment: Regex,
     connective: String,
 }
 
@@ -342,7 +342,6 @@ impl Vocabulary {
             review: column(board.review.as_deref(), "board.review")?,
             settled_types: board.settled_types.clone(),
             retired_types: board.retired_types.clone(),
-            pr_attachment: declared_row(patterns, "board-pr-attachment")?,
             connective,
         })
     }
@@ -382,7 +381,10 @@ struct Row<'a> {
 
 impl<'a> Row<'a> {
     /// `None` for a payload carrying no `id` or no `status` — the input refusal.
-    fn read(value: &'a Value, vocabulary: &Vocabulary) -> Option<Self> {
+    ///
+    /// A linked pull request is `landed`'s one reading of a pull-request URL
+    /// (CLOUD-1623), never a host literal of this module's own.
+    fn read(value: &'a Value) -> Option<Self> {
         let object = value.as_object()?;
         let id = scalar(object.get("id")?);
         let status = scalar(object.get("status")?);
@@ -393,7 +395,7 @@ impl<'a> Row<'a> {
                 items
                     .iter()
                     .filter_map(|item| item.get("url").and_then(Value::as_str))
-                    .filter(|url| vocabulary.pr_attachment.is_match(url))
+                    .filter(|url| crate::landed::is_pull_request_url(url))
                     .count()
             });
         let milestone = match object.get("projectMilestone") {
@@ -614,7 +616,7 @@ pub fn judge(
     }
     let mut rows = Vec::with_capacity(set.len());
     for value in set {
-        rows.push(Row::read(value, vocabulary)?);
+        rows.push(Row::read(value)?);
     }
     rows.sort_by(|left, right| by_num(&left.id).cmp(&by_num(&right.id)));
     let mut index = BTreeMap::new();

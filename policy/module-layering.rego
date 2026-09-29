@@ -691,9 +691,9 @@ declared_modules := {
 	"census",
 	# `board_check` arrived with CLOUD-1221, retiring the three board gates. It
 	# sits ABOVE the Ready grammar it composes: it asks `ready` for the one
-	# definition of Ready, reads `board` for the column vocabulary, `git` for the
-	# tracked tree and a deleted path, and `rules` for the one glob semantics the
-	# crate has. It decides over a PAYLOAD SET, which no mediated call carries,
+	# definition of Ready, reads `board` for the column vocabulary, `landed` for
+	# its one reading of a pull-request URL, `git` for the tracked tree and a
+	# deleted path, and `rules` for the one glob semantics the crate has. It decides over a PAYLOAD SET, which no mediated call carries,
 	# so its `hook` edge is forbidden below — a mediated call reaching a verb that
 	# reads the whole tracked tree is the per-call cost CLOUD-689's ceiling
 	# refuses.

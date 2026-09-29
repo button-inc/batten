@@ -2317,13 +2317,6 @@ regex = '\((§|clause )(?P<clause>[0-9]+)\)'
 id = "board-clause-citation"
 regex = "('s)? §(?P<clause>[0-9]+)(\\.[0-9]+)?"
 
-# A LINKED PULL REQUEST, by its attachment URL. "At least one" is a deliberate
-# approximation of "landed", checkable from the payload alone; commit containment
-# is the release transition's question, not this column check's.
-[[pattern]]
-id = "board-pr-attachment"
-regex = 'github\.com/.*/pull/'
-
 # THE PRESENT-TENSE CONNECTIVE a status claim may carry between a key and a column
 # word, and nothing else may stand there but punctuation, emphasis and whitespace.
 # An ALLOWLIST, because the blocklist it replaced — past-tense narration verbs —
