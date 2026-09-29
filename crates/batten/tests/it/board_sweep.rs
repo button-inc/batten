@@ -221,6 +221,10 @@ fn an_empty_payload_set_is_could_not_look() {
     assert!(text.contains("the payload set is empty"), "{text}");
 }
 
+/// `done-pr-check` is on the engine's table since CLOUD-843, so its
+/// could-not-look is exit 1 — the code a bash gate refuses at. The name keeps the
+/// ledger row's wording; what it proves is that neither table's could-not-look is
+/// laundered into the refusal lane.
 #[test]
 fn a_gate_exiting_2_is_not_laundered_into_the_refusal_lane() {
     let board = Board::new("laundered");

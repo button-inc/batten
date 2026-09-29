@@ -5515,11 +5515,16 @@ fi
 # and would judge the wrong repository.
 #
 # COULD-NOT-LOOK OUTRANKS A REFUSAL, AND A REFUSAL OUTRANKS AN ABSTENTION
-# (CLOUD-921). Board-scoped `unjudgeable` (a gate exited 2 over the payload set,
-# or the set is empty or not JSON) is exit 2; clone-scoped `abstained` (no `v*`
+# (CLOUD-921). Board-scoped `unjudgeable` (a gate could not look at the payload
+# set, or the set is empty or not JSON) is exit 2; clone-scoped `abstained` (no `v*`
 # tag for `released`, no pull-request state for `done-pr-check`) is exit 3, and a
 # refusal beside it is still exit 1. `graph-check` is a LEAF here, run before
 # `released`, so a tag-less clone still gets its verdict.
+#
+# EACH GATE IS READ ON ITS OWN EXIT TABLE. A bash gate refuses at 1 and cannot
+# look at 2; a gate on the engine's table (CLOUD-843: `duplicate-close-check`,
+# `done-pr-check`) refuses at 2 and cannot look at 1. `REFUSED_AT=2` names the
+# second, so neither table is laundered into the other's lane.
 #
 # EFFECT IS `read`: it decides and reports and MOVES NO ROW.
 [tasks.board-sweep]
@@ -5530,6 +5535,8 @@ fi
 #MUTANT released-fed-nothing|s@^\trun_gate released "\$tag" <<<"\$issues"@\trun_gate released "$tag" </dev/null@|a_payload_set_reaches_graph_check_behind_released
 #MUTANT graph-check-not-a-leaf|s@^run_gate graph-check@true graph-check@|a_tag_less_clone_still_gets_a_graph_check_verdict
 #MUTANT abstention-laundered|s@^\tabstained=@\tunjudgeable=@|an_abstention_and_a_not_judged_sweep_are_different_exit_codes
+#MUTANT duplicate-close-legacy-table|s@^REFUSED_AT=2 run_gate duplicate-close-check@run_gate duplicate-close-check@|a_duplicate_close_sharing_its_targets_operation_is_named_by_the_sweep
+#MUTANT done-pr-legacy-table|s@^\tREFUSED_AT=2 run_gate done-pr-check@\trun_gate done-pr-check@|a_gate_exiting_2_is_not_laundered_into_the_refusal_lane
 #MUTANT refusal-loses-to-abstention|s@^if \[\[ "\$refusals" -gt 0 \]\]; then$@if [[ "$refusals" -gt 99 ]]; then@|a_refusal_outranks_a_clone_scoped_abstention
 description = "Gate: run every board gate over one payload set and report the set of refusals (reads get_issue payloads on stdin or from BOARD_PAYLOADS_DIR) — CLOUD-825"
 shell = "bash -c"
@@ -5597,15 +5604,15 @@ gate() { # gate <name> [args...]
 # Pointer-only: the gate's name and its verdict. Both streams, because the gates
 # disagree on which one carries a finding (`released` puts its verdicts on
 # stdout), and a composer reading one throws half the report away.
-run_gate() { # run_gate <name> [args...]
-	local name=$1 report status
+run_gate() { # [REFUSED_AT=<code>] run_gate <name> [args...]
+	local name=$1 report status refused=${REFUSED_AT:-1}
 	report=$(gate "$@" 2>&1)
 	status=$?
 	case "$status" in
 	0)
 		echo "  $name ok"
 		;;
-	1)
+	"$refused")
 		refusals=$((refusals + 1))
 		echo "  $name REFUSED"
 		[[ -z "$report" ]] || printf '%s\n' "$report" >&2
@@ -5621,7 +5628,7 @@ run_gate() { # run_gate <name> [args...]
 }
 echo "board-sweep: $count issue(s)"
 run_gate graph-check <<<"$issues"
-run_gate duplicate-close-check <<<"$issues"
+REFUSED_AT=2 run_gate duplicate-close-check <<<"$issues"
 if [[ -z "$tag" ]]; then
 	tag=$(git tag --list 'v[0-9]*' --sort=-version:refname | head -n1) || tag=""
 fi
@@ -5642,13 +5649,13 @@ elif command -v gh >/dev/null 2>&1; then
 fi
 if [[ -z "$pulls" ]] || ! jq -e 'type == "array"' <<<"$pulls" >/dev/null 2>&1; then
 	# This task's own gather failed, a fact about the environment rather than
-	# the board, so it abstains; the gate's own exit 2 stays board-scoped.
+	# the board, so it abstains; the gate's own could-not-look stays board-scoped.
 	abstained=$((abstained + 1))
 	echo "  done-pr-check ABSTAINED"
 	echo "::notice:: board-sweep: no pull-request state to judge Done against, so that gate was not run. Supply --pulls <file> (a JSON array of {number,state,draft}), or make \`gh\` reachable." >&2
 else
 	with_pulls=$(jq -c --argjson pulls "$pulls" 'map(. + {pulls: $pulls})' <<<"$issues")
-	run_gate done-pr-check <<<"$with_pulls"
+	REFUSED_AT=2 run_gate done-pr-check <<<"$with_pulls"
 fi
 run_gate spec-ref-check <<<"$issues"
 if [[ "$unjudgeable" -gt 0 ]]; then
