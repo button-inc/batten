@@ -82,7 +82,8 @@ local gate = new Mapping<String, Step> {
     // (CLOUD-1397). It runs at `verify` and in CI, before merge.
     profiles = List("slow")
     glob = List("hk.pkl", ".claude/hooks/git-hook.sh")
-    check = "mise run record-verdicts"
+    // The rule acquires hk's two plans itself (CLOUD-843); nothing is recorded.
+    check = "cargo run --quiet -p batten -- check --rule 'hook declare other'"
   }
   // The adopted runner's own surface contract (CLOUD-947). BOTH ENDS ARE IN THE
   // GLOB, the same shape the surface-derivation gates carry: the projection is a
@@ -242,7 +243,7 @@ local gate = new Mapping<String, Step> {
     // (CLOUD-1397). It runs at `verify` and in CI, before merge.
     profiles = List("slow")
     glob = List("renovate.json5")
-    check = "mise run record-verdicts"
+    check = "cargo run --quiet -p batten -- record validate renovate-config"
   }
   // Every module the derived schemas are reachable from, or the step does not
   // fire on the commit that moved them. `provision.rs` and `waiver.rs` were
@@ -532,13 +533,12 @@ local gate = new Mapping<String, Step> {
   // malformed hk.pkl surfaces when a hook tries to run — the worst possible
   // moment — rather than at check time.
   ["pkl"] = (Builtins.pkl) {
-    // `slow` tier: its command reaches `record-verdicts`, which runs `cargo run`,
-    // so a commit would pay a compile (CLOUD-1397). It runs at `verify` and in CI.
+    // `slow` tier: its command runs `cargo run`, so a commit would pay a compile
+    // (CLOUD-1397). It runs at `verify` and in CI.
     profiles = List("slow")
-    // Command overridden to route through `record-verdicts`, which supplies the
-    // proxy CA the JVM needs in the web sandbox — carried verbatim out of the
-    // retired `mise-tasks/pkl-check.sh` — and then RECORDS what pkl said instead
-    // of adjudicating it here (CLOUD-1265, CLOUD-1199).
+    // Command overridden to `record validate`, which runs the `config-validator`
+    // row's declared `pkl eval` and RECORDS its exit code instead of adjudicating
+    // it here (CLOUD-1265, CLOUD-1199, CLOUD-843).
     //
     // The verdict is `policy/validator-verdict-clean.rego`'s to reach now, off
     // the `config-validator` row in `batten.toml`. That is the retirement: the
@@ -549,7 +549,7 @@ local gate = new Mapping<String, Step> {
     // handed some other path has no key to write under. `hk.pkl` is the only
     // tracked `.pkl`, so today the two selections are the same set; a second one
     // would owe a second `[[rule.tools]]` row rather than an argument here.
-    check = "mise run record-verdicts"
+    check = "cargo run --quiet -p batten -- record validate config-validator"
   }
   ["pkl-format"] = (Builtins.pkl_format) {
     depends = List("pkl")

@@ -1,26 +1,21 @@
 //! `policy/hook-profile.rego` over the compiled binary (CLOUD-509, retired under
-//! CLOUD-1199).
+//! CLOUD-1199; its `hk-plan` record retired under CLOUD-843).
 //!
 //! **The load-time tier pins the predicate and cannot pin that the engine builds
 //! the key it reads.** `hook-profile.rego`'s own `test_` rules fabricate
-//! `input.tree["tool-verdict"]["hk-plan"]` with `with input as`, which passes
-//! whether or not anything can ever produce that shape — the exact class
-//! `rules/policy-modules.md` opens with, and the class that let
-//! `tool judge dirty` ship deciding nothing. This file runs the real
-//! producer and the real engine.
-//!
-//! **The three record states are the whole subject**, and this module reads them
-//! differently from its sibling on purpose: absent is could-not-look, PRESENT AND
-//! EMPTY is the tier having evaporated (a finding), and present-with-a-stray is
-//! the false green the split can produce.
+//! `input.tree.plan` with `with input as`, which passes whether or not anything
+//! can ever produce that shape — the exact class `rules/policy-modules.md` opens
+//! with. This file runs the real runner, the real acquisition and the real
+//! engine: a scratch repository carries its own `hk.pkl`, and `batten check`
+//! acquires both declared plans from it.
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
 //! `hook-profile-check` ran `hk check --all --plan` twice and adjudicated the two
-//! plans in shell. The run stays outside — §9's prior art, and §5 makes `check`
-//! `read` — so the plans are recorded by `mise run record-verdicts hk-plan` and
-//! the adjudication moves here. The `hook-missing-profile-flag` half needs no
-//! record at all: it is a property of a FILE, and `line_sources` carries it.
+//! plans in shell; its first successor recorded a `jq` join of the two as the
+//! `hk-plan` tool verdict from `[tasks.record-verdicts]`. The join is the
+//! module's now, over two `[[rule.plan]]` rows the boundary acquires, and no
+//! producer runs at all.
 
 // carried: mise-tasks/hook-profile-check.sh policy/hook-profile.rego crates/batten/tests/hook_profile.rs
 // carried: tests/hook-profile-check.bats policy/hook-profile.rego crates/batten/tests/hook_profile.rs
@@ -34,20 +29,18 @@
 // carried: "every slow step missing from check is reported, not just the first" crates/batten/tests/hook_profile.rs
 // carried: "no slow tier at all is could-not-look, never a pass" crates/batten/tests/hook_profile.rs
 // carried: "this repository's own two-tier gate is correctly wired today" crates/batten/tests/hook_profile.rs
+// carried: "a step skipped for a non-profile reason is not read as the slow tier" policy/hook-profile.rego
 
-//! CHANGED — three cases whose SUBJECT moved from the gate to the producer, and
-//! one whose verdict class changed with it.
+//! CHANGED — cases whose subject moved to the boundary's acquisition.
 
-// changed: "a plan with no steps is exit 2" crates/batten/tests/hook_profile.rs the shell gate read both plans itself, so an empty one was its own could-not-look. The producer reads them now, and a plan it cannot read is a producer failure that writes no record — leaving the id absent, which this module reads as could-not-look and refuses nothing. `no_record_at_all_is_could_not_look` is the successor; the arm is conserved and its exit code is the producer's rather than a gate's
-// changed: "unparseable JSON is exit 2, not a verdict" crates/batten/tests/hook_profile.rs same move as the row above: parsing hk's plan is the producer's job now, and a plan that does not parse writes no record rather than reaching a verdict
-// changed: "a missing plan file is exit 2" crates/batten/tests/hook_profile.rs same move again — there is no plan FILE in the successor at all, since the producer pipes hk's output straight into `record tool` rather than staging it
-// changed: "a step skipped for a non-profile reason is not read as the slow tier" crates/batten/tests/hook_profile.rs the `profile_exclude` selection is the producer's `jq` now, so what reaches the module is already the tier. The distinction is conserved where it is made, and the module's own `test_every_slow_step_selected_by_check_is_clean` covers what arrives
+// changed: "a plan with no steps is exit 2" crates/batten/tests/hook_profile.rs the boundary acquires the plan, and `hk::planned_steps` answers could-not-look for an empty one, so the plan is `null` and the module refuses nothing — `no_plan_is_could_not_look` is the successor
+// changed: "unparseable JSON is exit 2, not a verdict" crates/batten/tests/hook_profile.rs parsing hk's plan is the acquisition's, and a plan that does not parse is `null`
+// changed: "a missing plan file is exit 2" crates/batten/tests/hook_profile.rs there is no plan FILE: the boundary asks hk directly
 
-//! WITHDRAWN — two cases whose subject does not survive the port, each for a
-//! stated reason rather than for convenience.
+//! WITHDRAWN — two cases whose subject does not survive the port.
 
-// withdrawn: "a tier member cannot also be included in the same no-profile plan" the shell gate's own comment records this branch as UNREACHABLE by construction — the tier is DERIVED from the no-profile plan's exclusions, so "a tier member still included there" cannot be represented, and an earlier draft asserting it had a branch its own test caught as dead. The successor derives the tier the same way, so the case is unrepresentable there too
-// withdrawn: "one argument is a usage error, not a half-judged run" the two-path fixture mode is gone with the program: the successor takes no plan arguments, because the producer reads hk directly and the module reads a record. There is no argument count left to get wrong
+// withdrawn: "a tier member cannot also be included in the same no-profile plan" the shell gate's own comment records this branch as UNREACHABLE by construction — the tier is DERIVED from the no-profile plan's exclusions, so the case is unrepresentable in the successor too
+// withdrawn: "one argument is a usage error, not a half-judged run" the successor takes no plan arguments; the rows name the plans
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -56,19 +49,42 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{batten, git_in, run_with_stdin, scratch, stderr, stdout, write};
-
-/// The `hk` pin the row declares, and the one a record must be keyed to.
-const DECLARED_VERSION: &str = "1.56.1";
-
-/// The subject the plan is taken over.
-const SUBJECT: &str = "amends \"package://example\"\n";
+use batten::facts::Look;
+use batten::hk;
+use common::{at_root, git_in, init_repo, run, scratch, stderr, stdout, write};
 
 /// A hook that still disables the slow tier — the clean half of the economy arm.
 const WIRED_HOOK: &str = "#!/usr/bin/env bash\nhk run pre-commit --profile '!slow'\n";
 
-fn config() -> String {
+/// This repository's own `amends` line, so the scratch config resolves from the
+/// package cache this checkout already warmed rather than from the network.
+fn amends() -> String {
+    std::fs::read_to_string(at_root("hk.pkl"))
+        .expect("read hk.pkl")
+        .lines()
+        .find(|line| line.starts_with("amends "))
+        .expect("hk.pkl amends the hk package")
+        .to_owned()
+}
+
+/// A scratch `hk.pkl` enabling `slow`, with one ordinary step and the steps
+/// `extra` declares.
+fn hk_config(extra: &str) -> String {
     format!(
+        "{}\n\nprofiles = List(\"slow\")\n\nhooks {{\n  [\"check\"] {{\n    steps {{\n      [\"fmt\"] {{\n        check = \"true\"\n      }}\n{extra}    }}\n  }}\n}}\n",
+        amends()
+    )
+}
+
+/// A step declaring `profile`, whose check does nothing.
+fn step(name: &str, profile: &str) -> String {
+    format!(
+        "      [\"{name}\"] {{\n        profiles = List(\"{profile}\")\n        check = \"true\"\n      }}\n"
+    )
+}
+
+fn config() -> String {
+    String::from(
         r#"version = 1
 
 [[rule]]
@@ -79,11 +95,14 @@ module = "hook-profile.rego"
 line_sources = [".claude/hooks/git-hook.sh"]
 severity = "deny"
 
-[[rule.tools]]
-id = "hk-plan"
-tool = "hk"
-version = "{DECLARED_VERSION}"
-input = "hk.pkl"
+[[rule.plan]]
+id = "gate"
+hook = "check"
+
+[[rule.plan]]
+id = "gate-fast"
+hook = "check"
+profile = ["!slow"]
 
 [[verdict]]
 id = "step declare missing"
@@ -97,7 +116,7 @@ target = "hk.pkl"
 
 [[verdict]]
 id = "tier list empty"
-gloss = "something planned this tree and no step declares the slow profile"
+gloss = "both plans were acquired and no step declares the slow profile"
 class = "A fixture class, mirroring the committed row."
 
 [[verdict.route]]
@@ -114,41 +133,36 @@ class = "A fixture class, mirroring the committed row."
 id = "source read first"
 kind = "document"
 target = ".claude/hooks/git-hook.sh"
-"#
+"#,
     )
 }
 
-/// A repository carrying the committed module, the row that reads it, and a hook.
-fn fixture(name: &str, hook: &str) -> PathBuf {
-    let dir = scratch(&format!("hook-profile-{name}-{}", std::process::id()));
+/// A committed repository carrying the module, the rows, a hook and an
+/// `hk.pkl` with `steps` added — or none at all when `steps` is `None`.
+fn fixture(name: &str, hook: &str, steps: Option<&str>) -> PathBuf {
+    let dir = scratch(&format!("hook-profile-{name}"));
     write(&dir, "batten.toml", &config());
     write(
         &dir,
         "hook-profile.rego",
-        &std::fs::read_to_string(at_repo("policy/hook-profile.rego")).expect("read the module"),
+        &std::fs::read_to_string(at_root("policy/hook-profile.rego")).expect("read the module"),
     );
-    write(&dir, "hk.pkl", SUBJECT);
+    if let Some(steps) = steps {
+        write(&dir, "hk.pkl", &hk_config(steps));
+    }
     write(&dir, ".claude/hooks/git-hook.sh", hook);
-    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    init_repo(&dir);
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-qm", "fixture"]);
     dir
 }
 
-/// A path inside this repository, resolved from the test binary's manifest dir.
-fn at_repo(relative: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(relative)
-}
-
-/// Record a plan through the real producer verb.
-fn record(dir: &Path, plan: &str) -> std::process::Output {
-    run_with_stdin(dir, &["record", "tool", "hk-plan"], plan)
-}
-
 fn check(dir: &Path) -> std::process::Output {
-    let mut command = batten();
-    command.current_dir(dir).arg("check");
-    command.output().expect("run batten check")
+    run(dir, &["check"])
+}
+
+fn said(outcome: &std::process::Output) -> String {
+    format!("{}{}", stdout(outcome), stderr(outcome))
 }
 
 #[test]
@@ -156,157 +170,175 @@ fn a_wired_split_is_clean() {
     // THE ANTI-VACUITY MIRROR, and it is listed first because every refusal below
     // is only evidence if this one passes: a module that denied unconditionally
     // would satisfy all of them.
-    let dir = fixture("wired", WIRED_HOOK);
-    assert_eq!(
-        record(&dir, "test included\nbatten-check included\n")
-            .status
-            .code(),
-        Some(0)
+    let dir = fixture(
+        "wired",
+        WIRED_HOOK,
+        Some(&format!(
+            "{}{}",
+            step("test", "slow"),
+            step("batten-check", "slow")
+        )),
     );
-
     let outcome = check(&dir);
-    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
     assert_eq!(
         outcome.status.code(),
         Some(0),
-        "a correctly wired split is clean\n{answer}{cause}"
+        "a correctly wired split is clean\n{}",
+        said(&outcome)
     );
 }
 
 #[test]
-fn a_slow_step_missing_from_check_is_refused() {
-    // THE LOAD-BEARING DIRECTION. The step still declares the profile, so
-    // pre-commit still skips it, and `mise run ci`, `verify` and CI have all
-    // silently stopped running it — green everywhere, nothing tested.
-    let dir = fixture("stray", WIRED_HOOK);
-    assert_eq!(
-        record(&dir, "test included\nbatten-check skipped\n")
-            .status
-            .code(),
-        Some(0)
-    );
-
-    let outcome = check(&dir);
-    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
-    assert_eq!(
-        outcome.status.code(),
-        Some(2),
-        "a slow step outside the check plan is a policy verdict\n{answer}{cause}"
-    );
-    assert!(answer.contains("hook declare other"), "{answer}{cause}");
-}
-
-#[test]
-fn an_evaporated_tier_is_refused_rather_than_read_as_clean() {
-    // PRESENT AND EMPTY, which this module reads as a FINDING where its sibling
-    // reads the same state as "the tool ran and found nothing". Every per-step
-    // assertion above would pass over an empty set, so a tier that evaporated must
-    // not be silent — the shell gate's own anti-vacuity arm, conserved.
-    let dir = fixture("evaporated", WIRED_HOOK);
-    assert_eq!(record(&dir, "").status.code(), Some(0));
-
-    let outcome = check(&dir);
-    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
-    assert_eq!(
-        outcome.status.code(),
-        Some(2),
-        "an evaporated tier is a finding, not a clean read\n{answer}{cause}"
-    );
-}
-
-#[test]
-fn no_record_at_all_is_could_not_look() {
-    // ABSENT, told apart from the empty case above by the only means that
-    // discriminates: that one refuses and this one does not. Collapsing them
-    // would refuse on every fresh checkout, which is the state of every clone
-    // before a producer has run.
-    let dir = fixture("unrecorded", WIRED_HOOK);
-    let outcome = check(&dir);
-    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
-    assert_ne!(
-        outcome.status.code(),
-        Some(2),
-        "nothing has planned this tree, which is not a verdict\n{answer}{cause}"
-    );
-}
-
-#[test]
-fn a_plan_recorded_before_the_subject_moved_does_not_answer() {
-    // THE KEYING, over this module's own row. A plan is an answer about the
-    // `hk.pkl` it was taken over; edit that file and the key moves, so the record
-    // is not found rather than found and wrong. Without this a stale `included`
-    // for every step outlives the config that produced it.
-    let dir = fixture("moved", WIRED_HOOK);
-    assert_eq!(
-        record(&dir, "batten-check skipped\n").status.code(),
-        Some(0)
-    );
-    write(&dir, "hk.pkl", "amends \"package://example-two\"\n");
-
-    let outcome = check(&dir);
-    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
-    assert_ne!(
-        outcome.status.code(),
-        Some(2),
-        "a plan must not survive the config it was taken over\n{answer}{cause}"
-    );
-}
-
-#[test]
-fn a_hook_that_stopped_passing_the_flag_is_refused() {
-    // THE ECONOMY HALF, which needs no record: it is a property of a file, and
-    // `line_sources` carries it.
-    let dir = fixture("unflagged", "#!/usr/bin/env bash\nhk run pre-commit\n");
-    assert_eq!(record(&dir, "test included\n").status.code(), Some(0));
-
-    let outcome = check(&dir);
-    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
-    assert_eq!(
-        outcome.status.code(),
-        Some(2),
-        "a hook that stopped disabling the tier is a finding\n{answer}{cause}"
-    );
-}
-
-#[test]
-fn the_flag_in_a_comment_alone_does_not_satisfy_it() {
-    // THE MEASURED CASE the shell gate's own comment records: deleting the flag
-    // from the COMMAND left it green, because the explanatory comment above still
-    // spelled it. Non-comment lines that actually run the hook, or the predicate
-    // is satisfied by its own documentation.
+fn a_slow_step_the_check_plan_does_not_select_is_refused() {
+    // THE LOAD-BEARING DIRECTION. `stray` declares a profile the committed
+    // config never enables, so pre-commit skips it AND `check` skips it — green
+    // everywhere, nothing tested. The fast plan skips it for its profile, which
+    // is what puts it in the tier.
     let dir = fixture(
-        "commented",
-        "#!/usr/bin/env bash\n# we pass --profile '!slow' here\nhk run pre-commit\n",
+        "stray",
+        WIRED_HOOK,
+        Some(&format!(
+            "{}{}",
+            step("test", "slow"),
+            step("stray", "rare")
+        )),
     );
-    assert_eq!(record(&dir, "test included\n").status.code(), Some(0));
-
     let outcome = check(&dir);
-    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
     assert_eq!(
         outcome.status.code(),
         Some(2),
-        "a flag named only in a comment is not a flag that is passed\n{answer}{cause}"
+        "a tier step outside the check plan is a policy verdict\n{}",
+        said(&outcome)
+    );
+    assert!(
+        said(&outcome).contains("hook declare other"),
+        "{}",
+        said(&outcome)
     );
 }
 
 #[test]
 fn every_stray_is_counted_not_just_the_first() {
-    // The shell gate reported each offender rather than stopping at one, and the
-    // successor's subject is a COUNT (rule 4), so the property to conserve is that
-    // the count reflects all of them.
-    let dir = fixture("many", WIRED_HOOK);
-    assert_eq!(
-        record(&dir, "one skipped\ntwo skipped\nthree included\n")
-            .status
-            .code(),
-        Some(0)
+    let dir = fixture(
+        "many",
+        WIRED_HOOK,
+        Some(&format!(
+            "{}{}{}",
+            step("one", "rare"),
+            step("two", "rare"),
+            step("three", "slow")
+        )),
     );
-
     let outcome = check(&dir);
-    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
-    assert_eq!(outcome.status.code(), Some(2), "{answer}{cause}");
+    assert_eq!(outcome.status.code(), Some(2), "{}", said(&outcome));
     assert!(
-        answer.contains('2'),
-        "the finding counts every stray, not just the first\n{answer}{cause}"
+        said(&outcome).contains('2'),
+        "the finding counts every stray, not just the first\n{}",
+        said(&outcome)
     );
+}
+
+#[test]
+fn an_evaporated_tier_is_refused_rather_than_read_as_clean() {
+    // Both plans acquired and no step declares a profile: every per-step
+    // assertion would pass over an empty set, so the tier's absence is a finding.
+    let dir = fixture("evaporated", WIRED_HOOK, Some(""));
+    let outcome = check(&dir);
+    assert_eq!(
+        outcome.status.code(),
+        Some(2),
+        "an evaporated tier is a finding, not a clean read\n{}",
+        said(&outcome)
+    );
+}
+
+#[test]
+fn no_plan_is_could_not_look() {
+    // No `hk.pkl` at all: neither plan can be acquired, which is not a verdict.
+    // Collapsing this with the evaporated tier would refuse on every checkout
+    // the runner cannot plan.
+    let dir = fixture("unplanned", WIRED_HOOK, None);
+    let outcome = check(&dir);
+    assert_ne!(
+        outcome.status.code(),
+        Some(2),
+        "nothing could plan this tree, which is not a verdict\n{}",
+        said(&outcome)
+    );
+}
+
+#[test]
+fn a_hook_that_stopped_passing_the_flag_is_refused() {
+    let dir = fixture(
+        "unflagged",
+        "#!/usr/bin/env bash\nhk run pre-commit\n",
+        Some(&step("test", "slow")),
+    );
+    let outcome = check(&dir);
+    assert_eq!(
+        outcome.status.code(),
+        Some(2),
+        "a hook that stopped disabling the tier is a finding\n{}",
+        said(&outcome)
+    );
+}
+
+#[test]
+fn the_flag_in_a_comment_alone_does_not_satisfy_it() {
+    let dir = fixture(
+        "commented",
+        "#!/usr/bin/env bash\n# we pass --profile '!slow' here\nhk run pre-commit\n",
+        Some(&step("test", "slow")),
+    );
+    let outcome = check(&dir);
+    assert_eq!(
+        outcome.status.code(),
+        Some(2),
+        "a flag named only in a comment is not a flag that is passed\n{}",
+        said(&outcome)
+    );
+}
+
+#[test]
+fn this_repositorys_two_tier_gate_is_wired_today() {
+    // THE ACQUISITION OVER THIS CHECKOUT, and the profile words reaching hk: the
+    // fast plan skips the committed slow steps for their profile, and the full
+    // plan includes them.
+    let root = at_root(".");
+    let query = |value: serde_json::Value| -> hk::PlanQuery {
+        serde_json::from_value(value).expect("a query a row declares")
+    };
+    let Look::Is(fast) = hk::acquire(
+        &root,
+        &query(serde_json::json!({"id": "gate-fast", "hook": "check", "profile": ["!slow"]})),
+    ) else {
+        panic!("the pinned runner plans this checkout with the tier off")
+    };
+    let Look::Is(full) = hk::acquire(
+        &root,
+        &query(serde_json::json!({"id": "gate", "hook": "check"})),
+    ) else {
+        panic!("the pinned runner plans this checkout")
+    };
+    assert!(
+        fast.invocation
+            .windows(2)
+            .any(|pair| pair == ["--profile", "!slow"]),
+        "the profile words reach the runner: {:?}",
+        fast.invocation
+    );
+    for name in ["batten-check", "test", "policy-test"] {
+        assert!(
+            fast.steps.iter().any(|step| step.name == name
+                && step.status == "skipped"
+                && step.reason_kind.as_deref() == Some("profile_exclude")),
+            "`{name}` is in the slow tier"
+        );
+        assert!(
+            full.steps
+                .iter()
+                .any(|step| step.name == name && step.status == "included"),
+            "`{name}` is selected by `check`"
+        );
+    }
 }

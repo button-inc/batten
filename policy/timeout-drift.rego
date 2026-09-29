@@ -1,5 +1,6 @@
 # A job's committed timeout budget still matches measured reality (CLOUD-266,
-# ported under CLOUD-1717).
+# ported under CLOUD-1717, its producer retired into forge queries under
+# CLOUD-843).
 #
 # REPORT, NEVER GATE, and the severity is the whole of that. `timeout-check` asks
 # a question about the COMMIT — is every timeout justified — and belongs on the
@@ -14,14 +15,14 @@
 # a report that only complained about tightness would let every number rot upward
 # forever.
 #
-# WHY THE MEASUREMENT STAYS OUTSIDE. The samples are durations of successful runs
-# read from the Actions API, and the p95 over them is arithmetic over instants —
-# two things this surface cannot do. §5 makes `check` `read` and incapable of
-# spawning, and `Fact::Instant` projects `null` to every module, which
-# `clippy.toml`'s `disallowed-methods` and `crates/batten/tests/clock_ban.rs` hold
-# the engine to. So `[tasks.timeout-drift-record]` reads the runs, subtracts the
-# instants, computes the p95 and records a row per job; the classification — which
-# is the decision — is here. CLOUD-1559: carry the decisions, not the steps.
+# WHAT IS READ, AND WHO DID WHICH HALF. Three families are recorded by
+# `batten record query` from `[[forge.query]]` rows: `drift-runs` (each
+# workflow's last successful runs, with the workflow's path) and `drift-jobs`
+# (each run's jobs, with the duration in SECONDS the producer subtracted — no
+# clock and no date parser reach this surface). The declared budgets are the
+# workflows' own lines. Everything the retired shell body computed beyond the
+# subtraction is here: which job a leg belongs to, the pooling of matrix legs,
+# the p95, and the classification. CLOUD-1559: carry the decisions, not the steps.
 #
 # A SMALL SAMPLE REPORTS `unmeasurable`, NEVER A NUMBER, and that arm is load
 # bearing rather than defensive. Ten of the fourteen jobs run weekly or on
@@ -30,16 +31,17 @@
 # minimum the job is reported as uncharacterised, which is itself the useful
 # signal.
 #
-# COULD-NOT-LOOK IS AN ABSENT RECORD. Every exit-2 arm of the retired program — no
-# `gh`, a query that would not answer, an unreadable workflow directory — is now
-# the producer refusing at write time and writing nothing. Reporting a healthy
+# COULD-NOT-LOOK IS AN ABSENT RECORD. `record query` removes a family it could
+# not read, so every rule below needs both families present. Reporting a healthy
 # budget as drifted on a network blip is the failure mode that gets a scheduled
 # gate switched off, and an absent record cannot do it.
 #MUTANT-SUITE crates/batten/tests/it/timeout_drift.rs
 #MUTANT loose-budget-passes|s@^\tentry.declared > entry.justified + slack$@\tfalse@|a_slack_budget_is_reported_as_loose_over_the_engines_projection
 #MUTANT tight-budget-passes|s@^\tentry.declared < entry.justified$@\tfalse@|a_budget_the_measurement_has_outgrown_is_reported_as_tight
-#MUTANT torn-census-passes|s@^\tcount(census) != 1$@\tfalse@|a_census_that_did_not_finish_is_not_a_short_census
+#MUTANT torn-census-passes|s@^\tcloses_of(input.tree.records\[family\]) != 1$@\tfalse@|a_census_that_did_not_finish_is_not_a_short_census
 #MUTANT small-sample-yields-a-number|s@^\tentry.samples < minimum$@\tfalse@|a_job_with_too_few_samples_is_unmeasurable_rather_than_fast
+#MUTANT matrix-legs-unpooled|s@^\tstartswith(name, concat("", \[key, " ("\]))$@\tfalse@|matrix_legs_pool_into_one_distribution
+#MUTANT failed-leg-sampled|s@^\trow.conclusion == "success"$@\ttrue@|a_failed_leg_is_not_a_sample
 
 # METADATA
 # description: |
@@ -66,108 +68,171 @@ rules contains "bound measure partial"
 # IN THE MODULE RATHER THAN IN CONFIG, on `repetition-without-progress`'s
 # reasoning: these are the practice's own figures, and a config knob invites
 # raising them until nothing is ever reported. Moving one costs a diff a reviewer
-# reads. The retired program took them from the environment, which is how a
-# scheduled report ends up measured against numbers nobody chose — its own
-# `fail_input` arm existed because a typo'd knob read as a working setting.
+# reads.
 multiplier := 3
 
 minimum := 5
 
 slack := 5
 
-# The producer's lines, or nothing.
-recorded := input.tree.records["timeout-drift"]
+# The two families the join needs. Both, or nothing is decided.
+families := ["drift-runs", "drift-jobs"]
 
-# `job <file> <name> <declared-minutes> <p95-seconds> <samples> <basis>` — one per
-# job the producer characterised. `basis` is `measured` or `grandfathered`: a dated
-# debt entry that now HAS a usable sample is a different report from a number that
-# has drifted, because the remedy is to convert it rather than to move it.
-jobs contains entry if {
-	some raw in recorded
-	columns := split(raw, "\t")
-	count(columns) == 7
-	columns[0] == "job"
-	regex.match(data.batten.patterns["whole-number"], columns[3])
-	regex.match(data.batten.patterns["whole-number"], columns[4])
-	regex.match(data.batten.patterns["whole-number"], columns[5])
-	entry := {
-		"file": columns[1],
-		"name": columns[2],
-		"declared": to_number(columns[3]),
-		"justified": justified(to_number(columns[4])),
-		"samples": to_number(columns[5]),
-		"basis": columns[6],
-	}
+measured if {
+	is_object(input.tree.records)
+	input.tree.records["drift-runs"]
+	input.tree.records["drift-jobs"]
 }
 
-# A CENSUS THAT DID NOT FINISH IS NOT A SHORT CENSUS.
-#
-# The producer used to pipe `emit` straight into `record named`, so an unreadable
-# page mid-loop left every workflow already processed in the store, and this
-# module adjudicated the partial census as whole — no completeness column, and a
-# torn `job` line silently skipped by the `count(columns) == 7` guard above. The
-# retired `timeout-drift.sh:132-133,142-143` exited 2 before emitting anything.
-#
-# The producer now buffers and writes only on success, and closes the census with
-# `census<TAB>jobs=<n>`. So a record present without exactly one closing line, a
-# closing count that disagrees with the job lines, or a job line this reader
-# cannot parse is TORN — present, so not could-not-look, and untrustworthy, so
-# not clean.
-census contains raw if {
-	some raw in recorded
-	startswith(raw, "census\t")
-}
+rows_of(lines) := [row |
+	some line in lines
+	startswith(line, "row\t")
+	row := json.unmarshal(trim_prefix(line, "row\t"))
+]
 
-job_lines contains raw if {
-	some raw in recorded
-	startswith(raw, "job\t")
-}
+closes_of(lines) := count([line |
+	some line in lines
+	startswith(line, "window\t")
+])
 
-# Guarded by `whole-number` BEFORE `to_number`: regorus's `to_number` FAULTS on
-# a non-numeric string rather than going undefined, and a fault here would
-# silence every predicate in the module — the torn census this arm exists to
-# report would become the thing that switches the module off.
-closing_count := to_number(value) if {
-	count(census) == 1
-	some raw in census
-	value := trim_prefix(raw, "census\tjobs=")
-	regex.match(data.batten.patterns["whole-number"], value)
-}
-
-torn if {
-	recorded
-	count(census) != 1
-}
-
-torn if {
-	count(census) == 1
-	not closing_count
-}
-
-torn if {
-	closing_count != count(job_lines)
-}
-
-torn if {
-	count(jobs) != count(job_lines)
+# A FAMILY THAT DID NOT CLOSE IS NOT A SHORT FAMILY. `record query` writes a
+# family whole or removes it, so a record present without exactly one closing
+# line was torn by something other than the producer — present, so not
+# could-not-look, and untrustworthy, so not clean.
+torn contains family if {
+	measured
+	some family in families
+	closes_of(input.tree.records[family]) != 1
 }
 
 violation contains {
 	"rule": "bound measure partial",
 	"verdict": "bound measure partial",
-	"subjects": [{"artifact": "census"}, {"count": count(job_lines)}],
+	"subjects": [{"artifact": family}, {"count": closes_of(input.tree.records[family])}],
 } if {
-	torn
+	some family in torn
+}
+
+# Which workflow a run belongs to, by the path the forge reports for it.
+run_paths := {row.id: row.path |
+	measured
+	some row in rows_of(input.tree.records["drift-runs"])
+}
+
+job_rows := rows_of(input.tree.records["drift-jobs"]) if measured
+
+# --- the budgets, read off the workflows' own lines --------------------------
+#
+# The same walk `timeout-budget` takes, over the same `[[pattern]]` rows: a job
+# key at two spaces below `jobs:`, and its job-level timeout at four.
+
+workflow_paths contains path if {
+	some path, _ in input.tree.lines
+	startswith(path, ".github/workflows/")
+}
+
+jobs_header(path) := i if {
+	some i, line in input.tree.lines[path]
+	line == "jobs:"
+}
+
+job_key contains {"path": path, "line": i, "job": name} if {
+	some path in workflow_paths
+	some i, line in input.tree.lines[path]
+	i > jobs_header(path)
+	regex.match(data.batten.patterns["workflow-job-key"], line)
+	not top_level_key_between(path, jobs_header(path), i)
+	name := trim_space(substring(line, 0, indexof(line, ":")))
+}
+
+top_level_key_between(path, from, to) if {
+	some k, line in input.tree.lines[path]
+	k > from
+	k < to
+	regex.match(data.batten.patterns["workflow-top-level-key"], line)
+}
+
+owning_job(path, i) := row if {
+	above := {k.line |
+		some k in job_key
+		k.path == path
+		k.line < i
+	}
+	some row in job_key
+	row.path == path
+	row.line == max(above)
+}
+
+comment_of(line) := trim_space(substring(line, indexof(line, "#"), -1)) if {
+	contains(line, "#")
+}
+
+comment_of(line) := "" if {
+	not contains(line, "#")
+}
+
+basis_of(line) := "grandfathered" if {
+	regex.match(data.batten.patterns["timeout-budget-grandfathered"], comment_of(line))
+}
+
+basis_of(line) := "measured" if {
+	not regex.match(data.batten.patterns["timeout-budget-grandfathered"], comment_of(line))
+}
+
+budget contains {"path": path, "name": owning_job(path, i).job, "declared": declared, "basis": basis_of(line)} if {
+	some path in workflow_paths
+	some i, line in input.tree.lines[path]
+	regex.match(data.batten.patterns["job-timeout-line"], line)
+	value := trim_space(substring(line, indexof(line, ":") + 1, -1))
+	declared := to_number(split(split(value, " ")[0], "#")[0])
+}
+
+# --- the measurement ---------------------------------------------------------
+
+# MATRIX LEGS POOL. One `timeout-minutes` covers every leg of a matrix, and the
+# forge reports each leg as `<key> (<axis>)`, so every leg feeds one
+# distribution — matched on the job key, or the key followed by " (".
+leg_of(name, key) if name == key
+
+leg_of(name, key) if {
+	startswith(name, concat("", [key, " ("]))
+}
+
+# A SUCCESSFUL leg's duration, and nothing else: a failed or cancelled leg ended
+# early or late for a reason that is not the job's cost.
+samples(path, key) := [row.seconds |
+	some row in job_rows
+	row.conclusion == "success"
+	is_number(row.seconds)
+	row.seconds >= 0
+	run_paths[row.run] == path
+	leg_of(row.name, key)
+]
+
+# The nearest-rank p95: the value at rank ceil(0.95 * n), counting from one.
+p95(values) := 0 if count(values) == 0
+
+p95(values) := sorted[ceil((95 * count(values)) / 100) - 1] if {
+	count(values) > 0
+	sorted := sort(values)
 }
 
 # `ceil(p95 * multiplier / 60)`, the same arithmetic `timeout-check` gates.
-#
-# `ceil` RATHER THAN THE SHELL'S `(x + 59) / 60`, and the difference is not
-# cosmetic: that idiom is integer division, and Rego's `/` is float — carrying it
-# over verbatim would make `justified(120)` 6.98 rather than 6, so every
-# comparison below would read against a number no budget can equal. The shell's
-# arithmetic is a STEP; what carries is the decision it computed.
-justified(p95) := ceil((p95 * multiplier) / 60)
+justified(seconds) := ceil((seconds * multiplier) / 60)
+
+jobs contains entry if {
+	measured
+	some row in budget
+	values := samples(row.path, row.name)
+	entry := {
+		"file": row.path,
+		"name": row.name,
+		"declared": row.declared,
+		"justified": justified(p95(values)),
+		"samples": count(values),
+		"basis": row.basis,
+	}
+}
 
 # A JOB NOBODY CAN CHARACTERISE, reported first because the arms below would
 # otherwise compute a confident classification from two samples.
@@ -222,97 +287,133 @@ violation contains {
 
 # --- cases ---------------------------------------------------------------
 
-tree(lines) := {"tree": {"records": {"timeout-drift": lines}}}
+wf := ".github/workflows/ci.yml"
+
+fixture_patterns := {
+	"workflow-job-key": `^  [A-Za-z0-9_-]+:[[:space:]]*$`,
+	"workflow-top-level-key": `^[a-z][A-Za-z0-9_-]*:`,
+	"job-timeout-line": `^    timeout-minutes:[[:space:]]*[0-9]+`,
+	"timeout-budget-grandfathered": `^#[[:space:]]*budget:[[:space:]]*grandfathered[[:space:]]+measured=[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]]*$`,
+}
+
+comment(basis) := "# budget: grandfathered measured=2026-08-01" if basis == "grandfathered"
+
+comment(basis) := "# budget: p95=40s x3 measured=2026-08-01" if basis == "measured"
+
+run_row := "row\t{\"id\":1,\"path\":\".github/workflows/ci.yml\",\"workflow\":7}"
+
+closed := "window\tstate=whole\tread=1\tkept=1\tmembers=1\ttruncated=0"
+
+leg(name, conclusion, seconds) := sprintf(
+	"row\t{\"conclusion\":\"%s\",\"name\":\"%s\",\"run\":1,\"seconds\":%d}",
+	[conclusion, name, seconds],
+)
+
+# One workflow, one job `bats` with the declared budget, and `n` successful legs
+# of `seconds` each.
+tree(declared, basis, legs) := {"tree": {
+	"lines": {wf: [
+		"name: ci",
+		"jobs:",
+		"  bats:",
+		"    runs-on: ubuntu-latest",
+		sprintf("    timeout-minutes: %d %s", [declared, comment(basis)]),
+	]},
+	"records": {
+		"drift-runs": [run_row, closed],
+		"drift-jobs": array.concat(legs, [closed]),
+	},
+}}
+
+legs(n, seconds) := [leg("bats", "success", seconds) | some _ in numbers.range(1, n)]
 
 # `justified(120) == 6`, so a declared 6 is exactly right, 5 is tight, and 12 is
 # loose once the five-minute slack is spent.
-job(declared, p95, samples, basis) := tree([
-	sprintf("job\tci.yml\tbats\t%d\t%d\t%d\t%s", [declared, p95, samples, basis]),
-	"census\tjobs=1",
-])
+job(declared, seconds, n, basis) := tree(declared, basis, legs(n, seconds))
 
-# THE MUTATION'S NAMED CASE. Four torn shapes, one per arm of `torn`, and a closed
-# census that is not torn — so the arm cannot pass by firing on everything.
 test_a_census_that_did_not_finish_is_not_a_short_census if {
-	line := "job\tci.yml\tbats\t6\t120\t25\tmeasured"
-	torn_only := {{"rule": "bound measure partial", "verdict": "bound measure partial", "subjects": [{"artifact": "census"}, {"count": 1}]}}
-	torn_only == violation with input as tree([line])
-	torn_only == violation with input as tree([line, "census\tjobs=2"])
-	torn_only == violation with input as tree([line, "census\tjobs=lots"])
-	count(violation) == 1 with input as tree(["job\tci.yml\ttorn", "census\tjobs=1"])
-	count(violation) == 0 with input as job(6, 120, 25, "measured")
+	good := job(6, 120, 25, "measured")
+	count(violation) == 0 with input as good with data.batten.patterns as fixture_patterns
+	unclosed := object.union(good, {"tree": {"records": {"drift-jobs": legs(25, 120)}}})
+	some v in violation with input as unclosed with data.batten.patterns as fixture_patterns
+	v.subjects == [{"artifact": "drift-jobs"}, {"count": 0}]
 }
 
 test_a_budget_matching_its_measurement_is_clean if {
-	count(violation) == 0 with input as job(6, 120, 25, "measured")
+	count(violation) == 0 with input as job(6, 120, 25, "measured") with data.batten.patterns as fixture_patterns
 }
 
 test_a_slack_budget_is_reported_as_loose if {
-	some v in violation with input as job(12, 120, 25, "measured")
+	some v in violation with input as job(12, 120, 25, "measured") with data.batten.patterns as fixture_patterns
 	v.verdict == "bound pin loose"
 }
 
 # THE SLACK IS A BOUNDARY, not a suggestion: at exactly `justified + slack` the
 # budget is still correct, because a ceiling is allowed headroom.
 test_a_budget_inside_the_slack_is_not_loose if {
-	count(violation) == 0 with input as job(11, 120, 25, "measured")
+	count(violation) == 0 with input as job(11, 120, 25, "measured") with data.batten.patterns as fixture_patterns
 }
 
 test_a_budget_the_measurement_has_outgrown_is_reported_as_tight if {
-	some v in violation with input as job(5, 120, 25, "measured")
+	some v in violation with input as job(5, 120, 25, "measured") with data.batten.patterns as fixture_patterns
 	v.verdict == "bound pin wrong"
 }
 
 # POINTER, NEVER PAYLOAD: the job's name and the minutes the measurement
 # justifies, which is what the remedy needs and nothing more.
 test_the_report_carries_a_name_and_a_count if {
-	some v in violation with input as job(12, 120, 25, "measured")
+	some v in violation with input as job(12, 120, 25, "measured") with data.batten.patterns as fixture_patterns
 	v.subjects == [{"artifact": "bats"}, {"count": 6}]
 }
 
 test_a_job_with_too_few_samples_is_unmeasurable_rather_than_fast if {
-	some v in violation with input as job(30, 120, 2, "measured")
+	some v in violation with input as job(30, 120, 2, "measured") with data.batten.patterns as fixture_patterns
 	v.verdict == "bound measure partial"
 }
 
-# AND IT IS THE ONLY REPORT for that job: a classification computed from two
-# samples is the confident-and-wrong answer the arm exists to prevent, so a slack
-# budget must not ALSO be reported as loose here.
+# AND IT IS THE ONLY REPORT for that job.
 test_an_unmeasurable_job_is_not_also_classified if {
-	count(violation) == 1 with input as job(30, 120, 2, "measured")
+	count(violation) == 1 with input as job(30, 120, 2, "measured") with data.batten.patterns as fixture_patterns
 }
 
 test_a_grandfathered_entry_with_samples_is_a_conversion_prompt if {
-	some v in violation with input as job(30, 120, 25, "grandfathered")
+	some v in violation with input as job(30, 120, 25, "grandfathered") with data.batten.patterns as fixture_patterns
 	v.verdict == "bound pin stale"
 }
 
-# A GRANDFATHERED ENTRY IS NOT ALSO DRIFT. Its remedy is to convert the debt to a
-# measured budget, and reporting it as loose as well would send the reader to move
-# a number they are supposed to replace.
 test_a_grandfathered_entry_is_not_also_drift if {
-	count(violation) == 1 with input as job(30, 120, 25, "grandfathered")
+	count(violation) == 1 with input as job(30, 120, 25, "grandfathered") with data.batten.patterns as fixture_patterns
 }
 
 test_no_record_at_all_says_nothing if {
-	count(violation) == 0 with input as {"tree": {"records": {}}}
+	count(violation) == 0 with input as {"tree": {"records": {}, "lines": {wf: ["jobs:", "  bats:", "    timeout-minutes: 30"]}}} with data.batten.patterns as fixture_patterns
 }
 
-# A LINE THAT IS NOT A JOB IS SKIPPED; A JOB LINE THIS READER CANNOT PARSE IS
-# TORN. This case used to feed a garbled `job` line and assert zero findings —
-# its own comment called that line a torn store and then asserted the silence.
-# A job that silently drops out of the census is a census that is short without
-# saying so.
-test_a_line_this_reader_cannot_parse_is_skipped if {
-	count(violation) == 0 with input as tree([
-		"job\tci.yml\tbats\t6\t120\t25\tmeasured",
-		"nonsense",
-		"census\tjobs=1",
-	])
-	some v in violation with input as tree([
-		"job\tci.yml\tbats\t6\t120\t25\tmeasured",
-		"job\tci.yml\tbroken\tnot-a-number\t120\t25\tmeasured",
-		"census\tjobs=2",
-	])
+# THE p95 IS NEAREST-RANK: over twenty samples of 60s and two of 600s the p95 is
+# 600 (rank 21 of 22), so a declared 6 is tight against a justified 30.
+test_the_p95_is_the_nearest_rank_over_the_pooled_samples if {
+	slow := array.concat(legs(20, 60), legs(2, 600))
+	some v in violation with input as tree(6, "measured", slow) with data.batten.patterns as fixture_patterns
+	v.subjects == [{"artifact": "bats"}, {"count": 30}]
+}
+
+test_matrix_legs_pool_into_one_distribution if {
+	pooled := array.concat(
+		[leg("bats (ubuntu-latest)", "success", 120) | some _ in numbers.range(1, 3)],
+		[leg("bats (macos-latest)", "success", 120) | some _ in numbers.range(1, 3)],
+	)
+	count(violation) == 0 with input as tree(6, "measured", pooled) with data.batten.patterns as fixture_patterns
+}
+
+test_a_failed_leg_is_not_a_sample if {
+	failed := array.concat(legs(4, 120), [leg("bats", "failure", 120)])
+	some v in violation with input as tree(6, "measured", failed) with data.batten.patterns as fixture_patterns
+	v.subjects == [{"artifact": "bats"}, {"count": 4}]
+}
+
+# A LEG FROM ANOTHER WORKFLOW'S RUN IS NOT THIS JOB'S, even under the same key.
+test_a_leg_from_another_workflows_run_is_not_counted if {
+	other := [sprintf("row\t{\"conclusion\":\"success\",\"name\":\"bats\",\"run\":2,\"seconds\":%d}", [120]) | some _ in numbers.range(1, 25)]
+	some v in violation with input as tree(6, "measured", other) with data.batten.patterns as fixture_patterns
 	v.verdict == "bound measure partial"
 }

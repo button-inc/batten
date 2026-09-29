@@ -16,18 +16,19 @@
 #   The second is the one that must be impossible, so `profiled-step-not-in-check`
 #   is the load-bearing predicate and the mutation below sits on it.
 #
-#   WHY A RECORD RATHER THAN A DERIVATION FROM `hk.pkl`. The tier is derived from
-#   hk's OWN plan — a step hk excludes for a missing profile when the profile is
-#   off is, by construction, a step that declared it. Re-deriving that from
-#   `hk.pkl`'s text would be a second authority over hk's profile resolution, and
-#   it would go stale in the silent direction the moment hk changed its ordering.
-#   The plan is a third-party tool's answer over a pinned input, which is exactly
-#   the `tool-verdict` triple, so the producer records it and this adjudicates.
+#   WHY hk'S OWN PLANS RATHER THAN A DERIVATION FROM `hk.pkl`. The tier is
+#   derived from hk's OWN plan — a step hk excludes for a missing profile when the
+#   profile is off is, by construction, a step that declared it. Re-deriving that
+#   from `hk.pkl`'s text would be a second authority over hk's profile resolution,
+#   and it would go stale in the silent direction the moment hk changed its
+#   ordering. Two `[[rule.plan]]` rows acquire both plans at the boundary
+#   (`Fact::Plan`): `gate` is `check` as committed, `gate-fast` is `check` with
+#   `--profile '!slow'`. The join a producer's `jq` used to make is here, where it
+#   is a decision (CLOUD-843, retiring the `hk-plan` record).
 #
-#   THREE ANSWERS, AND THE EMPTY ONE IS A FINDING HERE. This module reads the
-#   record's three states differently from `validator-verdict-clean`, deliberately:
-#   ABSENT is could-not-look (nothing has planned this tree). PRESENT AND EMPTY is
-#   the tier having EVAPORATED — no step declares the profile any more — which the
+#   THREE ANSWERS, AND THE EMPTY ONE IS A FINDING HERE. ABSENT is could-not-look
+#   (either plan could not be acquired). A tier that is EMPTY while both plans were
+#   acquired has EVAPORATED — no step declares the profile any more — which the
 #   shell gate refused as its anti-vacuity arm and which must stay a refusal, since
 #   every per-step assertion below would otherwise pass over an empty set.
 #
@@ -48,11 +49,37 @@ included := "included"
 # The hook file whose invocation line decides what a commit pays.
 hook := ".claude/hooks/git-hook.sh"
 
-# The recorded plan, guarded. `null` is a hard evaluation FAULT under `some .. in`
-# rather than a silent miss, and an id nothing recorded is absent from the map.
-plan := verdict if {
-	is_object(input.tree["tool-verdict"])
-	verdict := input.tree["tool-verdict"]["hk-plan"]
+# The status a step the fast plan skips for its missing profile carries, and the
+# runner's KIND token for that reason — never its prose.
+skipped := "skipped"
+
+profile_exclude := "profile_exclude"
+
+# The two acquired plans, guarded. `null` is a hard evaluation FAULT under
+# `some .. in` rather than a silent miss, and a plan that could not be acquired is
+# `null` or absent.
+plan(id) := acquired if {
+	is_object(input.tree.plan)
+	acquired := input.tree.plan[id]
+	is_object(acquired)
+}
+
+acquired if {
+	plan("gate")
+	plan("gate-fast")
+}
+
+# The slow tier: every step the fast plan skips because its profile is off.
+tier contains step.name if {
+	acquired
+	some step in plan("gate-fast").steps
+	step.status == skipped
+	step.reasonKind == profile_exclude
+}
+
+selected contains step.name if {
+	some step in plan("gate").steps
+	step.status == included
 }
 
 # A slow-tier step that `check` does not select.
@@ -62,8 +89,8 @@ plan := verdict if {
 # selecting it, because a skipped step and a passing one look identical in a
 # summary.
 stray contains name if {
-	some name, status in plan
-	status != included
+	some name in tier
+	not name in selected
 }
 
 violation contains {
@@ -74,19 +101,19 @@ violation contains {
 	count(stray) > 0
 }
 
-# THE TIER EVAPORATED. Present and empty: something planned this tree and no step
-# declared the profile, so there is nothing left for the rule above to judge and
-# every one of its assertions would pass over an empty set.
+# THE TIER EVAPORATED. Both plans acquired and no step declared the profile, so
+# there is nothing left for the rule above to judge and every one of its
+# assertions would pass over an empty set.
 #
-# Told apart from ABSENT by `is_object` plus the count: an id nothing recorded
-# never binds `plan` at all, and that is could-not-look rather than a finding.
+# Told apart from ABSENT by `acquired`: a plan that could not be taken never binds
+# it, and that is could-not-look rather than a finding.
 violation contains {
 	"rule": "hook declare other",
 	"verdict": "tier list empty",
-	"subjects": [{"artifact": "hk-plan"}],
+	"subjects": [{"artifact": "gate-fast"}],
 } if {
-	is_object(plan)
-	count(plan) == 0
+	acquired
+	count(tier) == 0
 }
 
 # THE ECONOMY HALF, and it is a property of a FILE rather than of a plan.
@@ -115,7 +142,8 @@ violation contains {
 	count(flagged) == 0
 }
 
-#MUTANT-EXEMPT CLOUD-931|no `tests/hook-profile.bats` exists and none may be added: `mutant` resolves a gate's suite as `tests/$gate.bats`, and `shell add refused` refuses adding one, so there is no named case a mutation could turn red. The load-time tier is this file's own `test_` rules and the engine tier is `crates/batten/tests/hook_profile.rs`, neither of which is what the mutation runner drives. The mutation this row WOULD declare is on `status != included` — the load-bearing conjunct, since a slow step the `check` hook does not select is the false green the whole rule exists for — and `a_slow_step_missing_from_check_is_refused` plus its anti-vacuity mirror `a_wired_split_is_clean` are what stand in for it. CLOUD-1267 owns closing this for the Rego layer as a whole
+#MUTANT-SUITE crates/batten/tests/it/hook_profile.rs
+#MUTANT tier-unread|s@^\tnot name in selected$@\tfalse@|a_slow_step_the_check_plan_does_not_select_is_refused
 
 # --- the load-time tier ------------------------------------------------------
 #
@@ -125,8 +153,21 @@ violation contains {
 # here it would fabricate the keying the record turns on.
 # `crates/batten/tests/hook_profile.rs` is that tier.
 
-planned(steps) := {"tree": {
-	"tool-verdict": {"hk-plan": steps},
+step(name, status, kind) := {"name": name, "status": status, "reasonKind": kind, "orderIndex": 0, "parallelGroupId": "0", "fileCount": 0}
+
+# `slow` maps each slow-tier step to its status under `check`; `fast` is one
+# ordinary step both plans include.
+planned(slow) := {"tree": {
+	"plan": {
+		"gate": {"steps": array.concat(
+			[step(name, status, null) | some name, status in slow],
+			[step("fmt", "included", null)],
+		)},
+		"gate-fast": {"steps": array.concat(
+			[step(name, "skipped", "profile_exclude") | some name, _ in slow],
+			[step("fmt", "included", null)],
+		)},
+	},
 	"lines": {".claude/hooks/git-hook.sh": ["hk run pre-commit --profile '!slow'"]},
 }}
 
@@ -139,28 +180,41 @@ test_a_slow_step_missing_from_check_is_refused if {
 	v.verdict == "step declare missing"
 }
 
+# A STEP SKIPPED IN THE FAST PLAN FOR ANOTHER REASON is not in the tier: a glob
+# miss is not a profile.
+test_a_step_skipped_for_a_glob_miss_is_not_in_the_tier if {
+	glob := {"tree": {
+		"plan": {
+			"gate": {"steps": [step("docs", "skipped", "no_files")]},
+			"gate-fast": {"steps": [step("docs", "skipped", "no_files"), step("test", "skipped", "profile_exclude")]},
+		},
+		"lines": {".claude/hooks/git-hook.sh": ["hk run pre-commit --profile '!slow'"]},
+	}}
+	violation == {{"rule": "hook declare other", "verdict": "step declare missing", "subjects": [{"count": 1}]}} with input as glob
+}
+
 # An evaporated tier is a FINDING, not a clean read — the anti-vacuity arm.
 test_an_empty_plan_is_refused if {
 	some v in violation with input as planned({})
 	v.verdict == "tier list empty"
 }
 
-# COULD-NOT-LOOK. Nothing has planned this tree, which is not the same as a tier
-# that evaporated, and collapsing them would refuse on every fresh checkout.
-test_no_record_is_not_refused if {
+# COULD-NOT-LOOK. A plan that could not be acquired is not a tier that
+# evaporated, and collapsing them would refuse on every checkout without hk.
+test_no_plan_is_not_refused if {
 	count(violation) == 0 with input as {"tree": {
-		"tool-verdict": {},
+		"plan": {"gate": null},
 		"lines": {".claude/hooks/git-hook.sh": ["hk run pre-commit --profile '!slow'"]},
 	}}
 }
 
 test_could_not_look_does_not_fault if {
-	count(violation) == 0 with input as {"tree": {"tool-verdict": null, "lines": {".claude/hooks/git-hook.sh": []}}}
+	count(violation) == 0 with input as {"tree": {"plan": null, "lines": {".claude/hooks/git-hook.sh": []}}}
 }
 
 test_a_hook_that_stopped_passing_the_flag_is_refused if {
 	some v in violation with input as {"tree": {
-		"tool-verdict": {"hk-plan": {"test": "included"}},
+		"plan": null,
 		"lines": {".claude/hooks/git-hook.sh": ["hk run pre-commit"]},
 	}}
 	v.verdict == "hook declare missing"
@@ -170,7 +224,7 @@ test_a_hook_that_stopped_passing_the_flag_is_refused if {
 # comment above it, which is what left the shell gate green.
 test_the_flag_in_a_comment_alone_does_not_satisfy_it if {
 	some v in violation with input as {"tree": {
-		"tool-verdict": {"hk-plan": {"test": "included"}},
+		"plan": null,
 		"lines": {".claude/hooks/git-hook.sh": ["# we pass --profile '!slow' here", "hk run pre-commit"]},
 	}}
 	v.verdict == "hook declare missing"

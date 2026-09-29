@@ -2656,126 +2656,18 @@ census="$scratch/census"
 cargo run --quiet -p batten -- record named attestation <"$census"
 '''
 
-# CLOUD-266's measurement half, ported off `timeout-drift.sh` under CLOUD-1717.
-#
-# THE ARITHMETIC CANNOT MOVE IN. A p95 over run durations is arithmetic over
-# instants, and the engine calls no clock on any evaluation path — `clippy.toml`'s
-# `disallowed-methods` and `crates/batten/tests/clock_ban.rs` hold it there. So the
-# durations are subtracted here and the classification is
-# `policy/timeout-drift.rego`'s: CLOUD-1559's rule, carry the decisions.
-#
-# MATRIX LEGS POOL. One `timeout-minutes` covers seven `dist` targets and the API
-# reports each leg as `dist (<target>)`, so every leg feeds one distribution —
-# matched on the job key, or the key followed by " (".
+# CLOUD-266's measurement half: three declared forge reads, in order, because
+# each fans out over the family the one before it recorded (CLOUD-843). The
+# endpoints, windows and reductions are `[[forge.query]]` rows in `batten.toml`;
+# the job durations are the producer's subtraction; the pooling, the p95 and the
+# classification are `policy/timeout-drift.rego`'s.
 [tasks.timeout-drift-record]
-description = "Record each job's declared budget against its measured p95, for `bound grade other`"
-shell = "bash -c"
-run = '''
-set -euo pipefail
-iso_epoch() { jq -rn --arg d "$1" '$d | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601' 2>/dev/null; }
-
-window="${BATTEN_BUDGET_WINDOW:-25}"
-workflows=".github/workflows"
-
-if ! command -v gh >/dev/null 2>&1; then
-	echo "::error:: timeout-drift-record: gh is not on PATH — cannot read the Actions API. Nothing recorded." >&2
-	exit 2
-fi
-if [ ! -d "$workflows" ]; then
-	echo "::error:: timeout-drift-record: $workflows is not a directory, so no budget could be read. Nothing recorded." >&2
-	exit 2
-fi
-
-emit() {
-	for wf in "$workflows"/*.yml; do
-		[ -e "$wf" ] || continue
-		file="$(basename "$wf")"
-		if ! runs=$(gh api "repos/{owner}/{repo}/actions/workflows/$file/runs?status=success&per_page=$window" --jq '.workflow_runs[].id' 2>/dev/null); then
-			echo "::error:: timeout-drift-record: cannot read runs for $file. Nothing recorded." >&2
-			return 2
-		fi
-		durations=""
-		for run in $runs; do
-			[ -n "$run" ] || continue
-			if ! legs=$(gh api "repos/{owner}/{repo}/actions/runs/$run/jobs?per_page=100" --jq '.jobs[] | select(.conclusion == "success") | [.name, .started_at, .completed_at] | @tsv' 2>/dev/null); then
-				echo "::error:: timeout-drift-record: cannot read jobs for run $run. Nothing recorded." >&2
-				return 2
-			fi
-			durations="$durations$(printf '%s\n' "$legs" | while IFS=$'\t' read -r leg from to; do
-				f=$(iso_epoch "$from") t=$(iso_epoch "$to")
-				[[ -n "$f" && -n "$t" && "$t" -ge "$f" ]] && printf '%s\t%d\n' "$leg" $((t - f))
-			done)
-"
-		done
-		awk -v file="$file" -v durations="$durations" '
-			function flush(   samples, n, i, j, v, idx, p95) {
-				if (job == "" || declared == "") return
-				n = 0
-				split(durations, rows, "\n")
-				for (i in rows) {
-					split(rows[i], f, "\t")
-					if (f[1] == job || index(f[1], job " (") == 1) samples[++n] = f[2] + 0
-				}
-				p95 = 0
-				if (n > 0) {
-					# INSERTION SORT RATHER THAN `asort`, WHICH IS GAWK ONLY. `[tools]`
-					# declares no awk at all, so this runs whatever the host has, and
-					# on macOS that is BSD awk — where `asort` is not a function and
-					# the program dies before emitting a single record, for every job
-					# that has samples. `n` is bounded by the run window, so the
-					# quadratic sort is cheaper than declaring a tool to avoid it.
-					for (i = 2; i <= n; i++) {
-						v = samples[i]
-						j = i - 1
-						while (j > 0 && samples[j] > v) { samples[j + 1] = samples[j]; j-- }
-						samples[j + 1] = v
-					}
-					idx = int(((95 * n) + 99) / 100)
-					if (idx < 1) idx = 1
-					p95 = samples[idx]
-				}
-				printf "job\t%s\t%s\t%s\t%d\t%d\t%s\n", file, job, declared, p95, n, basis
-			}
-			/^jobs:/ { injobs = 1; next }
-			injobs && /^[a-z]/ { injobs = 0 }
-			injobs && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ {
-				flush()
-				job = $1; sub(":", "", job); declared = ""; basis = "measured"
-			}
-			injobs && job != "" && /^    timeout-minutes:[[:space:]]*[0-9]+/ {
-				value = $0
-				sub(/^[[:space:]]*timeout-minutes:[[:space:]]*/, "", value)
-				sub(/[^0-9].*$/, "", value)
-				declared = value
-				basis = ($0 ~ /grandfathered/) ? "grandfathered" : "measured"
-			}
-			END { flush() }
-		' "$wf"
-	done
-}
-
-# THE RECORD IS WRITTEN ONLY AFTER `emit` FINISHES, and the pipe could not do
-# that. `record named` buffers stdin and writes on EOF, so every workflow `emit`
-# had already processed was down the pipe before its `return 2` — and `record
-# named` REPLACES a family, so the store ended up holding a partial census that
-# `policy/timeout-drift.rego` adjudicates as if it were whole. `pipefail` reds
-# the task, which is honest about the run and says nothing about the bytes it
-# left behind; the module reads the store on the next `check`, not this exit
-# code. Buffer to a file, and write only on success.
-census=$(mktemp)
-trap 'rm -f "$census"' EXIT
-emit >"$census"
-# THE CLOSING LINE IS WHAT MAKES "FINISHED" A READING. It is written only here,
-# after `emit` returned 0, and names how many job lines precede it — so
-# `policy/timeout-drift.rego` can tell a finished census from a short one, and
-# refuse a record with no close or a count that disagrees.
-jobs=0
-while IFS= read -r line; do
-	case "$line" in job$'\t'*) jobs=$((jobs + 1)) ;; esac
-done <"$census"
-printf 'census\tjobs=%s\n' "$jobs" >>"$census"
-cargo run --quiet -p batten -- record named timeout-drift <"$census"
-'''
+description = "Record each workflow's recent successful runs and their jobs' durations, for `bound grade other`"
+run = [
+  "cargo run --quiet -p batten -- record query drift-workflows",
+  "cargo run --quiet -p batten -- record query drift-runs",
+  "cargo run --quiet -p batten -- record query drift-jobs",
+]
 
 # CLOUD-831's producer, ported off `mise-tasks/evaluator-closure-check.sh` under
 # CLOUD-1717. The two things that are not decisions: the `cargo metadata` spawn,
@@ -3134,50 +3026,17 @@ printf '%s' "$metadata" \
     --input roots=evaluator-package --input bears=evaluator-io-crate
 """
 
+# CLOUD-349's reading half: three declared forge reads, in order, because the
+# tips fan out over the heads the first one recorded (CLOUD-843). The age in days
+# is the producer's clock; the trunk exclusion and the threshold are
+# `policy/branch-age.rego`'s.
 [tasks.branch-age-record]
-description = "Effect: record every remote branch's age in days and which names head more than one merged PR (CLOUD-349)"
-shell = "bash -c"
-run = """
-trunk="${BRANCH_AGE_TRUNK:-main}"
-today=$(date -u +%Y-%m-%d)
-
-slug=$(gh repo view --json owner,name --jq '.owner.login + " " + .name' 2>/dev/null) || exit 0
-refs=$(gh api graphql \
-  -f query='query($owner:String!,$name:String!){
-              repository(owner:$owner,name:$name){
-                refs(refPrefix:"refs/heads/",first:100){
-                  nodes{ name target{ ... on Commit { committedDate } } }
-                }
-              }
-            }' \
-  -F owner="${slug% *}" -F name="${slug#* }" \
-  --jq '.data.repository.refs.nodes[] | [.name, .target.committedDate] | @tsv' 2>/dev/null) || exit 0
-prs=$(gh pr list --state merged --limit 200 --json headRefName --jq '.[].headRefName' 2>/dev/null) || exit 0
-
-{
-  printf '%s\\n' "$refs" | awk -F'\\t' -v today="$today" -v trunk="$trunk" '
-    function days(y, m, d,   era, yoe, doy, doe) {
-      if (m <= 2) y -= 1
-      era = int((y >= 0 ? y : y - 399) / 400)
-      yoe = y - era * 400
-      doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
-      doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
-      return era * 146097 + doe - 719468
-    }
-    function daynum(iso,   p, s) {
-      s = substr(iso, 1, 10)
-      if (s !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) return "NaN"
-      split(s, p, "-")
-      return days(p[1] + 0, p[2] + 0, p[3] + 0)
-    }
-    BEGIN { now = daynum(today) }
-    $1 == "" { next }
-    $1 == trunk { next }
-    { d = daynum($2); if (d != "NaN") print "ref\\t" $1 "\\t" (now - d) }
-  '
-  printf '%s\\n' "$prs" | sed '/^$/d' | awk -v trunk="$trunk" '$0 != trunk { print "merged\\t" $0 }'
-} | cargo run --quiet -p batten -- record named branch-age
-"""
+description = "Effect: record every remote branch, each tip's age in days, and recently closed pull requests' heads (CLOUD-349)"
+run = [
+  "cargo run --quiet -p batten -- record query branch-heads",
+  "cargo run --quiet -p batten -- record query branch-tips",
+  "cargo run --quiet -p batten -- record query branch-merged",
+]
 
 # CLOUD-192's reading half, ported off `mise-tasks/done-check.sh` under
 # CLOUD-1717. The decision is `policy/done.rego`; this reads the piped
@@ -6653,241 +6512,23 @@ printf '%s\n' "$out" | cargo run --quiet -p batten -- record named land-divergen
 '''
 
 [tasks.record-verdicts]
-description = "Effect: run each declared third-party validator OUTSIDE the engine and record its verdict where `batten check` reads it (CLOUD-1265)"
-# THE HALF THAT WAS MISSING. `crates/batten/src/tools.rs` reads
-# `.git/batten-tools/<tool>@<version>@<digest>` and `crates/batten/src/forge.rs`
-# reads `.git/batten-forge/<sha>`; both shipped with no writer but a test, so
-# `validator-verdict-clean` and `forge-verdict-required` — two registered
-# `severity = "deny"` rows — resolved `null` on every real checkout and decided
-# nothing.
+description = "Effect: run each declared validator and record its exit code, then record the forge's answered verdicts for HEAD (CLOUD-1265)"
+# THE THREE ARMS ARE VERBS NOW (CLOUD-843). Each validator is a `[[rule.tools]]`
+# row whose `run` argv `batten record validate` runs, recording the exit code
+# under the row's key; `policy/validator-verdict-clean.rego` decides what a code
+# means. The `hk-plan` arm is gone: `policy/hook-profile.rego` reads hk's two
+# plans off `[[rule.plan]]` rows the boundary acquires, so nothing records them.
 #
-# BOTH HALVES ARE WRITTEN HERE NOW. The tool half landed with this task
-# (CLOUD-1265); the forge half is the arm at the end of this body (CLOUD-1707),
-# and until it landed this file closed one of the two gaps its own header
-# described and left the other open.
-#
-# THE RUN IS HERE BECAUSE IT CANNOT BE IN THE ENGINE. House style §5 makes
-# `check` `read` and structurally incapable of spawning, so the validator stays a
-# command on PATH (§9's prior art) and only the ADJUDICATION moved inside. This
-# task is the seam that split makes necessary, not a workaround for it.
-#
-# AN INLINE TASK RATHER THAN A `mise-tasks/` PROGRAM, and it is forced:
-# `governed_at_head` selects any `mise-tasks/` path carrying a shebang or a
-# `#MISE description=`, so a new program there is `shell add refused` — refused
-# at `deny`, in the same change that is retiring four of them.
-#
-# THE REDUCTION IS THIS REPOSITORY'S, WHICH IS WHY IT LIVES HERE. `status clean`
-# versus `status error` is the vocabulary `policy/validator-verdict-clean.rego`
-# declares, and that module owns what a clean verdict looks like. The engine only
-# supplies "the verdict recorded under this key" (non-negotiable rule 1).
-#
-# A REDUCTION, NEVER THE REPORT. Only a token reaches the record — the validator's
-# own diagnostic stays on the terminal where its author is looking, and never
-# enters a file a later `batten check` will read out. `tools.rs`'s header names a
-# validator's output as the likeliest place in this family for a secret to appear.
-run = '''
-set -eu
-
-# EVERY DECLARED ROW, EVERY RUN, and the per-row dispatch this used to carry was
-# withdrawn rather than fixed: mise does not hand an inline task body its
-# positional arguments, so the selector silently read `all` on every call — a seam
-# that looks like it narrows and does not is worse than none. Recording all three
-# costs one `pkl` evaluation, one config validation and two `hk` plans, which is
-# what `verify` and CI want anyway; the hk steps pay it on their own globs.
-
-record() { # $1 = row id; verdict lines on stdin
-	cargo run --quiet -p batten -- record tool "$1"
-}
-
-# `pkl` resolves `amends "package://..."` over the network on a cold cache and
-# trusts only its own bundled roots, so a sandbox that intercepts TLS makes that
-# fetch fail as if the config were malformed. Carried verbatim from the retired
-# `mise-tasks/pkl-check.sh`, whose `run_pkl` is the one place this was solved.
-run_pkl() {
-	ca=""
-	for candidate in "${SSL_CERT_FILE:-}" /root/.ccr/ca-bundle.crt; do
-		if [ -n "$candidate" ] && [ -f "$candidate" ]; then
-			ca="$candidate"
-			break
-		fi
-	done
-	if [ -n "$ca" ]; then
-		pkl eval --ca-certificates "$ca" "$@" >/dev/null
-	else
-		pkl eval "$@" >/dev/null
-	fi
-}
-
-# THE THREE VALIDATOR RECORDS ARE A FUNCTION OF COMMITTED BYTES, SO ONE RUN
-# ANSWERS FOR ALL (CLOUD-1891). Measured: hk's `hook-profile-check`,
-# `renovate-config-validator` and `pkl` steps each spawned this task, and
-# `verify`'s body ran it a fourth time over the same bytes. The key is what the
-# three read — `hk.pkl`, `renovate.json5`, `mise.toml` through the hk plans —
-# and the three tools' versions. The forge arm below is a property of the
-# WORLD, not the tree, and stays outside the receipt: it runs every time.
-export BATTEN_STEP_SPECS='hk.pkl renovate.json5 mise.toml'
-export BATTEN_STEP_TOOLS='pkl --version && renovate-config-validator --version && hk --version'
-# A RECEIPT ONLY OVER CLEAN VERDICTS. A validator that errored (a network
-# flake reads the same as a bad config) must be asked again next run, never
-# cached: an error record under a receipt replays forever until an input moves.
-dirty=0
-if [ "$(mise run -q step-receipt check record-verdicts | cut -c1-3)" != hit ]; then
-
-if run_pkl hk.pkl; then
-	verdict="status clean"
-else
-	verdict="status error"
-	dirty=1
-fi
-printf '%s\n' "$verdict" | record config-validator
-
-# `--strict` makes a warning fatal, carried verbatim out of the retired
-# `mise-tasks/renovate-config-validator.sh`: the alternative is a producer that
-# records `clean` while telling the author their config is wrong, which is the
-# "a log without a gate is sensor only" half of non-negotiable rule 2.
-#
-# THE PATH IS AN ARGUMENT AND NOT AN ENVIRONMENT VARIABLE, which is the whole
-# point of retiring that program (CLOUD-1262). Its seam was `RENOVATE_CONFIG`,
-# the same name renovate 44 reads as INLINE JSON5 config — so the validator was
-# handed a path and died parsing it as content. There is nothing left to rename:
-# the input is `batten.toml`'s `renovate-config` row, and the seam is config.
-if renovate-config-validator --strict renovate.json5; then
-	verdict="status clean"
-else
-	verdict="status error"
-	dirty=1
-fi
-printf '%s\n' "$verdict" | record renovate-config
-
-# THE TWO-TIER PLAN, reduced to one line per slow-tier step (CLOUD-509's predicate,
-# ported off `mise-tasks/hook-profile-check.sh`).
-#
-# The tier is DERIVED rather than declared: a step hk excludes for a missing
-# profile when the profile is off is, by construction, a step that declared it.
-# `profile_exclude` is the JSON `reasons[].kind`, which is NOT the kebab-case
-# `profile-not-enabled` naming the same condition in `display_skip_reasons`.
-#
-# Each line is `<step> <status-under-check>`, so the module refuses any step whose
-# status is not `included` — the load-bearing direction, since a slow step missing
-# from `check` means `mise run ci`, `verify` and CI all skip it silently. An EMPTY
-# record is the tier having evaporated, and `hook-profile.rego` reads that apart
-# from an absent one: present-and-empty is a finding, absent is could-not-look.
-full=$(mktemp)
-fast=$(mktemp)
-trap 'rm -f "$full" "$fast"' EXIT
-if ! hk check --all --plan --json >"$full" 2>/dev/null; then
-	echo "::error:: record-verdicts: \`hk check --all --plan --json\` failed, so the plan cannot be recorded" >&2
-	exit 1
-fi
-if ! hk check --all --plan --json --profile '!slow' >"$fast" 2>/dev/null; then
-	echo "::error:: record-verdicts: the no-slow plan could not be read, so the tier cannot be derived" >&2
-	exit 1
-fi
-jq -r --slurpfile full "$full" '
-	.steps[]
-	| select(.status == "skipped")
-	| select(any(.reasons[]?; .kind == "profile_exclude"))
-	| .name as $name
-	| ($full[0].steps[] | select(.name == $name) | .status) as $under
-	| "\($name) \($under // "absent")"
-' <"$fast" | record hk-plan
-
-# THE RECEIPT ATTESTS THE STORE, NOT THIS RUN (CLOUD-1891). hk spawns this task
-# from three steps at once, and a concurrent twin whose `pkl` fetch flaked can
-# write `status error` AFTER this run's clean record — measured on #1036's
-# second lap: `tool judge dirty` over a store both validators judge clean by
-# hand. A receipt keyed off this run's `dirty` alone then replays that error
-# until an input moves. So it is written only when the store itself reads clean.
-if [ "$dirty" = 0 ] && cargo run --quiet -p batten -- check --rule 'tool judge dirty' >/dev/null 2>&1; then
-	mise run -q step-receipt record record-verdicts || true
-fi
-fi
-unset BATTEN_STEP_SPECS BATTEN_STEP_TOOLS
-
-# THE FORGE'S OWN VERDICT, and the row it feeds had never been fed (CLOUD-1707).
-# `crates/batten/src/forge.rs` reads `.git/batten-forge/<sha>` and
-# `batten record forge` writes it, but nothing invoked the writer — so
-# `input.tree.forge` was `null` on every checkout, the module's `is_object` guard
-# never held, and `forge-verdict-required` decided NOTHING while registered at
-# `severity = "deny"`. A dead gate is byte-identical to a clean tree.
-#
-# THE REF IS `HEAD`, AND THAT IS THE WHOLE DECLARED SET. Two rows read this fact
-# — `forge-verdict-required` and the re-grade row above it — and each declares
-# exactly `forge = ["HEAD"]`. Recording HEAD is scoped to what is asked rather
-# than narrowed below it. A row that later declares a second ref must add it here
-# in the same change; an under-scoped record is the same silent pass in a new
-# costume.
-#
-# THE FAN-IN IS THE GATE ON WRITING AT ALL, and this is the load-bearing half.
-# `$CI_FANIN_CHECK` is the check every other required job feeds, so until IT has
-# concluded the forge has not finished judging this commit. Recording a partial
-# reading would be a record PRESENT without a passing fan-in, which
-# `forge-verdict-required` refuses — and that refusal would fire in the two places
-# it must never fire:
-#   * local `verify`, which runs against a freshly minted SHA CI has not graded,
-#     turning every pre-push check red;
-#   * CI itself, where `verify` runs while the fan-in is by construction still
-#     pending, so the record would refuse the very run that wrote it.
-# Absent is could-not-look and is the correct reading for both. So a failed fetch
-# writes nothing, and a commit whose fan-in has not concluded writes nothing.
-#
-# A NAME WITH A SPACE CANNOT BE SPELLED HERE, and is dropped rather than mangled.
-# The record's byte format is `<name> <token>` split on the first whitespace run,
-# so `action (ubuntu-latest) success` would record the name `action` with the
-# conclusion `(ubuntu-latest)` — a wrong verdict under a name three checks collide
-# on. Nine of `$CI_REQUIRED_CHECKS` carry spaces. The fan-in both rows read is one
-# token by construction, so nothing a consumer reads is lost; the COUNT of dropped
-# names goes to stderr (rule 4 — a count, never the payload) so the limit stays
-# visible rather than silent.
-forge_sha=$(git rev-parse HEAD 2>/dev/null || true)
-forge_fanin="${CI_FANIN_CHECK:-}"
-if [ -n "$forge_sha" ] && [ -n "$forge_fanin" ]; then
-	forge_repo="${REPO:-}"
-	[ -n "$forge_repo" ] || forge_repo='{owner}/{repo}'
-	# LATEST RUN PER NAME, and the reduction belongs here rather than in the
-	# reader. A re-run adds a second check-run under the SAME name, so the raw
-	# listing carries `fast-forward-release-pr success` and `… skipped` for one
-	# commit — and `forge::parse` folds a record into a map, so whichever line came
-	# last would win by listing order rather than by recency. `checks-green` draws
-	# the same distinction with `started_at` and `id`; this is that reduction,
-	# spelled once, at the producer.
-	# A `skipped` CONCLUSION IS NOT A GRADING, and admitting one is how this
-	# producer reintroduced the defect it exists to remove (CLOUD-1717). The
-	# filter read `.conclusion != null`, which was written for the PENDING case
-	# — and `skipped` is non-null. Every pull request starts as a draft by this
-	# repository's own contract, CI does not run on one, and a draft's twelve
-	# check-runs all conclude `skipped`. So the fan-in read as GRADED, the record
-	# spelled `final skipped`, and `forge-verdict-required` read that as the
-	# forge having looked and refused.
-	#
-	# Measured 2026-09-17 on PR #962: twelve checks skipped, the record written,
-	# `verify` refusing `forge check red` and `head grade twice`, and the branch
-	# unable to take its first lap — from the state the contract says every PR
-	# begins in. A could-not-look recorded as a verdict, which is precisely what
-	# CLOUD-1707 was about, one layer in.
-	#
-	# Filtered here rather than at the fan-in test alone, because a skipped job in
-	# a real run rendered no verdict either: recording `<job> skipped` would say
-	# that job refused.
-	if forge_runs=$(gh api "repos/$forge_repo/commits/$forge_sha/check-runs?per_page=100" \
-		--jq '.check_runs | group_by(.name) | map(max_by([(.started_at // ""), (.id // 0)])) | map(select(.conclusion != null and .conclusion != "skipped")) | .[] | "\(.name)\t\(.conclusion)"' 2>/dev/null); then
-		# The fan-in decides whether ANY record is written; the name filter then
-		# decides what the record may spell.
-		forge_graded=$(printf '%s\n' "$forge_runs" |
-			awk -F'\t' -v fanin="$forge_fanin" 'NF == 2 && $1 == fanin {found = 1} END {print found + 0}')
-		if [ "$forge_graded" -eq 1 ]; then
-			forge_dropped=$(printf '%s\n' "$forge_runs" |
-				awk -F'\t' 'NF == 2 && $1 ~ /[[:space:]]/ {n++} END {print n + 0}')
-			if [ "$forge_dropped" -gt 0 ]; then
-				echo "record-verdicts: $forge_dropped check-run name(s) carry a space and have no spelling in a forge record; dropped" >&2
-			fi
-			printf '%s\n' "$forge_runs" |
-				awk -F'\t' 'NF == 2 && $1 !~ /[[:space:]]/ {print $1 " " $2}' |
-				cargo run --quiet -p batten -- record forge HEAD
-		fi
-	fi
-fi
-'''
+# THE FORGE ARM reads HEAD's check-runs in process, keeps the latest ANSWERED
+# conclusion per name — the set `checks green` reads, so a cancelled or skipped
+# fan-in is not a grading (CLOUD-1965) — and writes nothing until the fan-in has
+# answered, which is what keeps `forge-verdict-required` from refusing local
+# `verify` and CI's own run.
+run = [
+  "cargo run --quiet -p batten -- record validate config-validator",
+  "cargo run --quiet -p batten -- record validate renovate-config",
+  "cargo run --quiet -p batten -- record forge HEAD --fetch --answered '{{env.CI_ANSWERED_CONCLUSIONS}}' --fanin '{{env.CI_FANIN_CHECK}}'",
+]
 
 # The perf producer and the perf gate (CLOUD-207, ported off
 # `mise-tasks/perf-assert.sh` under CLOUD-1321).
