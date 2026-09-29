@@ -4115,28 +4115,3378 @@ any_argument = true
 # A conflict marker reaching a source file means a botched merge landed — and
 # this row DELEGATES that check rather than re-implementing it (CLOUD-229).
 #
-# It used to be `kind = "forbid"`, `pattern = "# CLOUD-843: the board's own claims, held to what git and the forge already
-# say, as the vendored `tracker-hygiene` preset. It carries the five decisions
-# that were four consumer modules and one shell body — `done-check` (CLOUD-192),
-# `done-pr-check` (CLOUD-468), `duplicate-close-check` (CLOUD-829),
-# `deferral-check` (CLOUD-323) and `closing-key-check` (CLOUD-192, CLOUD-674) —
-# none of which named anything only this repository has once the readings
-# moved into `record derive`.
+# It used to be `kind = "forbid"`, `pattern = "<<<<<<< "`, which is a strictly
+# worse copy of a checker hk already ships and this repo already runs. Measured
+# against the pinned hk: a marker at the start of a line fails both, while the
+# same seven characters inside a string literal fail only the substring match.
+# That false positive is why `crates/batten/tests/cli.rs` had to assemble the
+# marker at runtime — the test file would otherwise trip the gate it is testing.
+# A workaround that exists to dodge your own rule is the rule telling you it is
+# wrong, and AGENTS.md's scope reminder says the same thing in advance: adopt
+# prior art, do not rebuild it.
 #
-# `deny`, as every one of the five was. Each fires only over a record its task
-# produced by piping the board or a PR body in, so an ordinary `check` with no
-# record is silent rather than red; and each task's producer clears the other
-# four families first, so the one row judges the question just asked.
+# What the delegation states is the division of labour the config should have
+# been stating all along. Batten owns **which paths are asked about, and what a
+# non-zero exit means downstream** — the severity, the waiver surface, the
+# receipt, the ready gate. The tool that already owns the check keeps owning it.
+# Conflict markers are the right vehicle for showing that precisely because the
+# check is trivial and owned elsewhere; a rule worth writing here is one no
+# existing tool answers.
+#
+# The predicate is the EXIT CODE ALONE (CLOUD-93). hk's stdout is discarded, so
+# what a finding reports is this rule's own pointer — the glob it selected, with
+# no line number, since a command condemns a batch rather than a span.
+#
+# `{{files}}` expands in place to the matched paths, batched under the argv
+# bound. THE GLOB IS A GATE BEFORE IT IS AN ARGV SOURCE: no match means no
+# process is spawned at all, which is what keeps a delegating rule cheap on the
+# commits it does not concern.
+#
+# WHY `crates/**` AND NOT `**`: the widening is deliberate and so is its bound.
+# `crates/**/*.rs` was narrow because a substring grep over Rust mostly overlaps
+# with what the compiler already catches — a justification that stops holding the
+# moment the rule is neither a substring match nor Rust-only. `crates/**` reaches
+# the files a botched merge corrupts and no compiler reads: the manifest, the
+# changelog, and every fixture under tests/, including the `.toml.in` configs and
+# the expected-stdout files whose bytes are the assertions. Going all the way to
+# `**` is what the engine cannot honestly do yet: the walk skips only `.git`, so
+# it has no gitignore, and a rule's `glob` is one pattern with no exclude form.
+# Counted in this checkout, `**` selects 15326 files, 14665 of them build output
+# under target/ — a delegate invoked over the compiler's own scratch space.
+# Closing that is CLOUD-214 (`ignore` + `globset` behind the walk), not a wider
+# glob here.
+#
+# `severity` (what a match does: "deny" fails the run, "warn" reports without
+# failing, "allow" switches the rule off) is required on every rule — the
+# default is stated here, never assumed. `scope` (where the rule looks) is a
+# separate key with its own vocabulary; "tree" is the whole working tree.
+# A credential in the tree (CLOUD-59). The kind runs the pinned scanner above and
+# turns each match into a pointer; the engine never holds a matched byte where it
+# could reach output, so this row cannot leak what it finds.
+#
+# `glob = "**"` because a secret can be in any file, and narrowing it would be
+# choosing which files are allowed to carry one. The tree walk already excludes
+# gitignored paths, so `target/` costs nothing.
+#
+# `enforce`, never `check`: the kind spawns, so the read-effect verb refuses the
+# whole ruleset naming `batten enforce`. `mise run batten-check` already calls
+# `enforce` for the same reason `no-conflict-markers` made it necessary.
 [[rule]]
-id = "issue state other"
+id = "source carry unsafe"
+kind = "secrets"
+glob = "**"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "rotate the credential and purge it from history; removing the line leaves it in every clone and every reflog, so no command can make this right"
+
+[[rule]]
+id = "source carry broken"
+kind = "command"
+glob = "crates/**"
+check = "hk util check-merge-conflict --assume-in-merge {{files}}"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "resolve the conflict by hand: choosing a side is a judgement no command can make"
+
+# Appeal-to-authority attribution, retired from `mise-tasks/attribution-check`
+# into the engine (CLOUD-881). The rule lives in
+# mem:prior-art-and-issue-hygiene: once a practice is adopted it is ours, and a
+# comment states the rule and the evidence rather than naming a third party.
+# "As <project> does" is unevaluable by a reader and survives neither that
+# project changing its mind nor being wrong.
+#
+# THE BASH THIS REPLACES WAS 93 LINES AND ITS SUITE 212, and the reason it is
+# gone is DoR §2 rather than tidiness: extending it for a cargo manifest took
+# four review rounds of regex narrowing and still could not answer the question
+# (CLOUD-873, canceled). A `forbid` row expresses the prose half exactly, and
+# the manifest half is the `policy` row below, which reads a parsed document.
+#
+# `glob = "**"` is the whole tree, which the task reached with `git ls-files`.
+# Its three `:!:` path exclusions are GONE rather than translated, and each for
+# a measured reason: `.serena/memories/prior-art-and-issue-hygiene.md` has zero
+# uncoordinated hits (every mention in it carries a coordinate), and the other
+# two were the task and its suite, which this change deletes.
+#
+# The lockfile arm went the same way. `^[^:]*\.lock:` matched grep's `path:line:`
+# PREFIX, which a `forbid` row has no analogue for — `exclude` sees the line, not
+# the path. Measured before dropping it: `Cargo.lock`, `fuzz/Cargo.lock` and
+# `mise.lock` carry zero uncoordinated hits, so the arm exempted nothing.
+#
+# POINTER-ONLY IMPROVES HERE. The task printed grep's whole `path:line:content`
+# hit, carrying the offending line into the finding; a `forbid` finding is
+# `path:line` and a rule id (non-negotiable rule 4).
+[[rule]]
+id = "prose point other"
+kind = "forbid"
+glob = "**"
+regex = "jdx|semgrep|opengrep|ast-grep"
+exclude = "https?://|package://|aqua:|ubi:|npm:|pipx:|github\\.com|\\.dev|submodule|amends|uses:|@[0-9a-f]{40}|^(regex|exclude) = "
+severity = "deny"
+scope = "tree"
+no_fix_reason = "state the rule and the evidence in this repo's terms; naming who else does it is not evaluable by a reader (mem:prior-art-and-issue-hygiene)"
+
+# Non-negotiable rule 1 as a standing gate, not prose (CLOUD-7). "The core stays
+# repo-agnostic … a grep for a specific consumer's names must return zero hits"
+# was discharged once, by hand, when the crate landed (CLOUD-26) — which leaves a
+# standing property carried as a comment, half a change by non-negotiable rule 2.
+# These two rows re-run that grep on every gate invocation.
+#
+# WHY THE GLOB IS `crates/**` AND NOT `crates/**/*.rs`: rule 1 says *anywhere* in
+# crates/batten. `git ls-files crates/ | grep -v '\.rs$'` names the tracked files
+# a `*.rs` glob would skip — the crate manifest, the changelog, and every fixture
+# under tests/. `**` spans path segments (pinned by `glob_double_star_spans_
+# segments` in crates/batten/src/rules.rs), and the match is anchored at the
+# first segment, so `crates/**` selects all of crates/ and nothing outside it.
+#
+# WHICH OF THE FOUR LITERALS CLOUD-26's ACCEPTANCE LISTED ARE ROWS, and why —
+# the boundary CLOUD-73 exists to record. Membership turns on one question: does
+# the literal name a CONSUMER, or is it a word this repo uses in its own right?
+#
+# That question used to be pre-empted by a capability limit, and the limit is
+# gone. This comment said `forbid` was a case-sensitive literal substring check,
+# so a literal with an English reading was "wrong in both directions at once" —
+# firing on ordinary prose while missing the capitalised form — and dropped two
+# of the four on that ground. CLOUD-283 gave `forbid` a `regex` alternative to
+# `pattern` (plus an `exclude` column), so both directions are now expressible
+# and the two exclusions are re-decided on the merits:
+#
+#   etaxbc      IN — an account identifier, no English reading.
+#   entities/   IN — an entity path, no English reading.
+#   complian…   IN, since CLOUD-73 — the predecessor consumer's repo name, which
+#               is squarely what rule 1 forbids. `(?i)` catches the capitalised
+#               form the old literal would have missed. It costs nothing to
+#               adopt: zero lines under crates/ carry it, and this engine's
+#               vocabulary is policy / gate / predicate / verdict, never this
+#               word. The Apache boilerplate's "in compliance with the License"
+#               is in LICENSE-APACHE, outside the glob.
+#   button      OUT — a DECISION, not a gap, and the difference matters now that
+#               a mechanism exists. It names the vendor rather than a consumer:
+#               github.com/button-inc/batten is Batten's own home, so
+#               src/store.rs's URL-canonicalization test and the changelog's
+#               release links carry it legitimately. Its consumer-facing half —
+#               a fixture quietly depending on THIS repository — is already
+#               gated, by `no-origin-literal-in-fixtures` below.
+#
+# The domain modules CLOUD-73's other criterion names (entity grep, pdfium, CA
+# privacy detectors, evidence and provenance semantics, the ICM design protocol)
+# get no rows: none has ever been in this repository, which was scaffolded fresh
+# rather than split out of the consumer's tree, so a row for `pdfium` or `icm`
+# could never fire and configuration stays narrow (non-negotiable rule 6). The
+# standing mechanism against one arriving is rule 1's grep over `crates/**` —
+# these rows.
+#
+# The rule IDs deliberately do not embed the literals they ban. A finding prints
+# `<path>:<line> <rule-id>`, so the id reaches the fixture test's expected-stdout
+# string, which lives under crates/batten/tests/ — inside this glob. An id naming
+# its own literal would make the gate fire on the test that proves it works.
+#
+# Naming the literals here is where they belong rather than a leak: rule 1 scopes
+# its grep to crates/batten, this file sits outside the crate, and it already
+# carries this repo's consumer-specific policy for exactly this reason (see the
+# [epoch] comment below). House style §9 wants a rule a reviewer can read, so an
+# obfuscated or hashed pattern would be the worse artifact even if the engine
+# could match one. The glob excludes this file, so neither rule matches its own
+# definition.
+[[rule]]
+id = "fact name other"
+kind = "forbid"
+glob = "crates/**"
+pattern = "etaxbc"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "delete the literal; a consumer fact belongs in that consumer's own batten.toml, never in the core"
+
+[[rule]]
+id = "path name other"
+kind = "forbid"
+glob = "crates/**"
+pattern = "entities/"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "delete the literal; a consumer fact belongs in that consumer's own batten.toml, never in the core"
+
+# CLOUD-1919. Every file this crate mutates goes through `durable`: one write
+# plus `fsync` per append, temp + `fsync` + `rename` + directory `fsync` per
+# replace, so an interrupted write leaves the old state or the new one and never
+# a torn one. The module's header carries the measurement and why neither a
+# clippy ban nor a `forbid` row can draw the production/test boundary.
+[[rule]]
+id = "path write unsafe"
 kind = "policy"
 scope = "tree"
-preset = "tracker-hygiene"
+line_sources = ["crates/batten/src/**/*.rs"]
+module = "policy/durable-write.rego"
 severity = "deny"
 
-# CLOUD-518, ported off `mise-tasks/pr-unsubscribed.sh` under CLOUD-1717. `deny`,
-# as `check`'s exit 1 was: `land` runs it as an entry gate on every lap. Silent
-# with no record, so an ordinary `check` is unaffected.
+[[verdict]]
+id = "path write unsafe"
+gloss = "a production file write bypasses `durable`, so a crash or a second writer can leave it torn"
+class = """
+Route the write through `crate::durable::append` (one write plus fsync) or \
+`crate::durable::replace` (temp, fsync, rename, directory fsync). A byte stream \
+being captured rather than state being committed is marked `// stream:` on the \
+line, with its commit point named (CLOUD-1919).
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "crates/batten/src/durable.rs"
+
+# CLOUD-1924. A function RETURNING `std::process::Command` moves the one
+# `#[expect(clippy::disallowed_types)]` off every spawn onto the factory, so each
+# caller is unannotated and invisible to the ban. #962 measured it: one generic
+# `common::program` laundered twelve spawns, two of them GNU-only. The module
+# names the factories that exist; adding one is an admission on `policy/**`.
+# `line_sources` is every crate source, because the helper that did it lived in
+# the test crate.
+[[rule]]
+id = "spawn bind loose"
+kind = "policy"
+scope = "tree"
+line_sources = ["crates/**/*.rs"]
+module = "policy/spawn-factory.rego"
+severity = "deny"
+
+[[verdict]]
+id = "spawn bind loose"
+gloss = "a function returns a `std::process::Command`, so the spawns it builds carry no `#[expect]` of their own"
+class = """
+Build the `Command` at the site that spawns it, under an `#[expect(\
+clippy::disallowed_types, reason = ...)]` naming that program and why no \
+in-process route exists — or do the work in-process. A shared launcher is a \
+factory only when it builds ONE program its own reason names; add it to \
+`policy/spawn-factory.rego`'s allowlist through the declared admission \
+(CLOUD-1924).
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/spawn-factory.rego"
+
+# THE GENERAL HATCH IS REMOVED FROM THE ENGINE, AND ITS NAME STAYS OUT OF THE
+# TREE. It was a knowable string that switched off mediation and recorded
+# nothing; CLOUD-1357 narrowed it and this removes it. A name nobody may write
+# cannot be prescribed by a rule file, advertised by a refusal, or set by a
+# test, so one literal row covers all three. The two excluded suites are the
+# proofs that setting it now changes nothing, and must spell it to set it.
+# `exclude` keeps this row from matching its own `pattern` line.
+[[rule]]
+id = "hook name dead"
+kind = "forbid"
+glob = "**"
+pattern = "BATTEN_HOOK_BYPASS"
+exclude = "^(pattern|exclude) = "
+exclude_paths = [
+  "crates/batten/tests/it/bypass_scrub.rs",
+  "crates/batten/tests/it/bypass_precondition.rs",
+]
+severity = "deny"
+scope = "tree"
+no_fix_reason = "the general hatch is removed; a refusal's ways through are its declared routes, a waiver, or batten override request"
+
+# `regex` rather than `pattern`, which is the whole reason this row can exist:
+# the shape is the stem, so one expression covers every ending the name takes,
+# and `(?i)` covers the capitalised form a literal would have to enumerate.
+# THE CLASS THE OTHER THREE ROWS DO NOT COVER (CLOUD-1100), and it is here
+# because rule 1 was violated in a way none of them could see.
+#
+# Measured: CLOUD-1121 ported the Ready-block grammar into `crates/batten/src/
+# ready.rs` and carried eighteen of this repository's own tokens in with it —
+# including the tracker key, as a `const`. It landed green, because the rows above
+# ban four LITERALS (an account number, an entity path, a repo name, an org) and a
+# tracker key is none of them. Rule 1 had a mechanism for four strings and none for
+# the class, which is the "rules ship with their mechanism" gap in its own right.
+#
+# THE DISCRIMINATOR IS THE CHARACTER CLASS, and it is what makes this row
+# affordable at all. A grammar constant is a REGEX — a key prefix followed by a
+# digit class — where a provenance citation is a literal key, and the crate is full
+# of the latter: every rationale comment in it cites the row it came from. Banning
+# the prefix would fire on all of them; banning the prefix-plus-class fires on the
+# vocabulary alone.
+#
+# IT NAMES THIS CONSUMER'S PREFIX, NOT A KEY SHAPE, and the first draft got that
+# wrong in a way worth recording. `[A-Z]{2,}-\[0-9\]` reads as the more principled
+# row and is the wrong claim: it fires on ANY key-shaped expression, including the
+# deliberately NEUTRAL `TEAM-[0-9]+` the eleven sites below were rewritten to — so
+# the generalisation refused the fix for the defect it was written to catch.
+# Measured, on this row's own first run. Rule 1 is a statement about a specific
+# consumer's names, which is why the three rows around it ban literals too, and
+# why this file can carry them: it sits outside the glob.
+#
+# `regex` rather than `pattern` because the digit class has to be matched as a
+# class rather than as the literal text of one.
+#
+# Measured on the tree at the moment this row landed: eleven sites, every one of
+# them a fixture, a doc example or a test — and every one rewritten to a neutral
+# prefix rather than exempted, because a crate fixture naming the gated
+# repository's tracker is the same defect one layer down. That is what
+# `no-origin-literal-in-fixtures` below already decided for the org literal.
+#
+# WHERE THE VOCABULARY GOES INSTEAD is `[[pattern]]`, which exists for exactly
+# this and whose own module doc says so: a tracker key "is a *consumer*
+# identifier … written here it is where consumer facts belong".
+# THE TWENTY-FIRST COPY (CLOUD-1142). `no-tracker-key-in-core` below refuses a
+# derivation outright, and can, because `crates/**` carries none — the crate owns
+# the three AXES (`ready::Grammar::key_of` and `keys_in`) and never the token.
+# The task tree is the other half and cannot be refused outright: CLOUD-761
+# measured twenty derivations there in nine spellings, and 34 occurrences across
+# 12 programs survive today. A `forbid` would fire on every one of them.
+#
+# SO IT RATCHETS RATHER THAN FORBIDS, which is the whole of what is landable here.
+# Converting those sites means editing governed `mise-tasks/` programs, which
+# `V-SHELL-RULE-EDITED` refuses with one route — retire them — and that is
+# CLOUD-761's remaining half, blocked on the retirement campaign's sequencing.
+# What this row buys meanwhile is the property whose absence is how twenty
+# arrived: the count cannot GROW. A twenty-first copy fails; the existing ones
+# wait for their program's retirement, each taking its derivation with it.
+#
+# The direction is also why the row needs no exemption for the authority. A
+# ratchet counts rather than judges, so `batten.toml`'s own rows are simply not in
+# this glob, and `policy/**` carries none at all because a module reads
+# `data.batten.patterns["ready-issue-key"]` by id — the registry doing its job.
+[[rule]]
+id = "issue key duplicate"
+kind = "ratchet"
+glob = "mise-tasks/**"
+# A LITERAL SUBSTRING, NOT A REGEX, and the distinction is a dead gate away.
+# `ratchet_rule` counts with `text.matches(pattern)`, which is `str::matches` —
+# substring, not expression. The first draft of this row wrote the escaped regex
+# form and counted ZERO at both ends, so the ratchet loaded, ran, and could never
+# fire. It was caught by driving a twenty-first derivation through it rather than
+# by reading, which is the only thing that tells a passing gate from an absent
+# one. `forbid` above takes `regex` and this takes `pattern`: two columns, two
+# languages, one file.
+pattern = 'CLOUD-[0-9]'
+direction = "non_increasing"
+base = "origin/main"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "read the key from `[[pattern]] ready-issue-key`, or let the program's retirement carry its derivation away; a twenty-first spelling is how the first twenty arrived"
+
+# THREE SPELLINGS, NOT ONE (CLOUD-761). This row carried `CLOUD-\[0-9\]` alone,
+# which refuses the ONE way the twenty measured derivations happened to be
+# written and waves through every other way of writing the same expression. A
+# class a second spelling escapes is not a class — it is the first spelling, with
+# a gate attached — and the whole reason twenty copies could accumulate is that
+# nothing refused the twenty-first before it was typed.
+#
+# The alternation is the escape forms a regex author reaches for next: the
+# character class, `\d`, and `\d` inside a class. Measured over the tree at
+# `6481e41`: zero hits under either glob for the two added spellings, so this
+# adds a refusal and removes none.
+#
+# WHAT IT DELIBERATELY DOES NOT MATCH is a bare CITATION. `CLOUD-761` in a
+# provenance comment carries no backslash and no character class, which is the
+# discriminator CLOUD-1100 already found for this row: a grammar constant is a
+# regex over keys where a citation is a literal key, and the crate is full of the
+# latter. Nor does it reach `[A-Z]+-[0-9]+` — a shape naming no consumer is what
+# rule 1 asks for, and `tests/it/claim_race.rs` and `src/race.rs` are right to
+# carry it.
+[[rule]]
+id = "issue name other"
+kind = "forbid"
+glob = "crates/**"
+regex = 'CLOUD-(\[0-9\]|\\d|\[\\d\])'
+severity = "deny"
+scope = "tree"
+no_fix_reason = "declare it as a `[[pattern]]` row and read it by id; a tracker's vocabulary in the core is rule 1's violation, and moving it is the fix rather than rewording it"
+
+# THE SAME CLASS, ONE DIRECTORY OVER, AND IT HAD NO GATE AT ALL (CLOUD-761). A
+# `[[rule]]`'s `glob` is one pattern, so the module tree gets its own row rather
+# than a widened one — and it is a `forbid` rather than the ratchet
+# `issue-key-derivations-not-growing` has to be for `mise-tasks/**`, because the
+# direction is available here: `policy/**` carries ZERO derivations today, so
+# nothing has to be waited out.
+#
+# It CAN be a flat refusal precisely because the registry already answers the
+# question a module would otherwise re-spell: a module reads
+# `data.batten.patterns["ready-issue-key"]` by id, so the token reaching a
+# predicate is the consumer's one declaration. A module composing its own is the
+# second authority `rules/policy-modules.md` refuses at load for inline
+# patterns generally, said here for the one token this consumer has already been
+# bitten by.
+#
+# A PRESET IS OUT OF SCOPE and that is not an oversight: a preset ships to
+# consumers who declare no rows, so `policy-modules.md`'s own exemption tells its
+# author to write the literal inline. This glob names the in-repo module tree,
+# which is exactly where the exemption does not apply.
+[[rule]]
+id = "pattern name other"
+kind = "forbid"
+glob = "policy/**"
+regex = 'CLOUD-(\[0-9\]|\\d|\[\\d\])'
+severity = "deny"
+scope = "tree"
+no_fix_reason = "read the key from `[[pattern]] ready-issue-key` by id; a module composing its own key expression is a second authority over one definition, which is what the registry exists to make unwritable"
+
+# A RETIREMENT LEDGER ARM IS EXEMPT, and this is a structural collision rather
+# than a convenience (CLOUD-1294). `bats-tests-not-deleted` matches an arm by the
+# deleted case's title QUOTED VERBATIM, and its `declared_in` puts every arm under
+# `crates/batten/tests/**` — inside this row's glob. So a governed bats case whose
+# TITLE happens to carry this word can never be recorded, and therefore never
+# retired, however honest the retirement is.
+#
+# Measured on CLOUD-312 row 10: `"the fixer is wired: session-start runs it, so a
+# clone is compliant before it commits"`.
+#
+# It is not a weakening of what this row decides. The row bans a consumer's name
+# appearing in the core; an arm is DATA ABOUT A LINE THAT NO LONGER EXISTS, and
+# the four markers anchor it at the start of a line, so nothing but a ledger row
+# can reach the exemption.
+[[rule]]
+id = "source name other"
+kind = "forbid"
+glob = "crates/**"
+regex = "(?i)complian"
+exclude = "^// (carried|subsumed|changed|withdrawn): "
+severity = "deny"
+scope = "tree"
+
+# The rule-2 half of CLOUD-1623: the board's column names left the engine, and
+# this is what refuses the next one. They arrived in the first place because
+# nothing refused them, and this file already carries the measured cost of that
+# shape one row up — twenty issue-key derivations accumulated because nothing
+# refused the twenty-first before it was typed.
+#
+# WHY THIS MATCHES THE COMPARISON AND NOT THE VOCABULARY, which is the whole
+# design and the reason the obvious row is unlandable. Measured over `crates/**`
+# at 32f9876: the four column literals occur 126 TIMES across 18 files, nearly
+# all of them legitimate — integration fixtures building board payloads
+# (`landed_check.rs` 19, `claim.rs` 25, `board_receipts.rs` 12), unit-test
+# vocabulary, and prose recording why a column is in the started set. A row
+# banning the WORDS would fire on every one of them, so it would either never
+# land or land with an exemption list longer than the rule.
+#
+# The violation was never the word. It was COMPARING A STATUS AGAINST A LITERAL
+# — `self.status == "In Progress"` — because that is the line that decides, and
+# the line that answers false on every other board while reading as a clean
+# sweep. So the regex is the comparison shape, in both operand orders, and it
+# reaches exactly the construct `board::Columns` exists to replace.
+#
+# IT LANDS AT ZERO, and that is a measurement rather than a hope: after the seam
+# commit the only match in the tree was `board.rs`'s own anti-vacuity test
+# asserting that a foreign board's set does not contain this one's word, and
+# that assertion was rewritten to compare the whole set — a stronger claim,
+# since a negative assertion also passes for a resolver that dropped every
+# column. So the row needs no `exclude`, which is the shape to prefer: an
+# exemption is where the next violation hides.
+#
+# `checks_green.rs`'s `status != "completed"` and `hk.rs`'s `!= "included"` are
+# deliberately NOT reached. They compare a check run's state and a plan's state,
+# which are a forge's and this engine's own vocabularies rather than a
+# tracker's — a row keyed on the bare word `status` would have caught both and
+# taught the next reader that the ban is about the field name.
+[[rule]]
+id = "config name other"
+kind = "forbid"
+glob = "crates/**"
+regex = '(==|!=)\s*"(Todo|Backlog|In Progress|In Review|Done)"|"(Todo|Backlog|In Progress|In Review|Done)"\s*(==|!=)'
+severity = "deny"
+scope = "tree"
+no_fix_reason = "read the column from the `[board]` table through `board::Columns` and compare against that; a board's column name in the core is rule 1's violation, and an undeclared column is could-not-look rather than a default"
+
+# The fixture corpus must stay repo-agnostic (CLOUD-63). The corpus exists so
+# coverage stops implicitly depending on *this* repository, which a fixture
+# naming this repository's origin would quietly undo.
+#
+# The org literal rather than `batten`: `min_batten_version` and `batten.toml`
+# legitimately carry the crate name, while nothing a fixture needs names where
+# this repository is hosted. It lands green — the literal occurs in the
+# workspace manifest, the toolchain config, a release workflow and the
+# generated changelog, but nowhere under crates/batten/tests/.
+[[rule]]
+id = "forge name other"
+kind = "forbid"
+glob = "crates/batten/tests/**"
+pattern = "button-inc"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "rewrite the fixture so it does not name where this repository is hosted"
+
+# Never compile a third-party tool from source in this repository (CLOUD-86).
+#
+# A tool built here is a tool nobody attested: the build happens on whatever
+# toolchain the runner had, produces a binary no checksum covers, and takes as
+# long as the crate takes. Every tool this repo uses is pinned in `mise.toml` as
+# a prebuilt artifact with a locked url and a per-platform checksum — that is the
+# sanctioned path, and CLOUD-281 is the instance where the one tool NOT pinned
+# that way was the one installed from an unverified download.
+#
+# TWO SHAPES, one per file that can express it, because a `forbid` pattern is a
+# literal substring and the two files spell the same mistake differently:
+#
+#   mise.toml   a `cargo:` backend, which builds the crate on install. The
+#               pattern carries the opening quote because TOML bare keys cannot
+#               contain `:`, so a backend key is always quoted — and the quote is
+#               what keeps the row off prose that merely says "cargo".
+#   workflows   `cargo install`, the same thing spelled by hand in a step.
+#
+# NOT gated here, deliberately: whether a *prebuilt* artifact is attested. That is
+# the `[[provision]]` manifest's question (CLOUD-90), and a row here that fired on
+# `ubi:` or on an install-action step would be answering a different one. This
+# rule is about compiling, and `mise.toml`'s `github:` vs `ubi:` distinction is
+# CLOUD-281's.
+#
+# The exemption path is a `[[waiver]]` carrying a reason and an expiry
+# (CLOUD-208), never `severity = "allow"`: switching the rule off records nothing
+# and lapses never, which is the undesigned hatch the waiver surface replaced.
+[[rule]]
+id = "pin add unsafe"
+kind = "forbid"
+glob = "mise.toml"
+pattern = "\"cargo:"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "pin an attested binary in mise.toml instead; what to pin is a supply-chain decision, not a rewrite"
+
+# THE COUNTERWEIGHT TO THE ONE EXEMPTION, and it exists because the exemption
+# just widened.
+#
+# `install.sh` is the single named exception to the bash moratorium: it reaches a
+# host that has no binary yet, so it runs before the engine exists and cannot be a
+# policy module by construction. `policy/shell-retirement.rego` now also exempts
+# its suite, because refusing edits to `tests/install.bats` froze the tests of the
+# one script that must stay bash.
+#
+# That pair is a hatch unless something says what the script may DO. Otherwise any
+# predicate an author declines to write in Rust can be dropped into the one file no
+# rule refuses — which is not hypothetical: `mise.toml`'s inline `run` bodies
+# reached 1188 lines across 36 bodies with only a COUNT ratchet watching them, so
+# folding two bodies into one bigger one read as an improvement.
+#
+# THE PREDICATE IS WHAT IT INVOKES, not how long it is. A length ceiling would
+# refuse honest install work — a new platform, a better error — while admitting a
+# short line that provisions a toolchain. What is banned is reaching for a package
+# manager, a task runner or a shell profile: fetch, verify, unpack, place, report,
+# and nothing else.
+#
+# Measured against the file as it stands: zero matches, so this lands green and
+# fires on the first line that changes what the installer is for. `regex` rather
+# than `pattern` because the discriminator is a word in COMMAND position — a
+# comment mentioning `mise` is prose about the ecosystem, and `\bmise\b` in a
+# sentence is exactly the false positive that gets a gate switched off.
+[[rule]]
+id = "program add other"
+kind = "forbid"
+glob = "install.sh"
+regex = '^\s*(mise|cargo|apt|apt-get|npm|pipx|uv|brew|rustup)\s|>>\s*"?\$?\{?HOME\}?/\.(bashrc|profile|zshrc)'
+severity = "deny"
+scope = "tree"
+no_fix_reason = "the installer installs the binary and nothing else; a toolchain, a package manager or a shell profile belongs behind `batten` once it is on PATH — a `[[provision]]` row or a `[[startup]]` row, both of which a gate can read"
+
+# A GRANT THAT MATCHES NOTHING IS THE DEAD-GATE CLASS, ONE SURFACE OVER, AND ITS
+# ONLY SYMPTOM IS A PERSON BEING ASKED (CLOUD-1455).
+#
+# `permissions.allow` carried `"mcp__serena__*"` for an unknown number of
+# sessions. The MCP forms are `mcp__<server>` and `mcp__<server>__<tool>`; a
+# trailing wildcard is not among them, so the line read as a grant and granted
+# nothing, and the repository owner approved `find_symbol` and
+# `get_symbols_overview` by hand, call after call, while the file said otherwise.
+#
+# NOTHING ELSE IN THE TREE CAN SEE THIS. A pattern that matches nothing and one
+# that matches everything are byte-identical to every other check here: the
+# server attaches, `doctor hooks` is clean, the tools appear and they work. The
+# cost lands entirely outside the exit codes — on a human, one click at a time —
+# which is precisely why it needs a row rather than a note.
+#
+# The regex refuses a wildcard ANYWHERE in an `mcp__` entry rather than only a
+# trailing `__*`, because the failure is the character and not its position, and
+# a row catching one spelling would teach the next author to write the other.
+[[rule]]
+id = "grant name loose"
+kind = "forbid"
+glob = ".claude/settings.json"
+regex = '"mcp__[^"]*\*'
+severity = "deny"
+scope = "tree"
+no_fix_reason = "an MCP permission entry names a server (`mcp__serena`) or one tool (`mcp__serena__read_memory`) and takes no wildcard; enumerate the tools, which is also the only spelling a reader can check against the server's own list. Measured twice in one session: the wildcard granted nothing, and the bare server form granted the reads and left every write still prompting"
+
+[[rule]]
+id = "cargo add loose"
+kind = "forbid"
+glob = ".github/workflows/*.yml"
+pattern = "cargo install"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "pin the tool in mise.toml so CI installs exactly what the lockfile names"
+
+# Portability: the shell layer must run on a machine that is not the CI runner
+# (CLOUD-282).
+#
+# `mise run verify` is the authorization the whole workflow contract rests on —
+# "verify exhaustively before CI", "the gates ARE your authorization". On macOS
+# it could not pass, for reasons no branch caused: two gates used sed's
+# NUL-separated mode (GNU only, BSD exits `illegal option -- z`), two used
+# `mapfile` (bash 4; macOS ships 3.2), one used xargs' short
+# `--no-run-if-empty`, and three fixture repos force-created a branch that git
+# refuses to force while it is checked out. An agent there either stopped on a
+# red `verify` it did not break, or landed on CI's word alone — the exact
+# failure the contract exists to prevent. CI runs ubuntu, so CI is
+# STRUCTURALLY BLIND to every one of these: the same "verdict is a property of
+# the machine" shape as CLOUD-227.
+#
+# These are `forbid` rows and not a 50th `mise-tasks/*-check` program, per the
+# 2026-08-07 engine-first amendment: `batten check` already runs in the shared hk
+# gate with no glob, so the whole construct set is config a reviewer can read
+# (§9) rather than a second copy inside a shell script. That amendment exists
+# because the older wording made a bash task the cheapest satisfying artifact,
+# and CLOUD-202 is in flight moving the existing guards OUT of that layer.
+#
+# WHY THE GLOBS ARE `mise-tasks/**` AND `tests/**/*.bats`:
+#
+#   * two or more segments, so neither can match the root `batten.toml` and make
+#     the rule fire on its own definition — the walk is `fs::read_dir` and skips
+#     only `.git`.
+#   * recursive, matching `no-bash4-wait-n` and `bats-tests-not-deleted` rather
+#     than inventing a third depth convention. Both were narrowed to one segment
+#     once, only to dodge the vendored `tests/bats` submodule the walker used to
+#     descend into; since CLOUD-328 the walk stops at a nested repository, so
+#     depth is free again and hk.pkl's `batten-check` glob spans it too. That
+#     coupling is not cosmetic: `batten-glob-check` subsumes a required glob only
+#     by verbatim match or a `P/**` prefix, so `tests/*.bats` would be uncovered
+#     by hk's `tests/**/*.bats` and the step would stop running for exactly the
+#     commits this rule judges.
+#
+# WHAT IS DELIBERATELY NOT HERE, and why it is a gap rather than an oversight:
+# the `tests/**/*.bats` half of the sed and flock rows. `tests/target-ensure.bats`
+# names the util-linux lock in a test title, and a `forbid` pattern is a literal
+# substring with no `exclude` column, so that row cannot be written today without
+# firing on the test that proves the guard works. That is exactly CLOUD-283. The
+# `mise-tasks/**` half — the layer that actually could not run — lands now.
+#
+# The in-place spelling used to be blocked here too, by `tests/memory-guard.bats`
+# carrying it five times as fixture strings. That suite retired with its guard
+# (CLOUD-442) and the fixtures moved to `crates/**`, which these rows do not
+# glob — so the sed half of this exclusion is now about `flock` alone.
+#
+# The rationale comments in the guarded files deliberately do NOT spell the
+# literals they explain, for the same reason the agnosticism rules above do not
+# embed theirs: a substring rule over a directory fires on its own explanation.
+[[rule]]
+id = "shell parse unsafe"
+kind = "forbid"
+glob = "mise-tasks/**"
+pattern = "sed -zE"
+severity = "deny"
+scope = "tree"
+
+# The trailing space is load-bearing: it is what distinguishes the GNU-only
+# no-suffix spelling from `sed -i.bak`, which BSD accepts and which
+# `tests/helpers.bash` uses.
+[[rule]]
+id = "shell edit unsafe"
+kind = "forbid"
+glob = "mise-tasks/**"
+pattern = "sed -i "
+severity = "deny"
+scope = "tree"
+
+[[rule]]
+id = "shell read unsafe"
+kind = "forbid"
+glob = "mise-tasks/**"
+pattern = "mapfile "
+severity = "deny"
+scope = "tree"
+
+[[rule]]
+id = "shell list unsafe"
+kind = "forbid"
+glob = "mise-tasks/**"
+pattern = "xargs -r"
+severity = "deny"
+scope = "tree"
+
+# CLOUD-286 replaced flock(1) with a `mkdir` mutex and named this row as its own
+# standing half: the refusal that fired before every other gate on a Mac was
+# correct behaviour over a Linux-only primitive.
+[[rule]]
+id = "shell guard unsafe"
+kind = "forbid"
+glob = "mise-tasks/**"
+pattern = "flock "
+severity = "deny"
+scope = "tree"
+
+# git refuses `branch -f` on the branch that is currently checked out. Three
+# fixture setups did it anyway, and passed only because the runner's git still
+# defaults to `master`, which made `main` a different branch — an accident of the
+# runner's configuration, not a property of the test. It is a `setup()` failure,
+# so every case in the suite errors, not one.
+#
+# The replacement is `git init -b <name>` plus a plain `git branch main`, NOT
+# `branch -M main`: `-M` renames the current branch, and these fixtures want a
+# SECOND branch marking the trunk while HEAD stays on the feature branch. That
+# distinction is measured, not assumed — rewriting them to `-M` first made
+# `tests/verified.bats`'s moved-main case fail, because it checks that other
+# branch out.
+[[rule]]
+id = "branch edit unsafe"
+kind = "forbid"
+glob = "tests/**/*.bats"
+pattern = "branch -f main"
+severity = "deny"
+scope = "tree"
+
+# No tracked instruction prescribes the commit identity `identity_deny` refuses
+# (CLOUD-605).
+#
+# A user-level stop hook outside this repository asks a session to reconfigure
+# `user.email` to a vendor no-reply address and amend. `[attribution]`'s
+# `identity_deny` already refuses the resulting COMMIT, and it has never failed
+# to. What nothing gated is the instruction: a session that copies that remedy
+# into a rules file, a task or a memory turns a one-session argument into a
+# standing one, and the next reader finds the repository apparently telling them
+# to do the thing the repository denies.
+#
+# THIS IS NOT A SECOND COPY OF `identity_deny`. That judges what a commit
+# CARRIES, over commit metadata; this judges what a tracked file PRESCRIBES, over
+# tree content. Different object, different pattern, one authority each — the
+# prose that names the precedence still cites `identity_deny` and never restates
+# its patterns.
+#
+# The glob is the instruction surfaces, and the bound is stated rather than
+# implied: Markdown is where a remedy gets pasted, and it is also the only glob
+# under which this row's own fixture can be written. A task or a workflow
+# spelling the same prescription is NOT caught here — it is caught at the commit,
+# by the gate this row exists to stop anyone arguing with.
+[[rule]]
+id = "remedy carry refused"
+kind = "forbid"
+glob = "**/*.md"
+pattern = "user.email noreply@anthropic.com"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "state the precedence instead of the command: `[attribution] identity_deny` is the authority, and a remedy that reproduces the denied identity cannot be corrected by rewording it"
+
+# Which programs change the world, in the one §5 effect vocabulary, each with the
+# sanctioned mutation to point at when it is refused.
+#
+# `>` and `>>` are not programs — a truncating redirect has no mutating program
+# to classify, since in `cat x > p` the program is `cat`. The engine surfaces the
+# operator as a pseudo-program (`hook::REDIRECT_VERBS`) so a consumer that wants
+# truncation gated declares it here like any other verb. That token is a
+# crate↔config contract: `verb = "redirect"` would get silence.
+[[verb]]
+verb = "rm"
+effect = "destructive"
+redirect = "restore it with `git checkout --`, or change it through the surface that owns it"
+
+[[verb]]
+verb = "mv"
+effect = "destructive"
+redirect = "copy instead of moving, or change the file in place"
+
+[[verb]]
+verb = ">"
+effect = "destructive"
+redirect = "append, or write through the surface that owns the file"
+
+[[verb]]
+verb = ">>"
+effect = "write"
+redirect = "write through the surface that owns the file"
+
+# The write TOOLS, classified through the same table as the shell programs
+# (CLOUD-312). A `Write` aimed at a protected path and an `echo x >` aimed at it
+# are one predicate — {mutating verb} × {protected path} — so they are declared
+# once, here, rather than as a second "which tools write" list the engine would
+# have to keep in agreement with this one.
+#
+# Which of a host's tools are writers is the ADAPTER's fact and is not declared
+# here (`hook::Harness::write_tools`); what a write MEANS for this repository is,
+# and that is the redirect. Until these rows existed the whole
+# `Write|Edit|MultiEdit|NotebookEdit` matcher was adjudicated by nothing: a write
+# carries no command, and every path in `adjudicate` returned Allow for it.
+#
+# The redirect started as the one `memory-guard-check` rendered, kept verbatim so
+# the refusal survived the move out of bash unchanged — which is what CLOUD-312's
+# differential suite asserted. With that guard retired (CLOUD-442) this text is no
+# longer a copy of anything: it is the authority, and
+# `crates/batten/tests/mediated_verbs.rs` is what holds it to the corpus the guard
+# used to prove. It is per-verb rather than per-path, exactly as `rm`'s is, so it
+# names the general remedy and leaves the specific one to the path in the message.
+# The write-shaped programs whose EVERY operand is a target, ported from
+# `memory-guard-check`'s table (CLOUD-312). Its own comments were the authority
+# for which those are: "every operand is a destination" for tee/sponge, and
+# rm/shred/truncate grouped together.
+#
+# The five that could not be expressed then are declared below with CLOUD-442's
+# qualifier columns, and the guard is deleted rather than left beside the engine
+# as a second authority. Each column NARROWS — an absent one leaves a row meaning
+# what it always meant — so the every-operand reading above is untouched and
+# stays the default, because it is the one that fails toward refusing.
+[[verb]]
+verb = "tee"
+effect = "write"
+redirect = "write through the surface that owns the file — for a memory that is the Serena tool `write_memory`"
+
+[[verb]]
+verb = "sponge"
+effect = "write"
+redirect = "write through the surface that owns the file — for a memory that is the Serena tool `write_memory`"
+
+[[verb]]
+verb = "truncate"
+effect = "destructive"
+redirect = "change the file through the surface that owns it, rather than emptying it in place"
+
+[[verb]]
+verb = "shred"
+effect = "destructive"
+redirect = "restore it with `git checkout --`, or remove it through the surface that owns it"
+
+# Destination-only: `operands = "last"`. The bash table's own words — "only the
+# destination is a write; copying a memory OUT is a read" — are what the column
+# now says, and the ALLOW is the load-bearing half: with the default every-operand
+# reading, a row here would refuse `cp batten.toml /tmp/backup.toml`, and a guard
+# that refuses reads is one people switch off.
+#
+# The stated limit, inherited from the guard this replaces rather than introduced:
+# a target-directory flag (`-t <dir>`) puts the destination somewhere other than
+# last, so the row does not see it. That under-denies, which is the sanctioned
+# direction (house style §5).
+[[verb]]
+verb = "cp"
+effect = "write"
+operands = "last"
+redirect = "write through the surface that owns the file — for a memory that is the Serena tool `write_memory`"
+
+[[verb]]
+verb = "install"
+effect = "write"
+operands = "last"
+redirect = "write through the surface that owns the file — for a memory that is the Serena tool `write_memory`"
+
+# Flag-qualified: the stream editor writes only in place. Every other invocation
+# of it is a read, so a row without `requires_flag` would refuse every read-only
+# stream edit in the repository — which is why this one waited for the column.
+# The suffix form is the same switch carrying a backup suffix; the engine matches
+# a declared flag's `.suffix` and `=value` forms for that reason.
+[[verb]]
+verb = "sed"
+effect = "write"
+requires_flag = ["-i", "--in-place"]
+redirect = "change the file through the surface that owns it — for a memory that is the Serena tool `edit_memory`"
+
+# Subcommand-qualified: two rows for one front-end, because they are two actions
+# with two remedies. The effective program is the same word whether it mutates or
+# reads, so a row keyed on the program alone would refuse `git log`.
+#
+# The rename is the shape worth the most, and the reason this pair is not
+# cosmetic: `rename_memory` is the only thing that rewrites `mem:` referrers, so
+# moving a memory with version control orphans every reference to it in one
+# silent step. `memories-check` catches the damage at commit time; this catches
+# it at the moment of action.
+[[verb]]
+verb = "git"
+subcommand = "mv"
+effect = "destructive"
+redirect = "copy instead of moving, or change the file in place — for a memory that is the Serena tool `rename_memory`, which rewrites every `mem:` referrer a raw move orphans"
+
+[[verb]]
+verb = "git"
+subcommand = "rm"
+effect = "destructive"
+redirect = "restore it with `git checkout --`, or remove it through the surface that owns it — for a memory that is the Serena tool `delete_memory`"
+
+[[verb]]
+verb = "Write"
+effect = "write"
+redirect = "change the file through the surface that owns it — for a memory that is the Serena tool `write_memory`, which enforces the size ceiling and the `mem:` reference rewrite a direct write skips"
+
+[[verb]]
+verb = "Edit"
+effect = "write"
+redirect = "change the file through the surface that owns it — for a memory that is the Serena tool `edit_memory`"
+
+[[verb]]
+verb = "MultiEdit"
+effect = "write"
+redirect = "change the file through the surface that owns it — for a memory that is the Serena tool `edit_memory`"
+
+[[verb]]
+verb = "NotebookEdit"
+effect = "write"
+redirect = "change the file through the surface that owns it"
+
+# The governing config surface, hashed into `batten config epoch` (CLOUD-32).
+#
+# This list is consumer-specific ON PURPOSE, and it lives here rather than in
+# crates/batten: which files govern a repository is that repository's business,
+# and these four govern *this* one. The core ships only the default — batten.toml
+# itself — so a grep of the engine for any consumer's identifiers returns
+# nothing (non-negotiable rule 1). Batten is consumer #1 in practice: this is
+# the worked example of the feature, in the config the feature reads.
+#
+# Every path must be readable. An unreadable one is exit 1 — this list is config,
+# so a tracked path that cannot be read is unreadable config, which §7 routes to
+# 1 and not to 3. It is never a silent skip: skipping would compute a stable
+# epoch over a surface that changed, which is precisely the failure the value
+# exists to prevent.
+# What the always-loaded instruction set may cost (CLOUD-50).
+#
+# Every agent pays AGENTS.md on every turn whether or not a word of it applies,
+# so its size is a per-turn tax rather than a style question. This table is the
+# successor to `mise-tasks/context-budget.sh`, deleted in the same change — never
+# two gates counting the same surface by different rules.
+#
+# `files` is consumer-specific by nature: which files are always loaded is a
+# property of this repository, not of Batten (non-negotiable rule 1). It lists
+# `AGENTS.md` alone. The shell task also globbed `.serena/memories/always/*.md`,
+# a directory that has never existed — a dead entry contributing nothing while
+# the rest counted, which is exactly the defect CLOUD-298 measured and which the
+# engine now refuses outright (exit 1, per entry). Declaring a memory always-load
+# means creating that directory AND adding the glob here in the same change: it
+# then costs exactly what an AGENTS.md section costs, which is the point.
+#
+# Both thresholds carry forward the shell gate's bar unchanged. `max_lines = 199`
+# is the documented 200-line CLAUDE.md target restated for a `<=` boundary — the
+# shell gate failed AT 200, so 199 is the same bar, not a loosening. Raising
+# either number is a visible diff in this file, pinned by a test in
+# `crates/batten/tests/cli.rs`.
+# How `batten exec` presents what it dispatched (CLOUD-429), on two axes adopted
+# from tools this repo already pins: hk's `format` and mise's `style`. Both are
+# set here rather than left implicit, because "the default" is a decision this
+# repository is making about its own callers and a reader should not have to open
+# the crate to learn what it was.
+#
+# `tee` is deliberately absent, which reads as `false`: the bytes are captured
+# and addressable, so an agent asking for `mise run test` gets a record and a
+# handle instead of a test log it did not budget for. `--tee` is how a human asks
+# for the log, and it restores the old behaviour verbatim.
+#
+# `manage_process_group` is absent for the opposite reason (CLOUD-427): every
+# `exec` in this repository runs UNDER `mise run`, so the marker is already set
+# and Batten would decline regardless. Declaring `true` here would state an
+# intent that never fires, which is worse than stating nothing.
+# `jobs` and `continue_on_error` are mise's own names for a `:::` bundle's width
+# and its failure policy (CLOUD-430). Both are stated at their conservative
+# values rather than left implicit, for the reason above: a reader should not
+# have to open the crate to learn that this repository runs a bundle one command
+# at a time and stops at the first failure.
+[exec]
+format = "human"
+style = "interleave"
+jobs = 1
+continue_on_error = false
+
+# Batten as the MCP CLIENT (CLOUD-1260), and every identifier below is THIS
+# repository's rather than the crate's.
+#
+# WHY THE ENGINE DISPATCHES AT ALL. Measured over one session's own transcript on
+# 2026-08-31: 43.5 MB of tool content, of which tracker round trips were 13.2 MB —
+# 73% of all tool output — across 973 calls against 208 rows. Bash, Grep and Read
+# together were 1.9 MB. Reading the tree is nearly free; the connector was the
+# entire cost, and a whole document moved every time to convey a delta of a couple
+# of kilobytes. That is non-negotiable rule 4 unenforced at the tool boundary.
+#
+# The two cheap fixes are already priced and both fail: only 8% of issue bytes are
+# byte-identical repeats (one row was pulled 22 times with 20 distinct digests, so
+# CLOUD-918/919's reification-by-handle cannot fire), and no projection exists to
+# ask for — the connector's own schema is `additionalProperties: false`. What is
+# left is to stop being a bystander to the call. MCP is JSON-RPC 2.0, so the
+# engine can be the client and give the tracker an API it does not ship.
+#
+# WHERE THE WIRING LIVES IS DECLARED, NEVER SCANNED, on `[[rule.external]]`'s own
+# terms: a `root` is the NAME of an environment variable, and the engine expands a
+# variable rather than walking a filesystem. Order is precedence — this repository
+# is worked in from several harnesses and each keeps its wiring somewhere else, so
+# the first row that carries the server is the one believed.
+#
+# THE HEADERS IN THESE FILES ARE THE CREDENTIAL, and the engine reading them is a
+# NARROWING rather than a widening: the agent can read the same file today and
+# did, so moving the read into the gate strictly reduces who holds them. A
+# durable, cross-session credential is a genuinely new surface and is CLOUD-1261's;
+# this dispatches from inside the session that minted the auth and needs none.
+
+# THE SERVERS THIS REPOSITORY'S PERMISSION FILE GOVERNS UNDER ANY NAME (CLOUD-191,
+# CLOUD-843). `batten mcp grant --guard` applies `.claude/settings.json`'s rules
+# for these names to whatever key the host exposes the server under this
+# session, matched by the endpoint its `endpoint_contains` row declares; `batten
+# mcp posture` reports the committed grants on them a connector would still
+# prompt for (CLOUD-765).
+#
+# ONE NAME, AND THE LIST IS THE DECISION. The retired resolver translated exactly
+# one server — the session toolbox — and left every other endpoint silent,
+# because a connector the host authorises at its own layer must not have its name
+# translated into a grant the host did not give. `Linear` below is declared for
+# DISPATCH (`mcp call`), not for this.
+# P5-SCHEMA-PENDING (CLOUD-843): uncomment once `mise run schema` has regenerated
+# `schema/batten.schema.json` from the merged binary; the committed schema
+# predates the key, so the commit-time `taplo` step refuses it until then. NOT
+# OPTIONAL, and the branch does not land commented: commented out, the
+# `connector-allow-guard` pre-tool handler (`mcp:guard`) and the posture census
+# (CLOUD-765) decide nothing here, and `connector_allow_door.rs`'s
+# `this_repository_declares_the_names_its_guard_translates` is red until it is.
+# [mcp]
+# permission_aliases = ["Claude_Code_Remote"]
+
+# Claude Code's own local wiring.
+[[mcp.source]]
+id = "claude-code-local"
+root = "HOME"
+path = ".claude.json"
+node = "mcpServers"
+
+# Cursor's, which is repo-relative and therefore not an out-of-root question at
+# all — the `root` key is omitted rather than set to something that expands to the
+# checkout, because an omitted key states "relative to the repository" once where
+# a variable name would state it per host.
+[[mcp.source]]
+id = "cursor"
+path = ".cursor/mcp.json"
+node = "mcpServers"
+
+# This repository's own project-scoped servers, last: a project file is the
+# narrowest declaration and the one most likely to be a fixture, so a harness's
+# real wiring outranks it.
+[[mcp.source]]
+id = "project"
+path = ".mcp.json"
+node = "mcpServers"
+
+# THE WRITE-SIDE REDUCTION (CLOUD-1122). `save_issue` was 435 calls returning
+# 4.98 MB on the measured session — 38% of the 13.2 MB the tracker cost — because
+# a write echoes the entire stored description back seconds after the author sent
+# it. A `patch` sends a few hundred bytes of anchors and gets a full body back,
+# and that body then sits in context, re-sent every turn, for the rest of the
+# session. It is the one operation whose input the caller already knows.
+#
+# `acknowledge` RATHER THAN A NARROW `project`, and the difference is in KIND
+# rather than in degree. Every field here is held to a bounded SCALAR — past
+# `TOKEN_MAX`, or a container rather than a scalar, and the field is DROPPED
+# rather than truncated, because a prefix of somebody's issue body is still their
+# issue body. So this arm cannot echo a body however the row is written, where
+# `project` above leaves that to the field list.
+#
+# THE BOUND IS LENGTH, NOT `facts::Reduction::Token`'S. That reduction also
+# refuses any value carrying whitespace, and it is right to: its product reaches
+# the POLICY INPUT, where a module could lift a sentence into a pointer. This
+# arm's product reaches the CALLER, and what is being kept out is a 15k-character
+# description, which the length bound stops on its own. Copying the whitespace
+# clause across would have silently dropped `status = "In Progress"` — the one
+# field this row's own remedy names.
+#
+# THE BODY KEEPS ARRIVING AT THE BOUNDARY, which is the half a naive fix breaks.
+# CLOUD-815 compares the stored body against the sent one — that comparison IS the
+# detection — and CLOUD-1118 wants the post-write body so a lint straight after a
+# write decides over what was actually stored. Both read the CAPTURE STORE, and
+# `mcp call` stores every response whole before reducing anything, so neither is
+# starved. What this removes is the copy that arrives in CONTEXT, which is the
+# only copy nobody asked for.
+#
+# THE FIELD LIST IS THE ROW'S OWN REMEDY, `{id, status, handle}`, plus the link a
+# writer wants at exactly this moment. `handle` is not here because it is not a
+# tracker field: it travels in the verb's own pointer line, which is where a
+# pointer belongs.
+[[mcp.result]]
+method = "save_issue"
+reduce = "acknowledge"
+fields = ["id", "status", "url"]
+
+# THE ONE THAT WAS CALLED UNDECLARABLE, NOW DECLARED (CLOUD-1251).
+#
+# A Claude Code REMOTE session's launcher mints its wiring per session, and the
+# text that stood here said so as a closed door: "the path is a glob, the match
+# count is not one, and the id a declaration would need cannot be authored for a
+# name that does not yet exist. Each of those three would be fatal alone."
+#
+# ALL THREE WERE OBJECTIONS TO A GLOB, AND NONE OF THEM SURVIVES EXPANSION. The
+# session id is not unknowable — the launcher exports it — so a row spells it
+# where it appears in the filename. The match count is exactly one by
+# construction, the engine expands a variable rather than walking a filesystem
+# (`[[rule.external]]`'s discipline, unchanged), and the id is this row's own.
+# Reading a refusal of one shape as a refusal of the family is what kept this
+# undeclared; the glob is still declined and this is not one.
+#
+# `base = "temp"` because the OS temp directory is the one location an operator
+# has no variable for: `TMPDIR` is unset on a great many hosts, this one
+# included, so `root = "TMPDIR"` would silently fail to resolve exactly where the
+# file is. The platform defines the directory and the engine asks it, rather than
+# this file spelling a literal `/tmp` that is wrong on Windows anyway.
+#
+# THE CREDENTIAL IS NAMED, NEVER CARRIED (CLOUD-1261). The three `X-` headers in
+# that wiring file are ROUTING IDENTIFIERS: measured 2026-09-01, a dispatch
+# carrying exactly them is answered 401, and CLOUD-673 had already reached the
+# same result with a different client. What the endpoint wants is a bearer token
+# the launcher writes to a file and exports the PATH of — so what is committed
+# here is a variable's NAME, and the value never touches the repository or the
+# model. Measured with these rows: three live `get_issue` calls, exit 0, 43,160
+# bytes stored for 1,000 emitted.
+#
+# ANSWER 2 STAYS THE CALL FOR THE GENERAL RUNTIME-DISCOVERED SET, and the
+# correction recorded with it is why it is the wrong tool for THIS case:
+# `facts.rs`'s `Sourced` states that "no byte of it reaches THIS record —
+# `rows_in` reduces the buffer to a COUNT at the boundary", so the record family
+# is payload-free by construction. Exactly right for a module deciding a
+# predicate, and structurally incapable of carrying an endpoint and headers,
+# which is what DISPATCH needs. Answer 2 serves CLOUD-1163's unit 4; this row
+# serves dispatch, and they are different mechanisms rather than one deferred.
+#
+# FIRST IN THE ORDER, because a session's own launcher wiring is the most
+# specific answer available and the rows above are the fallbacks. On any host
+# that is not a remote session the variable is unset, the row does not resolve,
+# and the next source answers — the same three-valued read `root` already has.
+[[mcp.source]]
+id = "claude-code-remote"
+base = "temp"
+path = "mcp-config-${CLAUDE_CODE_REMOTE_SESSION_ID}.json"
+node = "mcpServers"
+
+# THE NAME A REMEDY MAY CITE (CLOUD-1264). This launcher keys its server map by
+# whatever id the toolbox minted for the registration episode, so the key is
+# unwritable in advance: measured 2026-09-02, the same connector at the same
+# address was keyed `Linear` in one container and
+# `4db58e41-cd4e-4818-8922-46cf616593f4` in another, and `mcp call Linear` exited
+# 3 in the second with "no declared source resolves this server".
+#
+# That is CLOUD-178's rotation reaching DISPATCH, where the `__`-delimited
+# segment match that absorbs it for a `tool` selector has no analogue — the key
+# is the whole name. Without this row the `no-raw-issue-read` remedy below would
+# name a command that cannot run, which is the class CLOUD-1050 refuses.
+#
+# THE ADDRESS IS WHAT DOES NOT MOVE, which is why the selector is over the
+# endpoint. It is a substring rather than a whole URL because the launcher wraps
+# the upstream address in its own proxy URL with the real one in a query
+# parameter, and the wrapper carries a per-session id.
+[mcp.source.endpoint_contains]
+Linear = "mcp.linear.app"
+# THE SESSION TOOLBOX, by the upstream address its wrapper URL carries ENCODED
+# in a query parameter (CLOUD-843). The address was a constant in the retired
+# `connector-allow-resolve` body; it is the consumer's fact, so it lives here.
+# ONE VALUE, TWO MATCHERS. The permission alias `[mcp] permission_aliases` names
+# is translated only where `mcp::endpoint_names` finds this address EQUAL to the
+# endpoint or to a whole percent-decoded query value (scheme, query, fragment
+# and trailing `/` set aside), so an address that merely extends it names another server and
+# gets no grant. Dispatch (`mcp call`) selects with the looser
+# `mcp::endpoint_carries` substring, where the path segment is what keeps it
+# from also matching every other server behind the same proxy host, which would
+# be `Ambiguous`.
+Claude_Code_Remote = "api.anthropic.com/v1/code/mcp/meta"
+
+[mcp.source.credential]
+header = "Authorization"
+scheme = "Bearer"
+file_from = "CLAUDE_SESSION_INGRESS_TOKEN_FILE"
+
+# THE READ-SIDE REDUCTION. `get_issue` was 616 calls and 8.27 MB on the measured
+# session — the single largest line — because no projection exists and every read
+# is therefore the whole body.
+#
+# NO `node`/`embedded` OVERRIDE, and the absence is the statement. `tools/call` is
+# specified to answer with content blocks, so unframing one is reading the PROTOCOL
+# rather than guessing a tracker's schema, and the engine does it for every method.
+# Those two keys stay available for a server whose framing it does not recognise;
+# this one is ordinary.
+#
+# FIDELITY IS NOT LOST BY NARROWING THIS. `ready lint`, `graph-check` and
+# `claim check` read the payload from the CAPTURE STORE by key (CLOUD-1121's
+# `--issue`), and `mcp call` stores every response whole — so the gates keep
+# receiving the entire body while the model receives a dozen fields. The field
+# list is what a human reads to know which row this is; the body is what a gate
+# reads, and the two have never needed to be the same channel.
+[[mcp.result]]
+method = "get_issue"
+reduce = "project"
+fields = [
+  "id",
+  "title",
+  "status",
+  "statusType",
+  "assignee",
+  "priority",
+  "labels",
+  "url",
+  "updatedAt",
+  "gitBranchName",
+  # READ BY `claim-before-code`, and absent from this list until CLOUD-1422.
+  # That row's `[[rule.captured]]` reads `node = "project"` off a payload this
+  # projection did not carry, so the reduction answered `present = false` for
+  # every capture and the gate was UNSATISFIABLE by construction — two config
+  # rows disagreeing about the payload's own shape.
+  #
+  # It stayed invisible because the refusal needs a capture to exist: an id
+  # nothing captured is absent from the map and reads as could-not-look, so a
+  # clone that has never read that row passes. It fires the moment someone does.
+  "project",
+]
+
+# THE DOCUMENT-SIDE REDUCTION, and it is the same defect one method over (CLOUD-1742).
+# `get_document` had no row, so every document read was handed back re-serialised
+# rather than reduced — the shape `crates/batten/src/mcp.rs` already records for an
+# undeclared method: MORE OUT THAN IN. A document's `content` is its entire body, so
+# this is the widest single field the tracker returns and the one nobody reading a
+# projection asked for.
+#
+# DROPPING `content` COSTS A GATE NOTHING, for the reason the `get_issue` block above
+# states of its own narrowing: `mcp call` stores every response WHOLE, so a gate reads
+# the body from the capture store by key while the model receives a dozen fields. The
+# two have never needed to be the same channel.
+#
+# THE PROVENANCE FIELDS ARE NOT DECORATION, and choosing them for size would have been
+# the error. `updatedAt`, `updatedBy` and `team` are exactly the three that made
+# CLOUD-1742 legible: a spec `AGENTS.md` cites as authoritative was overwritten in
+# place and reparented to another team, and those fields are what showed it. A
+# projection carrying only `id`, `title` and `url` would have reported the clobbered
+# document as the same document — which is the failure this row's sibling exists to
+# prevent one surface over.
+[[mcp.result]]
+method = "get_document"
+reduce = "project"
+fields = [
+  "id",
+  "title",
+  "url",
+  "slugId",
+  "createdAt",
+  "creator",
+  "updatedAt",
+  "updatedBy",
+  "archivedAt",
+  "project",
+  "team",
+]
+
+# THE LIST-SIDE REDUCTION (CLOUD-1380). `list_issues` had no row and the verb said
+# so on every call — `undeclared — stored 17,313 bytes, emitted 20,366`. MORE OUT
+# THAN IN, because an undeclared result is handed back re-serialised rather than
+# reduced, and a list response is inherently the widest of the three.
+#
+# `reduce = "each"` RATHER THAN `project`, and the arm had to be built before this
+# row could be written. `project` does one flat field-pick against the node it is
+# given: naming `issues` selects an ARRAY, every field lookup against it misses,
+# and the projection is empty; leaving `node` at the root keeps `issues` whole and
+# reduces nothing. `acknowledge` refuses a container outright, so it would drop the
+# array and leave the verb unable to answer the one question a search asks.
+#
+# THE FIELD SET IS NOT CHOSEN FOR SIZE, which is the constraint that decides it.
+# `graph-check` reads `id`, `status`, `description`, `projectMilestone` and
+# `parentId`, and CLOUD-1151's wave ports it onto the capture store — so a
+# projection trimmed to the smallest thing that still looks like a search result
+# would leave that gate quietly unjudgeable rather than red.
+#
+# `description` EARNS ITS PLACE FOR THE SAME REASON, against the obvious objection.
+# `.claude/rules/toolchain.md` records that a list response TRUNCATES it, which
+# makes a projected `list_issues` an invalid input to `spec-ref-check` — that is a
+# statement about CLAUSE citation, which needs the whole body, and says nothing
+# about the presence-and-shape reads every other consumer does. Reading it as a
+# prohibition is the generalisation CLOUD-1380's own body records itself making.
+#
+# `title` and `url` are the identity half — what a human reads to know which row
+# matched — and `issue list unread` is the consumer that must not be blinded: a
+# reduction emitting only `hasNextPage` would satisfy every size predicate and
+# destroy the verb's purpose.
+#
+# `hasNextPage` AND `cursor` ARE NOT DECLARED AND ARRIVE ANYWAY. They are scalar
+# siblings of the array, carried by the arm itself, because they are what make the
+# page size a thing the caller controls — and this arm's bound is the page rather
+# than the declaration. Declaring them as `fields` would instead look them up on
+# every ELEMENT, where they do not exist, and they would be absent from every row.
+[[mcp.result]]
+method = "list_issues"
+reduce = "each"
+node = "issues"
+fields = [
+  "id",
+  "title",
+  "status",
+  "description",
+  "projectMilestone",
+  "parentId",
+  "url",
+  "updatedAt",
+]
+
+# CLOSING THE RAW READ PATH, as the gate `connector-not-granted` structurally
+# cannot be (CLOUD-1264). That row asserts what this repository's own committed
+# `.claude/settings.json` grants, and its module says in as many words that
+# REGISTRATION happens in the launcher, outside every gate here. So a session
+# whose harness registers the connector anyway keeps the raw tool on the model's
+# surface, and the reduction beside it decides nothing — the two routes return
+# the same payload and the cheaper-looking one wins every time.
+#
+# IT WON. Measured on the grooming session that dispatched this work: raw
+# `get_issue` 12.2 MB over 755 calls and raw `save_issue` 7.1 MB over 517 —
+# **85% of all tool output**, up from the 73% CLOUD-1260 was filed on, and 4 MB
+# of it AFTER the reduction landed. "The agent should call `batten` instead" is
+# a convention, which non-negotiable rule 2 calls feedforward only.
+#
+# THE PRECONDITION, AND IT IS WHY THIS ROW DID NOT LAND WITH CLOUD-1260. Every
+# board write in this repository owes a recent `issue-read` receipt, and until
+# this PR the verb minted none — so this deny would have refused the only route
+# that mints one and bricked `an-update-owes-a-recent-read`,
+# `a-todo-promotion-owes-a-ready-verdict` and `claim`'s `refined-this-session`
+# in the same move. Measured here before the fix: the raw tool minted the
+# receipt, the verb did not, and `claim check` refused `no-read-receipt` over a
+# row it had just read. The dispatch boundary mints now, which is what makes
+# refusing the raw route safe rather than merely desirable.
+#
+# FIRST-READ IS NOT EXEMPT, and the exemption is the one a reader reaches for.
+# `mcp call` stores the response WHOLE, and every gate that needs a body reads
+# the store by key — `ready lint --issue`, `claim check --issue`, the board
+# rows. So the model never needs the raw payload for a first read either; what
+# it needs is a dozen declared fields, which is what the `[[mcp.result]]`
+# projection above hands back. Measured 2026-09-02 through the verb: 20,580
+# bytes stored, 609 emitted.
+#
+# `tool` MATCHES THE SUFFIX, so every registration episode is covered —
+# `mcp__Linear__get_issue`, `mcp__<uuid>__get_issue` and
+# `mcp__claude_ai_Linear__get_issue` are one connector behind three prefixes the
+# host minted (CLOUD-178). `selects_tool` matches the whole name or the whole
+# final `__`-delimited segment, so `get_issue_status` is not reached.
+#
+# `list_issues` IS DELIBERATELY NOT HERE. It is already projected on every
+# measured call, and a `shape` row cannot express "without `fields`" — a row
+# that refused it outright would deny the search `issue list unread`
+# requires, which is how a guard gets switched off within a day (CLOUD-199).
+#
+# NOR IS `save_issue`, and that absence is recorded rather than pending. The
+# write reduction CLOUD-1122 landed is unreachable from a remote session today:
+# the wiring file declares 62 tools for this connector, 61 `always_allow` and
+# exactly one `always_ask` — `save_issue` — so the harness's approval layer
+# refuses a call the verb dispatches as a plain MCP client with no UI to satisfy
+# it. Denying the raw write while the reduced write cannot complete would leave
+# no route at all. Recorded on CLOUD-1122 and CLOUD-1261; the deny lands when a
+# write succeeds through the verb.
+[[rule]]
+id = "issue read loose"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+tool = "get_issue"
+reason = """
+Read the row through the reduction: `batten mcp call Linear get_issue \
+'{"id":"<KEY>"}'`, adding `"includeRelations":true` only where you need \
+relations. It stores the response whole — so `ready lint --issue`, `claim \
+check --issue` and the board gates keep reading the entire body from the \
+capture store by key — and hands back the declared projection instead of the \
+payload. Measured 2026-09-02: 20,580 bytes stored, 609 emitted. The raw tool \
+was 85% of one session's whole tool output, and a first read is not an \
+exception: the store is what a gate reads, and it is filled either way."""
+
+# THE TRANSPORT THRESHOLD, DECLARED RATHER THAN DEFAULTED (CLOUD-1367).
+#
+# At or under this many bytes a rendered response carries the payload; over it,
+# it carries a content address. The boundary is INCLUSIVE, which is the one
+# property an off-by-one hides — `crates/batten/tests/it/address_transport.rs`
+# sits its fixtures one byte either side for exactly that reason.
+#
+# THE NUMBER IS READ OFF A MEASUREMENT, not chosen. `mise run
+# address-transport-bench` writes `bench/address-transport/RESULTS.md`, and the
+# curve there is what moves this value: an address costs a fixed 69 characters —
+# the rendered grammar including `b3-`, the version and both separators — so
+# below roughly that length a payload is cheaper than its own pointer, and the
+# saving only becomes real once a payload is read more than once. 1024 is the
+# smallest round value the measured curve supports.
+#
+# COMMITTED RATHER THAN LEFT TO THE DEFAULT, because a threshold nobody declared
+# cannot be reviewed against the bench that justifies it, and a default buried in
+# `capture.rs` moves without anyone noticing that the measurement moved too.
+#
+# IT IS NOT A PRIVACY CAP AND MUST NOT BE READ AS ONE. A payload over this size
+# is still emitted — as an address — so this only ever changes the
+# REPRESENTATION. Refusing to emit content at all is a different mechanism with
+# its own rows, and one number serving both would let a measurement about token
+# cost silently decide what may leave the process.
+[capture]
+inline_max_bytes = 1024
+
+[budget.instructions]
+files = ["AGENTS.md"]
+max_tokens = 3500
+max_lines = 199
+
+# The other half of what loads on every session, and the half `files` cannot
+# reach: Serena's project file documents `initial_prompt` as content that "will
+# always be given to the LLM upon activating the project (contrary to the
+# memories, which are loaded on demand)". The cost is a string inside a document,
+# not a document, so it is declared as an embedded entry rather than a glob
+# (CLOUD-298).
+#
+# It is empty today, and that is the reason to gate it rather than fix it in
+# passing: an empty value contributes nothing and prints no row, so this costs
+# nothing now — and the first person to put text there pays for it against the
+# same budget as an AGENTS.md section instead of getting it free past a green
+# gate. A file the engine cannot parse is exit 1, never a silent zero.
+[[budget.instructions.embedded]]
+path = ".serena/project.yml"
+key = "initial_prompt"
+
+# What ONE emitted mediated refusal line may cost (CLOUD-1286).
+#
+# The neighbouring budget above bounds what loads once per session. This bounds
+# what is emitted ~300 times in one, so it is the ceiling that actually
+# compounds: measured live on 2026-09-01, a `no-tool-substitution` refusal was 88
+# words / ~115 tokens, and ~300 firings of it is ~34,500 tokens against a ~175k
+# window — 20%, which is CLOUD-417's headline figure arrived at independently
+# from the other direction.
+#
+# 24 is chosen against the longest line the tree can actually emit rather than
+# against the shortest: a three-word class is ~3 tokens and the pointers are the
+# rest, so a deeply-nested `path:line` plus an artifact fits with room, while the
+# ~43-token rendered form this row retires does not. A ceiling only the shortest
+# class clears would fire on correct output, and the first person it fires on
+# switches it off (CLOUD-418).
+#
+# Declared here rather than as a constant in `crates/batten` for the reason
+# non-negotiable rule 1 gives: a consumer whose harness renders wider cannot move
+# a number compiled into the engine.
+[refusal]
+max_tokens = 24
+# What ONE FIRST SIGHTING may cost (CLOUD-1637).
+#
+# The key above prices prose a reader has already met. This prices the one firing
+# where they have not: the same line plus the class gloss and every non-override
+# route, which is what turns a three-word pointer into something actionable. Two
+# keys rather than one number doing both jobs, because the quantities differ by
+# design — and bounding the long arm by the short arm's 24 would be a ceiling no
+# line that arm can compose could ever meet, which `refusal::validate` now refuses
+# outright rather than leaving as an arm that silently never renders.
+#
+# 64 IS READ OFF A MEASUREMENT PLUS THE DECLARED MAXIMA, not chosen. Fired in a
+# fixture whose sightings store started empty, 2026-09-08, one command per
+# distinct refusing row (estimated tokens, `budget.rs`'s len/4):
+#
+#   36  verdict read dropped  verdict-not-discarded  ... read rules/toolchain.md
+#   35  tool run loose        no-tool-substitution   ... read rules/scanning.md
+#   34  trunk push forced     no-force-push          ... run git push --force-with-lease
+#   28  call name refused     no-bare-cargo          ... read batten.toml
+#
+# So the tree emits 36 at its widest today. The headroom above that is not slack:
+# `GLOSS_MAX` admits a 120-character gloss, which is ~30 estimated tokens on its
+# own, and a class may declare several routes. 64 clears every line this tree can
+# spell while still catching a route list that has run away — the only thing this
+# ceiling sheds, since the gloss is undroppable and the first route is the floor.
+# A ceiling that fired on correct output would be switched off by the first person
+# it fired on (CLOUD-418), and `refusal_ceiling.rs` asserts the corpus stays under
+# it in the same direction the repeat arm's anti-vacuity case does.
+#
+# NOT AN `[epoch]` FLOOR BUMP, and that is a decision rather than an omission.
+# `min_batten_version` is compared against the RUNNING build, which in this
+# repository is the one built from this tree, so naming the next release makes the
+# repository refuse its own config for the whole life of the PR (measured
+# 2026-08-11: floor 0.0.62 against a 0.0.61 build, exit 1). The floor can only
+# name a version that already exists, so the raise belongs at the release. What
+# `[epoch]` actually wants — an older binary REFUSING this key rather than
+# ignoring it — `deny_unknown_fields` on `[refusal]` already delivers.
+first_sighting_max_tokens = 64
+
+# What the whole advisory CHANNEL may cost on one boundary (CLOUD-896).
+#
+# `hookSpecificOutput.additionalContext` has two producers today — `drain::render`
+# and `contract::render` — with a third queued behind them, and until now the only
+# declared number was `[drain] token_budget`, which bounds ONE of them. Coalescing
+# bounded how many documents are emitted; nothing bounded how much any of them
+# said, so N producers cost N budgets and the channel's real ceiling was whatever
+# the set happened to sum to. One fact, one authority: this supersedes the
+# per-producer key rather than sitting beside it.
+#
+# 1024 is `drain::DEFAULT_TOKEN_BUDGET`'s number read as the channel's rather than
+# one producer's. That is deliberately the tighter reading of the same figure: the
+# drain document is the largest of the three, so it keeps essentially its whole
+# allowance when it fires alone, and the change bites exactly where it should —
+# when two or three producers fire on one boundary, which is the case that had no
+# bound at all.
+#
+# Producers are admitted in `AdvisoryTier` order (CLOUD-80: severity as required
+# response latency), so what survives a tight boundary is what needs answering
+# soonest. The remainder is dropped AND COUNTED: a truncated report that reads as
+# complete is the false green in advisory form, so the suppressed count is a line
+# in the emitted document rather than a silence.
+#
+# An undeclared ceiling is no ceiling — `advisory::admit` emits everything — which
+# is what keeps this consumer's number out of every other consumer's engine
+# (non-negotiable rule 1) and is why the anti-vacuity case asserts the undeclared
+# path rather than assuming it.
+[advisory]
+max_tokens = 1024
+
+# The post-tool outcome signatures this repository recognises (CLOUD-945).
+#
+# THE `code` COLUMN IS THE ANCHORING, AND IT IS REQUIRED. A signature with no
+# code would match on diagnostic TEXT, which recognises `sh: 1: x: not found`
+# and equally every echo, log line and commit message that contains the phrase.
+# The row's own words: an unanchored matcher is what makes an advisory channel
+# noise, and a signature that fires on prose is worse than one that never fires,
+# because the first teaches a reader to ignore the channel.
+#
+# MEASURED, AND THESE ARMS ARE THEREFORE UNREACHED ON THIS HOST. Over 364 real
+# post-tool payloads from one Claude Code session, the Bash result carries
+# `stdout`, `stderr`, `interrupted`, `isImage`, `noOutputExpected` and five
+# optional siblings — and NO exit code. `returnCodeInterpretation` occurred once
+# and carried a human sentence ("Files differ"), not a number. So
+# `outcome::classify` reads no code, answers could-not-look, and nothing is
+# advised: the row's own "absent exit status fails open with no advice" working,
+# rather than a gap in it.
+#
+# They are declared anyway, and that is the point of declaring them: a host that
+# supplies a code is recognised the day it arrives, with no change to the engine
+# and no second authority over what 127 means.
+# `crates/batten/tests/fixtures/hooks/claude-code-posttool-failure.json` is the
+# measured shape, sanitized.
+[[outcome]]
+class = "command-not-found"
+code = 127
+family = "unix"
+
+[[outcome]]
+class = "permission-denied"
+code = 126
+family = "unix"
+
+# What THIS REPOSITORY'S OWN HOOKS may cost one session (CLOUD-417).
+#
+# The three thresholds above bound one thing each: what loads once per session,
+# what one refusal line says, what one advisory emission says. None of them
+# bounds the SUM over a session, which is where the cost actually landed —
+# measured on transcript `125cdf71` (758 turns, 5.83 MB): `hook_success` at
+# 1181 KB and `hook_additional_context` at 42 KB, against 95 KB of edited files
+# and 88 KB of delivered memories. Hook output alone was 20% of the transcript,
+# and the largest single contributor said one true, correctly pointer-shaped,
+# identical thing on essentially every turn.
+#
+# `max_repeats = 1` IS THE PREDICATE THAT MATTERS, and 1 is the floor rather than
+# a tuning: saying it once is the report, saying it again is the copy. This is
+# what makes "silence on success is the default" and "a repeat is a pointer to
+# the first, not a copy" runnable rather than prose — a hook confirming success
+# every turn is byte-identical every turn, so it is exactly a digest repeated.
+# `max_repeats = 0` is refused at load: it would silence a hook's FIRST emission,
+# which is removing the finding rather than its restatement, and this row puts
+# that explicitly out of scope.
+#
+# 12000 is DERIVED and it is deliberately not the measured number. 1223 KB is
+# ~313,000 tokens on the engine's own estimator; a ceiling at that figure would
+# certify the defect. It is the budget a session SHOULD spend: `[budget]` above
+# lets the always-loaded surface cost 3,500 tokens once, and a session's whole
+# hook channel earning a few multiples of that — findings that are real, said
+# once — is the shape being asked for. Any repository can recompute its own with
+# `mise run hook-cost`, which is why the figure ships as a command rather than as
+# a number in an issue body.
+#
+# Declared here rather than in `crates/batten` for non-negotiable rule 1's
+# reason: how loud a repository's hooks may be is a property of that repository's
+# hooks, and a consumer cannot move a number compiled into the engine.
+[hook_output]
+max_tokens = 12000
+max_repeats = 1
+
+# The test suite is half of this repository's definition of green, and was the
+# unguarded half (CLOUD-55). It cannot be a `protected` path — tests are edited
+# every day, so a protected glob would block writing them — so the computable
+# property is DIRECTION of change, the same shape `trust.rs` encodes for config.
+#
+# The token is consumer config, not an engine fact: `#[test]` is this
+# repository's test marker, and another language's marker works with no engine
+# change (non-negotiable rule 1).
+#
+# `base = "origin/main"`: the trunk this branch will land on, so the comparison
+# is against what is already released rather than against this branch's own
+# history. A legitimate reduction goes through a `[[waiver]]` with a reason and
+# an expiry — never `severity = "allow"`, which switches the row off forever and
+# tells nobody.
+[[rule]]
+id = "test count dropped"
+kind = "ratchet"
+glob = "crates/**/*.rs"
+pattern = "#[test]"
+direction = "non_decreasing"
+base = "origin/main"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "restore the tests, or waive the reduction deliberately; which of the two is the whole question"
+
+# `tests/**/*.bats`, recursive — and the recursion is safe now rather than by
+# this glob's care. `tests/bats` is a vendored submodule carrying 227 of its own
+# `.bats` files, and the two sides of a ratchet used to disagree about
+# submodules: `git ls-tree -r` at the base saw one gitlink while the
+# working-tree walk saw every file inside it. Measured with this glob before the
+# fix: base 637, working 1404 — a permanent +767 skew that no realistic deletion
+# could pull back under, i.e. a gate that could not fail. The row was narrowed to
+# `tests/*.bats` as a workaround; CLOUD-328 fixed the engine instead, so both
+# halves now stop at a nested repository and select the same files. Widened back
+# because the narrow glob was only correct while every bats suite sat directly in
+# `tests/` — this one covers a nested one the day it is written.
+[[rule]]
+id = "bats count dropped"
+kind = "ratchet"
+glob = "tests/**/*.bats"
+pattern = "@test \""
+direction = "non_decreasing"
+base = "origin/main"
+# CLOUD-807. Retirement is the steady-state behaviour of a repo folding its bash
+# into its own engine (CLOUD-312), not an exception — so it belongs in the rule,
+# not in a `[[waiver]]` that expires. The waiver this replaces was BLANKET: it
+# carried only `rule` and `reason`, so every deletion of every `@test` under
+# this glob passed, and a suite quietly gutted was indistinguishable from a
+# retirement. Net effect of the swap is a STRONGER ratchet, not a weaker one.
+#
+# The subject is DECLARED, never inferred from the filename. Measured: 19 of the
+# 142 suites have no same-named `mise-tasks/` program and every one is
+# legitimate — `verify.bats` and `cross-check.bats` cover `mise.toml` tasks,
+# `git-hook.bats` covers a hook body, and the rest are aspect suites over a
+# subject the filename only hints at. A filename heuristic would block those
+# retirements and admit real deletions elsewhere: `gh-guard.bats` drives
+# `gh-guard-check` too, and retiring only half of that pair must not buy the
+# suite's deletion.
+retires_with = "# subject:"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "restore the tests, or waive the reduction deliberately; which of the two is the whole question"
+
+# CLOUD-908. The column above conserves FILES: it asks whether the subject died
+# and never whether the cases moved, so a migration can delete a 259-line suite
+# and land green with nothing asserting what replaced it. Measured on the one
+# retirement the campaign has completed — 22 named cases deleted, six of them
+# with no successor anything in the tree could name, and one whose behaviour was
+# deliberately inverted with nothing marking it.
+#
+# So every case inside a decrease owes exactly one arm, and the arms live in
+# `crates/batten/tests/*.rs` — one block per retired suite, on its primary
+# successor, which is what lets another session (or another account) read
+# migration progress off the tree instead of off a chat transcript. A suite with
+# no block is untouched; a block with unmapped cases is half-done.
+#
+# `declared_in` is this repo's Rust test tree because that is where the ledger
+# for a retired bash suite belongs today: a migrated gate's evidence is a Rust
+# test or a `policy test` case, and both are reachable from there. A wave that
+# needs a ledger somewhere else widens this glob deliberately rather than
+# scattering arms — the walk is bounded by declaration on purpose.
+#
+# CLOUD-1080 adds the fourth arm, and the reason is a measured dead end rather
+# than a wish. The three above all name a SUCCESSOR, because they were written for
+# a suite migrating into the engine. A WITHDRAWAL has none: `.claude/container-
+# setup.sh` was added and removed inside one session, and six of its eight cases
+# described the wrapper's own existence — which script to prefer, what to fetch,
+# what to verify about the fetched bytes — so nothing replaced them because
+# nothing should have a subject to replace. The two that did have successors are
+# `subsumed` and `changed` in that ledger.
+#
+# With three arms the only routes past that were a false `subsumed` — a ledger
+# entry that lies in order to pass — or a `[[waiver]]`, which `config-lint`
+# refuses as `waiver-added` unless the weakening was groomed onto the issue before
+# the work started. Neither is honest, so the gate had no honest path, which makes
+# it a defect rather than a verdict.
+#
+# It is admissible ONLY where the dying file's declared subject is absent at head,
+# which is what keeps it strictly NARROWER than the waiver it replaces: a waiver
+# admits every deletion under its path, and this admits one case at a time and
+# only once the subject went with it. It owes a reason and names no target.
+#
+# CLOUD-1268 ADDS THE FIFTH, AND IT IS THE FOURTH'S EXACT MIRROR. `withdrawn` is
+# admissible only where the declared subject DIED; `ported` only where it LIVES.
+# Between them, both answers to "what happened to the subject" have a spelling,
+# and neither can be written over the other's condition.
+#
+# The class was measured and had no honest route. 16 of this repository's suites
+# declare a `# subject:` that CLOUD-843 never retires — `mise.toml`, `hk.pkl`,
+# `batten.toml`, `clippy.toml`, `install.sh`, a `.claude/hooks/` program,
+# `tests/helpers.bash`, Rust source. `SubjectFacts::died` is `.all()`, so it can
+# never hold for them, so those suites were undeletable BY CONSTRUCTION: 217.9s of
+# a 1097.1s corpus, in a lane whose makespan cannot fall below its longest suite.
+# Both other routes EDIT a governed `.bats`, which `shell edit refused` refuses
+# with no override — so the spelling had to live here, in the ledger.
+#
+# IT OBLIGES MORE THAN `carried`, NEVER LESS, which is what makes it additive
+# rather than a loosening of CLOUD-1130's arm: a target the tree carries, exactly
+# as the first three demand, PLUS a `subject:` field naming a path the dying file
+# itself declared at base and the head tree still carries. That field is what
+# clears the aggregate subject-alive term — by naming the survivor, rather than by
+# a `carried` row falsely claiming a case moved into it — and the subject is read
+# from the base header rather than taken from the author, so a row cannot name a
+# convenient survivor it invented.
+[rule.conserves]
+case = "@test \""
+close = "\""
+carried = "// carried:"
+subsumed = "// subsumed:"
+changed = "// changed:"
+withdrawn = "// withdrawn:"
+ported = "// ported:"
+declared_in = "crates/batten/tests/**/*.rs"
+
+# The mirror direction: a disabled test is a deleted test that still counts, so
+# the guard is on the token RISING.
+#
+# The pattern is newline-anchored, and that is load-bearing rather than tidy. A
+# bare `#[ignore]` is a literal substring, so it also matches every prose mention
+# of the attribute — including the sentence you are reading and the fixtures in
+# `crates/batten/tests/ratchet.rs` that exercise this very row. Measured: the
+# unanchored form counts 5 in a tree containing zero disabled tests, so the row
+# would have failed on its own documentation. An attribute always begins a line;
+# a mention does not. (`budget.rs` anchors its HTML-comment scan for the same
+# reason.)
+[[rule]]
+id = "test skip refused"
+kind = "ratchet"
+glob = "crates/**/*.rs"
+pattern = "\n#[ignore]"
+direction = "non_increasing"
+base = "origin/main"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "delete the new ignore, or waive it deliberately; an ignore is a decision, not a defect to rewrite"
+
+# CLOUD-929. THE CAMPAIGN'S OWN PROGRESS PREDICATE, which until now was four
+# shell one-liners in an issue body that nothing ran. CLOUD-843 measured the
+# consequence on itself: one bash file retired (65 lines) against +791 added in a
+# single day — "the campaign to delete bash added bash, and nothing on the board
+# was positioned to notice, because no row carries the number." Measured again
+# 2026-08-25 across the 80 commits from v0.0.106 to v0.0.113: 141 -> 148
+# programs. Twice now, in the same direction, while the campaign ran. By
+# non-negotiable rule 2 a rule without a runnable gate is half a change, and the
+# progress claim was the prose half.
+#
+# The unit is the PROGRAM, not the line. `#MISE description=` appears exactly
+# once per task file, so the count is the census CLOUD-843's buckets are
+# denominated in. A second row over raw lines would count volume instead, and was
+# deliberately not written: a volume ratchet fires on ordinary editing, so its
+# first firing would be a false positive — and "a gate whose first firing is a
+# false positive gets an exception written for it, and the exception is what
+# rots."
+#
+# THE ADMISSION IS A DECLARATION, NOT A PROOF, and the difference is stated here
+# because the sibling column above reads the other way. `retires_with` reads the
+# BASE tree, so a change cannot rewrite its own permission. A new file is absent
+# from base, so `admits_with` can only read the WORKING tree, and a change
+# therefore CAN write its own permission. What it buys is a silent increase
+# becoming a visible, attributed one — worth having, and not the same guarantee.
+#
+# Two of CLOUD-843's buckets (build/bench, forge) may legitimately stay bash, so
+# a bare `non_increasing` row would refuse correctly-authored work. The permit
+# lives in the rule rather than in a `[[waiver]]` that expires, for the reason
+# CLOUD-807 gave for the sibling: retirement is the steady state of a repo
+# folding its bash into its own engine, not an exception.
+[[rule]]
+id = "shell count ahead"
+kind = "ratchet"
+glob = "mise-tasks/**"
+pattern = "#MISE description="
+direction = "non_increasing"
+base = "origin/main"
+admits_with = "# stays-bash:"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "migrate the predicate onto a rule kind, or declare `# stays-bash: <issue> <why>` in the new program and own the increase; which of the two is the whole question"
+
+# CLOUD-1137. THE ROW ABOVE GLOBS ONE DIRECTORY, and `shell add refused`
+# (CLOUD-1059) covers `mise-tasks/**` and `tests/**/*.bats`. Those globs were the
+# whole enforced perimeter against new bash, and two surfaces sit outside it: a
+# `run = '''…'''` body in `mise.toml` is bash, and `.claude/hooks/session-start.sh`
+# is bash. Both are gates and effects doing what `mise-tasks/*.sh` does, and
+# neither is a file under `mise-tasks/` — so the census could report an honest
+# decrease while the repository's total shell rose.
+#
+# NOT the laundering path, which was already closed: `policy/shell-retirement.rego`
+# requires a deletion's ledger arm to name a policy surface AND a compiled-binary
+# test, and an inline body is neither, so retiring a described task by inlining it
+# already raises `shell port missing`. What these rows add is the case with no
+# sensor at all — shell authored straight into `mise.toml` or `.claude/**`, which
+# was never counted as bash in the first place.
+#
+# THE DRIFT IS MEASURED RATHER THAN ASSERTED, and it is why these rows exist
+# rather than a prose census: between v0.0.122 and v0.0.127 the inline-body count
+# rose by two (`fmt:deno` and `fix-selection-check`, in `6cd5134`) and the
+# `.claude/**` shebang count fell by one (`container-setup.sh`, in `65757c8`).
+# Five releases, both surfaces moved, and CLOUD-1137's own body — written four
+# days earlier — carried the stale integers. No count is restated here for the
+# same reason `shell-hygiene` refuses to: the rows compute it.
+#
+# TWO SURFACES ARE DELIBERATELY EXEMPT, and the reasons differ, so a later reader
+# finds a decision rather than a gap:
+#
+#   .github/workflows/**  bash is allowed, and since CLOUD-1709 it is COUNTED.
+#                         A workflow step is the one place a shell line is the
+#                         native spelling, and there is no engine surface it
+#                         could migrate onto — so it is exempt from THIS row,
+#                         which globs `mise-tasks/**`. It is not exempt from
+#                         measurement: `workflow add other` and its
+#                         `step add other` sibling ratchet the step count. Allowed and
+#                         uncounted are different claims, and reading the first
+#                         as the second is what 497 duplicated lines were
+#                         written under.
+#   install.sh            it cannot be a policy module by construction: it is how
+#                         the binary reaches a host that does not have it yet, so
+#                         it runs before the engine exists.
+#
+# NO `admits_with` ON EITHER `mise.toml` ROW, and this is the resolution of the
+# capability question CLOUD-1137 §2 left open rather than a silent omission. The
+# column DOES admit an increase inside an already-tracked file — `undeclared_growth`
+# compares `now > was` per path and a new file is only the `was == 0` case — so the
+# mechanism works. What does not work is the CARDINALITY: the declaration is a
+# per-FILE boolean, one matching line admits any amount of growth in that file, and
+# these rows glob exactly one file. The first author to spend the permit would
+# switch the row off permanently. So the hatch is a `[[waiver]]` carrying a reason
+# and an expiry, which is what `tests-not-deleted` prescribes and what bounds the
+# admission in time. Row (b) globs a directory, where the per-file semantics are
+# the ones the column was designed for, so it carries the permit.
+#
+# TWO LITERALS FOR ONE CONCEPT, because TOML spells a multiline body two ways and
+# a ratchet `pattern` is a literal substring with no `regex` column (CLOUD-1058).
+# `install:local` is spelled `"""` today, so a single `'''` row would leave a live
+# false negative — net-new shell in the very spelling the row does not read. Retire
+# the second row into the first when CLOUD-1058 lands the column.
+#
+# THE FIRING RATE, replayed before the severity was chosen (DoR §7). Over all
+# 1,479 commits on `origin/main` (2026-08-05 to 2026-08-28), asking of each commit
+# whether the count rose against its parent: `'''` fired 24 times, `"""` once, and
+# the `.claude/**` row 4 times. FALSE POSITIVES: ZERO. Every firing adds a real
+# inline body or a real shell program to a surface nothing counted — which is the
+# class, not a near miss. The distribution is front-loaded (18 of the 24 fall in
+# the first ten days, while the task layer was being built out); the trailing rate
+# over the last fortnight is 4, 0 and 1. `deny` is chosen on that, against a
+# repository that rejected one candidate predicate at 99.5% false positives
+# (CLOUD-514) and a `TODO|FIXME` ratchet at 100% (CLOUD-751).
+#
+# AND NOT THE WIDER LITERAL, which is the tempting unification and was rejected on
+# a measurement rather than on taste. `pattern = "run = "` is exact in this file
+# (anchored and unanchored agree) and would subsume all three spellings — but
+# replayed over 49 commits it fires four times, and two of those firings are the
+# campaign SUCCEEDING: retiring a shell task into the engine leaves a one-line
+# `run = "cargo run -p batten -- …"` shim, which raises that count while lowering
+# real bash (`8b234af`, `fba3f78`). A row that denies its own campaign's wins is
+# worse than the hole it closes.
+[[rule]]
+id = "task carry other"
+kind = "ratchet"
+glob = "mise.toml"
+pattern = "run = '''"
+direction = "non_increasing"
+base = "origin/main"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "migrate the predicate onto a rule kind, or waive the increase deliberately with a reason and an expiry; which of the two is the whole question"
+
+# A BAN YOU CAN WAIVE AT WILL IS NOT A BAN (CLOUD-1148, over CLOUD-1177's
+# inventory).
+#
+# Measured at this row's baseline: 11 `#[expect(clippy::disallowed_methods, …)]`
+# annotations standing over 13 `std::thread::sleep` sites in `crates/batten/src`.
+# The delay ban is therefore waived at essentially every site it governs, which
+# is the same as not having it.
+#
+# `crates/batten/tests/it/sleep_ban.rs` is the gate that was supposed to stop
+# this, and its own comment says so — "what stops the ban being satisfied by
+# thirteen waivers". It does not, and the reason is worth stating because it is a
+# non-negotiable rule 3 defect in a gate rather than a missing one. What it
+# decides is the FORM of the justification: `expect` rather than `allow`, a
+# `reason` present, a backticked token in it, and that token appearing elsewhere
+# in the same file. Every clause is a property of the SENTENCE. None asks whether
+# the delay was necessary, because clippy cannot ask that and neither can a text
+# scan — so the gate estimates whether an author thought about it, and an author
+# who copies the neighbouring annotation's shape passes.
+#
+# Measured 2026-09-06, by this agent, against itself: a grace loop was written
+# into `exec::terminate_group` with a blocking sleep, annotated in about thirty
+# seconds by copying the shape of the annotation three hundred lines above it
+# (`group_is_empty` and `GROUP_GRACE` both resolve in that file, so the bound
+# clause was satisfied), and it passed. The delay was then found to be
+# unnecessary — the group's leader is already dead, so nothing is mid-exit — and
+# deleted outright. The gate had certified a delay that should never have
+# existed.
+#
+# So the decidable property is the COUNT, and this row is it: the waivers may
+# fall and may never rise. That is a real object with a real exit code and no
+# judgement in it, which is what rule 3 asks for. It does not migrate the 11 —
+# that is its own change, and it touches the runtime posture `.claude/rules/rust.md`
+# records — it makes the migration MONOTONIC, so no twelfth can arrive while it
+# is pending.
+#
+# `disallowed_methods` rather than the sleep paths specifically: the same
+# argument applies to every ban in that list, and a row that named only the sleep
+# would leave the multi-thread-runtime ban waivable at will for the same reason.
+[[rule]]
+id = "waiver add refused"
+kind = "ratchet"
+glob = "crates/batten/src/**/*.rs"
+pattern = "clippy::disallowed_methods"
+direction = "non_increasing"
+base = "origin/main"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "a waiver is not a fix: either the delay has a bound it can exit on and needs no sleep, or it is a backoff and belongs on the async path where it can be cancelled. Adding a twelfth exemption is the thing this row refuses"
+
+# The other spelling of the same concept — see the block above for why it is a
+# second row rather than a second pattern on the first. The two names differ only
+# in their subject because the vocabulary has no token for "the same rule, the
+# other spelling": `workflow add other` carries the keyed `run:` inside an
+# already-opened step mapping, `step add other` the bare `- run:` list item.
+[[rule]]
+id = "task write other"
+kind = "ratchet"
+glob = "mise.toml"
+pattern = 'run = """'
+direction = "non_increasing"
+base = "origin/main"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "migrate the predicate onto a rule kind, or waive the increase deliberately with a reason and an expiry; which of the two is the whole question"
+
+# CLOUD-1925. This repository's rule is no bash unless there is no other choice,
+# measured in LINES: `policy/shell-banned.rego` refuses any rise in inline shell
+# lines, a task gaining shell, workflow shell growth and new shell files. It
+# lands BESIDE the two body-count rows above rather than replacing them in one
+# step, because removing a rule is a weakening and a weakening is admitted only
+# by a recorded answer (CLOUD-1078) — which a released binary must record. The
+# rows and their waivers are deleted in the change after CLOUD-1078 ships.
+#
+# `line_sources` is where a SHEBANG can be read on an added path; the extension
+# arm reads `delta.added` over `**` and needs no lines.
+[[rule]]
+id = "shell write other"
+kind = "policy"
+scope = "tree"
+base = "origin/main"
+delta_sources = ["**"]
+line_sources = [
+  "mise.toml",
+  ".github/workflows/*.yml",
+  "mise-tasks/**",
+  ".claude/hooks/**",
+]
+module = "policy/shell-banned.rego"
+severity = "deny"
+
+# CLOUD-843. THE MEASUREMENT BESIDE THE BAN IT MEASURES FOR. `batten census shell`
+# counts every home shell lives in, with the ban's own detection: the manifest's
+# `run` bodies grouped per task, the workflows' `run:` steps, and every tracked
+# shell file — plus hk's command strings, which the ban does not read. Each wave's
+# before and after are two runs of it rather than two hand counts.
+#
+# `exempt` IS THE BAN'S `stays_bash`, EXACTLY, and `census_shell.rs` asserts the
+# two lists are one: a file exempt from the count and refused by the gate (or the
+# reverse) would make "the census reads 0" and "the ban passes" disagree.
+[census.shell]
+workflows = [".github/workflows/*.yml"]
+exempt = [
+  "install.sh",
+  "setup.sh",
+  ".claude/hooks/git-hook.sh",
+  "completions/batten.bash",
+]
+
+[[census.shell.manifest]]
+path = "mise.toml"
+keys = ["run"]
+unit = "[tasks."
+
+[[census.shell.manifest]]
+path = "hk.pkl"
+keys = ["check", "fix"]
+
+# CLOUD-1709. THE THIRD SURFACE, AND THE LARGEST. `bash-surface-not-growing`
+# globs `mise-tasks/**`; CLOUD-1137 closed the `mise.toml` and `.claude/**` holes
+# above. `.github/workflows/**` was left, and it is bigger than either: 28 files
+# carrying 135 shell steps, on a surface nothing counted.
+#
+# THE EXEMPTION ABOVE IS ABOUT MIGRATION, NOT ABOUT COUNTING, and these rows are
+# the correction of that inference rather than of the exemption itself. Workflow
+# bash stays allowed — a step is the native spelling and there is no engine
+# surface it could move onto. What does not follow is that it need not be
+# MEASURED, and 41% byte-identical duplication is what that inference bought.
+#
+# WHAT IS COUNTED IS THE STEP, NOT THE LINE, and the row body's 1,215-line figure
+# is deliberately NOT the predicate. A ratchet `pattern` is a literal substring
+# counted with `str::matches` (CLOUD-1058) — it cannot see where a YAML block
+# ends, so "lines inside a `run:` block" is not expressible here. The step is,
+# and it is the right unit anyway: `#MISE description=` counts programs for the
+# same reason one line up.
+#
+# TWO LITERALS FOR ONE CONCEPT, exactly as the `mise.toml` pair above, and for
+# the same CLOUD-1058 reason. Measured over the 28 workflows, `run:` appears at
+# precisely two indentations and no others: `\n        run:` (the key under a
+# `- name:` step) 111 times, and `\n      - run:` (the bare step) 24 times.
+# Both are newline-anchored, which is load-bearing: the unanchored literal also
+# matches `workflow_run:` and `check_run:`, 15 of them today, so it would count
+# trigger declarations as shell.
+#
+# THE BLIND SPOTS, STATED RATHER THAN DISCOVERED LATER (DoR §2). A `run:` at any
+# third indentation is not counted — none exists today, and a nested one inside a
+# composite action would need its own row. `.github/actions/**` is not globbed at
+# all, because no composite action exists yet; the follow-up that deduplicates
+# the 497 lines into one will have to add it, and that is the point at which this
+# row would otherwise report a fall it did not earn.
+#
+# THE FIRING RATE, replayed before the severity was chosen (DoR §7). Over all
+# 2,574 commits on `origin/main`, 181 of which touch a workflow: the 8-space row
+# fired 59 times, the dash row 21. As a share of all commits that is 2.3% and
+# 0.8%, against the `mise.toml` pair's 1.6% and 0.07%.
+#
+# AND THE FALSE POSITIVES ARE REAL HERE, which the `mise.toml` rows did not have
+# to answer for and which decides the `admits_with` column below. At least five
+# firings are THIS CAMPAIGN SUCCEEDING: retiring a shell program onto a verb
+# leaves a workflow step invoking it, so the step count rises while real bash
+# falls. `4b8fc385f` (`retire land-lock-check.sh onto batten lease check`, +1),
+# `8a90687a3` (`the perf budget is a rule, not a shell program`, +1) and
+# `c5346097d` (`move the latency family into the perf namespace`, +1) on the
+# 8-space row; `1e1d19874` (`retire ci-drift onto the verb it was already
+# calling`, +1) and `c5346097d` again on the dash row. That is the exact class
+# `batten.toml` rejected the wider `run = ` literal for one block up — *"a row
+# that denies its own campaign's wins is worse than the hole it closes."*
+#
+# SO THE PERMIT IS CARRIED RATHER THAN THE SEVERITY LOWERED. `warn` would answer
+# the false positives by making every firing advisory, including the 75 that are
+# real net-new shell. `admits_with` answers only the firings an author is willing
+# to sign for, and the cardinality objection that keeps it off both `mise.toml`
+# rows does not apply: those glob exactly ONE file, so the first permit spent
+# switches the row off forever, whereas this globs a DIRECTORY, which is the
+# per-file semantics the column was designed for. A retirement that adds a step
+# declares it in the workflow it added it to, and every other workflow stays
+# ratcheted.
+[[rule]]
+id = "workflow add other"
+kind = "ratchet"
+glob = ".github/workflows/**"
+pattern = "\n        run:"
+direction = "non_increasing"
+base = "origin/main"
+admits_with = "# workflow-shell:"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "move the step's body into a composite action or a batten verb, or declare `# workflow-shell: <issue> <why>` in the workflow and own the increase; which of the two is the whole question"
+
+# The other spelling of the same concept — see the block above for why it is a
+# second row rather than a second pattern on the first. The two names differ only
+# in their subject because the vocabulary has no token for "the same rule, the
+# other spelling": `workflow add other` carries the keyed `run:` inside an
+# already-opened step mapping, `step add other` the bare `- run:` list item.
+[[rule]]
+id = "step add other"
+kind = "ratchet"
+glob = ".github/workflows/**"
+pattern = "\n      - run:"
+direction = "non_increasing"
+base = "origin/main"
+admits_with = "# workflow-shell:"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "move the step's body into a composite action or a batten verb, or declare `# workflow-shell: <issue> <why>` in the workflow and own the increase; which of the two is the whole question"
+
+# The `.claude/**` half. `#!` rather than a shebang's text, because the programs
+# there do not share a spelling — `#!/usr/bin/env bash` twice today, and the file
+# this row's baseline lost spelled it `#!/bin/sh` — so a text literal would count
+# some of them and read as a decrease when one was replaced.
+#
+# THE GLOB IS THE DIRECTORY, NOT `.claude/**/*.sh`, and the narrower form was
+# considered and rejected: the `mise-tasks/` programs carry no extension at all,
+# so an extension-anchored glob is exactly how this class reappears one directory
+# over. The cost is a known false positive — a `#!` inside a fenced code block in
+# `rules/*.md` would count as a program. Zero today; if one lands, the
+# answer is CLOUD-1058's line-anchored `regex`, not a per-file exception.
+[[rule]]
+id = "shell add other"
+kind = "ratchet"
+glob = ".claude/**"
+pattern = "#!"
+direction = "non_increasing"
+base = "origin/main"
+admits_with = "# stays-bash:"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "migrate the predicate onto a rule kind, or declare `# stays-bash: <issue> <why>` in the new program and own the increase; which of the two is the whole question"
+
+# CLOUD-1419 HAS NO AGGREGATE RATCHET, AND THAT IS A MEASURED DECISION RATHER
+# THAN AN OMISSION.
+#
+# A `kind = "ratchet"` row over `git_in(` was written here, in this branch, and
+# withdrawn in it. It counted CALL SITES, and the measurement this row's own
+# issue produced is that call sites do not track the cost: 79 hand-rolled `git
+# init` sites produced **1,819 git processes** over one traced run, roughly
+# twenty executions per site. So the fix — a template every fixture copies —
+# removed 1,008 processes while ADDING 17 call sites, and the row refused it at
+# `580->597`, naming the three files that had to grow for the reshaping to exist
+# at all.
+#
+# Its first firing was therefore on the change that improves the thing it
+# guards, which is the shape the preamble to `bash-surface-not-growing` already
+# refuses in as many words: "a volume ratchet fires on ordinary editing, so its
+# first firing would be a false positive — and a gate whose first firing is a
+# false positive gets an exception written for it, and the exception is what
+# rots." Spending `// needs-real-fixture:` on the three growing files would have
+# bought that exception immediately, to silence a premise rather than to own an
+# increase.
+#
+# `policy/fixture-forks.rego` is the whole gate instead. It refuses a NEW
+# hand-rolled `git init` at the line that writes it, which is the reversal that
+# matters, and it fired correctly on the one case that legitimately needed the
+# admission in the same run. Nothing is left uncovered: the aggregate can only
+# grow through a new fork, and a new fork is what the module reads.
+
+# CLOUD-1419's gate. See the block above for why it is the only one.
+#
+# `delta_sources` is the integration suite rather than the whole tree: the module
+# decides over a path's CONTENT, so unlike `test-targets` it needs the lines, and
+# handing it every path in the repository would make it read the engine's own
+# source to answer a question about fixtures.
+[[rule]]
+id = "test fix duplicate"
+kind = "policy"
+scope = "tree"
+base = "origin/main"
+delta_sources = ["crates/batten/tests/it/**/*.rs"]
+line_sources = ["crates/batten/tests/it/**/*.rs"]
+module = "policy/fixture-forks.rego"
+severity = "deny"
+
+# The landing path consults the required-check roster before it moves `main`
+# (CLOUD-1570).
+#
+# NO `base` AND NO `delta_sources`, unlike its neighbour above. `fixture-forks`
+# asks whether a change ADDED a fork, so it needs the branch's own diff; this
+# asks whether the landing workflow guards the roster AT ALL, which is a
+# property of the committed tree rather than of the change. A delta-scoped
+# spelling would go silent on every branch that does not touch the workflow —
+# including the branch that deletes the guard from a file it is not otherwise
+# editing.
+#
+# `line_sources` DECLARES THE DIRECTORY AND THE MODULE READS ONE KEY, and the
+# narrow spelling was tried here first and is wrong. It named only
+# `.github/workflows/fast-forward.yml`, on `fixture-forks`' reasoning that a
+# module should not be handed files it does not judge. Measured by the compiled
+# tier: a rule whose declared sources match NO file is SKIPPED rather than
+# evaluated over an empty document, so deleting the landing workflow made this
+# gate not run at all and the branch passed clean — the dead-gate shape the
+# module exists to refuse, reached through its own declaration. The directory
+# guarantees a source exists (28 workflows), so the predicate fires on a DELETED
+# landing workflow exactly as on an unguarded one. The narrowing that matters —
+# which file answers the question — is the module's and is unchanged.
+# Recorded on CLOUD-1320, which owns the general form.
+[[rule]]
+id = "check read never"
+kind = "policy"
+scope = "tree"
+line_sources = [".github/workflows/*.yml"]
+module = "policy/landing-roster-guarded.rego"
+severity = "deny"
+
+# Advisory rather than blocking: assertions thinning out while the `#[test]`
+# count holds is the gutting shape, and it is worth saying without blocking —
+# a refactor legitimately merges assertions. `--fail-on-warning` and
+# `--strictness strict` promote it when a run wants the stricter reading.
+[[rule]]
+id = "test grade dropped"
+kind = "ratchet"
+glob = "crates/batten/tests/**/*.rs"
+pattern = "assert"
+direction = "non_decreasing"
+base = "origin/main"
+severity = "warn"
+scope = "tree"
+no_fix_reason = "restore the assertions, or waive the reduction deliberately"
+
+# The merge contract, DERIVED from this repository's GitHub ruleset (CLOUD-54).
+#
+# The host is the authority; this is a projection a gate polices. `mise run
+# ci-drift` pipes `gh api repos/{owner}/{repo}/rules/branches/main` into
+# `batten config lint --host-rules -`, so an edit on either side that the other
+# does not follow fails the build rather than drifting quietly.
+#
+# `required_checks` is `final` alone: the ruleset requires that one check-run,
+# and `final` is the aggregating job every other CI job reports through. There
+# is no `allowed_merge_methods` key because the ruleset carries no
+# `pull_request` rule — the host constrains no merge method, which is a
+# different claim from constraining none of them, and writing an empty list here
+# would assert the second.
+#
+# Landing is by `/fast-forward` regardless (see AGENTS.md): the merge button is
+# blocked so `main` only ever advances to a SHA that already passed CI. That is
+# repository discipline, not a host constraint, and it is deliberately not
+# encoded here — this table records what the HOST enforces, and recording a
+# convention as a host rule would be the second authority the whole issue exists
+# to prevent.
+# `wait -n` IS BASH 4.3, AND ITS PID-LIST FORM IS 5.1 (CLOUD-383). macOS ships
+# bash 3.2 as `/bin/bash` and `mise registry` carries no bash, so one executable
+# `wait -n` under `mise-tasks/` makes that task unrunnable on a platform
+# `darwin-link` treats as a required check. `land` raced two unbounded pollers
+# with it and waits on a FIFO rendezvous now; this is the standing half, so the
+# next race cannot reintroduce it — the shape the portability rows above already
+# use.
+#
+# Anchored to a line start so the ban is on RUNNING it, not on naming it: the
+# rendezvous is documented in comments that say what it replaced, and a rule that
+# forbade the words would delete the explanation along with the construct.
+[[rule]]
+id = "shell run unsafe"
+kind = "forbid"
+glob = "mise-tasks/**"
+regex = "^[ \\t]*wait -n"
+severity = "deny"
+scope = "tree"
+
+# SBOM conformance as an adopted verdict rather than a clause list (CLOUD-580,
+# settling CLOUD-279 verdict 1). `mise run sbom-check` already asks whether the
+# published inventory DESCRIBES this tree; these two ask whether it is USABLE by
+# whoever receives it — the NTIA 2021 minimum elements and CISA's 2024 FSCT
+# minimum expectation, which is what a procurement review actually checks.
+# `policy/ntia.rego` carries the reasoning; `batten sbom --conformance` the reading.
+#
+# The clause set is the tool's, named by its own `--comply` flag: no clause list
+# in the engine and no crosswalk table (CLOUD-279 verdict 2).
+#
+# ONE ROW, TWO CLASSES, since CLOUD-1717 collapsed the two `command` rows. THE
+# MECHANISM half (`manifest check unread`) is a document whose spec cannot be read
+# or a standard it can never satisfy; an unresolvable checker or an underivable
+# document is the producer's exit 3, loud and unrecorded, rather than a row 2 that
+# passes by never asking anything (non-negotiable rule 2, and `sbom-empty`'s
+# lesson one layer up). THE VERDICT half is `manifest cover partial`. hk's
+# `ntia-check` step produces the record on the inputs that move the document.
+[[record]]
+record = "ntia"
+writer = "batten sbom --conformance"
+
+[[verdict]]
+id = "manifest check unread"
+gloss = "the SBOM's spec could not be read, or a configured standard can never be satisfied by it"
+class = """
+Could we even ask: a document declaring no or an unclassifiable `spdxVersion`, \
+or a standard requiring SPDX 3 over a document that is not one (CLOUD-666). A \
+constant refusal is not a verdict about this tree; drop the standard from \
+`[sbom.conformance] standards` or change the producer.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "batten sbom --conformance"
+
+[[verdict]]
+id = "manifest cover partial"
+gloss = "the NTIA checker refused the SBOM this tree produces under the named standard"
+class = """
+The checker's exit code, never its report. The per-standard counts are on the \
+`ntia` record's line; the fix is enriching the document, not re-running this.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "batten sbom --conformance"
+
+# THE VERDICT is `deny` as of CLOUD-631 — promoted in the change
+# that makes it pass, which is that row's own acceptance clause rather than a
+# preference about when to tighten.
+#
+# It was `warn` by measurement, and the measurement was right at the time: on
+# 2026-08-14 this tree produced 243 components with no supplier on 190 and no
+# concluded license or copyright text on 243/243, because `Cargo.lock` carries no
+# license and no supplier field and that is the only input syft's cargo cataloger
+# reads. `deny` then would have failed `batten enforce` -> `verify` and stopped
+# every landing in the repo until a change that did not exist yet — a gate
+# answering a question nobody had asked it.
+#
+# What changed is that the document now conforms, from five sources each of which
+# reads data this tree already states and invents nothing:
+#
+#   supplier          the lockfile's own resolution — one distinct `source`, so
+#                     the distributor is stated rather than inferred (CLOUD-630)
+#   licenseConcluded  `cargo metadata`, which `cargo-deny` already gates on
+#                     (CLOUD-628), plus the pinned-action table (CLOUD-667)
+#   copyrightText     the checksum-pinned registry cache, with `NONE` where the
+#                     pinned bytes carry no holder (CLOUD-629), plus CLOUD-667
+#
+# and from two corrections without which none of the above would have been
+# legible: the component census counted 340 entries for 290 distinct things
+# (CLOUD-664), and `fsct3-min` was in the standards set while being unsatisfiable
+# for every document syft can emit, so the gate was guaranteed non-zero whatever
+# the SBOM said (CLOUD-666).
+#
+# Measured on this tree at promotion time: `mise run ntia-check` exits 0 —
+# `batten.spdx.json conforms to ntia` — over 290 components, every one carrying a
+# supplier and a license, 162 with a copyright holder and 119 determined to have
+# none.
+#
+# THE FIRING RATE IS ZERO BEFORE THE `deny` BINDS, which is what makes this safe
+# where a heuristic promotion would not be. The predicate has no commit series to
+# replay: it is the checker's exit code on the document a tree produces, so its
+# history is per-SHA. It fired on every SHA to date, and none of those firings was
+# a false positive — the checker DECIDES conformance against the minimum elements
+# rather than estimating it, so a false positive would be a checker defect and not
+# a tuning question. Taking the rate to zero is what this change does; the `deny`
+# is what keeps it there.
+[[rule]]
+id = "manifest cover other"
+kind = "policy"
+scope = "tree"
+module = "policy/ntia.rego"
+severity = "deny"
+no_fix_reason = "the missing fields do not exist in a cargo lockfile, so no command over this tree can add them: the SBOM has to be enriched from `cargo metadata` first"
+
+# Release provenance, adopted as `gh attestation verify` (CLOUD-583, CLOUD-279
+# verdict 1 — `slsa-verifier` is redundant against the same absent provenance and
+# `cosign` has no signing identity here). `policy/attestation.rego` carries the
+# design; what belongs here is why this is ONE row and which half it runs.
+#
+# THE OFFLINE HALF, and that is the whole of the wiring decision. Whether a
+# published release is attested changes with no diff, so it is a property of the
+# WORLD and belongs on a clock — it runs weekly in `release-assets.yml`, beside
+# the sibling question about the archives themselves. Putting it here instead
+# would make every `batten enforce` reach api.github.com, which is precisely the
+# coupling CLOUD-410 removed from `zizmor`. So the row runs `--precondition`: the
+# verifier resolves and carries a credential, decided from local facts, with a
+# bats case asserting it makes no API call at all.
+#
+# `deny` is safe BECAUSE of that split. The precondition holds today (measured
+# 2026-08-14) while the platform gap is wide open — this repository's attestations
+# endpoint answers 404, which is the feature being absent rather than an artifact
+# being unattested, and the task reports that gap at exit 0 without calling
+# anything unverified. `blockedBy CLOUD-585` was removed from the issue on that
+# measurement: a public repository is what makes the verdict INTERESTING, never
+# what makes this gate runnable.
+# THE GLOB IS THIS ROW'S OWN MECHANISM, and both constraints that produced it were
+# measured rather than reasoned. It must be a path `batten-glob-check` can prove
+# covered — that gate accepts a verbatim match or a `P/**` prefix against hk.pkl's
+# `batten-check` list, and `mise-tasks/**` is in it, so any path under
+# `mise-tasks/` is provable while a lone `.github/workflows/release-artifacts.yml`
+# is not. And it must not match inside a FIXTURE tree: a `check` spelled `mise run`
+# resolves only where a mise.toml is findable, so a row matching a fixture reports
+# the launcher rather than the tree. Two suites caught the two wider spellings —
+# `tests/prebuilt-lint.bats` copies `mise.toml` and the workflows into its fixture,
+# and `cli.rs`'s portability case writes a `mise-tasks/seed.sh` — and neither failure
+# had anything to do with attestation. CLOUD-614 carries the general defect; naming
+# the file the row exists to run is what makes the trigger and the mechanism the
+# same object rather than a coincidence.
+# REPOINTED, NOT REMOVED (CLOUD-1717). `mise-tasks/attestation-check.sh` is
+# retired, and its precondition mode survives as `[tasks.attestation-record]
+# --precondition`: the same one fact, decided from the same local reading, still
+# at `deny` on every gate invocation. Retiring the row instead would have removed
+# a gate and owed a weakening; this changes only which program carries it.
+#
+# THE GLOB FOLLOWS THE CHECK, which is this row's own discipline one paragraph
+# down: it must name a path `batten-glob-check` can prove covered, and it must not
+# match inside a fixture tree, because a `mise run` check resolves only where a
+# mise.toml is findable. `mise.toml` is both — it is in hk's `batten-check` list,
+# and it is where the task body now lives, so the trigger and the mechanism stay
+# the same object.
+[[rule]]
+id = "release check unread"
+kind = "command"
+glob = "mise.toml"
+check = "mise run attestation-record --precondition"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "install the pinned `gh` (`mise install aqua:cli/cli`) or supply GH_TOKEN; neither is a change to this tree's content"
+
+# CLOUD-618. `release-plz.yml` publishes a tag; this row is what keeps the tag
+# reaching Linear's `batten` pipeline rather than only the run summary.
+#
+# `command` AND NOT `forbid`, which is the whole reason this is a row plus a
+# script rather than a declarative rule. Every other shape gate here asserts an
+# ABSENCE — a token that must not appear, a path that must not be tracked — and
+# absence is what a pattern over a file can express. This asserts PRESENCE: two
+# action invocations, pinned, bound to one resolved tag output, over a checkout
+# that is not shallow. No rule kind can address a node in a document, so there is
+# nothing declarative to write. That gap is `relatedTo` CLOUD-452, and it does
+# not block: `command` is the sanctioned form until a kind exists that closes it,
+# at which point this row collapses into that kind and the script goes away.
+#
+# THE GLOB IS THE ROW'S OWN MECHANISM, the discipline
+# `release-attestation-precondition` above establishes, and both halves of it
+# bind here too. It must be a path `batten-glob-check` can prove covered — that
+# gate accepts a verbatim match or a `P/**` prefix against hk.pkl's
+# `batten-check` list, and `mise-tasks/**` is in it, while a lone
+# `.github/workflows/release-plz.yml` is not provable. And it must not match
+# inside a FIXTURE tree: a `check` spelled `mise run` resolves only where a
+# mise.toml is findable, so a row matching a fixture reports the launcher rather
+# than the tree — `tests/prebuilt-lint.bats` copies the workflows into its
+# fixture, which is exactly the wider spelling that would have caught this one.
+# Naming the file the row exists to run keeps the trigger and the mechanism the
+# same object. The workflow it JUDGES is globbed on the hk step instead, where a
+# glob is a re-run trigger rather than a rule's subject.
+#
+# `deny` is safe because the check is offline and local: it reads one tracked
+# file, makes no network call, and needs no credential — so it cannot block on
+# ambient environment the way an earlier attestation precondition did inside fixture
+# repositories. The only way it reds is the workflow actually losing its wiring.
+#
+# PORTED OFF `mise-tasks/release-tracking-check.sh` UNDER CLOUD-1717, which is the
+# collapse the paragraphs above promised: `line_sources` is the kind that addresses
+# a node in a document now, so the program is gone and `policy/release-tracking.rego`
+# walks both workflows' lines. The directory is declared rather than the two files,
+# for `check read never`'s measured reason: a glob matching nothing SKIPS the rule,
+# so a deleted workflow would pass instead of reading as `release wire unread`.
+[[rule]]
+id = "release wire other"
+kind = "policy"
+scope = "tree"
+line_sources = [".github/workflows/*.yml"]
+module = "policy/release-tracking.rego"
+severity = "deny"
+# `issue-guard`'s duplicate-claim half, and the change that retires that file
+# (CLOUD-446). The naming half is the engine's, two rows above as
+# `pr-names-an-issue`/`ready-names-an-issue`; this is what could not follow it.
+#
+# WHY IT IS A `tree` ROW rather than a mediated one, which is the issue's whole
+# decision: the predicate needs `gh pr list` plus a `gh pr view` per competitor,
+# and `RuleKind::scopes` pairs every spawning kind with `RuleScope::Tree` alone —
+# pinned by `rules::tests::no_mediated_call_kind_spawns_a_process`, an invariant
+# worth more than this predicate. A network round trip on every mediated tool
+# call is also disqualifying against the published <=100ms budget. So it runs
+# where spawning is already legal, under `verify`, which sits on every path to a
+# published PR because `land` is the only readier.
+#
+# The cost, stated rather than absorbed: this catches the race at `verify` where
+# `issue-guard` caught it at `gh pr create`. Both are later than pull time, which
+# is what CLOUD-230 wanted and which no candidate restores.
+#
+# `glob` NAMES THE CHECK'S OWN FILE, for the reason
+# `release-attestation-precondition` spells out above:
+# a `mise run` check resolves only where a mise.toml is findable, so a row
+# matching inside a fixture reports the launcher rather than the tree
+# (CLOUD-614). Naming the program the row exists to run makes the trigger and the
+# mechanism the same object, and keeps this out of every fixture that does not
+# carry it.
+# CONSUMER #1 EATS THE SAME FOOD (CLOUD-836). Batten ships vendored preset
+# bundles compiled into the binary, and this repository enables one like any
+# other consumer would — which is the only way the surface gets exercised by
+# something other than its own tests.
+#
+# `trunk-based` rather than `commit-hygiene`, and the choice is on the merits:
+# AGENTS.md's landing contract is trunk-based development, `main` is the one
+# long-lived branch, and a force push there is exactly the shape the practice
+# refuses. `--force-with-lease` stays admitted, which is what the preset's own
+# comment argues for — banning both would push toward the bypass rather than
+# toward the safer flag.
+#
+# `commit-hygiene` is deliberately NOT enabled here, and that is a decision
+# rather than an oversight: its `no-empty-commit` predicate overlaps AGENTS.md's
+# own "never push an empty commit to kick CI", which the landing loop already
+# enforces where it can act on it. Enabling a second gate over the same practice
+# would double a refusal without doubling the coverage, and the row that fired
+# would be a question of which one a reader happened to read first.
+#
+# Mediated-call scoped, because the preset's predicate is over a command line.
+# A tree-scoped row would hand it a document it has no predicate for and read as
+# a configured gate that never fires.
+[[rule]]
+id = "trunk push forced"
+kind = "policy"
+scope = "mediated_call"
+preset = "trunk-based"
+severity = "deny"
+
+# CLOUD-1949, consumer #1 first. The owner's ruling: the host never halts on a
+# prompt. In plan mode a call reads or is refused; a read is pre-approved in every
+# mode, and so is a `batten` verb whose declared effect is read or write. The deny
+# is composed first, so a call any other row refuses stays refused.
+[[rule]]
+id = "plan write refused"
+kind = "policy"
+scope = "mediated_call"
+preset = "claude-code-cloud"
+severity = "deny"
+
+# CLOUD-1028, and consumer #1 eating the same food again. The practice is that a
+# program this project's pin provides is reached through the pin; the incident
+# behind it is this repository's own, and the fact the preset reads is resolved
+# for whatever project the engine is pointed at.
+#
+# `warn`, NOT `deny`, AND THE FIRST LANDING IS THE REASON. The pinned set here is
+# 49 programs — measured, the difference between the PATH the pin composes and
+# this process's own — so a `deny` would refuse every bare `jq`, `gh`, `hk` and
+# `shellcheck` in the tree on the same commit that introduces the row. That is a
+# far larger behavioural change than the incident asks for, and the discipline
+# this repository applies to every other verdict says the promotion comes with a
+# number: land it reporting, read the firing rate over a session, promote it with
+# the measurement rather than with an argument (CLOUD-320).
+#
+# What it costs meanwhile is stated rather than hidden: at `warn` the refusal is
+# advice, so an invocation this row exists to stop still runs. The class it
+# catches is a false REPORT rather than a broken tree, and a session that reads
+# the advice has what it needs to distrust the run.
+#
+# NO `sources` COLUMN, AND THE ABSENCE IS THE DESIGN. The record this preset
+# reads is keyed to the pin's configuration, and the obvious spelling of that —
+# naming the manifest and the lockfile here — is refused at LOAD, because
+# `sources` is what a `scope = "tree"` row hands its bundle. The engine asks the
+# pin which files configure it instead, so neither this row nor `crates/batten`
+# carries their names (non-negotiable rule 1).
+# CONSUMER #1 EATS THE SAME FOOD (CLOUD-946), and this preset is `pinned-toolchain`'s
+# complement rather than a second copy of it. That one asks whether a program was
+# reached around the pin and can only name the PROGRAM; this one reads the task
+# receipt and names the TASK to run instead, so the remedy is in the finding
+# rather than in a file the reader has to go and search.
+#
+# `warn`, AND THE SEVERITY IS THE ROW'S OWN DISCIPLINE RATHER THAN TIMIDITY.
+# CLOUD-946 asks that every new deny predicate be REPLAYED before its severity is
+# selected, and no replay has been run for this one. Choosing `deny` now would be
+# selecting a severity without the evidence the row requires; `warn` is what the
+# predicate has earned, and moving it is a change somebody makes with a number.
+#
+# NO `sources` COLUMN, for `pinned-toolchain-preset`'s reason one row down: the
+# receipt this reads is keyed to the manifest the runner resolves, and naming that
+# manifest here is refused at load and would put a consumer's filenames in a row
+# that ships to every consumer.
+[[rule]]
+id = "task reach loose"
+kind = "policy"
+scope = "mediated_call"
+preset = "mise"
+severity = "warn"
+
+# THE SAME PRESET AT THE OTHER SURFACE (CLOUD-1672), and two rows rather than one
+# because a rule row carries ONE scope. The `mise` manifest declares a scope per
+# module since that row, so this enables its tree half while the row above
+# enables its mediated half; each compiles only the modules at its own scope.
+#
+# `severity = "deny"` where the mediated row warns, and the asymmetry is the
+# point rather than an inconsistency. That row nudges an agent toward a task it
+# could have run; this one is a disagreement between two committed statements
+# about which toolchain this commit runs, and it has already cost a release: on
+# 2026-09-08 the action resolved a mise whose asset 404ed, every job of every
+# workflow died in the install step inside eleven seconds, and v0.0.152 published
+# carrying its schema and none of its seven binaries.
+#
+# `sources` MUST CARRY BOTH SIDES OF THE COMPARISON, which is the one way this
+# row can be wrong while looking right. The predicate reads a workflow's declared
+# version AND the `[[provision]]` row it must equal; drop `batten.toml` from this
+# glob and the pin document is simply absent, the module abstains by design, and
+# the gate reports clean forever. The module finds both by SHAPE rather than by
+# name — a document carrying `jobs`, a document carrying `provision` — because a
+# preset ships to every consumer and rule 1 forbids naming their paths; this glob
+# is where this consumer says which of its files those are.
+#
+# `line_sources` for the pointers only. Every clause decides over the parsed
+# document; the lines are read to place a finding at a job, and a pointer that
+# cannot be placed costs the line rather than the finding.
+[[rule]]
+id = "task table other"
+kind = "policy"
+scope = "tree"
+preset = "mise"
+# ONLY THIS ROW OF THE TWO, and that is the point of a per-module declaration
+# (CLOUD-1625). At `tree` the `mise` preset compiles
+# `action-version-matches-the-pin`, which matches a step's `uses:` coordinate —
+# GitHub Actions. At `mediated_call` the same preset compiles
+# `task-over-executable`, which decides task argv and reads no provider at all,
+# so `mise-preset` above needs nothing. A manifest-level declaration could not
+# have told those two apart.
+provider = "github-actions"
+sources = [
+  "batten.toml",
+  ".github/workflows/*.yml",
+  ".github/workflows/*.yaml",
+]
+line_sources = [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+severity = "deny"
+
+[[rule]]
+id = "pin table other"
+kind = "policy"
+scope = "mediated_call"
+preset = "pinned-toolchain"
+severity = "warn"
+
+# CONSUMER #1 EATS THE SAME FOOD, for the generic half of `ci-local-parity`'s
+# retirement (CLOUD-1161). What a hosted-CI run costs, and whether the wiring
+# deciding it can be reached at all, is true of the PRACTICE rather than of this
+# repository — so it ships as a preset and this row is what enables it here.
+#
+# `sources` rather than `line_sources`: every clause reads the PARSED workflow.
+# Which job carries a draft guard, whether a concurrency block sets
+# `cancel-in-progress`, which `types:` belong to `pull_request` rather than to a
+# neighbouring trigger — all four are structural, and a line-oriented reading
+# cannot say which job or which trigger a key belongs to. The glob carries both
+# spellings because a consumer may use either, and a workflow this row cannot
+# see is one it silently passes.
+#
+# The consumer-specific half — the required-check roster, the task names, the
+# bot branch prefixes, the fan-in wiring — is `policy/ci-parity.rego`, and the
+# split is non-negotiable rule 1: a preset reaches every consumer, so this
+# repository's job names may not travel inside one.
+[[rule]]
+id = "job spelling wrong"
+kind = "policy"
+scope = "tree"
+preset = "ci-hygiene"
+# Both of this preset's modules read GitHub Actions expression language and key
+# on documents carrying a `jobs:` mapping (CLOUD-1625). Declaring the provider is
+# what lets them load: without it the engine refuses, because on any other
+# provider that document set is empty and the modules would report a clean tree
+# they never read.
+provider = "github-actions"
+sources = [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+#
+# `line_sources` AS WELL, for exactly one clause. The swallowed-interpolation
+# rule is only decidable BEFORE the parse — by the time the value is a node it is
+# already truncated, and nothing downstream can tell a deliberately short string
+# from a truncated one. Every other clause in this bundle reads the parsed
+# document; this one cannot, so the row declares both surfaces rather than
+# forcing the whole bundle onto text.
+line_sources = [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+severity = "deny"
+
+# CONSUMER #1 EATS THE SAME FOOD, for the generic third of the landing loop
+# (CLOUD-1269). Whether a commit the forge already judged is judged again is true
+# of the PRACTICE — every project with a landing loop and a forge has that
+# question — so it ships as a preset and this row is what enables it here.
+#
+# `forge = ["HEAD"]` is the whole declaration, and declaration is what makes the
+# fact affordable: a run whose rules name no commit resolves nothing, so the cost
+# is one record read per named commit rather than a sweep of the trunk.
+#
+# NO OVERLAP WITH `ci-hygiene`, and the two are deliberately not one bundle.
+# `ci-hygiene` judges WIRING — whether a job is draft-gated, whether a
+# concurrency block supersedes its own runs, whether a workflow can be reached at
+# all — which is a property of the configuration and is answered before any run
+# has happened. This judges a RUN THAT ALREADY HAPPENED, against a commit. No
+# clause of either can fire on the other's subject, so one practice is never
+# reported twice.
+#
+# NOR WITH `forge-verdict-required`, which reads the same fact and asks the other
+# question. That row asks whether `final` PASSED for this commit, and it is a
+# consumer module precisely because `final` is this repository's name for its
+# fan-in. This asks only whether anything was recorded at all. A commit graded
+# green fires this and not that; a commit graded red fires both, and they say
+# different things — do not re-run it, and do not land it.
+#
+# BOTH READINGS NEEDED A PRODUCER, and until CLOUD-1707 neither had one: nothing
+# invoked `batten record forge`, so this fact was `null` and the paragraph above
+# described a discrimination no checkout could make. `mise run record-verdicts`
+# writes it, and writes it ONLY once the fan-in has concluded — so "nothing was
+# recorded at all" now means the forge has not finished judging, which is the
+# could-not-look both rows read it as.
+#
+# `warn`, NOT `deny`, AND THE FIRST LANDING IS THE REASON. `land` re-verifies and
+# re-waits every lap by design, because a rebase mints a new SHA and the receipts
+# keyed to the old one are gone — so the loop legitimately reaches graded commits,
+# and a `deny` here would refuse the lap that is working as designed. Land it
+# reporting, read the firing rate over a session, and promote it with the
+# measurement rather than with an argument (CLOUD-320). What it costs meanwhile is
+# stated rather than hidden: at `warn` the refusal is advice, so a re-grade this
+# row exists to stop still runs.
+[[rule]]
+id = "lane declare missing"
+kind = "policy"
+scope = "tree"
+preset = "landing-loop"
+forge = ["HEAD"]
+#
+# `landing` AS WELL, and WITHOUT IT THE SECOND PREDICATE SHIPS DEAD. The bundle's
+# `already-landed-work-is-not-relanded` reads `input.tree.landing`, which the
+# engine resolves only for targets a row DECLARES — so a bundle enabled without
+# this column loads clean, passes its own tests and the preset suite, and decides
+# nothing. That is CLOUD-845's class, and CLOUD-1161's `ci-hygiene` shipped it
+# twice; declaration is what makes the fact exist, not just what bounds its cost.
+#
+# `origin/main` is this repository's trunk and is consumer config precisely
+# because it is: the preset names no target, and a project landing onto a
+# differently-named branch declares that name here instead.
+landing = ["origin/main"]
+severity = "warn"
+
+# The evaluator's IO-free pin, given a mechanism (CLOUD-831). `policy.rs`'s
+# module doc admits consumer-authored code to the MEDIATED CALL on the claim that
+# a module "cannot open a file, start a process, or reach the network", and cited
+# a test named `no_evaluator_feature_admits_io` that did not exist — CLOUD-589's
+# class, on the highest-consequence claim in the crate. That test exists now, and
+# this row is its defence-in-depth half.
+#
+# A `command` row rather than a `forbid` over the manifest text, deliberately.
+# Cargo unifies features across the graph, so `http` can re-enter the closure
+# with NO edit to the `regorus` feature list — a `forbid` matches the line that
+# states the pin and is blind to the failure mode that matters. Only the resolved
+# graph can answer, and reading it means spawning `cargo metadata`.
+#
+# Tree-scoped and spawning, so it runs under `enforce` / the hk gate and never on
+# the mediated path — which is the right side of the CLOUD-170 split for a gate
+# whose subject is the mediated path.
+#
+# `glob` names the check's own file so the trigger and the mechanism are one
+# object (CLOUD-614), matching `claim-not-raced` below. The gate reads
+# `Cargo.lock` and `Cargo.toml`, not this file — the glob is what decides WHEN it
+# is worth asking, and asking on a change to the gate itself is the case that
+# must never be skipped.
+#
+# PORTED UNDER CLOUD-1717, AND THE ROW KEEPS ITS ID. `kind` moves from `command`
+# to `policy` because the program it spawned is gone: the `cargo metadata` call
+# and the graph walk are `[tasks.evaluator-closure-record]`'s, and the decision
+# over what that walk reached is `policy/evaluator-closure.rego`'s. The split is
+# forced — §5 makes `check` `read` and incapable of spawning, and a reachability
+# closure is not expressible in Rego at all (a self-referential rule is a compile
+# error and `graph.reachable` is not in this build's regorus feature set).
+#
+# `glob` is dropped with the program it named. A `policy` row over a declared
+# record is asked on every run rather than when one file changes, which is the
+# right cadence here: the drift this gate exists for arrives through feature
+# unification with no edit to any file a glob could name.
+[[rule]]
+id = "layer reach unsafe"
+kind = "policy"
+scope = "tree"
+module = "policy/evaluator-closure.rego"
+severity = "deny"
+no_fix_reason = "an IO crate reaching the evaluator is closed where it was enabled, not here: `cargo tree -i <crate>` names who turned it on, and the `regorus` feature list in Cargo.toml is where the pin is stated rather than where it is decided"
+
+[[record]]
+record = "evaluator-closure"
+writer = "mise run evaluator-closure-record"
+
+# The macOS link gate, ported under CLOUD-1717 from `mise-tasks/macos-link-check.sh`
+# and from an `hk` step that spawned it. The release artifacts for macOS are
+# linked on Linux by zig with no Apple SDK present, and `cross-check` runs
+# `cargo check` — which stops at codegen-to-metadata and never links — so nothing
+# else in this tree can see a framework-linking dependency before a tag is cut.
+[[rule]]
+id = "workspace carry unsafe"
+kind = "policy"
+scope = "tree"
+module = "policy/macos-link.rego"
+severity = "deny"
+no_fix_reason = "a dependency needing a macOS SDK is not fixable by a rewrite here: either drop it, feature-gate it off the default build (a rustls-style alternative usually exists), or accept an SDK and revisit how macOS is built"
+
+[[record]]
+record = "macos-link"
+writer = "mise run macos-link-record"
+
+# CLOUD-326 section 8.1's unblock condition, as a command and an exit code rather
+# than as prose no gate reads. Ported under CLOUD-1717 from
+# `mise-tasks/transcript-corpus-check.sh`.
+#
+# `warn`, and that is the honest severity: the count is a reading about the
+# WORLD — whether CLOUD-651's collector has landed and reached this host — rather
+# than about the branch, so no commit is at fault when it is low. A caller that
+# wants it blocking reads `--fail-on-warning`, which is the same posture
+# `land-divergence` and `nonverdict` take one row over.
+[[rule]]
+id = "prose measure partial"
+kind = "policy"
+scope = "tree"
+module = "policy/transcript-corpus.rego"
+severity = "warn"
+no_fix_reason = "the number rises when the collector reaches this host, not when a branch changes: nothing in a diff can raise it, so there is nothing here to rewrite"
+
+[[record]]
+record = "transcript-corpus"
+writer = "mise run transcript-corpus-record"
+
+# CLOUD-418's obligation, made runnable rather than promised, and ported under
+# CLOUD-1717. `no_evaluator_feature_admits_io` is green under the shipped feature
+# set whether or not it still DISCRIMINATES; this is the row that requires it to
+# go red with `regorus/http` on.
+#
+# THE ROW'S ID IS NOT ONE OF ITS VERDICT TOKENS, and the engine holds it both
+# ways: a rule that is a class's SOLE raiser must be spelled as that class, and
+# one that raises TWO must not, because the name would answer for two different
+# things. This row raises `test judge never` and `test run unread`, so it carries
+# a third name of its own.
+[[rule]]
+id = "test cover never"
+kind = "policy"
+scope = "tree"
+module = "policy/evaluator-io-probe.rego"
+severity = "deny"
+no_fix_reason = "a test that no longer discriminates is fixed in the test, not here: either the assertion has been reworded into something the probe cannot falsify, or the fixture no longer reaches `http.send`"
+
+[[record]]
+record = "evaluator-io-probe"
+writer = "mise run evaluator-io-record"
+
+# CLOUD-669, ported under CLOUD-1717. The stand-in for a blind spot the
+# attribution gate structurally has: `Attribution` carries `identity_deny`,
+# `trailer_deny`, `body_deny`, `trailer_allow` and `identity` with NO signature
+# field, so `gpgsig` — the one commit field that was carrying a vendor-held key —
+# is invisible to it until CLOUD-440 lets the engine read a commit object.
+[[rule]]
+id = "commit grade unsafe"
+kind = "policy"
+scope = "tree"
+module = "policy/signing-posture.rego"
+severity = "deny"
+no_fix_reason = "a commit already signed cannot be unsigned in place: repair the checkout's config (`mise run signing-posture-repair`) and rewrite the range, or publish the key's public half so the signature becomes verifiable (CLOUD-591)"
+
+[[record]]
+record = "signing-posture"
+writer = "mise run signing-posture-record"
+
+[[verdict]]
+id = "config carry unsafe"
+gloss = "signing is on in this checkout with a signer whose key cannot be verified or reproduced"
+class = """
+NOT A VERDICT ABOUT SIGNING, which is good and which CLOUD-591 is working \
+toward. It is about a signature that LOOKS like provenance and carries none: a \
+key whose public half cannot be read, or a signer under `/tmp` that the container \
+reclaims. The refusal is the CONFLICT — something outside the checkout turns \
+signing on and nothing local answers it — never the mere absence of a local \
+override, because a CI runner has no launcher and an absent local value is \
+correct there.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run signing-posture-repair"
+
+[[verdict]]
+id = "commit carry unsafe"
+gloss = "a commit in range carries a gpgsig from a key this repository cannot verify or reproduce"
+class = """
+The posture already produced one. Config can be repaired AFTER a commit was \
+written, so a repaired checkout still carries what it signed before the repair — \
+and those are exactly what must not reach `main`. That is why this is a separate \
+class from the config one rather than the same finding twice: repairing the \
+config clears that arm and leaves this one firing, which is the distinction the \
+declared mutation exists to hold.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/signing-posture.rego"
+
+[[verdict]]
+id = "test judge never"
+gloss = "the IO-free evaluator test stayed green with regorus's http feature on, so it discriminates nothing"
+class = """
+A test that is green whether or not the evaluator can reach the network is not \
+evidence that it cannot. `crates/batten/src/policy.rs` admits consumer-authored \
+code to the mediated call on the claim that a policy module cannot open a file, \
+start a process or reach the network, and this test is that claim's evidence — so \
+a version of it that cannot fail is coverage theatre standing where the evidence \
+should be. Fix the test, not the gate.
+"""
+
+[[verdict.route]]
+id = "test read first"
+kind = "document"
+target = "crates/batten/tests/policy_modules.rs"
+
+[[verdict]]
+id = "test run unread"
+gloss = "the probe build exited non-zero without running the named test to a failure"
+class = """
+COULD NOT LOOK, and it is the arm a gate written to the obvious shape gets wrong. \
+`cargo test` exits non-zero for a compile error, an unresolved feature, an absent \
+toolchain and a panic in another test — every one of which would read as "the \
+probe falsified the assertion" and hand this gate a pass it did not earn. That \
+pass gets MORE likely as the crate breaks, so the gate would be loudest exactly \
+when it was lying. The producer reads the harness's own failures listing instead, \
+and says so here when it saw something else.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run evaluator-io-record"
+
+[[verdict]]
+id = "prose measure partial"
+gloss = "this host carries fewer independent session transcripts than the caller asked for"
+class = """
+Every prose-shaped literal in this repository is held to a measured corpus — \
+firings AND true positives among them — and a transcript-derived literal has no \
+corpus until independent sessions accumulate. A low count is a PROGRESS reading \
+rather than a permanent state: transcripts are collected to the Batten service \
+(CLOUD-651), so it means the collector has not landed or has not reached this \
+host. The number is expected to rise; do not read a permanent block into it, and \
+do not fit a literal to the single transcript it was derived from.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run transcript-corpus-record"
+
+[[verdict]]
+id = "manifest carry unsafe"
+gloss = "a package in the built macOS graph declares a `links` key, so it needs a real SDK to find that library"
+class = """
+Rule 1, and it is the manifest's OWN statement rather than a guess: a `links` key \
+says the package links a native library. The exemption is a list of crates that \
+vendor and compile their own C, for which "links a native library" does not imply \
+"needs an SDK to find one" — and an UNKNOWN `links` crate is still a finding, so \
+the list narrows the gate rather than opening it. Adding a name to it requires a \
+link, never a reading of the crate.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/macos-link.rego"
+
+[[verdict]]
+id = "workspace reach unsafe"
+gloss = "a crate that links an Apple system framework from a build script is reachable in the built macOS graph"
+class = """
+Rule 2, and it is a LIST, so it is incomplete by construction: a crate nobody has \
+listed slips past. That residual gap is closed by actually linking the target, \
+which `darwin-link` does — this is the fast, specific, early half of that pair and \
+not a replacement for it. Prefer proving a new name with a link over adding it on \
+a reading.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/macos-link.rego"
+
+# The macOS walk's could-not-look, spelled as a record. The producer writes
+# `scanned <n>` for how many built packages the walk reached; zero means the
+# graph resolved and nothing was inspected, which must not read as a clean graph.
+# `layer read absent` is the evaluator family's version of the same reading.
+[[verdict]]
+id = "workspace read absent"
+gloss = "the platform graph resolved and the walk reached no built package, so nothing was inspected"
+class = """
+`scanned 0` is the producer saying it looked and resolved nothing. Before the \
+module read that count, the record was byte-identical to a fully walked clean \
+graph and exited 0 — the vacuous pass the retired `macos-link-check.sh` refused \
+and the evaluator family already refuses with `absent`. Re-run the producer; if \
+the count stays zero, the workspace member set or the platform filter is wrong.
+"""
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run macos-link-record"
+
+# The contract half of the config deprecation grammar (CLOUD-360). A key that
+# leaves the published schema with no window breaks every consumer still carrying
+# it, and breaks them SILENTLY: their config stops loading with an unknown-key
+# error naming no successor and no date.
+#
+# A `command` row for `evaluator-closure-io-free`'s reason, one layer over. The
+# subject is not this tree's text but the DIFFERENCE between two published
+# surfaces, one of which lives at a git tag — no `forbid` over a line can see
+# that, and the schema file itself is derived, so matching on it would gate the
+# artifact rather than the change it records.
+#
+# Tree-scoped and spawning, so it runs under `enforce` and the hk gate and never
+# on the mediated path. `glob` names the check's own file, matching the two rows
+# above (CLOUD-614): the gate reads `schema/batten.schema.json` at a tag and the
+# schema this build derives, so the glob decides WHEN the question is worth
+# asking, and asking on a change to the gate itself is the case that must never
+# be skipped.
+#
+# `deny` is earned rather than assumed. §7 required the predicate be replayed
+# across history first, and it was: over all 112 release tags, zero would have
+# reported a violation (85 clean, 27 exit 3 for tags predating the committed
+# schema). A gate that would have refused past releases fires on work nobody can
+# now fix; this one would not have.
+[[rule]]
+id = "config retire unnamed"
+kind = "command"
+glob = "crates/batten/tests/it/config_deprecations.rs"
+check = "mise run test:config-deprecations"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "a removal is announced by declaring the window, not by editing the schema: add a row to `config::DEPRECATED_KEYS` naming the replacement and the expiry, and the derived artifact follows from the types"
+
+# The first migrated gate of the bash-retirement campaign (CLOUD-843 track 2):
+# `run-shape-guard`'s no-message-source family, as a consumer-authored module
+# rather than a vendored preset. It names `git`, which a preset may not — a
+# preset carries a PRACTICE and this carries one tool's argv, so it belongs on
+# this side of the boundary (non-negotiable rule 1).
+#
+# `module` rather than `bundle`: one predicate, one file, and a folder would
+# enable whatever later lands beside it without a row saying so.
+#
+# Mediated-call scoped, because every predicate in it is over a command line.
+# THREE MORE LANDED WITH CLOUD-613 — `unsatisfiable-commit`, `foreground-sleep`
+# and `background-timer`. The fourth family of that guard
+# (`cargo-substitutes-for-a-task`) stays in bash on CLOUD-856, and because
+# `shell-retirement` admits only a WHOLE-file deletion the guard keeps all four
+# until that one can move: both authorities decide these three until then, which
+# is CLOUD-1108's row rather than a drift nobody noticed.
+#
+# The short flag cluster `git commit` accepts a message source in — `-m`, `-am`,
+# `-F`, `-C`, `-c` — as a shape rather than a literal (CLOUD-885).
+#
+# DECLARED HERE RATHER THAN IN THE MODULE, and this row is the mechanism proving
+# itself on consumer #1. An expression is a consumer fact: written into
+# `policy/run-shape.rego` it would be a pattern with no home, invisible to
+# `config show`, and the second module wanting the same shape would re-spell it.
+# The engine refuses an inline regex at load, so this row is not a convention —
+# it is the only way to write the predicate at all.
+#
+# The anchor is the predicate. `contains` over the flag's tail cannot say
+# "letters", so `-x=mfoo` carried an `m` and read as naming a message source,
+# letting through a commit that still blocks on $EDITOR.
+[[pattern]]
+id = "short-message-flag-cluster"
+regex = "^-[A-Za-z]*[mFCc]"
+
+# CLOUD-613's half of the same predicate, and it is a DIFFERENT question from the
+# row above. That one asks "does this cluster select a message source at all";
+# this asks "which flag takes the operand that would make it stdin", so it is
+# anchored at BOTH ends — `-F` and `--file` exactly, never `-Fmsg.txt`, which
+# carries its own value and cannot be followed by a bare `-`.
+[[pattern]]
+id = "commit-message-file-flag"
+regex = "^(-[A-Za-z]*F|--file)$"
+
+# THE ID IS NARROWER THAN THE ROW AND STAYS THAT WAY. Three more predicates
+# landed in this module with CLOUD-613, so `commit-message-obtainable` now names
+# the first one to arrive rather than the set. Renaming it is a `rule-removed`
+# smell to `config-lint`, whose only route is a `Weakens:` clause groomed into
+# the issue BEFORE the work starts — and asserting one inside the change that
+# performs it is precisely what that gate refuses. So the row keeps its name and
+# this comment carries the correction; the module file is the honest label.
+[[rule]]
+id = "commit read missing"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/run-shape.rego"
+severity = "deny"
+
+[[rule]]
+id = "lane guard other"
+kind = "policy"
+scope = "tree"
+sources = [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+module = "policy/privileged-lane.rego"
+severity = "deny"
+
+# CLOUD-1050. The registry's tree-facing half: `verdict::validate` decides a
+# route's SHAPE at parse and this decides whether it points at anything, which is
+# a question about this tree and about a task RUNNER — so it is a module rather
+# than a line of Rust (non-negotiable rule 1, the same placement CLOUD-614 was
+# forced into by `no_artifact_name_reaches_the_core`).
+#
+# It matters more here than for a `command` ROW. A row naming a missing task
+# fails loudly the first time it runs; a ROUTE naming one fails when a reader has
+# just been refused, has been handed the one thing to run, and runs it.
+[[rule]]
+id = "route resolve missing"
+kind = "policy"
+scope = "tree"
+sources = ["batten.toml", "mise.toml"]
+module = "policy/verdict-routes-resolve.rego"
+severity = "deny"
+
+# CLOUD-1050 defects A and B: a gate's remedy reaches its reader, and exactly one
+# program authors it. The module's own header carries the measurement and the
+# scope limit; the reasoning is not restated here.
+#
+# `line_sources` RATHER THAN `lines`, for the reason that column exists
+# (CLOUD-850): the predicate decides over every shell gate in the tree, and
+# enumerating them is a list that goes stale the next time one is added —
+# silently and green, which is the failure a declaration bound exists to prevent.
+# `documents` names the manifest because defect B is a predicate over parsed
+# tasks, not over the manifest's text.
+#
+# THE FIRST CONSUMER OF `Fact::Lines`. CLOUD-846 landed the fact and no module
+# read it, so this row is also the live proof that the unparsed surface reaches a
+# policy at all — which is why `crates/batten/tests/remedy_authorship.rs` drives
+# the binary rather than trusting the schema.
+[[rule]]
+id = "remedy own other"
+kind = "policy"
+scope = "tree"
+line_sources = ["mise-tasks/*.sh"]
+documents = ["mise.toml"]
+module = "policy/remedy-authorship.rego"
+severity = "deny"
+
+# CLOUD-1059. A migration that TOUCHES an authored shell rule retires it, or it
+# does not land. The module's header carries the measurement and the bounds; the
+# reasoning is not restated here.
+#
+# `delta_sources` PLUS `base`, and the pair is the whole declaration: the fact is
+# a comparison, so a glob with no rev to compare against is unanswerable rather
+# than merely narrower. `base` is the column `retires_with` already reads, shared
+# deliberately — two spellings of "what did this branch change" is exactly the
+# second authority CLOUD-1050 is about, one layer down.
+#
+# `line_sources` SPANS TWO CORPORA because the predicate asks two different
+# questions of them. `mise-tasks/*.sh` answers "is this changed path an authored
+# shell rule", read from the file's own first bytes rather than guessed from its
+# name. `crates/batten/tests/*.rs` is CLOUD-908's retirement ledger, and it is
+# declared by glob for that column's own reason: enumerating which test files
+# carry an arm is a list that goes stale the next time somebody adds one —
+# silently and green, which is the failure a declaration bound exists to prevent.
+#
+# THE COST IS REAL AND IS MEASURED RATHER THAN ASSUMED. This roughly doubles the
+# line corpus on the tree input against `remedy-authorship`'s 34,730 lines, so
+# `perf-gate` is the sensor on whether that stays inside the budget, and the
+# number is reported on the PR rather than asserted here.
+[[rule]]
+id = "shell retire partial"
+kind = "policy"
+scope = "tree"
+base = "origin/main"
+# THE PARSED AUTHORITY, for the rename-rewrite admission (CLOUD-1638). That arm
+# asks whether a token a governed file started naming is a rule id this config
+# declares, and `input.tree.documents` is populated only for a row that names
+# its source — without this the arm is undefined on every real tree while its
+# own synthetic cases pass, which is exactly how it first shipped.
+sources = ["batten.toml"]
+# THE SELECTOR IS `**` FOR THE FOURTH ARM (CLOUD-1080), and it is the same
+# correction `prose-only` records one row down. What this row GOVERNS is unchanged
+# — `governed_at_head` and `governed_when_deleted` still select `mise-tasks/**` and
+# `tests/**/*.bats` and nothing else — but a withdrawal has to be able to see that
+# its declared subject DIED, and a subject is routinely neither of those: the
+# wrapper this arm was built for lived under `.claude/`. With the narrow list the
+# subject never appears in `delta.deleted`, so the arm reads every honest
+# withdrawal as one over a live subject and refuses it. A false refusal, in the
+# direction that blocks correct work.
+delta_sources = ["**"]
+# `tests/**/*.bats` IS HALF THE GOVERNED SET AND WAS NOT A DECLARED SOURCE
+# (CLOUD-1294). `governed_at_head` selects every bats suite, but the lines of one
+# were never read — so `only_drops_a_retired_reference` bound `base` from
+# `base-lines` and came back UNDEFINED for every suite, and arm B refused every
+# edited `.bats` unconditionally, whatever the edit was. The one admitted edit
+# has been unreachable for half the corpus since it was written, and the refusal
+# was indistinguishable from a real one because the finding is byte-identical.
+#
+# Measured on CLOUD-312 row 10: three cases in two suites, no landable spelling.
+# The cost of reading them is `rules/rust.md`'s ~5.4 µs per declared
+# document against ~137 suites — under a millisecond, on a 100 ms budget.
+#
+# AND CLOUD-1088 IS ITS SECOND CONSUMER, which is why the glob now carries two
+# reasons rather than one. `shell add refused` advertises a `# stays-bash:`
+# declaration as its way out, and the ADDED arm honours one on the added path
+# itself. That clause reads `input.tree.lines[path]` — exactly this list — so
+# without the bats glob it would evaluate over a key nothing fills, never hold,
+# and the route would still not clear the verdict it is offered for. The module
+# would report clean while deciding nothing, which is the dead-gate class
+# arriving inside the fix for a dead route.
+line_sources = ["mise-tasks/*.sh", "crates/batten/tests/**/*.rs", "tests/**/*.bats"]
+module = "policy/shell-retirement.rego"
+severity = "deny"
+
+# CLOUD-1776, and it is the retirement above's own fallout rather than a
+# neighbour. A retired sibling script could not be UNRESOLVABLE — it was a path
+# that existed or did not, and its absence was loud. `batten claim keys` can be
+# unresolvable in a new way: present binary, absent subcommand. So the
+# `2>/dev/null || true` that was harmless before the port launders a
+# could-not-look into a measured negative after it, and the campaign has ~130
+# remaining retirements each moving a decider behind the same resolver.
+#
+# A DELTA RATCHET RATHER THAN A STATE RULE, and the choice is forced. Three
+# instances are live on `main` — `closing-key-check.sh:193,195` and
+# `deferral-check.sh:117` — and none is repairable, because `mise-tasks/**` is
+# governed by `shell edit refused`, whose landable shapes are retire-whole or
+# leave-alone. A state-scoped row would be red on landing day with no spelling
+# that could make it green; reading the delta grandfathers the three and refuses
+# the fourth.
+#
+# `line_sources` MATCHES `delta_sources` HERE, unlike the row above, because this
+# module reads lines for exactly the paths it governs and no others. The row above
+# carries three globs because its arms read documents its delta selector does not
+# select; this one has no such arm, and a glob that selected more would hand the
+# module files it never judges.
+[[rule]]
+id = "gate run unsafe"
+kind = "policy"
+scope = "tree"
+base = "origin/main"
+delta_sources = ["mise-tasks/*.sh"]
+line_sources = ["mise-tasks/*.sh"]
+module = "policy/could-not-look-laundered.rego"
+severity = "deny"
+
+# CLOUD-827, ported off `mise-tasks/prose-only-check.sh` under CLOUD-1051. A
+# branch whose whole diff is comment lines buys a full required matrix that can
+# confirm nothing, because there is nothing in it CI could have an opinion about.
+#
+# THE SELECTOR IS `**` DELIBERATELY, and it is the one place this row is wider
+# than its predecessor's. The shell read `git diff --name-only`, which is every
+# tracked path; a `delta_sources` list would answer the question over a subset
+# and report "prose-only" about a branch that also moved something the list does
+# not name — a false refusal, in the direction that blocks correct work.
+#
+# THE OVERRIDE IS DECLARED ON THE CLASS, not here. `[[verdict]]`'s
+# `diff ship early` carries an `override` route with its precondition, which is
+# what `batten override request` generates its questions from (CLOUD-1051). No
+# `bypass_env`: the whole point of that row is that the bare variable stops
+# working.
+# The first of `stop-guard`'s five rules to become a module (CLOUD-1051).
+#
+# `scope = "mediated_call"` and it fires only at `Stop`, because that is the one
+# event projecting `final-message`. Every other event hands the module `null`
+# there, Rego reads an undefined path as *does not hold*, and the predicate is
+# silent — so the scope is wider than the moment and the moment is what decides.
+#
+# NO `bypass_env`. `stop-guard` carried `BATTEN_STOP_GUARD_BYPASS` for all five of
+# its rules at once; a module is one rule, and the engine's own hatch already
+# suppresses the whole mediated path. A per-rule off-switch for an advisory that
+# refuses nothing would only make the channel quieter, which is the direction
+# nobody can detect.
+# CLOUD-514's gate, ported off `mise-tasks/filed-here-check.sh` under CLOUD-1051.
+#
+# `delta_sources = ["**"]` for `prose-only`'s reason: the shell read
+# `git diff --name-only origin/main...HEAD`, which is every tracked path, and a
+# narrower list would answer the question over a subset — a row naming a file the
+# list does not cover would pass, which is a miss in the direction that lets the
+# punt through.
+#
+# NO `line_sources`: this row reads no file's contents. Its whole subject is the
+# recorder's record and the delta the engine already resolved.
+#
+# THE OVERRIDE IS DECLARED ON THE CLASS. `issue file same` carries an
+# `override` route with its precondition, which is what `batten override request`
+# generates its questions from. No `bypass_env`, and specifically not
+# `BATTEN_FILED_HERE_OVERLAP`: the point of the admission mechanism is that the
+# bare variable stops working, and this is the row that variable served.
+[[rule]]
+id = "issue file other"
+kind = "policy"
+scope = "tree"
+base = "origin/main"
+delta_sources = ["**"]
+module = "policy/filed-here.rego"
+severity = "deny"
+
+# CLOUD-1423's ratchet: a verb this branch ADDS that nothing reaches.
+#
+# `delta_sources` is `crates/batten/src/surface.rs` alone, and that is the whole
+# subject rather than a narrowing for speed — the module's first conjunct is
+# `SURFACE in touched`, so a delta naming anything else answers the same question
+# with more paths in it.
+#
+# `line_sources` IS THE CONSUMER'S SURFACE LIST, and it lives here rather than in
+# the module under non-negotiable rule 1: which directories of THIS repository a
+# production caller may live in is a fact about this repository. The module knows
+# only "a caller lives outside the crate" and reads whatever this list filled.
+#
+# `.claude/**` IS LOAD-BEARING AND THE ISSUE'S OWN LIST OMITTED IT. Measured
+# 2026-09-18: the harness hook registrations there are the only caller of
+# `adjudicate`, so the four-surface list the row specified would have refused the
+# single verb this engine exists to serve. A gate that refuses `adjudicate` is one
+# an author disables the first time they meet it.
+#
+# The crate's own tests are deliberately NOT a source. The row asked for a
+# test-case arm and grooming removed it: an integration test over the compiled
+# binary is the tier this repository invests in hardest, and a gate reading that
+# coverage as evidence of deadness would push an author to wire a fake production
+# caller instead of writing one. It is also unwritable as text — `record_closes.rs`
+# builds argv as `.arg("record").arg("closes")` and `task_registry.rs` passes only
+# the tail to a helper that prepends the verb, so the tokens are never adjacent.
+# A ratchet needs no such arm, which is why it is the shape that landed.
+[[rule]]
+id = "verb reach other"
+kind = "policy"
+scope = "tree"
+base = "origin/main"
+delta_sources = ["crates/batten/src/surface.rs"]
+#
+# `batten.toml` IS DELIBERATELY NOT A SURFACE, and dropping it is a measured
+# decision rather than an omission. This file is ~14,000 lines ABOUT verbs, and
+# its prose lives in `reason`, `gloss` and `class` STRING VALUES rather than in
+# comments, so the module's comment-stripping cannot reach it. Measured
+# 2026-09-18: seven verbs read as reached through this file alone — `capture
+# find`, `mcp`, `mcp call`, `ready lint`, `design`, `record keyed` and `lease
+# authorises` — and every one of them is a remedy sentence, not a caller. A verb
+# whose only mention is a remedy string is dead code with documentation.
+#
+# That is the UNDER-deny direction, and it is the one this gate must not fail in:
+# it is precisely how PR #812 would have passed. Declare a verb, name it in a
+# rule's `reason`, and a gate reading this file calls it reached.
+line_sources = [
+  "crates/batten/src/surface.rs",
+  "mise-tasks/**",
+  ".github/workflows/*.yml",
+  ".claude/**",
+  "mise.toml",
+]
+module = "policy/dead-capability.rego"
+severity = "deny"
+
+# CLOUD-1210's ratchet on the cargo test-target count.
+#
+# `delta_sources` is the whole tree rather than `crates/batten/tests/**`, because
+# the module decides on the path's SHAPE and a narrower delta would hand it only
+# paths it was going to accept anyway — a gate reading a pre-filtered input cannot
+# tell "nothing was added" from "the filter removed it". The depth test lives in
+# the module, where a reader can check it against Cargo's autodiscovery rule.
+# CLOUD-472. The plan a branch declared, held to its own end.
+#
+# `delta_sources` is the whole tree because the vacuity arm asks whether this
+# branch is holding ANYTHING open, and a narrower delta would hand it a
+# pre-filtered answer — a gate that cannot tell "nothing changed" from "the
+# filter removed it" is the class `test-targets` below states for its own reason.
+#
+# NO `line_sources`: the subject is the record `batten record plan` wrote and the
+# delta the engine already resolved. This row opens no file.
+# CLOUD-472. A §7 obligation is bound to a case, or it is not landing.
+#
+# `line_sources` is where a reader should look hardest, because the failure it
+# guards is silent: the module resolves a declared slug by reading the named
+# file's lines, so an obligation naming a file OUTSIDE these globs can never be
+# bound and the rule would refuse it for the wrong reason. The globs are the
+# places a `#MUTANT` row can legitimately live.
+#
+# `delta_sources` is the whole tree because the subject is the recorded
+# obligation set rather than any path this branch happens to touch.
+[[rule]]
+id = "test name undefined"
+kind = "policy"
+scope = "tree"
+base = "origin/main"
+delta_sources = ["**"]
+# `mise.toml` and `crates/batten/src` since CLOUD-1909: an inline task declares
+# its mutation in the manifest and an engine module in its own source, because a
+# row mutates the file it is written in. Without them an obligation naming either
+# file reads as undeclared however plainly the row is there.
+line_sources = [
+  "crates/batten/tests/**/*.rs",
+  "policy/*.rego",
+  "tests/**/*.bats",
+  "mise-tasks/**",
+  "mise.toml",
+  "crates/batten/src/**/*.rs",
+]
+module = "policy/obligations-bound.rego"
+severity = "deny"
+
+# CLOUD-1355. The sweep's `names-no-case` verdict, asked where a contributor
+# sees it.
+#
+# `line_sources` is `obligations-bound`'s set plus the preset tree, and it has to
+# carry BOTH SIDES: the declaring files and the suites they name. A set holding
+# only the declarations would make every suite a could-not-look and the rule
+# would decide nothing -- the exact shape `rules/policy-modules.md` warns
+# a dead gate takes.
+#
+# NO `delta_sources` AND NO `base`: the subject is the tree's whole declaration
+# set rather than what this branch touched, because a declaration goes stale when
+# somebody renames a case in the SUITE, which is a different file from the one
+# carrying the promise.
+[[rule]]
+id = "marker name undefined"
+kind = "policy"
+scope = "tree"
+line_sources = [
+  "crates/batten/tests/**/*.rs",
+  "crates/batten/src/policy/presets/**/*.rego",
+  "policy/*.rego",
+  "tests/**/*.bats",
+  "mise-tasks/**",
+  # The declaring side for an inline task (CLOUD-1909); its suites are already
+  # in the set above.
+  "mise.toml",
+]
+module = "policy/mutation-declared-case.rego"
+severity = "deny"
+
+# CLOUD-349, ported off `mise-tasks/branch-age-check.sh` under CLOUD-1717.
+#
+# A MEASUREMENT, SO THE READS STAY IN THE PRODUCER (house-style §5). `mise run
+# branch-age-record` walks three `[[forge.query]]` rows — the branches, each
+# tip's age in days against the producer's clock (the engine calls no clock on
+# any evaluation path), and the closed pull requests — and this row joins and
+# adjudicates what they recorded (CLOUD-843).
+#
+# `severity = "warn"` FOR NOW, and the reason is the population rather than
+# caution: the retired program ran on a schedule against every remote branch,
+# where this runs in `verify` against whatever the last producer wrote. CLOUD-320
+# binds the promotion — land it reporting, read the firing rate, promote with the
+# measurement rather than with an argument.
+[[rule]]
+id = "branch watch loose"
+kind = "policy"
+scope = "tree"
+module = "policy/branch-age.rego"
+severity = "warn"
+
+# CLOUD-583, ported off `mise-tasks/attestation-check.sh` under CLOUD-1717.
+#
+# `deny` BECAUSE THE GAP IS NOT A VERDICT. The module fires nothing while the
+# platform offers no attestation — a 404 posture judges no artifact — so the only
+# way this reds is a release whose binaries the verifier actually refused where
+# attestation IS available. That is a release to fix, which is what `deny` means.
 [[rule]]
 id = "release grade unsafe"
 kind = "policy"
@@ -4159,7 +7509,6 @@ severity = "deny"
 # the job and timeout grammar is GitHub Actions'. What stays here is this
 # consumer's: which workflows hold budgets (`line_sources`) and which forge reads
 # feed the two families (`drift-runs`, `drift-jobs`, in `[forge]` below).
-
 [[rule]]
 id = "bound grade other"
 kind = "policy"
@@ -4169,21 +7518,28 @@ provider = "github-actions"
 line_sources = [".github/workflows/*.yml"]
 severity = "warn"
 
-# CLOUD-484, ported off `mise-tasks/nonverdict-assert.sh` under CLOUD-1717.
+# CLOUD-843: the board's own claims, held to what git and the forge already
+# say, as the vendored `tracker-hygiene` preset. It carries the five decisions
+# that were four consumer modules and one shell body — `done-check` (CLOUD-192),
+# `done-pr-check` (CLOUD-468), `duplicate-close-check` (CLOUD-829),
+# `deferral-check` (CLOUD-323) and `closing-key-check` (CLOUD-192, CLOUD-674) —
+# none of which named anything only this repository has once the readings
+# moved into `record derive`.
 #
-# `warn` HOLDS TWO CLAIMS THAT LOOK OPPOSED, and both are the retired pair's own.
-# The decider argued that a rate which rises has to FAIL something or it becomes
-# an artifact nobody opens (non-negotiable rule 2) — it was filed against twice,
-# both times by someone deciding the number was not worth collecting.
-# `nonverdict-rate.yml` argued just as plainly that its failure is informational:
-# a job dying in provisioning is the platform having a bad afternoon, no branch
-# is at fault, and nothing in the tree is broken.
-#
-# A warn finding is reported without failing the run, so an ordinary `check` and
-# every `verify` stay green — which is what stops a branch going red for a reason
-# it did not cause — while the scheduled job runs `--fail-on-warning` and reds on
-# the rate. The gate is preserved and its blast radius is the clock, not the
-# landing path.
+# `deny`, as every one of the five was. Each fires only over a record its task
+# produced by piping the board or a PR body in, so an ordinary `check` with no
+# record is silent rather than red; and each task's producer clears the other
+# four families first, so the one row judges the question just asked.
+[[rule]]
+id = "issue state other"
+kind = "policy"
+scope = "tree"
+preset = "tracker-hygiene"
+severity = "deny"
+
+# CLOUD-518, ported off `mise-tasks/pr-unsubscribed.sh` under CLOUD-1717. `deny`,
+# as `check`'s exit 1 was: `land` runs it as an entry gate on every lap. Silent
+# with no record, so an ordinary `check` is unaffected.
 [[rule]]
 id = "event watch other"
 kind = "policy"
@@ -7784,73 +11140,6 @@ names = ["GITHUB_PERSONAL_ACCESS_TOKEN", "BATTEN_GITHUB_TOKEN"]
 [forge]
 credential_names = ["BATTEN_GITHUB_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN"]
 
-# --- the declared forge reads (CLOUD-843) ---------------------------------------
-#
-# Each row is walked by `batten record query <id>` and written as the record
-# family of the same name. The rows carry this repository's facts — which
-# endpoints, which fields, which windows — and the engine carries none of them.
-
-# `timeout-drift`: the workflows the forge knows, keyed by the id the runs
-# endpoint takes.
-[[forge.query]]
-id = "drift-workflows"
-endpoint = "repos/{owner}/{repo}/actions/workflows"
-rows = "workflows"
-per_page = 100
-max_pages = 1
-select = ["id", "path"]
-
-# `branch-age`: the remote's branches, the first hundred, as the retired GraphQL
-# read took them.
-[[forge.query]]
-id = "branch-heads"
-endpoint = "repos/{owner}/{repo}/branches"
-per_page = 100
-max_pages = 1
-select = ["name", "commit.sha"]
-
-# Recently CLOSED pull requests and whether each merged, newest-created first —
-# the order `gh pr list` reads. The pulls endpoint has no merged-only state, so a
-# closed-but-unmerged pull request takes a slot in the window; ten pages are read
-# so that the retired body's population, the 200 most recent MERGED pull requests
-# (`--state merged --limit 200`), fits inside the window, and
-# `policy/branch-age.rego` keeps the first 200 merged rows and no more.
-[[forge.query]]
-id = "branch-merged"
-endpoint = "repos/{owner}/{repo}/pulls"
-params = { state = "closed", sort = "created", direction = "desc" }
-per_page = 100
-max_pages = 10
-select = ["head.ref", "merged_at"]
-
-# CLOUD-319's two readings, retiring `[tasks.release-due-record]` (CLOUD-843). The
-# body read the clock and the forge and recorded two AGES; these two rows move the
-# clock into the producer (`record query`'s window) and leave the ages unwritten:
-# a row is kept only when its instant is inside the window, so `kept=0` IS "older
-# than the window" and `policy/release-due.rego` compares no timestamp at all.
-#
-# ONE ROW EACH, NEWEST FIRST, which is what the body's `.[0]` read. `main` is this
-# consumer's trunk and a fact about this repository, so it is a parameter here and
-# never a literal in the engine. The windows are the ones `auto-release-land.yml`
-# ran the body with — 120 quiet minutes (its `RELEASE_QUIET_MINUTES`), and the
-# 24-hour max wait the body defaulted to — now committed rather than exported.
-[[forge.query]]
-id = "release-due-activity"
-endpoint = "repos/{owner}/{repo}/commits"
-params = { sha = "main" }
-per_page = 1
-max_pages = 1
-since = { field = "commit.committer.date", seconds = 7200 }
-select = ["commit.committer.date"]
-
-[[forge.query]]
-id = "release-due-latest"
-endpoint = "repos/{owner}/{repo}/releases"
-per_page = 1
-max_pages = 1
-since = { field = "published_at", seconds = 86400 }
-select = ["published_at"]
-
 # THE CLAIMS THIS REPOSITORY'S TASKS NEED, each with the endpoint that proves it
 # (CLOUD-843, retiring `[tasks.gh-preflight]`'s bash table into rows
 # `batten doctor forge` walks). An under-scoped or proxy-substituted token
@@ -7912,6 +11201,73 @@ select = ["published_at"]
 # claim = "pull_requests=write"
 # used_by = "gh pr ready — marking a draft ready is what starts CI here"
 # probe = false
+
+# CLOUD-319's two readings, retiring `[tasks.release-due-record]` (CLOUD-843). The
+# body read the clock and the forge and recorded two AGES; these two rows move the
+# clock into the producer (`record query`'s window) and leave the ages unwritten:
+# a row is kept only when its instant is inside the window, so `kept=0` IS "older
+# than the window" and `policy/release-due.rego` compares no timestamp at all.
+#
+# ONE ROW EACH, NEWEST FIRST, which is what the body's `.[0]` read. `main` is this
+# consumer's trunk and a fact about this repository, so it is a parameter here and
+# never a literal in the engine. The windows are the ones `auto-release-land.yml`
+# ran the body with — 120 quiet minutes (its `RELEASE_QUIET_MINUTES`), and the
+# 24-hour max wait the body defaulted to — now committed rather than exported.
+[[forge.query]]
+id = "release-due-activity"
+endpoint = "repos/{owner}/{repo}/commits"
+params = { sha = "main" }
+per_page = 1
+max_pages = 1
+since = { field = "commit.committer.date", seconds = 7200 }
+select = ["commit.committer.date"]
+
+[[forge.query]]
+id = "release-due-latest"
+endpoint = "repos/{owner}/{repo}/releases"
+per_page = 1
+max_pages = 1
+since = { field = "published_at", seconds = 86400 }
+select = ["published_at"]
+
+# --- the declared forge reads (CLOUD-843) ---------------------------------------
+#
+# Each row is walked by `batten record query <id>` and written as the record
+# family of the same name. The rows carry this repository's facts — which
+# endpoints, which fields, which windows — and the engine carries none of them.
+
+# `timeout-drift`: the workflows the forge knows, keyed by the id the runs
+# endpoint takes.
+[[forge.query]]
+id = "drift-workflows"
+endpoint = "repos/{owner}/{repo}/actions/workflows"
+rows = "workflows"
+per_page = 100
+max_pages = 1
+select = ["id", "path"]
+
+# `branch-age`: the remote's branches, the first hundred, as the retired GraphQL
+# read took them.
+[[forge.query]]
+id = "branch-heads"
+endpoint = "repos/{owner}/{repo}/branches"
+per_page = 100
+max_pages = 1
+select = ["name", "commit.sha"]
+
+# Recently CLOSED pull requests and whether each merged, newest-created first —
+# the order `gh pr list` reads. The pulls endpoint has no merged-only state, so a
+# closed-but-unmerged pull request takes a slot in the window; ten pages are read
+# so that the retired body's population, the 200 most recent MERGED pull requests
+# (`--state merged --limit 200`), fits inside the window, and
+# `policy/branch-age.rego` keeps the first 200 merged rows and no more.
+[[forge.query]]
+id = "branch-merged"
+endpoint = "repos/{owner}/{repo}/pulls"
+params = { state = "closed", sort = "created", direction = "desc" }
+per_page = 100
+max_pages = 10
+select = ["head.ref", "merged_at"]
 
 # --- the scripts the launcher re-arms every spawn (CLOUD-1704) -----------------
 #
