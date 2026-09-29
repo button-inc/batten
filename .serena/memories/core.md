@@ -185,9 +185,9 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   `save_issue`), reported as a set. Each row carries its own exit table
   (`refuses`, default `[2]`; `abstains`); an unclassified exit is could-not-look.
   The fold is `ExitCode::combine(refused, could-not-look)` plus one clone-scoped
-  abstention lane below a refusal. Gate removal and an added abstention are
-  `config lint` weakenings (`board-sweep-gate-removed`,
-  `board-sweep-abstention-added`). Its drain row is `landed abandoned --gather`,
+  abstention lane below a refusal. Gate removal, an added abstention and a
+  widened refusal table are `config lint` weakenings (`board-sweep-gate-removed`,
+  `board-sweep-abstention-added`, `board-sweep-refusal-widened`). Its drain row is `landed abandoned --gather`,
   which acquires each evidence arm no file names: closing keys from
   `must_land_on`'s whole history (a broken walk is could-not-look), merged PRs
   and branches from the forge via `repo_slug`; on a forge without that branch

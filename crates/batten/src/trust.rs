@@ -997,6 +997,22 @@ pub enum WeakeningKind {
     ///
     /// **Appended, never inserted**, for `PerfExemptionAdded`'s reason.
     BoardSweepAbstentionAdded,
+    /// A `[[board.sweep]]` gate's `refuses` gained an exit the base ref's row
+    /// classified in NEITHER lane (CLOUD-843).
+    ///
+    /// The widening mirror of the narrowing `BoardSweepAbstentionAdded` calls a
+    /// tightening. An exit a row does not classify is could-not-look, which
+    /// outranks a refusal; moving it into `refuses` turns a sweep that answered
+    /// "not judged" into one that answers "refused", so a gate that could not
+    /// look reads as a finding against the board. `refuses = [2]` widened to
+    /// `[1, 2]` on an engine-table gate is exactly that: its could-not-look
+    /// laundered into the refusal lane.
+    ///
+    /// An exit the base row ABSTAINED on and the working row refuses is not this
+    /// kind: a refusal outranks an abstention, so that move answers louder.
+    ///
+    /// **Appended, never inserted**, for `PerfExemptionAdded`'s reason.
+    BoardSweepRefusalWidened,
 }
 
 impl WeakeningKind {
@@ -1071,6 +1087,7 @@ impl WeakeningKind {
         WeakeningKind::WiringDisarmRemoved,
         WeakeningKind::BoardSweepGateRemoved,
         WeakeningKind::BoardSweepAbstentionAdded,
+        WeakeningKind::BoardSweepRefusalWidened,
     ];
 
     /// The stable, lowercase identifier used in machine output (§6).
@@ -1096,6 +1113,7 @@ impl WeakeningKind {
             WeakeningKind::WiringDisarmRemoved => "wiring-disarm-removed",
             WeakeningKind::BoardSweepGateRemoved => "board-sweep-gate-removed",
             WeakeningKind::BoardSweepAbstentionAdded => "board-sweep-abstention-added",
+            WeakeningKind::BoardSweepRefusalWidened => "board-sweep-refusal-widened",
             WeakeningKind::ReadyCutoverRelaxed => "ready-cutover-relaxed",
             WeakeningKind::PerfExemptionAdded => "perf-exemption-added",
             WeakeningKind::VerbRemoved => "verb-removed",
@@ -1258,6 +1276,7 @@ pub const CENSUS: &[FieldCoverage] = &[
         coverage: Coverage::Compared(&[
             WeakeningKind::BoardSweepGateRemoved,
             WeakeningKind::BoardSweepAbstentionAdded,
+            WeakeningKind::BoardSweepRefusalWidened,
         ]),
     },
     FieldCoverage {
@@ -2506,6 +2525,16 @@ fn scalar_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         &sweep_abstentions(base, base),
         &sweep_abstentions(working, base),
     ));
+    // The widening mirror: an exit a SAME gate's `refuses` gained that the base
+    // row classified nowhere was could-not-look, which outranks a refusal
+    // (`WeakeningKind::BoardSweepRefusalWidened`). The base side counts an exit
+    // it abstained on as already classified, because abstention to refusal
+    // answers louder.
+    found.extend(added_entries(
+        WeakeningKind::BoardSweepRefusalWidened,
+        &sweep_classified(base, base),
+        &sweep_refusals(working, base),
+    ));
 
     // The judge's privacy boundary (CLOUD-135). Compared from both sides
     // regardless of whether either declares the table: an absent `[judge]` is
@@ -2802,6 +2831,46 @@ fn sweep_abstentions(config: &Config, ran: &Config) -> Vec<String> {
                 gate.abstains
                     .iter()
                     .map(move |code| format!("board.sweep[{}].abstains[{code}]", gate.name))
+            })
+            .collect()
+    })
+}
+
+/// Every exit `config`'s sweep gates refuse on, rendered as its own key path,
+/// for the gates `ran` also declares — scoped as [`sweep_abstentions`] is, and
+/// for its reason.
+fn sweep_refusals(config: &Config, ran: &Config) -> Vec<String> {
+    sweep_exit_keys(config, ran, |gate| gate.refuses.iter())
+}
+
+/// Every exit `config`'s sweep gates classify in EITHER lane, rendered as a
+/// `refuses` key path so [`sweep_refusals`] of another config compares against
+/// it: an exit moved from `abstains` into `refuses` answers louder, so it must
+/// read as already known rather than as a widening.
+fn sweep_classified(config: &Config, ran: &Config) -> Vec<String> {
+    sweep_exit_keys(config, ran, |gate| {
+        gate.refuses.iter().chain(gate.abstains.iter())
+    })
+}
+
+/// The `board.sweep[<name>].refuses[<code>]` keys for the exits `pick` reads off
+/// each gate `ran` also declares.
+fn sweep_exit_keys<'a, I>(
+    config: &'a Config,
+    ran: &Config,
+    pick: impl Fn(&'a crate::board::SweepGate) -> I,
+) -> Vec<String>
+where
+    I: Iterator<Item = &'a i32>,
+{
+    let known = sweep_gate_names(ran);
+    config.board.as_ref().map_or_else(Vec::new, |board| {
+        board
+            .sweep
+            .iter()
+            .filter(|gate| known.contains(&gate.name))
+            .flat_map(|gate| {
+                pick(gate).map(move |code| format!("board.sweep[{}].refuses[{code}]", gate.name))
             })
             .collect()
     })
@@ -4242,6 +4311,23 @@ mod tests {
         let corpus = gate("refuses = [1, 2]\n");
         assert!(weakenings(&corpus, &plain).is_empty());
         assert!(weakenings(&config(""), &abstaining).is_empty());
+
+        // WIDENING `refuses` IS ONE, the mirror of the line above: exit 1 was
+        // unclassified, so could-not-look, and now reads as a refusal.
+        assert_eq!(
+            only(&plain, &corpus),
+            Weakening::new(
+                WeakeningKind::BoardSweepRefusalWidened,
+                "board.sweep[drain].refuses[1]",
+                "absent",
+                "present",
+            )
+        );
+        // But an exit the base ABSTAINED on moving into `refuses` answers
+        // louder, and a gate the working tree adds is a question gained.
+        let abstains_one = gate("abstains = [1]\n");
+        assert!(weakenings(&abstains_one, &corpus).is_empty());
+        assert!(weakenings(&config(""), &corpus).is_empty());
     }
 
     #[test]
@@ -6279,3 +6365,14 @@ mod tests {
         assert!(!kinds.contains(&WeakeningKind::MintAdded), "got: {kinds:?}");
     }
 }
+
+/*
+The mutations the `[[board.sweep]]` exit-table comparison declares (CLOUD-843).
+Each undoes one half of `BoardSweepRefusalWidened`, and the named case is the
+one that stops discriminating. The named case is this file's own unit tier, so
+the declared suite is this file, `landed.rs`'s reason.
+
+#MUTANT-SUITE crates/batten/src/trust.rs
+#MUTANT sweep-refusal-widening-unread|s@sweep_refusals(working, base)@sweep_refusals(base, base)@|dropping_a_sweep_gate_or_adding_an_abstention_is_a_weakening
+#MUTANT sweep-abstention-to-refusal-flagged|s@gate.refuses.iter().chain(gate.abstains.iter())@gate.refuses.iter().chain(gate.refuses.iter())@|dropping_a_sweep_gate_or_adding_an_abstention_is_a_weakening
+*/

@@ -11233,15 +11233,18 @@ started = ["In Progress", "In Review", "Done"]
 # THE BOARD SWEEP'S GATES (CLOUD-825), which `batten board sweep` runs over ONE
 # payload set — the retired `[tasks.board-sweep]` composer's six gates, as rows
 # (CLOUD-843). Committed authority only, like the columns above: `config lint`
-# reports a dropped row (`board-sweep-gate-removed`) and an exit moved into
-# `abstains` (`board-sweep-abstention-added`).
+# reports a dropped row (`board-sweep-gate-removed`), an exit moved into
+# `abstains` (`board-sweep-abstention-added`), and an unclassified exit moved
+# into `refuses` (`board-sweep-refusal-widened`).
 #
 # `graph-check` (and `ready-lint` behind it) and `spec-ref-check` retired into
 # `batten board check` and its `--refs` arm; `in-progress-drain` into `landed
 # abandoned --gather`. Each is an engine verb, so each reads on the engine's
 # table: 2 refuses, anything else unclassified is could-not-look.
 #
-# TWO OF THE SIX ARE NOT ROWS YET, and that is a gap, not a decision. `released`
+# TWO OF THE SIX ARE NOT ROWS YET, and that is a gap, not a decision (filed as
+# CLOUD-2027). And until `batten board check` lands (package P14 of CLOUD-843)
+# its two rows below read could-not-look on every run. `released`
 # needs a tag and `done-pr-check` needs pull-request state merged into the set;
 # the retired composer acquired both itself (`git tag --sort`, `gh pr list`) and
 # abstained when it could not. A row is one argv over the payload set, so each
@@ -11254,9 +11257,18 @@ run = ["batten", "board", "check"]
 name = "spec-ref-check"
 run = ["batten", "board", "check", "--refs"]
 
+# `duplicate-close-check` is still a consumer task, and its table is the CORPUS
+# one: 0 clean, 1 a refusal, 2 could not look. Read on the engine's default it
+# would launder the two answers into each other, so the row names `[1]`. When
+# the task moves to the engine table (2 refuses, 1 could not look), this key is
+# deleted in the same change — `[1]` there would read a could-not-look as a
+# refusal. That deletion reads to `config lint` as exit 2 gaining the refusal
+# lane (`board-sweep-refusal-widened`), because two parsed configs cannot see
+# that the task's own table moved underneath the row; it is admitted by answer.
 [[board.sweep]]
 name = "duplicate-close-check"
 run = ["mise", "run", "-q", "duplicate-close-check"]
+refuses = [1]
 
 [[board.sweep]]
 name = "in-progress-drain"
