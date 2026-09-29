@@ -9568,6 +9568,89 @@ module = "policy/mise-pin-agreement.rego"
 severity = "deny"
 reason = "mise.toml owns the pin and .mcp.json's copy is a reference to it: move the version in mise.toml and repeat it in the scoped `mise exec`, never the other way round. A launch that names no tool before `--` provisions the whole toolchain and dies with any one of it (CLOUD-316)."
 
+# THREE TASK BODIES THAT WERE GATES, RETIRED ONTO MODULES (CLOUD-1991). `hk-version`,
+# `no-docs-tree` and `no-armed-ripcord` were each a `grep`/`git ls-files` pipeline
+# and an `exit 1` in `mise.toml`. The decisions are the modules below; the facts
+# are the engine's (`documents`, `lines`, and the `git-index` projection a row
+# declares with `index`), so no task spawns anything to reach them. The task names
+# survive as one-line `batten check --rule` calls for `hk.pkl`'s steps and for
+# hands that type them.
+[[rule]]
+id = "tool pin other"
+kind = "policy"
+scope = "tree"
+documents = ["mise.toml"]
+line_sources = ["hk.pkl"]
+module = "policy/hk-pin-agreement.rego"
+severity = "deny"
+reason = "mise.toml pins the hk binary and hk.pkl's `amends` URL names the hk config package; bump both to one version together, then revisit hk.pkl for what the new version offers."
+
+[[rule]]
+id = "prose place refused"
+kind = "policy"
+scope = "tree"
+index = ["docs"]
+module = "policy/docs-tree-absent.rego"
+severity = "deny"
+reason = "research deliverables and evidence notes attach to the tracker row they back, never a repository docs/ folder (AGENTS.md, non-negotiable rule 7)."
+
+[[rule]]
+id = "path ship refused"
+kind = "policy"
+scope = "tree"
+index = [".batten-ripcord"]
+module = "policy/ripcord-untracked.rego"
+severity = "deny"
+reason = "the break-glass sentinel admits the repair floor over a config that loads and denies; remove it from the index and disarm it, and fix the lockout in the config (CLOUD-1847)."
+
+[[pattern]]
+id = "hk-amends-version"
+regex = 'hk@([0-9]+\.[0-9]+\.[0-9]+)'
+
+[[verdict]]
+id = "tool pin other"
+gloss = "hk.pkl's `amends` URL names a different hk than mise.toml pins, or one of them names none"
+class = """
+mise.toml pins the hk binary and hk.pkl amends the hk config package by URL, and \
+the two move independently: a bump to one without the other runs the hook config \
+against a schema its binary did not ship. Set both to one version, then revisit \
+hk.pkl for what that version offers (CLOUD-1991).
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/hk-pin-agreement.rego"
+
+[[verdict]]
+id = "prose place refused"
+gloss = "a path under docs/ is tracked; research and evidence belong on the tracker row"
+class = """
+A repository docs/ folder is a second home for research and evidence that nothing \
+reads and everything forgets. Move the file's content onto the tracker row it \
+backs and remove the path from the index (AGENTS.md, non-negotiable rule 7).
+"""
+
+[[verdict.route]]
+id = "rule read first"
+kind = "document"
+target = "AGENTS.md"
+
+[[verdict]]
+id = "path ship refused"
+gloss = "the break-glass sentinel is tracked, so every clone would inherit the bypass"
+class = """
+`.batten-ripcord` admits the repair floor over a config that loads and denies. One \
+operator arms it in one tree for as long as the lockout lasts; committed, it ships \
+that bypass to every clone. Remove it from the index, disarm it, and fix the \
+lockout in the config (CLOUD-1847).
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/ripcord-untracked.rego"
+
 [[rule]]
 id = "version check stale"
 kind = "policy"

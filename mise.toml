@@ -655,7 +655,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,land-divergence,task-linear-check,macos-link,task-mcp-allow-check,nonverdict,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census"
+MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,land-divergence,task-linear-check,macos-link,task-mcp-allow-check,nonverdict,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,docs-tree-absent,ripcord-untracked,hk-pin-agreement"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -3122,6 +3122,17 @@ printf '%s' "$metadata" \
   | cargo run --quiet -p batten -- record derive macos-link \
     --input framework=sdk-framework-crate --input vendored=vendored-links-crate
 """
+
+# The macOS link gate as hk's `macos-link-check` step runs it (CLOUD-1991). The
+# step's `check` was a `&&` pair — produce, then decide — which made it the one
+# shell line in `hk.pkl`. `depends` is that ordering without a shell: the record
+# is produced first, and a producer that fails stops the gate before the engine
+# decides over a record it did not write. The step name and the rule id stay one
+# object, as the step's own comment requires.
+[tasks.macos-link-check]
+description = "Gate: the macOS graph links no Apple SDK framework — record it, then decide `workspace carry unsafe`"
+depends = ["macos-link-record"]
+run = "cargo run --quiet -p batten -- check --rule 'workspace carry unsafe'"
 
 [tasks.evaluator-closure-record]
 description = "Effect: record the evaluator's activated sub-closure and any IO-bearing crate in it, for `layer reach unsafe`"
@@ -8681,33 +8692,20 @@ fi
 
 [tasks.hk-version]
 description = "Gate: hk's version is pinned identically in mise.toml and hk.pkl (amends URL). A bump to one without the other is the moment to revisit the hook config."
-shell = "bash -c" # uses grep -oE + cut; keep off /bin/sh for consistency
-run = '''
-mise_v=$(grep -E '^hk = ' mise.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
-pkl_v=$(grep -oE 'hk@[0-9]+\.[0-9]+\.[0-9]+' hk.pkl | head -n1 | cut -d@ -f2)
-if [ "${mise_v:?}" != "${pkl_v:?}" ]; then
-  echo "::error:: hk version drift: mise.toml pins $mise_v but hk.pkl amends $pkl_v." >&2
-  echo "Sync both, then revisit hk.pkl for new features worth adopting (see AGENTS.md)." >&2
-  exit 1
-fi
-echo "hk-version: mise.toml and hk.pkl agree on hk $mise_v"
-'''
+# THE DECISION IS `policy/hk-pin-agreement.rego` SINCE CLOUD-1991, over facts the engine
+# reads itself; this name survives for `hk.pkl`'s step and for hands that type
+# it, and selects the one row so it reports nothing else.
+run = "cargo run --quiet -p batten -- check --rule 'tool pin other'"
 
 [tasks.no-docs-tree]
 description = "Gate: no committed docs/ tree. Research deliverables and evidence notes attach to the Linear issue, not a repo docs/ folder (see AGENTS.md)."
-shell = "bash -c"
-run = '''
-tracked=$(git ls-files 'docs/*' 'docs/**' | head -n1)
-if [ -n "$tracked" ]; then
-  echo "::error:: committed docs/ tree found (e.g. $tracked). Research evidence belongs on the Linear issue, not in a repo docs/ folder (see AGENTS.md)." >&2
-  exit 1
-fi
-echo "no-docs-tree: no committed docs/ tree"
-'''
+# THE DECISION IS `policy/docs-tree-absent.rego` SINCE CLOUD-1991, over facts the engine
+# reads itself; this name survives for `hk.pkl`'s step and for hands that type
+# it, and selects the one row so it reports nothing else.
+run = "cargo run --quiet -p batten -- check --rule 'prose place refused'"
 
 [tasks.no-armed-ripcord]
 description = "Gate: the break-glass sentinel is never committed. An armed ripcord in the index hands every clone the bypass (CLOUD-1847)."
-shell = "bash -c"
 # THE AUDIT IS WHAT KEEPS THE RIPCORD FROM BEING A PASSWORD, and this is half of
 # it. `.batten-ripcord` opens the repair floor over a config that loads and
 # denies — which is the right answer for a container that would otherwise be
@@ -8720,14 +8718,10 @@ shell = "bash -c"
 # where a glob would let one persist unreported for every commit that did not
 # touch it. `.gitignore` carries the same name, so reaching this gate takes a
 # deliberate `git add -f` — which is exactly the case a gate is for.
-run = '''
-tracked=$(git ls-files '.batten-ripcord' | head -n1)
-if [ -n "$tracked" ]; then
-  echo "::error:: the break-glass sentinel is tracked ($tracked). It admits the repair floor over a config that loads and denies, so committing one ships that bypass to every clone. Remove it from the index and disarm it; the lockout it was pulled for is fixed in the config, not here." >&2
-  exit 1
-fi
-echo "no-armed-ripcord: the break-glass is not committed"
-'''
+# THE DECISION IS `policy/ripcord-untracked.rego` SINCE CLOUD-1991, over facts the engine
+# reads itself; this name survives for `hk.pkl`'s step and for hands that type
+# it, and selects the one row so it reports nothing else.
+run = "cargo run --quiet -p batten -- check --rule 'path ship refused'"
 
 [tasks.bats-submodule]
 description = "Check out the vendored bats runner if it is missing — `bats-submodule-checked-out`'s check and repair, for `test:bats`"
