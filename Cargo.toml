@@ -231,6 +231,17 @@ indoc = "2"
 # pin it measures under is declared as data beside the vocabulary, never baked in
 # here -- `bench/tokens/method.toml`'s discipline for its byte divisor.
 tiktoken-rs = "0.12"
+# The allocation counter the cost cases assert with (CLOUD-2022). DEV-ONLY, for
+# `tiktoken-rs`'s reason: it is the `it` binary's `#[global_allocator]`, and the
+# shipped binary keeps the system allocator untouched.
+#
+# A COUNT RATHER THAN A CLOCK. `shell_retirement_cost` bounded a wall-clock ratio
+# whose floor is a property of the runner — false reds at 8.1x on Windows and
+# 10.4x on macOS, each answered by widening the bound. An allocation count over
+# an in-process scan is the same number on every runner, which is what
+# `rules/rust.md` asks a cost assertion to be. MIT, no dependencies of its own,
+# and no `unsafe` at the use site, which `unsafe_code = "forbid"` requires.
+stats_alloc = "0.1"
 # `min_batten_version` comparison. Cargo's own flavour of SemVer, so the config
 # key means what a Rust consumer already expects it to.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

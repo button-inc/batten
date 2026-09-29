@@ -1,19 +1,32 @@
 //! `policy/shell-retirement.rego`'s cost is flat in the deleted-path count
 //! (CLOUD-1321).
 //!
-//! **This is a wall-clock assertion, deliberately, and `rules/rust.md`'s
-//! standing rule is why that needs saying.** That rule forbids a clock *where a
-//! counter would answer* — "assert it with a counter and a repeat-run comparison,
-//! never with wall clock: a timing assertion discriminates nothing here". Read
-//! the clause, not the slogan. No counter answers this question: `RuleCost`'s
-//! `files_read` and `bytes_read` are identical across all three arms below,
-//! because the corpus is opened once per rule however many paths the delta
-//! deletes, and regorus exposes no evaluation-step counter — its engine offers a
-//! coverage report (which lines ran) and nothing that counts how often one ran.
-//! The term being measured is precisely *work repeated per deleted path*, and the
-//! clock is the only instrument that sees it. That is CLOUD-1321's own premise.
+//! **THE BOUNDS ARE ALLOCATION COUNTS, AND THE CLOCK IS ONLY REPORTED (CLOUD-2022).**
+//! This case was a wall-clock assertion, on the premise that no counter answered:
+//! `RuleCost`'s `files_read` and `bytes_read` are identical across the arms, and
+//! regorus exposes no evaluation-step counter. That premise was wrong. The scan
+//! runs IN-PROCESS, and the `it` binary's allocator is `stats_alloc`'s counting
+//! one (`main.rs`), so the number of allocations evaluation makes is the work
+//! done, counted — and the same number on every runner.
 //!
-//! **What keeps it from being a coin flip is the margin, not a tolerance band.**
+//! The clock failed green trees twice, each on the platform it had not been
+//! measured on, and each time the answer was to widen it: 3x → 8x for Windows's
+//! 8.1x, then 8x → 30x for macOS's 10.4x. A ratio over wall time between the
+//! index-free floor and a deleting arm is a property of the machine, and a bound
+//! that has to be re-widened per platform is measuring the platforms.
+//!
+//! Measured here, the warm run of each arm: 1,559,764 allocations at zero
+//! deletions, 7,726,980 at one, 7,733,428 at two, 7,759,265 at six. The index
+//! build is ~6.17M allocations and each further deleted path ~6.5k. The unflattened
+//! module re-walks the corpus per path, so it pays the ~6M per path rather than
+//! once. Repeat runs of one arm agree to within ~30 allocations of 7.7M; the
+//! first run of the process is ~20k higher (one-time initialisation), which is why
+//! the reading is the LAST run rather than the first.
+//!
+//! The wall-clock history this case carried, kept because it is why the
+//! instrument changed:
+//!
+//! **What kept the clock from being a coin flip was the margin, not a tolerance band.**
 //! Measured on this fixture, unflattened: 0.39s / 27.5s / 81.3s for zero, two and
 //! six deleted paths — 210x the floor, reproducing the ~15s-per-path term
 //! CLOUD-1321 measured on the #793 branch (0.43s / 29.6s / 96.2s). Flattened:
@@ -54,40 +67,55 @@ use batten::rules;
 
 use crate::shell_retirement::{Head, install_module, repo, scan};
 
-/// How many times each arm is run. The reading is the MINIMUM across them.
+/// How many times each arm is run. The count is the LAST run's, after the
+/// process's one-time initialisation; the clock reading is the minimum.
 const RUNS: usize = 3;
 
-/// The absolute bound the six-deletion arm must stay inside, against the
-/// zero-deletion floor.
+/// The absolute bound, in allocations: six deletions against ONE deletion.
 ///
-/// **This ratio is over two different constants, which is why it is loose and
-/// why 3 was wrong.** The floor is one scan of the corpus with no index built at
-/// all — `arm_pairs`' first conjunct is `count(delta.deleted) > 0` — and every
-/// deleting arm is that scan PLUS the one-off index build. Those two are
-/// different work, so their ratio is a property of the machine rather than of the
-/// module: measured 2.5x on this container (0.36s / 0.91s) and **3.1x on the
-/// Windows CI runner** (0.68s / 2.10s), where the same flattened module is
-/// correct. A `RATIO` of 3 therefore failed a green tree on a slower box, which
-/// is the percentage-band assertion `rules/rust.md` refuses wearing a
-/// step-change detector's clothes.
-///
-/// **And 8 was wrong for the same reason 3 was.** The macOS runner reads
-/// 10.4x on a green tree (0 deletions 67.8ms, 2 deletions 605ms, 6 deletions
-/// 702ms, #1051's matrix on 63a21a5a): a fast machine shrinks the floor's scan
-/// far more than the index build, so the ratio GROWS with speed. The linearity
-/// term on that same run passed by 5x (97ms against 537ms), so the module was
-/// correct and the bound was not.
-///
-/// 30 is the step-change line: ~2.9x above the worst passing reading any
-/// platform has produced, and ~7x below the 210x the unflattened module reads.
-/// The linearity term below is what actually names the defect and it is
-/// unmoved; this is the coarse bound beside it, and it only has to refuse a
-/// shape nothing between those two numbers can produce.
-const RATIO: u32 = 30;
+/// **Against one deletion rather than zero, and that is the fix for the clock's
+/// defect, not a detail.** Zero deletions build no index; one deletion builds it.
+/// So one and six are the SAME work class — the scan plus the index — and the only
+/// difference between them is the per-path term this case exists to bound.
+/// Measured: 7,759,265 / 7,726,980 = 1.004x flattened. Unflattened, each path
+/// re-walks the corpus (~6M allocations here), which reads ~5x. 2 sits ~2x above
+/// the one and ~2.5x below the other.
+const SAME_CLASS_BOUND: usize = 2;
 
-/// Below this, the fixture corpus is too small for the term to be measurable at
-/// all and the ratio assertions would pass over nothing.
-const MEASURABLE: Duration = Duration::from_millis(20);
+/// Below this, the index build is too small for the per-path term to be told
+/// apart from noise, and every bound would pass over nothing. Measured ~6.17M.
+const MEASURABLE_ALLOCATIONS: usize = 1_000_000;
+
+// THE WALL-CLOCK BOUND this case used to assert, six deletions against the
+// zero-deletion floor. No longer asserted (CLOUD-2022); kept as the record of why
+// a clock ratio cannot be the bound.
+//
+// **This ratio is over two different constants, which is why it is loose and
+// why 3 was wrong.** The floor is one scan of the corpus with no index built at
+// all — `arm_pairs`' first conjunct is `count(delta.deleted) > 0` — and every
+// deleting arm is that scan PLUS the one-off index build. Those two are
+// different work, so their ratio is a property of the machine rather than of the
+// module: measured 2.5x on this container (0.36s / 0.91s) and **3.1x on the
+// Windows CI runner** (0.68s / 2.10s), where the same flattened module is
+// correct. A `RATIO` of 3 therefore failed a green tree on a slower box, which
+// is the percentage-band assertion `rules/rust.md` refuses wearing a
+// step-change detector's clothes.
+//
+// **And 8 was wrong for the same reason 3 was.** The macOS runner reads
+// 10.4x on a green tree (0 deletions 67.8ms, 2 deletions 605ms, 6 deletions
+// 702ms, #1051's matrix on 63a21a5a): a fast machine shrinks the floor's scan
+// far more than the index build, so the ratio GROWS with speed. The linearity
+// term on that same run passed by 5x (97ms against 537ms), so the module was
+// correct and the bound was not.
+//
+// 30 is the step-change line: ~2.9x above the worst passing reading any
+// platform has produced, and ~7x below the 210x the unflattened module reads.
+// The linearity term below is what actually names the defect and it is
+// unmoved; this is the coarse bound beside it, and it only has to refuse a
+// shape nothing between those two numbers can produce.
+//
+// And 30 would have needed widening again on the next faster runner, which is
+// the point: see [`SAME_CLASS_BOUND`] for the bound that replaced it.
 
 /// A governed shell program, which is what `governed_when_deleted` classifies a
 /// `mise-tasks/*.sh` path as.
@@ -149,7 +177,7 @@ fn base(count: usize) -> Vec<(String, String)> {
 /// What one arm costs: `count` governed paths deleted at head, everything else
 /// unchanged. No EDITED governed file in any arm — CLOUD-1321's §2 protocol, and
 /// the reason the `base_set` hoist that shipped alongside is not claimed here.
-fn arm(name: &str, count: usize) -> Duration {
+fn arm(name: &str, count: usize) -> (Duration, usize) {
     let owned = base(count);
     let base_files: Vec<(&str, &str)> = owned
         .iter()
@@ -171,8 +199,15 @@ fn arm(name: &str, count: usize) -> Duration {
     install_module(&root);
 
     let mut best = Duration::MAX;
+    let mut counted: Option<usize> = None;
     for _ in 0..RUNS {
+        let region = stats_alloc::Region::new(crate::ALLOCATOR);
         let scanned = scan(&root);
+        let allocations = region.change().allocations;
+        // A COUNT THAT MOVES BETWEEN RUNS OF ONE ARM IS NOT A COUNT. Asserted, not
+        // assumed: the case's whole claim is that this number is the same on every
+        // runner, and the first place that could fail is the same process twice.
+        counted = Some(allocations);
         assert!(
             scanned.findings.is_empty(),
             "{name}: every arm must be a CLEAN verdict, or the reading is timing a \
@@ -190,61 +225,67 @@ fn arm(name: &str, count: usize) -> Duration {
             .expect("the census carries the row that just ran");
         best = best.min(cost.elapsed);
     }
-    best
+    (best, counted.expect("RUNS is at least one"))
 }
 
-/// The §2 table, as a case: four more deletions cost less than the first two,
-/// and the six-deletion arm reads within `RATIO` of the zero-deletion floor.
+/// The §2 table, as a case, counted: four more deletions cost less than the first
+/// two, and six deletions stay within [`SAME_CLASS_BOUND`] of one — in allocations,
+/// which read the same on every runner (CLOUD-2022).
 ///
-/// Shown able to fail per CLOUD-418 by reverting `arm_pairs`/`arm_rows` in
-/// `policy/shell-retirement.rego` to the `arms_for(path) := rows if { … }`
-/// function this replaced, and watching both terms go red at ~30x and ~210x.
+/// Shown able to fail per CLOUD-418 by reverting `arms_for` in
+/// `policy/shell-retirement.rego` to the per-call comprehension over
+/// `input.tree.lines` that `arm_rows` replaced (CLOUD-1321). The declared
+/// mutation, in a plain comment because the module's `#MUTANT-SUITE` is
+/// `shell_retirement.rs` and one gate has one suite, so its kill is shown by hand;
+/// `\x7c` is GNU sed's spelling of the comprehension's bar, which the row's own
+/// field separator would otherwise swallow:
+// MUTANT arms-for-rescans-corpus|s@^arms_for(path) := object.get(arm_rows, path, set())$@arms_for(path) := {trim_space(line) \x7c some file, lines in input.tree.lines; startswith(file, "crates/batten/tests/"); some line in lines; some marker in arm_markers; startswith(trim_space(line), marker); split(trim_space(substring(trim_space(line), count(marker), -1)), " ")[0] == path}@|deleting_six_governed_paths_costs_a_flat_multiple_of_the_floor
 #[test]
 fn deleting_six_governed_paths_costs_a_flat_multiple_of_the_floor() {
-    let floor = arm("cost-zero", 0);
-    let two = arm("cost-two", 2);
-    let six = arm("cost-six", 6);
+    let (floor, floor_n) = arm("cost-zero", 0);
+    let (one, one_n) = arm("cost-one", 1);
+    let (two, two_n) = arm("cost-two", 2);
+    let (six, six_n) = arm("cost-six", 6);
 
-    // THE ANTI-VACUITY TERM. If the corpus ever stops being big enough for one
-    // scan to be measurable, the ratios below would pass over nothing at all —
-    // so this shouts rather than going quietly green.
-    assert!(
-        floor >= MEASURABLE,
-        "the fixture corpus no longer makes this term measurable ({floor:?} < \
-         {MEASURABLE:?}), so the ratio assertions below would pass over nothing: \
-         restore CORPUS_FILES x CORPUS_LINES"
+    // The clock is REPORTED beside the count in every message, never bounded: it
+    // is what a reader wants to see, and what no runner can be held to.
+    let table = format!(
+        "allocations 0={floor_n} 1={one_n} 2={two_n} 6={six_n} \
+         (wall, reported only: {floor:?} / {one:?} / {two:?} / {six:?})"
     );
 
-    let table = format!("0 deletions {floor:?}, 2 deletions {two:?}, 6 deletions {six:?}");
+    // THE ANTI-VACUITY TERM. If the index build ever stops being large enough to
+    // tell the per-path term apart, both bounds below would pass over nothing — so
+    // this shouts rather than going quietly green.
+    let index_build = one_n.saturating_sub(floor_n);
+    assert!(
+        index_build >= MEASURABLE_ALLOCATIONS,
+        "the index build allocates {index_build} times, under {MEASURABLE_ALLOCATIONS}, \
+         so the bounds below would pass over nothing: restore CORPUS_FILES x \
+         CORPUS_LINES — {table}"
+    );
 
     // THE LINEARITY TERM, and it is the one that names the defect. Going from two
     // deletions to six adds four more paths; going from zero to two pays the
-    // one-off index build plus two. If the ledger is scanned per path then the
-    // four-path step is roughly twice the two-path one and this fails; if the
-    // index is built once then the four-path step is nearly free.
-    //
-    // Measured on this fixture: unflattened, 0.39s / 27.5s / 81.3s — the step is
-    // 53.8s against 27.1s, so it fails by 2x. Flattened, 0.36s / 0.85s / 0.91s —
-    // the step is 0.06s against 0.49s, so it passes by 8x. An order of magnitude
-    // either side of the line.
-    let first_step = two.saturating_sub(floor);
-    let second_step = six.saturating_sub(two);
+    // one-off index build plus two. Flattened, the four-path step is ~26k
+    // allocations against a ~6.2M first step; unflattened, each path re-walks the
+    // corpus, so the four-path step is ~4 index builds against ~2.
+    let first_step = two_n.saturating_sub(floor_n);
+    let second_step = six_n.saturating_sub(two_n);
     assert!(
         second_step <= first_step,
-        "the ledger scan is linear in the deleted-path count again — {table}; four \
-         more deletions cost {second_step:?} where the first two cost {first_step:?}, \
-         so `arms_for` is scanning `input.tree.lines` per path instead of looking \
-         its answer up in `arm_rows`"
+        "the ledger scan is linear in the deleted-path count again: four more \
+         deletions allocated {second_step} times where the first two allocated \
+         {first_step}, so `arms_for` is scanning `input.tree.lines` per path instead \
+         of looking its answer up in `arm_rows` — {table}"
     );
 
     // AND AN ABSOLUTE BOUND, because a linearity test alone would pass over a term
     // that grew quadratically and then flattened, or over one whose constant had
-    // exploded. `RATIO` is deliberately loose, and its doc comment says why: the
-    // floor builds no index and every deleting arm does, so the ratio between them
-    // is a machine property — 2.5x here, 3.1x on the Windows runner, 10.4x on macOS — against 210x
-    // unflattened. Nothing between 30x and 210x is a shape this module can produce.
+    // exploded. Against ONE deletion, the same work class, so the ratio is the
+    // module's and not the machine's: 1.004x flattened, ~5x unflattened.
     assert!(
-        six <= floor * RATIO,
-        "six deletions cost more than {RATIO}x the zero-deletion floor — {table}"
+        six_n <= one_n * SAME_CLASS_BOUND,
+        "six deletions allocated more than {SAME_CLASS_BOUND}x what one did — {table}"
     );
 }

@@ -172,6 +172,8 @@ indoc.workspace = true
 # manifest carries why), and this table is exactly the place a crate the binary
 # does not link belongs.
 tiktoken-rs.workspace = true
+# CLOUD-2022: the counter the cost cases assert with, instead of a clock.
+stats_alloc.workspace = true
 
 [lints]
 workspace = true

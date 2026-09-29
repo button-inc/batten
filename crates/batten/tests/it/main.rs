@@ -45,6 +45,16 @@
 // the former per-file allowances are preserved on each module below.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+/// Every allocation this binary makes, counted (CLOUD-2022).
+///
+/// A cost case asserts over a COUNT, never a clock: `stats_alloc::Region` over an
+/// in-process call is the same number on every runner, where a wall-clock ratio
+/// failed green trees at 8.1x on Windows and 10.4x on macOS. nextest runs each
+/// case in its own process, so the process-wide counter belongs to one case.
+#[global_allocator]
+pub(crate) static ALLOCATOR: &stats_alloc::StatsAlloc<std::alloc::System> =
+    &stats_alloc::INSTRUMENTED_SYSTEM;
+
 mod abandon_matrix;
 mod acceptance_corpus;
 mod acquisition_metric;
