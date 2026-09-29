@@ -2084,6 +2084,27 @@ const SLOW_BASE: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--head <rev>` on `ci slow-needed` (CLOUD-1991).
+///
+/// The diff is always taken against the CHECKOUT, which in a `pull_request` job
+/// is the merge commit and elsewhere is `HEAD`. A caller naming a head asserts
+/// the two carry one tree, and a head that does not is refused as a usage error
+/// rather than silently answered about the checkout instead. This was the retired
+/// task body's shell guard; it is the verb's own argument now.
+const SLOW_HEAD: FlagDecl = FlagDecl {
+    id: "head",
+    long: Some("head"),
+    short: None,
+    help: "The revision whose tree the checkout must carry; refused when it does not",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const CLAIMED: FlagDecl = FlagDecl {
     id: "claimed",
     long: Some("claimed"),
@@ -3422,7 +3443,7 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_VERDICT,
         effect: Effect::Read,
-        flags: &[SLOW_BASE],
+        flags: &[SLOW_BASE, SLOW_HEAD],
     },
     // WHICH suites a diff can move (CLOUD-886), ported out of
     // `mise-tasks/suite-select.sh` under CLOUD-1716.

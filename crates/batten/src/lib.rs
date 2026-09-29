@@ -21183,7 +21183,49 @@ fn run_ci(
     match *command {
         cli::CiCommand::SlowNeeded { ref base } => run_ci_slow_needed(base, overrides, out, err),
         cli::CiCommand::Suites { ref base } => run_ci_suites(base, overrides, out, err),
+        cli::CiCommand::SlowNeededAt { ref base, ref head } => {
+            run_ci_slow_needed_at(base, head, overrides, out, err)
+        }
     }
+}
+
+/// `ci slow-needed --head <rev>` (CLOUD-1991): the plain question, asked by a
+/// caller that names the head it believes the checkout carries.
+///
+/// # The diff is the checkout's, so the head is ASSERTED, never ignored
+///
+/// A `pull_request` job checks out GitHub's merge commit, never the PR head, so
+/// the diff is taken against the checkout. Where the named head carries the
+/// checkout's tree the two questions are one — landing is fast-forward, so a
+/// landable head is already on its base. Where they differ the caller is asking
+/// about a head it is not standing on, which this cannot answer, and answering
+/// about the checkout instead would be a verdict on a different change. So it is
+/// refused as a statement about the invocation, the same reading the retired task
+/// body gave it in shell.
+///
+/// # Errors
+///
+/// Propagates a failure to open the repository, or a write failure on either
+/// channel.
+fn run_ci_slow_needed_at(
+    base: &str,
+    head: &str,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let root = git::repo_root(Path::new("."))?;
+    let named = git::resolve_ref(Path::new(&root), &format!("{head}^{{tree}}"))?;
+    let checkout = git::resolve_ref(Path::new(&root), "HEAD^{tree}")?;
+    if named.is_none() || named != checkout {
+        writeln!(
+            err,
+            "::error:: ci slow-needed: {head} does not carry this checkout's tree, and the \
+             diff is taken against the checkout."
+        )?;
+        return Ok(ExitCode::Usage);
+    }
+    run_ci_slow_needed(base, overrides, out, err)
 }
 
 /// Which bats suites a diff can move (CLOUD-886), ported off

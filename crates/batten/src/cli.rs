@@ -1820,6 +1820,19 @@ pub enum CiCommand {
         /// The revision this checkout is diffed against.
         base: String,
     },
+    /// [`CiCommand::SlowNeeded`], asked by a caller naming the head it believes
+    /// the checkout carries (CLOUD-1991).
+    ///
+    /// A VARIANT RATHER THAN A FIELD on `SlowNeeded`, for the reason every enum
+    /// here records: a field added to an existing variant is a break
+    /// `mise run semver` makes the crate declare, and an appended variant is not.
+    /// The parse selects this one exactly when `--head` is given.
+    SlowNeededAt {
+        /// The revision this checkout is diffed against.
+        base: String,
+        /// The revision whose tree must equal the checkout's.
+        head: String,
+    },
 }
 
 /// Diagnoses of `doctor` (house style §2: the verb nests focused
@@ -2321,9 +2334,15 @@ fn release_of(matches: &ArgMatches) -> Option<ReleaseCommand> {
 /// The `ci` sub-verb a parse resolved to.
 fn ci_of(matches: &ArgMatches) -> Option<CiCommand> {
     match matches.subcommand()? {
-        ("slow-needed", matches) => Some(CiCommand::SlowNeeded {
-            base: matches.get_one::<String>("base").cloned()?,
-        }),
+        ("slow-needed", matches) => {
+            let base = matches.get_one::<String>("base").cloned()?;
+            // `--head` is optional, so its absence selects the plain question
+            // rather than failing the parse.
+            Some(match matches.get_one::<String>("head").cloned() {
+                Some(head) => CiCommand::SlowNeededAt { base, head },
+                None => CiCommand::SlowNeeded { base },
+            })
+        }
         ("suites", matches) => Some(CiCommand::Suites {
             base: matches.get_one::<String>("base").cloned()?,
         }),
