@@ -1512,6 +1512,55 @@ fn no_suite_sets_the_state_dir_variables_itself() {
     );
 }
 
+/// A state redirect moves batten's store and never mise's installs (CLOUD-2021).
+///
+/// `state_dir` repoints the XDG data variable, and mise reads that same variable
+/// for every installed tool — so before the pin, a mise reached from a redirected
+/// spawn reinstalled the whole toolchain: 20.87s and 1.8 GB a call, 19.44 of the
+/// suite's most expensive case's 26.5 CPU-seconds. And it did so only locally,
+/// because CI turns auto-install off; this asserts both halves on the command
+/// every redirected suite actually spawns.
+#[test]
+fn a_redirected_state_root_leaves_mises_installs_where_they_are() {
+    let command = common::batten_at_real_root();
+    let envs: std::collections::BTreeMap<String, Option<String>> = command
+        .get_envs()
+        .map(|(name, value)| {
+            (
+                name.to_string_lossy().into_owned(),
+                value.map(|value| value.to_string_lossy().into_owned()),
+            )
+        })
+        .collect();
+    assert!(
+        !common::state_roots(&command).is_empty(),
+        "the command must redirect the state root, or this asserts nothing about a redirect"
+    );
+    for setting in ["MISE_TASK_RUN_AUTO_INSTALL", "MISE_EXEC_AUTO_INSTALL"] {
+        assert_eq!(
+            envs.get(setting),
+            Some(&Some("false".to_owned())),
+            "{setting} must be `false`, as `.github/workflows/ci.yml` sets it — otherwise a \
+             cold mise installs silently here and fails loudly there"
+        );
+    }
+    if let Some(data) = common::pinned_mise_data_dir() {
+        assert_eq!(
+            envs.get("MISE_DATA_DIR"),
+            Some(&Some(data.to_string_lossy().into_owned())),
+            "a redirected spawn must carry mise's ambient data dir, or every mise it reaches \
+             installs the whole toolchain into the fixture"
+        );
+        for (name, root) in common::state_roots(&command) {
+            assert!(
+                !data.starts_with(&root),
+                "{name} moved to {} and took mise's installs with it",
+                root.display()
+            );
+        }
+    }
+}
+
 /// The needle, assembled so this audit is invisible to itself.
 fn path_env_needle() -> String {
     [".env(\"PA", "TH\""].concat()

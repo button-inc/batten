@@ -312,7 +312,102 @@ pub(crate) fn batten() -> Command {
         command.env_remove(name);
     }
     command.env("BATTEN_BIN", env!("CARGO_BIN_EXE_batten"));
+    pin_mise(&mut command);
     command
+}
+
+/// Where mise keeps its installs, cache and state, resolved from THIS process's
+/// environment the way mise resolves them, before any case redirects anything.
+///
+/// # Why a state redirect must never move these (CLOUD-2021)
+///
+/// [`state_dir`] points `XDG_DATA_HOME` at a fixture so the child's STATE STORE
+/// is the suite's own. mise reads the same variable for `$XDG_DATA_HOME/mise`,
+/// which is every installed tool, so a mise reached through such a spawn — the
+/// `connector-allow-guard` handler runs one for every `mcp__*` payload — saw an
+/// empty install tree and installed the whole `[tools]` set before running its
+/// task. Measured: **20.87s and 1.8 GB** for one call, against 0.20s ambient;
+/// **19.44 CPU-seconds** of `cli::the_committed_shape_rules_fire_on_every_banned_
+/// shape`, the most expensive case in the suite. `MISE_*_DIR` outranks the XDG
+/// variables, so pinning them here leaves the store redirect intact and the
+/// toolchain where it is.
+fn mise_dirs() -> &'static [(&'static str, PathBuf)] {
+    static DIRS: std::sync::LazyLock<Vec<(&'static str, PathBuf)>> =
+        std::sync::LazyLock::new(|| {
+            let home = std::env::var_os("HOME").map(PathBuf::from);
+            let resolve = |own: &str, xdg: &str, fallback: &[&str]| {
+                std::env::var_os(own)
+                    .map(PathBuf::from)
+                    .or_else(|| std::env::var_os(xdg).map(|base| PathBuf::from(base).join("mise")))
+                    .or_else(|| {
+                        home.as_ref().map(|home| {
+                            fallback.iter().fold(home.clone(), |at, part| at.join(part))
+                        })
+                    })
+            };
+            // mise's own defaults per platform. UNIX ONLY, because Windows keeps
+            // all three under `%LOCALAPPDATA%\mise` and a `HOME`-relative guess
+            // would pin a directory mise never reads — an empty tree, which is the
+            // defect this exists to remove.
+            let cache: &[&str] = if cfg!(target_os = "macos") {
+                &["Library", "Caches", "mise"]
+            } else {
+                &[".cache", "mise"]
+            };
+            if cfg!(windows) {
+                return Vec::new();
+            }
+            [
+                (
+                    "MISE_DATA_DIR",
+                    "XDG_DATA_HOME",
+                    &[".local", "share", "mise"][..],
+                ),
+                ("MISE_CACHE_DIR", "XDG_CACHE_HOME", cache),
+                (
+                    "MISE_STATE_DIR",
+                    "XDG_STATE_HOME",
+                    &[".local", "state", "mise"][..],
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(own, xdg, fallback)| resolve(own, xdg, fallback).map(|dir| (own, dir)))
+            .collect()
+        });
+    &DIRS
+}
+
+/// [`mise_dirs`] pinned on `command`, and CI's two auto-install settings with them.
+///
+/// THE SETTINGS ARE THE BAN. `.github/workflows/ci.yml` sets both workflow-wide,
+/// so a case reaching a mise with a missing tool fails there naming the tool; left
+/// at mise's default here, the same case silently installs for twenty seconds on
+/// a developer's machine and nowhere else. The harness now answers the way CI
+/// does, so a cold mise is a named failure in both places rather than a cost in one.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays with the harness spawn it configures: which mise a child reaches is a property of the child's environment"
+)]
+fn pin_mise(command: &mut Command) {
+    // The declared mutation, in a plain comment because `common/` is harness
+    // rather than a sweep route; its kill is shown by hand (CLOUD-2021):
+    // MUTANT state-redirect-moves-mise|s@command.env(name, dir);@let _ = (name, dir);@|a_redirected_state_root_leaves_mises_installs_where_they_are
+    for (name, dir) in mise_dirs() {
+        command.env(name, dir);
+    }
+    command
+        .env("MISE_TASK_RUN_AUTO_INSTALL", "false")
+        .env("MISE_EXEC_AUTO_INSTALL", "false");
+}
+
+/// The mise data dir [`batten`] pins, for the case asserting a state redirect
+/// leaves it alone.
+#[must_use]
+pub(crate) fn pinned_mise_data_dir() -> Option<&'static Path> {
+    mise_dirs()
+        .iter()
+        .find(|(name, _)| *name == "MISE_DATA_DIR")
+        .map(|(_, dir)| dir.as_path())
 }
 
 /// The state root a suite whose subject is the REAL repository must run under.
