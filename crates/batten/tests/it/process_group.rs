@@ -663,6 +663,9 @@ fn a_session_leader_declines_even_with_the_opt_in_on() {
         .current_dir(&dir)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        // `common::batten()`'s CLOUD-1951 mask, applied by hand for the reason
+        // above: nothing this wraps may resolve an installed `batten` by name.
+        .env("PATH", common::ambient_path())
         // For `spawn_exec`'s reason: this case must decline on the SESSION-LEADER
         // rule, and an inherited marker would make it decline on the other one —
         // passing while measuring nothing it claims to.

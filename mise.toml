@@ -1292,12 +1292,16 @@ description = "Run the Rust workspace test suite"
 #
 # * NO `batten` RESOLVABLE BY NAME WHILE THE SUITE RUNS (CLOUD-1951). CI's test
 #   job has neither `target/release` nor an installed release on PATH, so a case
-#   or hook spawning a bare `batten` passed here and failed there. The mask now
-#   lives where every case reaches the binary: `common::batten()` hands its child
-#   `common::ambient_path()`, this PATH with every directory holding a `batten`
-#   swapped for a shadow of its other entries, and the tiers that build their own
-#   PATH start from that same value. Cases still reach the tree's own binary
-#   through `CARGO_BIN_EXE_batten`.
+#   or hook spawning a bare `batten` passed here and failed there. The mask is
+#   `common::ambient_path()` — this PATH with every directory holding a `batten`
+#   swapped for a shadow of its other entries — and it now reaches a child
+#   through the doors that hand it over: `common::batten()`, `task_bash()`,
+#   `git_command()` (a fixture's hooks run under git's PATH), and the by-hand
+#   spawns that set PATH from it. NARROWER THAN THE RETIRED BODY, stated rather
+#   than absorbed: that body masked the whole `cargo nextest` process tree, so a
+#   lib unit test, or an `it` case spawning some other program with the ambient
+#   PATH, is no longer covered. Cases reach the tree's own binary through
+#   `CARGO_BIN_EXE_batten`.
 # * THE SUITE LEAVES THE CHECKOUT AS IT FOUND IT (CLOUD-1953). The before/after
 #   comparison of tracked state is `receipt record`'s refusal of a tree that
 #   differs from HEAD, at the end of `verify:gated` — which is where the #928

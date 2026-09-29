@@ -329,9 +329,13 @@ pub(crate) fn batten() -> Command {
 /// `batten` passed here and failed there; the retired `doctor` handler on #928
 /// cost a matrix that way. `test:cargo`'s shell body used to mask the whole
 /// suite's `PATH` before `cargo nextest` ran. That body retired to one argv
-/// (CLOUD-843), and the mask moved to the one door every case reaches the binary
-/// through: [`batten`] hands this to its child, and a tier that builds its own
-/// `PATH` starts from this rather than from the ambient one.
+/// (CLOUD-843), and the mask moved to the doors that hand a child its `PATH`:
+/// [`batten`], [`task_bash`] and [`git_command`] set this, and a tier that builds
+/// its own `PATH` starts from this rather than from the ambient one.
+///
+/// NARROWER THAN THE SHELL MASK, and said so rather than implied: that covered
+/// the whole nextest process tree. A lib unit test, or a case spawning some
+/// other program without one of these doors, inherits the ambient `PATH`.
 ///
 /// A SHADOW, NOT A DROP: `mise` shares `~/.local/bin` with the installed
 /// release, so removing the directory would hide the tool runner a case may
@@ -1128,7 +1132,10 @@ pub(crate) fn git_command(dir: &Path, args: &[&str]) -> Command {
         .args(args)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"));
+        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        // A hook a fixture installs runs under git's PATH, so git gets the
+        // CLOUD-1951 mask too: no installed `batten` answers a hook by name.
+        .env("PATH", ambient_path());
     for var in [
         "GIT_DIR",
         "GIT_COMMON_DIR",

@@ -352,7 +352,8 @@ fn wrapper(dir: &Path, knobs: &[(&str, &str)]) -> Output {
     let path = format!(
         "{}:{}",
         stubs.display(),
-        std::env::var("PATH").unwrap_or_default()
+        // The CLOUD-1951 mask, so the stub is the ONLY `batten` by name.
+        common::ambient_path().to_string_lossy()
     );
     let mut all: Vec<(&str, &str)> = knobs.to_vec();
     let batten = stubs.join("batten");
