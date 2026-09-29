@@ -3128,6 +3128,8 @@ pub const SURFACE: &[CommandDecl] = &[
             LOCK_PATH,
             LOCK_ATTEMPTS,
             LOCK_LABEL,
+            EXEC_TRACKED,
+            EXEC_EXCEPT,
             FlagDecl::defaulted_enum(
                 "format",
                 "format",
@@ -6567,6 +6569,45 @@ pub const SURFACE: &[CommandDecl] = &[
         ],
     },
 ];
+
+/// `--tracked <pathspec>` on `exec` (CLOUD-1991): append every TRACKED path the
+/// pathspec selects to the child's argv, and run nothing when none is selected.
+///
+/// The shell spelling it retires is `git ls-files -z <spec> | xargs -0 -r
+/// <tool>`, carried by five lint and format task bodies so a formatter never
+/// reaches a deliberately corrupt fixture a suite wrote under an ignored
+/// directory. REPEATABLE, for [`ValueDecl::StrMany`]'s reason: a second spec
+/// widens the selection rather than silently replacing the first.
+const EXEC_TRACKED: FlagDecl = FlagDecl {
+    id: "tracked",
+    long: Some("tracked"),
+    short: None,
+    help: "Append the tracked paths this pathspec selects to the command; run nothing if none",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::StrMany,
+};
+
+/// `--except <glob>` on `exec` (CLOUD-1991): drop the `--tracked` paths a glob
+/// matches — the `:!:` exclusions a magic pathspec would carry, which `--tracked`
+/// refuses rather than reading as a literal.
+const EXEC_EXCEPT: FlagDecl = FlagDecl {
+    id: "except",
+    long: Some("except"),
+    short: None,
+    help: "Drop the tracked paths this glob matches from what --tracked selected",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::StrMany,
+};
 
 /// `--completions <dir>` on `artifacts write` (CLOUD-1991).
 const ARTIFACT_COMPLETIONS: FlagDecl = FlagDecl {

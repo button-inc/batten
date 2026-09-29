@@ -622,6 +622,11 @@ local gate = new Mapping<String, Step> {
   // promised was the one `mise run fmt` could not perform. It routes through the
   // task for the same single-definition reason the check does.
   ["deno-fmt"] {
+    // `slow` tier since CLOUD-1991: the task selects its files through
+    // `batten exec --tracked`, which a PATH release does not carry yet, so it
+    // builds the engine and a commit would pay a compile (CLOUD-1397). It runs
+    // at `verify` and in CI, before merge.
+    profiles = List("slow")
     glob = List("**/*.json", "**/*.jsonc", "**/*.yaml", "**/*.yml")
     check = "mise run lint:deno"
     fix = "mise run fmt:deno"
@@ -640,6 +645,11 @@ local gate = new Mapping<String, Step> {
   // than taking `{{files}}`, because the check must never reach a deliberately
   // malformed fixture a suite writes under `target/`.
   ["rego"] {
+    // `slow` tier since CLOUD-1991: the task selects its files through
+    // `batten exec --tracked`, which a PATH release does not carry yet, so it
+    // builds the engine and a commit would pay a compile (CLOUD-1397). It runs
+    // at `verify` and in CI, before merge.
+    profiles = List("slow")
     glob = List("**/*.rego")
     check = "mise run lint:rego"
     fix = "mise run fmt:rego"

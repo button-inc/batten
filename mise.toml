@@ -878,7 +878,6 @@ mise run -q step-receipt record lint:fmt || true
 
 [tasks."lint:toml"]
 description = "taplo: TOML syntax, duplicate keys, schema bindings, and formatting"
-shell = "bash -c"
 # TRACKED FILES ONLY, and this is not tidiness. A bare `taplo lint` walks the
 # whole tree including `target/`, where the test suite writes deliberately
 # corrupt fixtures — `target/tmp/trust-corrupt-config/batten.toml` is literally
@@ -891,16 +890,20 @@ shell = "bash -c"
 # task with "Closing comment tag `#}` not found" before a shell ever sees it.
 # NUL-delimited is the more robust idiom anyway. `-r` so an empty set is a
 # no-op rather than a bare `taplo lint` that would walk the tree after all.
-run = '''
-set -euo pipefail
-git ls-files -z '*.toml' | xargs -0 -r taplo lint
-git ls-files -z '*.toml' | xargs -0 -r taplo format --check --diff
-echo "lint:toml: every tracked TOML file parses, lints and is formatted"
-'''
+# THE SELECTION IS `batten exec --tracked` SINCE CLOUD-1991, NOT A SHELL PIPE.
+# `git ls-files -z <spec> | xargs -0 -r <tool>` was the whole reason this body
+# was shell: the index is the selection (tracked files only, for the reason
+# above), and `-r` ran nothing when nothing matched. `--tracked` is both, over
+# the same index projection a policy row's `index` column reads, and `--tee`
+# hands the tool's own output back unchanged. `cargo run` resolves the TREE's
+# engine, because `--tracked` is newer than any release on PATH.
+run = [
+  "cargo run --quiet -p batten -- exec --tee --tracked '*.toml' -- taplo lint",
+  "cargo run --quiet -p batten -- exec --tee --tracked '*.toml' -- taplo format --check --diff",
+]
 
 [tasks."lint:deno"]
 description = "deno fmt: JSON/JSONC and non-workflow YAML parse and are formatted"
-shell = "bash -c"
 # MARKDOWN IS DELIBERATELY NOT HERE, and the reason is measured rather than
 # stylistic. `deno fmt` over the tree's 41 Markdown files rewrites 5, and two of
 # those rewrites are documentation corruption: it strips a trailing space INSIDE
@@ -935,18 +938,17 @@ shell = "bash -c"
 # zero-line diff on that file. Structure is formatted; prose lines are left be.
 #
 # `-z` + `xargs -0`, and NOT a bash array, for `lint:toml`'s Tera reason above.
-run = '''
-set -euo pipefail
-git ls-files -z '*.json' '*.jsonc' '*.yaml' '*.yml' \
-	':!:.github/workflows/*' ':!:schema/*.json' ':!:contracts/*.json' \
-	':!:crates/batten/tests/fixtures/*' ':!:fuzz/corpus/*' ':!:tests/fixtures/*' |
-	xargs -0 -r deno fmt --check --prose-wrap=preserve
-echo "lint:deno: every tracked JSON and non-workflow YAML file parses and is formatted"
-'''
+# THE SELECTION IS `batten exec --tracked` SINCE CLOUD-1991, NOT A SHELL PIPE.
+# `git ls-files -z <spec> | xargs -0 -r <tool>` was the whole reason this body
+# was shell: the index is the selection (tracked files only, for the reason
+# above), and `-r` ran nothing when nothing matched. `--tracked` is both, over
+# the same index projection a policy row's `index` column reads, and `--tee`
+# hands the tool's own output back unchanged. `cargo run` resolves the TREE's
+# engine, because `--tracked` is newer than any release on PATH.
+run = "cargo run --quiet -p batten -- exec --tee --tracked '*.json' --tracked '*.jsonc' --tracked '*.yaml' --tracked '*.yml' --except '.github/workflows/*' --except 'schema/*.json' --except 'contracts/*.json' --except 'crates/batten/tests/fixtures/*' --except 'fuzz/corpus/*' --except 'tests/fixtures/*' -- deno fmt --check --prose-wrap=preserve"
 
 [tasks."fmt:deno"]
 description = "deno fmt: rewrite the tracked JSON/JSONC and non-workflow YAML in canonical form"
-shell = "bash -c"
 # The fixer half of `lint:deno`, and it is CLOUD-681's second half rather than a
 # tidy-up. `fmt`'s own description has always named `deno fmt` among the fixers it
 # runs, and the `deno-fmt` step carried only a `check` — so the one formatter that
@@ -970,13 +972,14 @@ shell = "bash -c"
 # reflows AGENTS.md past `[budget.instructions]`'s line cap.
 #
 # `-z` + `xargs -0` rather than a bash array, for `lint:toml`'s Tera reason.
-run = '''
-set -euo pipefail
-git ls-files -z '*.json' '*.jsonc' '*.yaml' '*.yml' \
-	':!:.github/workflows/*' ':!:schema/*.json' ':!:contracts/*.json' \
-	':!:crates/batten/tests/fixtures/*' ':!:fuzz/corpus/*' ':!:tests/fixtures/*' |
-	xargs -0 -r deno fmt --prose-wrap=preserve
-'''
+# THE SELECTION IS `batten exec --tracked` SINCE CLOUD-1991, NOT A SHELL PIPE.
+# `git ls-files -z <spec> | xargs -0 -r <tool>` was the whole reason this body
+# was shell: the index is the selection (tracked files only, for the reason
+# above), and `-r` ran nothing when nothing matched. `--tracked` is both, over
+# the same index projection a policy row's `index` column reads, and `--tee`
+# hands the tool's own output back unchanged. `cargo run` resolves the TREE's
+# engine, because `--tracked` is newer than any release on PATH.
+run = "cargo run --quiet -p batten -- exec --tee --tracked '*.json' --tracked '*.jsonc' --tracked '*.yaml' --tracked '*.yml' --except '.github/workflows/*' --except 'schema/*.json' --except 'contracts/*.json' --except 'crates/batten/tests/fixtures/*' --except 'fuzz/corpus/*' --except 'tests/fixtures/*' -- deno fmt --prose-wrap=preserve"
 
 [tasks."fix-selection-check"]
 description = "hk's `fix` hook selects exactly the gate's fixer-bearing steps — no check-only step, no unrouted fixer"
@@ -1051,7 +1054,6 @@ run = "actionlint"
 
 [tasks."lint:rego"]
 description = "opa fmt: Rego formatting over the tracked module corpus"
-shell = "bash -c"
 # CLOUD-930. Every other config format in this tree is formatted and validated in
 # the shared gate — taplo for TOML, pkl for hk.pkl, prettier for Markdown,
 # actionlint for workflows — and `.rego` had neither when that row was filed.
@@ -1083,35 +1085,40 @@ shell = "bash -c"
 # `lint:toml`'s, and for the same hard reason — mise renders task bodies through
 # Tera, which reads the `{#` in `${#files[@]}` as a comment-open and fails the task
 # before a shell ever sees it.
-run = '''
-set -euo pipefail
-unformatted=$(git ls-files -z '*.rego' | xargs -0 -r mise exec -- opa fmt -l)
-if [ -n "$unformatted" ]; then
-	echo "$unformatted" >&2
-	echo "::error:: rego formatting: the files above would change under opa fmt. Run 'mise run fmt' (or 'mise run fmt:rego')." >&2
-	exit 1
-fi
-# The parse and type half, here because this step is cheap and runs before any
-# compile: a module that does not parse, or reads a path the engine never emits,
-# used to surface only inside `batten-check`, after the whole cargo chain. The
-# `module read undefined` row stays the landing authority over the same command.
-mise exec -- opa check -s schema/ policy/
-echo "lint:rego: every tracked Rego module is formatted and type-checks"
-'''
+# THE SELECTION IS `batten exec --tracked` SINCE CLOUD-1991, NOT A SHELL PIPE.
+# `git ls-files -z <spec> | xargs -0 -r <tool>` was the whole reason this body
+# was shell: the index is the selection (tracked files only, for the reason
+# above), and `-r` ran nothing when nothing matched. `--tracked` is both, over
+# the same index projection a policy row's `index` column reads, and `--tee`
+# hands the tool's own output back unchanged. `cargo run` resolves the TREE's
+# engine, because `--tracked` is newer than any release on PATH.
+# `opa fmt -l --fail` SHORT-CIRCUITS on the first unformatted file, measured
+# again on opa 1.2.0, so the verdict is the SECOND call and the whole pointer
+# set is the FIRST: `-l` alone names every file that would change and exits 0,
+# then the same selection under `--fail` refuses. A reader sees every offender on
+# one run, and the gate still fails on any.
+run = [
+  "cargo run --quiet -p batten -- exec --tee --tracked '*.rego' -- mise exec -- opa fmt -l",
+  "cargo run --quiet -p batten -- exec --tee --tracked '*.rego' -- mise exec -- opa fmt -l --fail",
+  "mise exec -- opa check -s schema/ policy/",
+]
 
 [tasks."fmt:rego"]
 description = "opa fmt -w: rewrite the tracked Rego corpus in canonical form"
-shell = "bash -c"
 # The fixer half of `lint:rego`. hk's `rego` step is what routes `mise run fmt`
 # through it — single-definition, the way hk's `cargo-fmt`/`cargo-clippy` steps
 # override the builtin command with `mise run lint:fmt`/`lint:clippy` so the hook
 # and the task cannot disagree about what passes. Same tracked-file selection as
 # the check: a fixer let loose on the tree would repair the corrupt fixture a suite
 # wrote to be broken.
-run = '''
-set -euo pipefail
-git ls-files -z '*.rego' | xargs -0 -r mise exec -- opa fmt -w
-'''
+# THE SELECTION IS `batten exec --tracked` SINCE CLOUD-1991, NOT A SHELL PIPE.
+# `git ls-files -z <spec> | xargs -0 -r <tool>` was the whole reason this body
+# was shell: the index is the selection (tracked files only, for the reason
+# above), and `-r` ran nothing when nothing matched. `--tracked` is both, over
+# the same index projection a policy row's `index` column reads, and `--tee`
+# hands the tool's own output back unchanged. `cargo run` resolves the TREE's
+# engine, because `--tracked` is newer than any release on PATH.
+run = "cargo run --quiet -p batten -- exec --tee --tracked '*.rego' -- mise exec -- opa fmt -w"
 
 [tasks.coverage]
 description = "Report: line/region coverage of the Rust suite. A REPORT, never a gate — deliberately not in `verify` and not a required check"

@@ -1142,6 +1142,13 @@ pub struct ExecRequest {
     /// file; "the toolchain lock (aarch64-apple-darwin)" is a pointer to the
     /// thing a reader has to reason about.
     pub lock_label: Option<String>,
+    /// Pathspecs whose TRACKED paths are appended to the child's argv
+    /// (CLOUD-1991) — `git ls-files -z <spec> | xargs -0 -r`, without the shell.
+    /// Empty is the ordinary run.
+    pub tracked: Vec<String>,
+    /// Globs removing paths from what `tracked` selected — the `:!:` exclusions a
+    /// magic pathspec would carry, which `tracked` refuses rather than misreads.
+    pub except: Vec<String>,
 }
 
 /// Subcommands of `lint` — one arm per *kind* of artifact, which is what the
@@ -2821,6 +2828,16 @@ fn exec_of(matches: &ArgMatches) -> Option<Command> {
         lock_path: matches.get_one::<String>("lock_path").cloned(),
         lock_attempts: matches.get_one::<String>("lock_attempts").cloned(),
         lock_label: matches.get_one::<String>("lock_label").cloned(),
+        // `unwrap_or_default` for `record derive`'s reason: an absent repeatable
+        // flag is an empty selection rather than a parse failure.
+        tracked: matches
+            .get_many::<String>("tracked")
+            .map(|values| values.cloned().collect())
+            .unwrap_or_default(),
+        except: matches
+            .get_many::<String>("except")
+            .map(|values| values.cloned().collect())
+            .unwrap_or_default(),
     }))
 }
 

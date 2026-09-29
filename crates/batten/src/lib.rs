@@ -17947,6 +17947,12 @@ fn run_exec(
             })?;
     }
     settings.continue_on_error = settings.continue_on_error || request.continue_on_error;
+    // `--tracked` NARROWS TO NOTHING BY RUNNING NOTHING (CLOUD-1991), the `-r` of
+    // the `xargs -0 -r` it retires: a formatter handed no path would walk the
+    // whole tree instead, which is the reach the flag exists to bound.
+    let Some(command) = exec_tracked_command(request)? else {
+        return Ok(ExitCode::Success);
+    };
     // THE LOCK IS HELD ACROSS THE CHILD, AND THE GUARD IS WHAT MAKES THAT TRUE
     // ON EVERY RETURN (CLOUD-1710). A wrapped command that fails comes back as
     // `Err(Passthrough)`, so releasing after the call would leak the lock on
@@ -17960,7 +17966,95 @@ fn run_exec(
     // The report goes to the ERROR channel, never `out`: stdout belongs to the
     // wrapped command (CLOUD-285), so a pointer line there would corrupt a
     // document the caller may be parsing.
-    exec::run_with(&request.command, &patterns, &settings, err)
+    exec::run_with(&command, &patterns, &settings, err)
+}
+
+/// The child's argv with `--tracked`'s paths appended, or `None` when the
+/// pathspecs selected nothing (CLOUD-1991).
+///
+/// # The retired shell, and what each clause of it becomes
+///
+/// Five task bodies spelled `git ls-files -z <spec> | xargs -0 -r <tool>`, so a
+/// formatter never reached a deliberately corrupt fixture a suite wrote under an
+/// ignored `target/`. The INDEX is the selection — [`git::index_facts`], the same
+/// projection a policy row's `index` column reads, so "tracked" means one thing
+/// in this crate — and `-r` is the `None` arm. `--except` is the `:!:` exclusions
+/// those bodies carried: a magic pathspec is refused here exactly as
+/// [`git::pathspec_is_supported`] refuses it for a row, rather than read as a
+/// literal that selects nothing and reports a clean run.
+///
+/// # Root-relative, so it runs from the root
+///
+/// Index paths are relative to the repository root, and `git ls-files` printed
+/// them relative to the caller's directory. The two agree only at the root, so a
+/// caller anywhere else is refused rather than handed paths that name different
+/// files — the silent wrong answer the refusal exists to prevent.
+///
+/// # Errors
+///
+/// [`UsageError`] for an `--except` with no `--tracked`, a `:::` bundle, a magic
+/// pathspec, a malformed glob, or a caller outside the root; otherwise whatever
+/// reading the index reports.
+fn exec_tracked_command(request: &cli::ExecRequest) -> Result<Option<Vec<String>>> {
+    if request.tracked.is_empty() {
+        if !request.except.is_empty() {
+            return Err(UsageError::raise(
+                "exec: --except narrows what --tracked selected; name the selection with --tracked",
+            ));
+        }
+        return Ok(Some(request.command.clone()));
+    }
+    if request
+        .command
+        .iter()
+        .any(|word| word == exec::BUNDLE_SEPARATOR)
+    {
+        return Err(UsageError::raise(
+            "exec: --tracked appends to one command, and a `:::` bundle carries several",
+        ));
+    }
+    if let Some(spec) = request
+        .tracked
+        .iter()
+        .find(|spec| !git::pathspec_is_supported(spec))
+    {
+        return Err(UsageError::raise(format!(
+            "exec: --tracked `{spec}` is not a plain pathspec; exclude with --except instead"
+        )));
+    }
+    let mut builder = globset::GlobSetBuilder::new();
+    for glob in &request.except {
+        let parsed = globset::Glob::new(glob).map_err(|error| {
+            UsageError::raise(format!("exec: --except `{glob}` is not a glob: {error}"))
+        })?;
+        builder.add(parsed);
+    }
+    let except = builder
+        .build()
+        .map_err(|error| UsageError::raise(format!("exec: --except: {error}")))?;
+
+    // THIS CHECKOUT'S root, never `repo_root`, which answers with the common
+    // dir's parent: in a linked worktree that is the MAIN checkout, whose paths
+    // would name another tree's files — `index_facts` reads its own workdir for
+    // the same reason.
+    let root = git::worktree_root(Path::new("."))?;
+    let here = std::env::current_dir()?;
+    if here.canonicalize()? != root.canonicalize()? {
+        return Err(UsageError::raise(
+            "exec: --tracked appends root-relative paths, so it runs from the repository root",
+        ));
+    }
+    let paths: std::collections::BTreeSet<String> = git::index_facts(&root, &request.tracked)?
+        .into_values()
+        .flat_map(|fact| fact.entries.into_iter().map(|entry| entry.path))
+        .filter(|path| !except.is_match(path))
+        .collect();
+    if paths.is_empty() {
+        return Ok(None);
+    }
+    let mut command = request.command.clone();
+    command.extend(paths);
+    Ok(Some(command))
 }
 
 /// What `--lock` asked for, as the value [`exec::hold`] takes.

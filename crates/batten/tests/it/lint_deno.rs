@@ -1,6 +1,12 @@
 //! `[tasks."lint:deno"]` — which tracked files reach `deno fmt` (CLOUD-104),
-//! over the task's own body in a scratch repository with a `deno` stub first on
+//! over the task's own argv in a scratch repository with a `deno` stub first on
 //! `PATH` that fails on any file it is handed that is not JSON.
+//!
+//! Since CLOUD-1991 the task is one `batten exec --tracked` argv rather than a
+//! `git ls-files | xargs` body, so this tier runs THAT argv through the engine
+//! under test: the selection, the exclusions and the no-match arm are the verb's
+//! now, and the task's own spelling is still what decides which files reach the
+//! formatter.
 //!
 //! The retired suite registered its probes in the SHARED `.git/index` of this
 //! checkout, and the suite runs files in parallel: it raced another file's git
@@ -15,6 +21,7 @@
 // carried: "a corrupt file under tests/fixtures leaves it green" mise.toml kind:mechanism
 // carried: "the task pins --prose-wrap=preserve, which is a predicate and not a style" mise.toml kind:mechanism
 // carried: "the hk step calls this task rather than re-deriving the file set" hk.pkl kind:mechanism
+// changed: "the selection is `git ls-files -z` into `xargs -0 -r`" crates/batten/src/lib.rs `exec --tracked` selects from the same index and runs nothing on an empty selection; the `:!:` exclusions are `--except` globs, since a magic pathspec is refused rather than misread
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -80,8 +87,27 @@ impl Repo {
         git(&self.dir, &["add", "-N", path]);
     }
 
+    /// The task's argv, minus the `cargo run … --` that resolves the engine in
+    /// this repository, run through the engine under test with the stub first on
+    /// `PATH`. Tokens are single-quoted globs at most, so a whitespace split with
+    /// the quotes trimmed is the argv mise hands the shell.
     fn run(&self) -> Option<i32> {
-        common::task_command(&self.dir, "lint:deno")
+        let body = common::task_body("lint:deno");
+        let argv: Vec<String> = body
+            .strip_prefix("cargo run --quiet -p batten -- ")
+            .expect("the task runs the tree's engine")
+            .split_whitespace()
+            .map(|word| word.trim_matches('\'').to_owned())
+            .collect();
+        let inherited = std::env::var_os("PATH").unwrap_or_default();
+        let path = std::env::join_paths(
+            std::iter::once(self.dir.join("bin")).chain(std::env::split_paths(&inherited)),
+        )
+        .expect("a PATH entry carries no separator");
+        common::batten()
+            .args(&argv)
+            .current_dir(&self.dir)
+            .env("PATH", path)
             .output()
             .expect("run lint:deno")
             .status
