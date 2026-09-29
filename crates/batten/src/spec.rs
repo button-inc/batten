@@ -958,6 +958,10 @@ mod tests {
             // it inherits the widest effect of the steps it sequences.
             "land fast-forward".to_owned(),
             "land lap".to_owned(),
+            // CLOUD-1991: the `linear-check` task body's question, through the
+            // fetch the lap already makes. `write` for that fetch, and so absent
+            // from the read-only allowlist.
+            "land linear".to_owned(),
             "land push".to_owned(),
             "land replay".to_owned(),
             "land verify".to_owned(),

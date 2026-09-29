@@ -655,7 +655,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,land-divergence,task-linear-check,macos-link,task-mcp-allow-check,nonverdict,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,docs-tree-absent,ripcord-untracked,hk-pin-agreement"
+MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,land-divergence,macos-link,task-mcp-allow-check,nonverdict,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,docs-tree-absent,ripcord-untracked,hk-pin-agreement"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -7273,16 +7273,15 @@ depends = ["build:release"]
 # `::error::`, a log pointer, and a non-zero exit. At hook time, a `batten` that
 # is not there is a command the host cannot run, which every supported host
 # reports through its own channel.
-# `sh`, not bash: mise runs a task body through `sh -c`, so `set -o pipefail` is
-# an illegal option here. There is no pipeline in this body to protect, and
-# `set -eu` is the portable half that matters.
-run = """
-set -eu
-dest="${BATTEN_INSTALL_DIR:-${XDG_BIN_HOME:-$HOME/.local/bin}}"
-mkdir -p "$dest"
-install -m 0755 target/release/batten "$dest/batten"
-echo "install:local: batten -> $dest/batten"
-"""
+# AN ARGV SEQUENCE, NOT A SHELL BODY (CLOUD-1991). The `set -eu` the body opted
+# into is what mise does to an array — the install does not run when the
+# directory could not be made — and the destination's fallback chain, which was
+# `${BATTEN_INSTALL_DIR:-${XDG_BIN_HOME:-$HOME/.local/bin}}`, is the template's
+# `if`/`elif`, where an empty variable is as unset as it was to `:-`.
+run = [
+  "mkdir -p {% if env.BATTEN_INSTALL_DIR %}{{env.BATTEN_INSTALL_DIR}}{% elif env.XDG_BIN_HOME %}{{env.XDG_BIN_HOME}}{% else %}{{env.HOME}}/.local/bin{% endif %}",
+  "install -m 0755 target/release/batten {% if env.BATTEN_INSTALL_DIR %}{{env.BATTEN_INSTALL_DIR}}{% elif env.XDG_BIN_HOME %}{{env.XDG_BIN_HOME}}{% else %}{{env.HOME}}/.local/bin{% endif %}/batten",
+]
 
 # The provisioning seam the environment's setup script ALREADY CALLS, and which
 # this repository never defined (CLOUD-1085).
@@ -9169,52 +9168,30 @@ run = 'cargo run --quiet -p batten -- land lap "{{usage.reference}}"'
 # `linear-check` receipt it mints are unchanged, because `verify`'s receipts,
 # `[ready] checks`, `verified_by` and the ready guard all name it.
 #
-# THE FETCH FAILS CLOSED, and that is why it once lived in a file with `set -e`:
-# a task body under `bash -c` runs every line regardless, so a failed fetch fell
-# through to `rev-parse origin/main`, compared a stale main to itself, passed, and
-# minted a receipt the ready guard then accepted. Every line below is guarded by
-# hand instead. The fetch names its refspec and deepens a shallow clone first: a
-# single-branch clone's `git fetch origin main` exits 0 while writing no
-# `origin/main` at all (measured on `git clone --depth 1`).
-#
-# Exit 1 is the environment (fetch failed, `origin/main` unresolvable) and exit 2
-# is "the branch is behind" (CLOUD-318): `land` laps on 2 and stops on 1, so the
-# two must never collapse. No receipt on any refusal; a failed receipt write
-# fails the gate. `BATTEN_BIN` stubs the writer in the tier.
+# THE FETCH FAILS CLOSED, and that was the whole reason this was once a file with
+# `set -e`: a failed fetch that fell through compared a stale main to itself,
+# passed, and minted a receipt the ready guard then accepted. The verb below
+# holds that property in-process (CLOUD-1991); `crates/batten/tests/it/
+# linear_check.rs` pins it over the compiled binary.
 [tasks."linear-check"]
-#MUTANT-SUITE crates/batten/tests/it/linear_check.rs
-#MUTANT failed-fetch-trusts-stale-ref|s@^\techo "::error:: could not fetch origin/main@\ttrue; echo "@|a_failed_fetch_exits_1_and_writes_no_receipt
-#MUTANT behind-reads-as-broken|s@^\texit 2$@\texit 1@|a_head_behind_main_is_exit_2_and_writes_no_receipt
-#MUTANT receipt-failure-swallowed|s@attests this linearity" >&2$@attests this linearity"; exit 0@|a_failed_receipt_write_fails_the_gate
 description = "Gate: HEAD is linear on the current origin/main, so the PR can fast-forward-land"
-shell = "bash -c"
-run = '''
-{% raw %}
-set -uo pipefail
-if [[ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]]; then
-	git fetch -q --no-tags --unshallow origin 2>/dev/null ||
-		git fetch -q --no-tags --deepen=1000 origin 2>/dev/null || true
-fi
-if ! git fetch -q --no-tags origin "+refs/heads/main:refs/remotes/origin/main"; then
-	echo "::error:: could not fetch origin/main, so linearity is unverifiable. Refusing to pass on a stale ref — re-run when the network is back." >&2
-	exit 1
-fi
-if ! main=$(git rev-parse origin/main 2>/dev/null); then
-	echo "::error:: fetched, but origin/main still does not resolve. That is a checkout problem, not a rebase problem — do not read it as 'not rebased'." >&2
-	exit 1
-fi
-if [[ "$(git merge-base origin/main HEAD)" != "$main" ]]; then
-	echo "::error:: not rebased on latest main ($main). Run: mise run land" >&2
-	exit 2
-fi
-read -r -a batten_bin <<<"${BATTEN_BIN:-cargo run --quiet -p batten --}"
-"${batten_bin[@]}" receipt record linear-check || {
-	echo "::error:: linear-check: could not record the receipt, so nothing attests this linearity" >&2
-	exit 1
-}
-echo "linear-check: HEAD is linear on origin/main ($main)"
-{% endraw %}
-'''
+# THE QUESTION IS `batten land linear` SINCE CLOUD-1991; the receipt stays here.
+# The fetch, the fail-closed arms and the merge-base comparison the body spelled
+# in shell are the verb's, through the fetch a landing lap already makes — so
+# "the trunk as the loop sees it" has one reading. The verb answers `0` linear,
+# `2` behind (the verdict `verify` laps on, as the body's `exit 2` was), and `3`
+# where it could not look: a fetch that did not complete, or a SHALLOW clone,
+# which it refuses and names the remedy for rather than deepening in place.
+#
+# THE RECEIPT IS AN ARGV STEP, NOT A VERB FLAG: which receipt names this
+# question is this repository's vocabulary (`[ready] checks`, `verify`'s
+# receipts). mise runs it only after the verb answered `0`, and a receipt that
+# will not write fails the task — the two properties the body's `set -uo
+# pipefail` and `|| { …; exit 1; }` were carrying.
+run = [
+  "cargo run --quiet -p batten -- land linear main",
+  "cargo run --quiet -p batten -- receipt record linear-check",
+]
 
 # The external analyzer's verdict on one SHA (CLOUD-441), retired off
 # `mise-tasks/sonar-gate.sh` under CLOUD-1717. The DECISION was always

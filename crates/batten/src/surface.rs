@@ -6313,6 +6313,19 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_VERDICT,
         flags: &[LAND_REFERENCE],
     },
+    // `write`, for `land replay`'s first half: it fetches the reference into the
+    // odb and moves its remote-tracking ref, which is the lap's own fetch reused
+    // so the trunk has one reading. The ANSWER is a verdict — `2` for a head that
+    // is not built on the current tip — and it leaves no record (CLOUD-1991).
+    CommandDecl {
+        path: "land linear",
+        id: "land.linear",
+        about: "Whether this head is built on the reference's current tip, so it can fast-forward",
+        data_channel: false,
+        effect: Effect::Write,
+        exits: EXITS_VERDICT,
+        flags: &[LAND_REFERENCE],
+    },
     // --- CLOUD-843's foundation surface (the bash retirement) -----------------
     //
     // Every row below carries its FINAL arguments and its §5 effect. A row whose

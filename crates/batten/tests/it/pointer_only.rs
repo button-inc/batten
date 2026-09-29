@@ -744,6 +744,9 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // which is the honest could-not-look and not a verb that emitted nothing
     // because it had nothing to emit.
     "land lap",
+    // `land linear` (CLOUD-1991) resolves the same remote before its fetch, so
+    // on a corpus naming none it stops at that preamble with the same answer.
+    "land linear",
     // THE FIVE PORTS WHOSE SUBJECT IS OUTSIDE THE CORPUS (CLOUD-1716,
     // CLOUD-1753), each here on the bar the paragraph above states: no lighter
     // fixture produces a verdict, and the reason is the corpus rather than the
@@ -931,6 +934,13 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "land lap",
         args: &["refs/heads/main"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `land linear` reports a tracking ref and a sha, or a refusal naming them.
+    Verb {
+        path: "land linear",
+        args: &["main"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },

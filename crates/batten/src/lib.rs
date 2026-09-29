@@ -8003,6 +8003,81 @@ fn run_land(
             };
             run_land_lap(root, &url, reference, &branch, out, err)
         }
+        cli::LandCommand::Linear { reference } => {
+            let Some(url) = land_remote(root, err)? else {
+                return Ok(ExitCode::Internal);
+            };
+            run_land_linear(root, &url, reference, out, err)
+        }
+    }
+}
+
+/// `batten land linear <reference>` (CLOUD-1991): is HEAD built on the reference's
+/// CURRENT tip, so its pull request can fast-forward-land?
+///
+/// # The retired shell, clause by clause
+///
+/// The `linear-check` task body fetched `+refs/heads/main:refs/remotes/origin/main`
+/// after deepening a shallow clone, refused on a fetch that failed or a ref that
+/// still would not resolve, and compared `git merge-base origin/main HEAD` against
+/// the fetched tip. Each clause is here, through [`land::advance`] — the fetch a
+/// lap already makes, so "the trunk as the landing loop sees it" has one reading:
+///
+/// * **THE FETCH FAILS CLOSED.** A fetch that does not complete is could-not-look
+///   (`3`), never a comparison against a stale tracking ref — the false green that
+///   once minted a receipt the ready guard accepted.
+/// * **A SHALLOW CLONE IS REFUSED, NOT DEEPENED.** The body unshallowed first; the
+///   in-process fetch sends `have` lines from local history and cannot deepen, and
+///   ancestry over a truncated history answers wrong in exactly one direction. So a
+///   shallow clone is could-not-look, naming the remedy, rather than a verdict.
+/// * **BEHIND IS THE VERDICT (`2`)**, which is what the body's `exit 2` was and what
+///   a caller branching on "rebase needed" reads. Linear is `0`.
+///
+/// The receipt the body minted is NOT minted here: which receipt names this
+/// question is the consumer's vocabulary, so the task records it after a `0`.
+///
+/// # Errors
+///
+/// Only a write failure on either channel; every failure to look is an exit code.
+fn run_land_linear(
+    root: &Path,
+    url: &str,
+    reference: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    //MUTANT-SUITE crates/batten/tests/it/linear_check.rs
+    //MUTANT linear-shallow-trusted|s@^    if git::is_shallow(root).unwrap_or(true) {$@    if false {@|a_shallow_clone_is_could_not_look_and_names_the_remedy
+    //MUTANT linear-fetch-failure-trusted|s@return Ok(ExitCode::Internal); // the fetch did not complete$@return Ok(ExitCode::Success);@|a_fetch_that_cannot_complete_is_could_not_look_and_never_a_pass
+    if git::is_shallow(root).unwrap_or(true) {
+        writeln!(
+            err,
+            "::error:: land linear: this clone is shallow (or unreadable), so ancestry against \
+             {reference} is unanswerable; deepen it with `git fetch --unshallow` and ask again"
+        )?;
+        return Ok(ExitCode::Internal);
+    }
+    let tracking = land::tracking_ref(reference);
+    let tip = match land::advance(root, url, reference, &tracking) {
+        Ok(tip) => tip,
+        Err(error) => {
+            writeln!(
+                err,
+                "::error:: land linear: could not fetch {reference}, so linearity is \
+                 unverifiable; not reading a stale {tracking}: {error:#}"
+            )?;
+            return Ok(ExitCode::Internal); // the fetch did not complete
+        }
+    };
+    if gitwrite::carries(root, &tip, "HEAD") {
+        writeln!(out, "land linear: HEAD is built on {tracking} ({tip})")?;
+        Ok(ExitCode::Success)
+    } else {
+        writeln!(
+            err,
+            "::error:: land linear: HEAD is not rebased on the current {tracking} ({tip})"
+        )?;
+        Ok(ExitCode::Violation)
     }
 }
 

@@ -733,6 +733,16 @@ pub enum LandCommand {
         /// The remote reference this lap lands onto, e.g. `refs/heads/main`.
         reference: String,
     },
+    /// Is this head built on the CURRENT tip of the reference, so its pull
+    /// request can fast-forward-land (CLOUD-1991)?
+    ///
+    /// APPENDED LAST, for the reason every enum here records. The question the
+    /// `linear-check` task body asked in shell — fetch the trunk, compare the
+    /// merge base — asked through the fetch a lap already makes.
+    Linear {
+        /// The remote reference the head must be built on, e.g. `main`.
+        reference: String,
+    },
 }
 
 /// Subcommands of `mutate`.
@@ -2431,6 +2441,9 @@ fn land_of(matches: &ArgMatches) -> Option<LandCommand> {
         ("verify", _) => Some(LandCommand::Verify),
         ("fast-forward", _) => Some(LandCommand::FastForward),
         ("lap", matches) => Some(LandCommand::Lap {
+            reference: reference_of(matches),
+        }),
+        ("linear", matches) => Some(LandCommand::Linear {
             reference: reference_of(matches),
         }),
         _ => None,
