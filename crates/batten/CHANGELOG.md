@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.191](https://github.com/button-inc/batten/compare/v0.0.190...v0.0.191) - 2026-09-29
+
+### Added
+
+- *(memories)* [**breaking**] bound every memory to what one read returns, and split the ones over it
+- *(policy)* subagents and workflows never prompt in auto mode; only worktrees are refused
+
+### Fixed
+
+- *(hook)* the unreadable-config refusal names the floor it admits
+- *(policy)* bats-invocation reads the selector test:bats actually runs
+- *(policy)* keep a consumer filename out of the core, and fork no fixture repo
+- *(policy)* read rule members only at the packages the modules declared
+- *(refusal)* accept an admission subject as the refusal line prints it
+- *(prune)* reclaim a .dwo whose owning unit has no fingerprint
+- *(perf)* build the repository being measured, never an enclosing workspace
+- *(hook)* a leading `/` in a followed `cd` is absolute on every host
+- *(prune)* measure the warm floor instead of rescaling it by test-file count
+- *(doctor)* register `doctor config` in the read allowlist, row set and pointer-only table
+- *(doctor)* a `[[startup]]` row fails when the engine on PATH drops config rows
+- *(hook)* a memory `Read` refuses under its own class and names its read route
+- *(ready)* a docs or commitless row may declare no tests in its claims object
+- *(tasks)* `record-verdicts` records only conclusions in the declared answered set
+- *(hook)* `tool select other` follows a leading `cd` before judging an operand's containment
+
+### Other
+
+- *(perf)* keep the confinement case compiled on every target
+- *(hook)* quote the repository root in the followed-`cd` deny cases
+
 ## [0.0.190](https://github.com/button-inc/batten/compare/v0.0.189...v0.0.190) - 2026-09-29
 
 ### Other
