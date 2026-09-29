@@ -560,9 +560,12 @@ local gate = new Mapping<String, Step> {
     //
     // `{{files}}` IS DROPPED DELIBERATELY. The declared row names `hk.pkl`, and a
     // record is keyed to the digest of the input its row names — so a producer
-    // handed some other path has no key to write under. `hk.pkl` is the only
-    // tracked `.pkl`, so today the two selections are the same set; a second one
-    // would owe a second `[[rule.tools]]` row rather than an argument here.
+    // handed some other path has no key to write under. `hk.pkl` was the only
+    // tracked `.pkl` when this was written; `hk-fix-selection.pkl` (CLOUD-1991)
+    // is the second, and it needs no row here because `gate fix missing`
+    // EVALUATES it — a module that will not evaluate fails that row. A third
+    // that nothing evaluates would owe a `[[rule.tools]]` row rather than an
+    // argument here.
     check = "mise run record-verdicts"
   }
   ["pkl-format"] = (Builtins.pkl_format) {

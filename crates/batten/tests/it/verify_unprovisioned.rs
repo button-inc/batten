@@ -25,6 +25,13 @@
 //! 2. `verify` ROUTES through that predicate, in a guard that stops before any
 //!    receipt is written — read off the committed manifest as text.
 //!
+//! **CHANGED BY CLOUD-1991**: `[tasks."toolchain-check"]` no longer pipes a
+//! probe into half 1's verb; it asks `mise install --dry-run-code`, the runner's
+//! own form of the same question, which exits 1 where anything would still
+//! install. Half 1 stays the verb's contract for a consumer holding a probe, and
+//! the task's spelling is pinned by
+//! `the_task_asks_the_runner_whether_anything_would_still_install`.
+//!
 //! What no case here runs is an end-to-end `mise run verify` on an unprovisioned
 //! container. That pulls the reclaim, the fetch and the whole gate set, and is
 //! environment-dependent by construction, so it does not belong in this lane.
@@ -476,14 +483,17 @@ fn the_install_step_cannot_report_success_over_a_sub_invocation_that_failed() {
     );
 }
 
-/// CLOUD-1683. The manifest is an operand rather than a constant in the engine,
-/// which is what keeps the consumer artifact's name out of `crates/batten/src`.
-/// A default would put it back.
+/// CLOUD-1683, CHANGED BY CLOUD-1991. The task asks the runner its own
+/// could-anything-still-need-installing question, whose non-zero is the refusal:
+/// the pipe that handed `batten doctor toolchain` a probe was the task's whole
+/// shell body, and the verb stays for a consumer holding a probe. A plain
+/// `--dry-run` would report and exit 0 over a missing tool — the lying zero this
+/// row exists for — so the code-bearing spelling is the assertion.
 #[test]
-fn the_task_supplies_the_manifest_path_rather_than_the_engine_defaulting_it() {
-    let body = task_body("toolchain-check");
+fn the_task_asks_the_runner_whether_anything_would_still_install() {
+    let body = common::task_value(&task_body("toolchain-check"), "run");
     assert!(
-        body.contains("batten doctor toolchain mise.toml"),
-        "the consumer's own fact travels in the consumer's own task body"
+        body.contains("mise install --dry-run-code"),
+        "the refusal is the runner's exit code, not a report: {body}"
     );
 }

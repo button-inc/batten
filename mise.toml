@@ -987,67 +987,28 @@ run = "cargo run --quiet -p batten -- exec --tee --tracked '*.json' --tracked '*
 
 [tasks."fix-selection-check"]
 description = "hk's `fix` hook selects exactly the gate's fixer-bearing steps — no check-only step, no unrouted fixer"
-shell = "bash -c"
 # CLOUD-681's gate, and it exists because the obvious structural fix is not
-# available. `hk fix` runs a step's CHECK when that step declares no fixer, so a
+# available: `hk fix` runs a step's CHECK when that step declares no fixer, so a
 # `fix` hook handed the whole gate runs the whole gate — measured, 58 steps of
-# which 7 were fixers, and `mise run fmt` took 931s. The right answer is to DERIVE
-# the hook's steps from the gate, and hk's own embedded evaluator cannot: the
-# generator form made it read `steps` as EMPTY and report "no steps to run" (green,
-# formatting nothing), and `filter((k, v) -> v.fix != null)` made it abort with
-# `Eval error: field not found: fix`. Both were caught by running the task, not by
-# reading the config.
+# which 7 were fixers, and `mise run fmt` took 931s. hk's embedded evaluator
+# cannot derive the subset, so `hk.pkl` names it as a list and this asks `pkl`
+# whether the list still equals the derivation, in both directions.
 #
-# So `hk.pkl` names the subset as a list and this asks pkl — which evaluates the
-# predicate fine — whether that list still equals the derivation. SET EQUALITY IN
-# BOTH DIRECTIONS, because the two failures are different and both are silent:
-# a fixer the list forgot never runs under `mise run fmt` (the `deno-fmt` defect
-# this row also found, indistinguishable from a tree that needs no fixing), and a
-# check-only step the list gained runs its check under a task two authorities call
-# the formatters-only subset.
+# THE PREDICATE IS `hk-fix-selection.pkl` SINCE CLOUD-1991, beside the config it
+# evaluates. It was a `pkl eval -x` string inside a shell body; the module now
+# `throw`s on drift, naming the `unrouted` and `not-a-fixer` steps (pointers,
+# never bytes), and `pkl eval` exits non-zero on the throw. Replayed against the
+# retired expression over the committed `hk.pkl`, a dropped fixer and an added
+# check-only step: the same verdict and the same names on all three.
 #
-# `cargo-clippy` is the one fixer-bearing step deliberately outside the subset —
-# `fix` sequences its autofixes itself against the target-dir lock — and the
-# exception is written here and in `hk.pkl`, nowhere else.
-#
-# POINTER-ONLY (non-negotiable rule 4): step names and a direction, never a byte of
-# either file.
-run = '''
-set -euo pipefail
 # `pkl` SHIPS ITS OWN ROOT BUNDLE AND IGNORES THE SYSTEM TRUST STORE, so in a
-# TLS-intercepting sandbox this resolves the `amends` package over HTTPS and dies
-# with `unable to find valid certification path` — which reads as a drift verdict
-# and is could-not-look. `mem:github-access` records the measurement: of
-# `SSL_CERT_FILE`, `--http-no-proxy` and unsetting `HTTPS_PROXY`, only
-# `--ca-certificates` works. Passed ONLY when the bundle exists, because the flag
-# REPLACES pkl's roots rather than adding to them — so off-sandbox, where there is
-# no bundle and no interception, this stays the bare invocation.
-ca=""
-if [ -n "${BATTEN_CA_BUNDLE:-}" ] && [ -f "${BATTEN_CA_BUNDLE}" ]; then
-	ca="${BATTEN_CA_BUNDLE}"
-elif [ -f /root/.ccr/ca-bundle.crt ]; then
-	ca=/root/.ccr/ca-bundle.crt
-fi
-if [ -n "$ca" ]; then
-	set -- --ca-certificates "$ca"
-else
-	set --
-fi
-drift=$(mise exec pkl -- pkl eval "$@" -x 'new Listing {
-  for (name in gate.toMap().filter((k, v) -> v.fix != null && k != "cargo-clippy").keys.toList()) {
-    when (!hooks["fix"].steps.containsKey(name)) { "unrouted " + name }
-  }
-  for (name in hooks["fix"].steps.toMap().keys.toList()) {
-    when (gate.toMap().getOrNull(name) == null || gate[name].fix == null) { "not-a-fixer " + name }
-  }
-}.join("\n")' hk.pkl)
-if [ -n "$drift" ]; then
-	echo "$drift" >&2
-	echo "::error:: fix-selection: hk's \`fix\` hook and the gate's fixer-bearing steps disagree. \`unrouted\` means a fixer \`mise run fmt\` cannot reach; \`not-a-fixer\` means a check-only step it would run. Fix the \`fixers\` mapping in hk.pkl." >&2
-	exit 1
-fi
-echo "fix-selection: hk's fix hook selects exactly the gate's fixer-bearing steps"
-'''
+# TLS-intercepting sandbox it cannot resolve the `amends` package and fails as
+# could-not-look. `mem:github-access` records that only `--ca-certificates`
+# works, and the flag REPLACES pkl's roots — so it is passed only when a bundle
+# is named: `BATTEN_CA_BUNDLE`, else `SSL_CERT_FILE`, which is how the sandbox
+# names the interception bundle the body's `/root/.ccr` fallback probed for.
+# With neither set this stays the bare invocation.
+run = "mise exec pkl -- pkl eval {% if env.BATTEN_CA_BUNDLE %}--ca-certificates {{env.BATTEN_CA_BUNDLE}} {% elif env.SSL_CERT_FILE %}--ca-certificates {{env.SSL_CERT_FILE}} {% endif %}hk-fix-selection.pkl"
 
 [tasks."lint:actions"]
 description = "actionlint: workflow mistakes (bad `on:` keys, undefined matrix refs, shellcheck over `run:` blocks)"
@@ -7503,48 +7464,24 @@ description = "Gate: every tool [tools] declares is actually installed — the q
 # leaves, and the state that made CLOUD-1683's false green possible. This asks
 # the complementary question, over the DECLARATION.
 #
-# The manifest is an operand because the engine may not name it: the path is a
-# consumer artifact, and `document_facts.rs` refuses that literal inside
-# `crates/batten/src`. So this repository's own fact stays in this repository's
-# own file, which is where every other one already lives.
+# THE RUNNER ANSWERS IT ITSELF SINCE CLOUD-1991, and that retired the pipe.
+# `mise install --dry-run-code` resolves every tool the configuration declares,
+# installs nothing, and exits 1 when any of them would still need installing —
+# the question `batten doctor toolchain` answered over `mise ls --json` piped in.
+# The pipe was the whole of the shell: a read verb may not spawn the runner
+# (CLOUD-170), so the caller fetched and handed the probe over, and the body
+# carried an installed-binary-first fallback so a session step never compiled
+# the engine (`no_session_start_step_compiles_the_engine`). Asking the runner
+# directly needs neither, so both callers — `session:install` and `verify` — get
+# the same answer with no engine on the path at all.
 #
-# `batten`, never `cargo run -p batten`: this is reachable from `session:install`,
-# and `session_provisioning.rs`'s `no_session_start_step_compiles_the_engine`
-# bans a compile entry point from a session step.
-#
-# THE CALLER FETCHES AND THE GATE DECIDES, which is the board gates' own shape
-# and load-bearing rather than stylistic: a verb that spawned the runner itself
-# would put a program resolved off PATH behind a row on the read-only allowlist,
-# which is CLOUD-170's invariant. So the probe is piped, and the verb is `read`
-# structurally rather than only by promise.
-#
-# A probe that fails writes nothing, and empty stdin is the could-not-look arm —
-# which this gate reads as UNPROVISIONED, not as a pass, because a runner that
-# cannot answer is what an unprovisioned container has. Fail-closed through the
-# pipe, so the lost exit status costs nothing.
-#
-# INSTALLED BINARY FIRST, WORKING TREE SECOND — `target-prune`'s shape, and here
-# for a reason that bit immediately. This task has two callers with opposite
-# needs: `session:install` must NOT compile the engine
-# (`no_session_start_step_compiles_the_engine`), and `verify` must judge the
-# WORKING TREE's engine rather than whatever binary was installed last. A body
-# that only ran `batten` satisfied the first and failed the second — measured on
-# this very branch, where the installed release predates the verb and answered
-# `unrecognized subcommand 'toolchain'`, which the guard above then reported as
-# an unprovisioned toolchain. That is the misattribution this row exists to
-# close, reproduced one layer up by the row's own fix.
-#
-# So the fallback is not a convenience: it is what makes the two callers agree.
-# The probe is captured ONCE and replayed, because a pipe cannot be consumed
-# twice, and `command -v batten` is the guard `a_cargo_fallback_in_a_session_task_is_guarded`
-# requires around any `cargo` reachable from a session step.
-run = """
-probe="$(mise ls --json)"
-if command -v batten >/dev/null 2>&1 && printf '%s' "$probe" | batten doctor toolchain mise.toml; then
-  exit 0
-fi
-printf '%s' "$probe" | cargo run --quiet -p batten -- doctor toolchain mise.toml
-"""
+# WHAT CHANGED, stated rather than implied: the runner's question covers every
+# configuration file in scope, where the verb read this manifest's `[tools]`
+# table alone, so a tool declared elsewhere and not installed now refuses too.
+# Nothing the verb refused passes. Replayed on this tree (both answer "all
+# installed") and on a manifest declaring an uninstalled pin (both refuse at 1).
+# `batten doctor toolchain` stays a verb for any consumer that holds a probe.
+run = "mise install --dry-run-code"
 
 [tasks."session:submodules"]
 description = "Session start: check out the vendored submodules — bats lives in tests/bats"

@@ -1,0 +1,52 @@
+// CLOUD-681's fix-selection predicate, evaluated by `pkl` over `hk.pkl`.
+//
+// `hk fix` runs a step's CHECK when that step declares no fixer, so a `fix` hook
+// handed the whole gate runs the whole gate. The right answer is to DERIVE the
+// hook's steps from the gate, and hk's own embedded evaluator cannot: the
+// generator form made it read `steps` as EMPTY and report "no steps to run"
+// (green, formatting nothing), and `filter((k, v) -> v.fix != null)` made it
+// abort with `Eval error: field not found: fix`. So `hk.pkl` names the subset as
+// a list, and this module asks `pkl` — which evaluates the predicate fine —
+// whether that list still equals the derivation.
+//
+// SET EQUALITY IN BOTH DIRECTIONS, because the two failures are different and
+// both are silent: a fixer the list forgot never runs under `mise run fmt`
+// (`unrouted`), and a check-only step the list gained runs its check under a
+// task two authorities call the formatters-only subset (`not-a-fixer`).
+// `cargo-clippy` is the one fixer-bearing step deliberately outside the subset;
+// the exception is written here and in `hk.pkl`, nowhere else.
+//
+// A FILE RATHER THAN A `pkl eval -x` STRING (CLOUD-1991). The expression lived
+// inside a shell body that also chose the CA bundle and turned a non-empty
+// answer into `exit 1`. The bundle is `[tasks."fix-selection-check"]`'s argv
+// now, and the refusal is this module's own `throw`, which `pkl eval` reports
+// as a failed evaluation. `gate` is `hk.pkl`'s local, so it is read here as the
+// `pre-commit` hook's steps, which ARE that mapping.
+//
+// POINTER-ONLY (non-negotiable rule 4): step names and a direction, never a
+// byte of either file.
+import "hk.pkl"
+
+local gate = hk.hooks["pre-commit"].steps
+local fix = hk.hooks["fix"].steps
+
+local unrouted =
+  gate
+    .toMap()
+    .filter((name, step) -> step.fix != null && name != "cargo-clippy")
+    .keys
+    .filter((name) -> !fix.containsKey(name))
+    .toList()
+
+local notAFixer =
+  fix.toMap().keys.filter((name) -> gate.getOrNull(name) == null || gate[name].fix == null).toList()
+
+output {
+  text =
+    if (unrouted.isEmpty && notAFixer.isEmpty)
+      "fix-selection: hk's fix hook selects exactly the gate's fixer-bearing steps\n"
+    else
+      throw(
+        "fix-selection: hk's `fix` hook and the gate's fixer-bearing steps disagree. unrouted: [\(unrouted.join(" "))] are fixers `mise run fmt` cannot reach; not-a-fixer: [\(notAFixer.join(" "))] are check-only steps it would run. Fix the `fixers` mapping in hk.pkl."
+      )
+}
