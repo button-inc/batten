@@ -143,6 +143,7 @@ const PRESET_SCOPES: &[(&str, bool)] = &[
     ("ci-hygiene", true),
     ("landing-loop", true),
     ("claude-code-cloud", false),
+    ("ci-signal", true),
 ];
 
 /// A row enabling `name` at the scope it is really enabled with.
@@ -642,6 +643,59 @@ fn decided(bundle: &policy::Bundle, document: &str) -> Vec<policy::Violation> {
         panic!("the preset answered");
     };
     violations
+}
+
+/// (CLOUD-843) `ci-signal` decides each of its two families for a consumer with no
+/// vocabulary of its own, is green over the ideal window of each, and is silent
+/// where its producer never ran — so enabling the one row judges only the families
+/// a consumer actually produces.
+#[test]
+fn the_ci_signal_preset_decides_both_families_and_is_silent_without_them() {
+    let bundle = loaded("ci-signal", tree_preset_row("signal", "ci-signal"));
+    let verdicts = |found: &[policy::Violation]| -> Vec<String> {
+        let mut ids: Vec<String> = found.iter().map(|v| v.verdict.clone()).collect();
+        ids.sort();
+        ids
+    };
+    let lane = |landings: u32, graded: u32, ff_refused: u32| {
+        format!(
+            r#"{{"tree":{{"records":{{"land-divergence":["window\tsince=2026-08-12T00:00:00Z\tlandings={landings}\tgraded={graded}\tgreen={graded}\tred=0\tcancelled=0\tcancel_p50=0\tpeak_concurrency=1\tqueue_p90=0\tqueue_job_p90=0\tretries=0\tff_refused={ff_refused}\tff_success={landings}\tunreadable=0"]}}}}}}"#
+        )
+    };
+    let job = |nonverdicts: usize| {
+        let mut lines: Vec<String> = (0..nonverdicts)
+            .map(|n| format!("nonverdict\trun={n}\tjob=j{n}\tstep=Set up job"))
+            .collect();
+        lines.push(format!(
+            "window\truns=10\tfailed_jobs={nonverdicts}\tnonverdict={nonverdicts}\tverdict=0\tunreadable=0"
+        ));
+        format!(
+            r#"{{"tree":{{"records":{{"nonverdict":{}}}}}}}"#,
+            serde_json::to_string(&lines).expect("lines")
+        )
+    };
+
+    assert!(
+        decided(&bundle, &lane(1, 1, 0)).is_empty(),
+        "one matrix per landing is linear"
+    );
+    assert_eq!(
+        verdicts(&decided(&bundle, &lane(1, 3, 1))),
+        vec!["branch reach stale", "lane count spent"]
+    );
+    assert!(
+        decided(&bundle, &job(2)).is_empty(),
+        "two is inside the budget"
+    );
+    assert_eq!(
+        verdicts(&decided(&bundle, &job(3))),
+        vec!["job answer missing"; 3],
+        "one finding per job over the budget"
+    );
+    assert!(
+        decided(&bundle, r#"{"tree":{"records":{}}}"#).is_empty(),
+        "no producer ran, so nothing is judged"
+    );
 }
 
 /// (CLOUD-1269) `head grade twice` refuses a judged commit and is

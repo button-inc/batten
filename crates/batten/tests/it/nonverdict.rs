@@ -1,8 +1,9 @@
-//! `job grade other` over the compiled binary (CLOUD-484, CLOUD-1717).
+//! The `ci-signal` preset's verdict module over the compiled binary (CLOUD-484,
+//! CLOUD-1717, CLOUD-843).
 //!
 //! # Why this tier and not the module's own `test_` rules
 //!
-//! Every case in `policy/nonverdict.rego` fabricates its input with
+//! Every case in the preset's `required-failures-reach-a-verdict.rego` fabricates its input with
 //! `with input as`, which cannot see a fact the engine never projects — the state
 //! `policy/branch-age.rego` sat in for a whole session while its own suite stayed
 //! green (CLOUD-1810). These run the real module over a record the real verb
@@ -14,8 +15,14 @@
 //! `nonverdict-scan` (measure) and `nonverdict-assert` (decide), kept apart for
 //! exactly CLOUD-1559's reason: a measurement needs the network and a token, a
 //! decision needs neither. So the port carried each half to the home the engine
-//! has for it — the scan to `[tasks.nonverdict-record]`, the assert to
-//! `policy/nonverdict.rego` — and no decision changed hands.
+//! has for it — the scan to `[tasks.nonverdict-record]` and then, under
+//! CLOUD-843, to `batten record nonverdict`; the assert to
+//! `policy/nonverdict.rego` and then, under CLOUD-843, into the vendored
+//! `ci-signal` preset — and no decision changed hands.
+//!
+//! THIS IS THE PRESET'S SCRATCH-CONSUMER TIER, on `land_divergence.rs`'s terms: the
+//! repository below enables `ci-signal` by name and declares no `[[pattern]]` and
+//! no `[[verdict]]` row.
 //!
 //! THE SCAN'S ARMS ARE `carried`, AND `ported` WOULD HAVE BEEN WRONG. That marker
 //! is admissible only where the dying file's DECLARED subject lives on, read from
@@ -25,12 +32,13 @@
 //! so the subject did not survive and `ported` cannot spell it.
 //!
 //! THE PRODUCER'S STEPS HAVE A TIER AGAIN (CLOUD-843). CLOUD-1717 left the
-//! classification in `[tasks.nonverdict-record]`'s jq, which no compiled-binary
-//! case reached. That body is now `batten record nonverdict`
+//! classification in the retired task's jq, which no compiled-binary case
+//! reached. The producer is now `batten record nonverdict`
 //! (`crates/batten/src/ci_signal.rs`), and the cases at the end of this file drive
 //! it against `rest`'s `BATTEN_REST_FIXTURE` forge. The consumer's facts — the
-//! roster, the fan-in, the two verdict spellings — are its arguments, never the
-//! engine's literals (rule 1).
+//! roster, the fan-in, the two verdict spellings — are its environment
+//! (`$CI_REQUIRED_CHECKS`, `$CI_FANIN_CHECK`, `$CI_VERDICT_STEPS`) or its flags,
+//! never the engine's literals (rule 1).
 //!
 //! THE RETIRED BODY DID NOT RUN, which the replay found. Its jq program was
 //! single-quoted and a comment inside it read "jq's `inside`", so the apostrophe
@@ -54,22 +62,22 @@
 //! is not blindness: it is a window read in PART, which is `bench-assert`'s
 //! partial-coverage false green.
 //!
-// carried: mise-tasks/nonverdict-scan.sh policy/nonverdict.rego kind:mechanism crates/batten/tests/it/nonverdict.rs
-// carried: tests/nonverdict-scan.bats policy/nonverdict.rego kind:mechanism crates/batten/tests/it/nonverdict.rs
-// carried: mise-tasks/nonverdict-assert.sh policy/nonverdict.rego kind:mechanism crates/batten/tests/it/nonverdict.rs
-// carried: tests/nonverdict-assert.bats policy/nonverdict.rego kind:mechanism crates/batten/tests/it/nonverdict.rs
-// carried: "under budget is a pass, and says what it judged" policy/nonverdict.rego kind:mechanism
-// carried: "THE ACCEPTANCE CASE: over budget fails and names each non-verdict failure" policy/nonverdict.rego kind:mechanism
-// carried: "a VERDICT failure is not counted, however many there are" policy/nonverdict.rego kind:mechanism
-// carried: "COULD NOT LOOK: an unreadable run in the window is exit 2, never a pass" policy/nonverdict.rego kind:mechanism
-// carried: "an unreadable run is exit 2 even when the count is under budget" policy/nonverdict.rego kind:mechanism
-// carried: "ANTI-VACUITY: an empty window exits 0 and says it judged nothing" policy/nonverdict.rego kind:mechanism
-// carried: "POINTER, NEVER PAYLOAD: the report carries no step output, only coordinates" policy/nonverdict.rego kind:mechanism
+// carried: mise-tasks/nonverdict-scan.sh crates/batten/src/policy/presets/ci-signal/required-failures-reach-a-verdict.rego kind:mechanism crates/batten/tests/it/nonverdict.rs
+// carried: tests/nonverdict-scan.bats crates/batten/src/policy/presets/ci-signal/required-failures-reach-a-verdict.rego kind:mechanism crates/batten/tests/it/nonverdict.rs
+// carried: mise-tasks/nonverdict-assert.sh crates/batten/src/policy/presets/ci-signal/required-failures-reach-a-verdict.rego kind:mechanism crates/batten/tests/it/nonverdict.rs
+// carried: tests/nonverdict-assert.bats crates/batten/src/policy/presets/ci-signal/required-failures-reach-a-verdict.rego kind:mechanism crates/batten/tests/it/nonverdict.rs
+// carried: "under budget is a pass, and says what it judged" crates/batten/src/policy/presets/ci-signal/required-failures-reach-a-verdict.rego kind:mechanism
+// carried: "THE ACCEPTANCE CASE: over budget fails and names each non-verdict failure" crates/batten/src/policy/presets/ci-signal/required-failures-reach-a-verdict.rego kind:mechanism
+// carried: "a VERDICT failure is not counted, however many there are" crates/batten/src/policy/presets/ci-signal/required-failures-reach-a-verdict.rego kind:mechanism
+// carried: "COULD NOT LOOK: an unreadable run in the window is exit 2, never a pass" crates/batten/src/policy/presets/ci-signal/required-failures-reach-a-verdict.rego kind:mechanism
+// carried: "an unreadable run is exit 2 even when the count is under budget" crates/batten/src/policy/presets/ci-signal/required-failures-reach-a-verdict.rego kind:mechanism
+// carried: "ANTI-VACUITY: an empty window exits 0 and says it judged nothing" crates/batten/src/policy/presets/ci-signal/required-failures-reach-a-verdict.rego kind:mechanism
+// carried: "POINTER, NEVER PAYLOAD: the report carries no step output, only coordinates" crates/batten/src/policy/presets/ci-signal/required-failures-reach-a-verdict.rego kind:mechanism
 // changed: "empty stdin is exit 2, not a clean window" mise.toml there is no stdin: the decider's input is the record family, and an ABSENT family is could-not-look, which on the engine's contract must read as silence rather than as the exit 2 that now means a finding. The property the case was protecting is kept on the other side of the door — the producer refuses and writes nothing rather than recording an empty window
-// carried: "records with no window summary are exit 2 — there is no window to judge" policy/nonverdict.rego `torn` refuses a record present with no summary as `job read partial`. The first port read it as silence and said so here; that was the dropped refusal, restored
-// carried: "two concatenated scans are exit 2 — a count over both describes neither" policy/nonverdict.rego a count over both still describes neither, so neither is judged against the budget; the record is refused as torn instead of passing silent, which is what the retired arm did
-// carried: "a non-numeric count is exit 2 rather than being coerced to zero" policy/nonverdict.rego `count_of` still refuses to coerce, and `torn` now reads the undefined count as a refusal rather than leaving the window unjudged
-// changed: "the budget is raise-only overridable, which is how the window is retuned" policy/nonverdict.rego the override had exactly one reader — the suite, pointing the budget at a fixture. A module's cases vary the COUNTS against a fixed `budget := 2` instead, which is `timeout-drift.rego`'s placement for its multipliers, so the knob is gone because the reader it existed for is
+// carried: "records with no window summary are exit 2 — there is no window to judge" crates/batten/src/policy/presets/ci-signal/required-failures-reach-a-verdict.rego `torn` refuses a record present with no summary as `job read partial`. The first port read it as silence and said so here; that was the dropped refusal, restored
+// carried: "two concatenated scans are exit 2 — a count over both describes neither" crates/batten/src/policy/presets/ci-signal/required-failures-reach-a-verdict.rego a count over both still describes neither, so neither is judged against the budget; the record is refused as torn instead of passing silent, which is what the retired arm did
+// carried: "a non-numeric count is exit 2 rather than being coerced to zero" crates/batten/src/policy/presets/ci-signal/required-failures-reach-a-verdict.rego `count_of` still refuses to coerce, and `torn` now reads the undefined count as a refusal rather than leaving the window unjudged
+// changed: "the budget is raise-only overridable, which is how the window is retuned" crates/batten/src/policy/presets/ci-signal/required-failures-reach-a-verdict.rego the override had exactly one reader — the suite, pointing the budget at a fixture. A module's cases vary the COUNTS against a fixed `budget := 2` instead, which is `timeout-drift.rego`'s placement for its multipliers, so the knob is gone because the reader it existed for is
 // carried: "THE ACCEPTANCE CASE: a job that died before any mise step is a non-verdict failure" crates/batten/src/ci_signal.rs kind:verb crates/batten/tests/it/nonverdict.rs
 // carried: "a job that failed IN a mise step rendered a verdict and is not counted" crates/batten/src/ci_signal.rs kind:verb crates/batten/tests/it/nonverdict.rs
 // carried: "a job that failed in a mise EXEC step rendered a verdict too" crates/batten/src/ci_signal.rs kind:verb crates/batten/tests/it/nonverdict.rs
@@ -93,61 +101,31 @@ use crate::common;
 
 use common::{git_in, init_repo, run, run_with_stdin, scratch, write};
 
-/// A repository registering the real module against a declared family.
+/// A consumer enabling the vendored preset against a declared family: one row
+/// and the family, and nothing a harness would have to supply on its behalf.
 fn repo(name: &str) -> std::path::PathBuf {
     let dir = scratch(&format!("nonverdict-{name}"));
-    let module = std::fs::read_to_string("../../policy/nonverdict.rego")
-        .expect("the module this tier exists for");
-    write(&dir, "policy/nonverdict.rego", &module);
     write(
         &dir,
         "batten.toml",
         r#"version = 1
 scope = ["**"]
 
-# The module reads its count guard by id rather than spelling the expression
-# inline, which `policy test` refuses: an expression is a consumer fact and
-# belongs in the config (rule 1). A fixture that omitted the row would make every
-# reference undefined and every rule below silent.
-[[pattern]]
-id = "whole-number"
-regex = '^[0-9]+$'
-
-[[verdict]]
-id = "job read partial"
-gloss = "the scan could not read part of its window, so a green verdict would cover less than it claims"
-class = "Partial coverage reported as a clean window is the false green this sensor exists to report."
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "batten record nonverdict --exclude-job final --verdict-step 'Run mise run ' --verdict-step 'Run mise exec -- '"
-
-[[verdict]]
-id = "job answer missing"
-gloss = "a required job failed before reaching any verdict-bearing step"
-class = "The run spent its minutes and answered nothing."
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "batten record nonverdict --exclude-job final --verdict-step 'Run mise run ' --verdict-step 'Run mise exec -- '"
-
 [[rule]]
-id = "job grade other"
+id = "workflow measure other"
 kind = "policy"
 scope = "tree"
-module = "policy/nonverdict.rego"
+preset = "ci-signal"
 severity = "warn"
 
 [[record]]
 record = "nonverdict"
-writer = "batten record nonverdict --exclude-job final --verdict-step 'Run mise run ' --verdict-step 'Run mise exec -- '"
+writer = "batten record nonverdict"
 "#,
     );
     init_repo(&dir);
     git_in(&dir, &["add", "-A"]);
-    git_in(&dir, &["commit", "-qm", "register the module"]);
+    git_in(&dir, &["commit", "-qm", "enable the preset"]);
     dir
 }
 
@@ -387,8 +365,8 @@ fn the_report_names_every_job_that_answered_nothing() {
     //
     // The rendered line is the LEADING subject and nothing else, which is rule 4
     // holding at the output contract — the run id and step name ride on the
-    // finding for a structured reader, and `policy/nonverdict.rego`'s own
-    // `test_the_finding_carries_coordinates_and_nothing_else` is where that is
+    // finding for a structured reader, and the preset module's own
+    // `test_job_the_finding_carries_coordinates_and_nothing_else` is where that is
     // pinned. Asserting the run id HERE would be asserting the renderer's shape,
     // not this module's.
     let dir = repo("pointer");
@@ -524,22 +502,20 @@ fn forge(name: &str, routes: &[(&'static str, u16, String)]) -> std::path::PathB
     dir
 }
 
-/// `batten record nonverdict` in `dir` against `forge`, with this repo's spellings
-/// passed as the consumer's arguments.
+/// This repository's two verdict spellings, as `$CI_VERDICT_STEPS` carries them:
+/// comma-separated, each keeping the trailing space that makes it a prefix.
+const VERDICT_STEPS: &str = "Run mise run ,Run mise exec -- ";
+
+/// `batten record nonverdict` in `dir` against `forge`, with no flag at all: the
+/// roster, the fan-in and the verdict spellings arrive through the environment,
+/// which is the path the scheduled job and the `[[record]]` writer take.
 fn classify(dir: &std::path::Path, forge: &std::path::Path) -> std::process::Output {
     common::batten()
-        .args([
-            "record",
-            "nonverdict",
-            "--exclude-job",
-            "final",
-            "--verdict-step",
-            "Run mise run ",
-            "--verdict-step",
-            "Run mise exec -- ",
-        ])
+        .args(["record", "nonverdict"])
         .env("GH_REPO", "acme/widgets")
         .env("CI_REQUIRED_CHECKS", ROSTER)
+        .env("CI_FANIN_CHECK", "final")
+        .env("CI_VERDICT_STEPS", VERDICT_STEPS)
         .env("BATTEN_REST_FIXTURE", forge)
         .current_dir(dir)
         .output()
@@ -574,6 +550,41 @@ fn the_producer_classifies_failed_required_jobs_and_the_module_decides() {
         said(&decided).contains("job answer missing"),
         "{}",
         said(&decided)
+    );
+}
+
+#[test]
+fn a_flag_outranks_the_environment_it_defaults_from() {
+    // The environment is the default, never an override: a caller naming the
+    // fan-in and the spellings on the command line is classified by those, even
+    // where the environment names others that would change every line.
+    let dir = repo("flags");
+    let forge = forge("flags", &window_routes());
+    let measured = common::batten()
+        .args([
+            "record",
+            "nonverdict",
+            "--exclude-job",
+            "final",
+            "--verdict-step",
+            "Run mise run ",
+            "--verdict-step",
+            "Run mise exec -- ",
+        ])
+        .env("GH_REPO", "acme/widgets")
+        .env("CI_REQUIRED_CHECKS", ROSTER)
+        .env("CI_FANIN_CHECK", "ci")
+        .env("CI_VERDICT_STEPS", "Set up job")
+        .env("BATTEN_REST_FIXTURE", &forge)
+        .current_dir(&dir)
+        .output()
+        .expect("the compiled binary runs");
+    assert_eq!(measured.status.code(), Some(0), "{}", said(&measured));
+    assert!(
+        String::from_utf8_lossy(&measured.stdout)
+            .ends_with("window\truns=3\tfailed_jobs=5\tnonverdict=3\tverdict=2\tunreadable=0\n"),
+        "{}",
+        said(&measured)
     );
 }
 
@@ -636,5 +647,23 @@ fn an_unreadable_run_list_is_could_not_look_and_an_empty_roster_is_refused() {
         said(&refused).contains("CI_REQUIRED_CHECKS"),
         "{}",
         said(&refused)
+    );
+
+    // And with the roster but no verdict spelling anywhere, every failure would
+    // read as a non-verdict: refused before any request, naming both homes.
+    let unspelled = common::batten()
+        .args(["record", "nonverdict"])
+        .env("CI_REQUIRED_CHECKS", ROSTER)
+        .env_remove("CI_VERDICT_STEPS")
+        .env("GH_REPO", "acme/widgets")
+        .current_dir(&dir)
+        .output()
+        .expect("the compiled binary runs");
+    assert_ne!(unspelled.status.code(), Some(0), "{}", said(&unspelled));
+    assert_ne!(unspelled.status.code(), Some(3), "{}", said(&unspelled));
+    assert!(
+        said(&unspelled).contains("CI_VERDICT_STEPS"),
+        "{}",
+        said(&unspelled)
     );
 }

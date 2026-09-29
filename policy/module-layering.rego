@@ -1137,6 +1137,18 @@ test_the_mediated_path_must_not_reach_the_forge_query_producer if {
 # AND THE ARRANGEMENT: the producer composes the window, the transport and the
 # record store, and the verb dispatch reaches it. A table that banned the module
 # outright would satisfy the case above.
+test_the_forge_query_producer_reaches_what_it_composes if {
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/forge_query.rs",
+		[internal("forge", 10), internal("rest", 11), internal("record", 12), internal("landed", 13)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/record.rs",
+		[internal("forge_query", 20)],
+	)
+}
+
 # The CI-signal producers, both directions, on `forge_query`'s terms.
 test_the_mediated_path_must_not_reach_the_ci_signal_producers if {
 	count(violation) == 1 with input as judging(
@@ -1152,18 +1164,6 @@ test_the_mediated_path_must_not_reach_the_ci_signal_producers if {
 	count(violation) == 0 with input as judging(
 		"crates/batten/src/ci_signal.rs",
 		[internal("forge", 10), internal("rest", 11), internal("record", 12), internal("forge_query", 13)],
-	)
-}
-
-test_the_forge_query_producer_reaches_what_it_composes if {
-	count(violation) == 0 with input as judging(
-		"crates/batten/src/forge_query.rs",
-		[internal("forge", 10), internal("rest", 11), internal("record", 12), internal("landed", 13)],
-	)
-
-	count(violation) == 0 with input as judging(
-		"crates/batten/src/record.rs",
-		[internal("forge_query", 20)],
 	)
 }
 

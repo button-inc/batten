@@ -175,7 +175,7 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   exempt list is asserted equal to the ban's `stays_bash`. Not layered (§8): a
   local file able to add an exempt glob could make a wave read as progress. The
   other CLOUD-843 foundation verbs (`step check|record|run`, `sbom`, `dist`,
-  `mcp grant|posture`, `board check`, `record divergence`, `record census …`)
+  `mcp grant|posture`, `board check`, `record census …`)
   carry final arguments and answer `unimplemented` at exit 3 until their package
   lands; the serena launcher's home is the existing `mcp spawn`.
 - `claim.rs` — whether an issue is pullable, and the receipt that records the
@@ -2840,6 +2840,19 @@ view` and no argument, which reads the CURRENT BRANCH — so under a detached
   `id` must be a declared `[[record]]` family, refused at load, so a query no
   module can read is unwritable. `[forge]` is read from the committed authority
   alone (`resolve::committed`), never layered.
+- `ci_signal.rs` — the two CI-signal PRODUCERS (CLOUD-843, retiring
+  `land-divergence-record` and `nonverdict-record`): `batten record divergence`
+  joins a window of CI runs to merged PRs and writes `land-divergence`; `batten
+record nonverdict` classifies failed required jobs by their failed steps and
+  writes `nonverdict`. Both walk `forge::window_over` and decide nothing — the
+  budgets are the vendored `ci-signal` preset's, one `[[rule]]` enabling both
+  modules. Consumer facts arrive as a flag or else one `[env]` variable each
+  (`LAND_CI_WORKFLOW`, `LAND_WORKFLOW`, `CI_REQUIRED_CHECKS`, `CI_FANIN_CHECK`,
+  `CI_VERDICT_STEPS`), so every caller — workflow, `[[record]] writer` — runs
+  `mise run batten -- record …` with no flags and one spelling exists. The byte
+  format is the retired bodies' (FLOOR rank, text-compared instants), kept so
+  recorded windows stay comparable. Could-not-look REMOVES the stale record and
+  exits 3; a window read in part is recorded with `unreadable` counted.
 - `severity.rs` — the severity taxonomy (CLOUD-168): one rank table plus the
   adapter across the three axes — `RuleSeverity` (config, CLOUD-61),
   `AdvisoryTier` (the one _stored_ severity, CLOUD-80/78), `ReportLevel`

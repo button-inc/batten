@@ -961,6 +961,9 @@ _batten() {
             batten__subcmd__help__subcmd__record,named)
                 cmd="batten__subcmd__help__subcmd__record__subcmd__named"
                 ;;
+            batten__subcmd__help__subcmd__record,nonverdict)
+                cmd="batten__subcmd__help__subcmd__record__subcmd__nonverdict"
+                ;;
             batten__subcmd__help__subcmd__record,plan)
                 cmd="batten__subcmd__help__subcmd__record__subcmd__plan"
                 ;;
@@ -1519,6 +1522,9 @@ _batten() {
             batten__subcmd__record,named)
                 cmd="batten__subcmd__record__subcmd__named"
                 ;;
+            batten__subcmd__record,nonverdict)
+                cmd="batten__subcmd__record__subcmd__nonverdict"
+                ;;
             batten__subcmd__record,plan)
                 cmd="batten__subcmd__record__subcmd__plan"
                 ;;
@@ -1593,6 +1599,9 @@ _batten() {
                 ;;
             batten__subcmd__record__subcmd__help,named)
                 cmd="batten__subcmd__record__subcmd__help__subcmd__named"
+                ;;
+            batten__subcmd__record__subcmd__help,nonverdict)
+                cmd="batten__subcmd__record__subcmd__help__subcmd__nonverdict"
                 ;;
             batten__subcmd__record__subcmd__help,plan)
                 cmd="batten__subcmd__record__subcmd__help__subcmd__plan"
@@ -6604,7 +6613,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__record)
-            opts="suites tool forge named derive keyed journal show fold plan closes query divergence census"
+            opts="suites tool forge named derive keyed journal show fold plan closes query divergence nonverdict census"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -6786,6 +6795,20 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__record__subcmd__named)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__help__subcmd__record__subcmd__nonverdict)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -10948,7 +10971,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__record)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help suites tool forge named derive keyed journal show fold plan closes query divergence census help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help suites tool forge named derive keyed journal show fold plan closes query divergence nonverdict census help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -11382,7 +11405,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__record__subcmd__help)
-            opts="suites tool forge named derive keyed journal show fold plan closes query divergence census help"
+            opts="suites tool forge named derive keyed journal show fold plan closes query divergence nonverdict census help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -11591,6 +11614,20 @@ _batten() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        batten__subcmd__record__subcmd__help__subcmd__nonverdict)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         batten__subcmd__record__subcmd__help__subcmd__plan)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
@@ -11728,6 +11765,48 @@ _batten() {
                 return 0
             fi
             case "${prev}" in
+                --strictness)
+                    COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-level)
+                    COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__record__subcmd__nonverdict)
+            opts="-q -v -y -h --window --exclude-job --verdict-step --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --window)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --exclude-job)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --verdict-step)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --strictness)
                     COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
                     return 0

@@ -1566,15 +1566,24 @@ fn diff_shape(root: &Path, staged: &Staged, source: &str) -> (bool, usize) {
     if before == after {
         return (false, 0);
     }
+    (true, code_lines_changed(&before, &after))
+}
+
+/// The lines a mutation changed that are not a declaration line.
+///
+/// **Every opener in [`OPENERS`], not `#` alone.** The guard once skipped only
+/// `#MUTANT…` lines, so a Rust row (`//MUTANT …`) whose unanchored pattern
+/// matched nothing but its own declaration counted that rewrite as a code change
+/// — exactly the self-match this guard exists to refuse, in the half of the
+/// tree it did not look at.
+fn code_lines_changed(before: &str, after: &str) -> usize {
     let head: Vec<&str> = after.lines().collect();
     let base: Vec<&str> = before.lines().collect();
-    let changed = base
-        .iter()
+    base.iter()
         .filter(|line| !head.contains(*line))
         .chain(head.iter().filter(|line| !base.contains(*line)))
-        .filter(|line| !line.trim_start().starts_with("#MUTANT"))
-        .count();
-    (true, changed)
+        .filter(|line| strip_marker(line.trim_start(), "MUTANT").is_none())
+        .count()
 }
 
 /// Judge one row.
@@ -2060,6 +2069,22 @@ mod tests {
             target.starts_with(root.join("target")),
             "but it stays under `target/`, so one `cargo clean` reaches it and \
              `.gitignore` already covers it"
+        );
+    }
+
+    /// Fails by: the guard reading only the `#` opener again. A Rust row whose
+    /// pattern rewrote nothing but its own `//MUTANT` line would then count one
+    /// changed code line and read as an applied mutation.
+    #[test]
+    fn a_rewritten_declaration_is_not_a_changed_code_line_under_any_opener() {
+        let before = "//MUTANT a|s@x@y@|case\n    let x = 1;\n#MUTANT b|s@x@y@|case\n";
+        let after = "//MUTANT a|s@y@y@|case\n    let x = 1;\n#MUTANT b|s@y@y@|case\n";
+        assert_eq!(code_lines_changed(before, after), 0);
+        let code = "//MUTANT a|s@x@y@|case\n    let y = 1;\n#MUTANT b|s@x@y@|case\n";
+        assert_eq!(
+            code_lines_changed(before, code),
+            2,
+            "the old and new code line"
         );
     }
 

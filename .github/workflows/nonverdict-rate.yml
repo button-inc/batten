@@ -21,7 +21,7 @@ name: nonverdict-rate
 # a branch must not go red because the platform had a bad afternoon —
 # coverage.yml:15-18 states the same boundary for the same reason. What IS gated is
 # the decision: `crates/batten/tests/it/nonverdict.rs` and
-# `policy/nonverdict.rego`'s own cases run on every commit, because the decider
+# the `ci-signal` preset's own cases run on every commit, because the decider
 # is a pure function of records.
 #
 # Failure here is informational: it means the rate crossed its budget and wants
@@ -79,14 +79,14 @@ jobs:
       # per-step conclusions; the engine adjudicates what it recorded. Neither
       # half can hold the other: section 5 makes `check` `read` and incapable of
       # spawning the reads below. The producer is `batten record nonverdict`
-      # (CLOUD-843): `final` is the fan-in and the two prefixes are how this
-      # repository renders a verdict, so they are its arguments, never the
-      # engine's literals; the roster is `mise.toml [env]`'s `CI_REQUIRED_CHECKS`.
+      # (CLOUD-843), and this repository's facts are `mise.toml [env]`'s, never
+      # the engine's literals: the roster `CI_REQUIRED_CHECKS`, the fan-in
+      # `CI_FANIN_CHECK` and the verdict spellings `CI_VERDICT_STEPS`.
       - name: Measure which required-check failures never reached a verdict
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: mise run batten -- record nonverdict --exclude-job final --verdict-step 'Run mise run ' --verdict-step 'Run mise exec -- ' > "$RUNNER_TEMP/nonverdict.txt"
+        run: mise run batten -- record nonverdict > "$RUNNER_TEMP/nonverdict.txt"
       - name: Publish the records
         shell: bash
         run: |
@@ -110,4 +110,4 @@ jobs:
       - name: Judge the rate against its budget
         if: always()
         shell: bash
-        run: mise run batten -- check --rule 'job grade other' --fail-on-warning
+        run: mise run batten -- check --rule 'workflow measure other' --fail-on-warning

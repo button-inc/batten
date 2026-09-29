@@ -11,8 +11,8 @@
 //! built to replace exactly those copies — and the join, the percentiles and the
 //! emission are plain functions over parsed rows.
 //!
-//! **Both MEASURE; neither DECIDES.** The budgets stay in the modules that read
-//! the two families (`lane grade other`, `job grade other`). What is here is the
+//! **Both MEASURE; neither DECIDES.** The budgets are the vendored `ci-signal`
+//! preset's, whose two modules read the two families. What is here is the
 //! reduction the retired bodies already did before any decision: which runs a
 //! landing bought, a cancellation's latency, a leg's queue wait, and whether a
 //! failed job's failed step is one the consumer names as verdict-bearing.
@@ -22,9 +22,12 @@
 //! No workflow file, job name or step spelling is named here. The two workflows
 //! arrive as flags or through `$LAND_CI_WORKFLOW` / `$LAND_WORKFLOW` — the latter
 //! the variable `land fast-forward` already reads — the required roster through
-//! `$CI_REQUIRED_CHECKS`, which `land` reads, and the fan-in and the verdict-step
-//! prefixes as flags. The two FAMILY names are this module's own vocabulary: a
-//! verb writes the family it is named for, as `record closes` does.
+//! `$CI_REQUIRED_CHECKS`, which `land` reads, the fan-in as `--exclude-job` or
+//! `$CI_FANIN_CHECK`, which `land` reads too, and the verdict-step prefixes as
+//! `--verdict-step` or `$CI_VERDICT_STEPS`. A flag outranks its variable; the
+//! variable is how a consumer states each fact ONCE for every caller. The two
+//! FAMILY names are this module's own vocabulary: a verb writes the family it is
+//! named for, as `record closes` does.
 //!
 //! # The byte format is the retired bodies', on purpose
 //!
@@ -260,6 +263,150 @@ fn updated_before(row: &Value, since_at: i64) -> bool {
     at < since_at
 }
 
+/// Per-PR attribution: each landing's graded runs, and the totals over all.
+///
+/// Joined by branch AND bounded by `merged_at`, so a branch's post-merge runs
+/// and a reused name's later life are not attributed to it. The bound compares
+/// TEXT, as the retired `awk` did: both are the forge's own fixed-width UTC
+/// spelling, where text order is time order.
+fn attribute(
+    landed: &[(String, String, String)],
+    runs: &[Run],
+    records: &mut Vec<String>,
+) -> (u64, u64, u64, u64) {
+    let (mut graded, mut green, mut red, mut cancelled) = (0_u64, 0_u64, 0_u64, 0_u64);
+    for (number, branch, merged) in landed {
+        let (mut g, mut s, mut f, mut c) = (0_u64, 0_u64, 0_u64, 0_u64);
+        for run in runs.iter().filter(|run| {
+            run.branch == *branch && run.created.as_str() <= merged.as_str() && !run.skipped()
+        }) {
+            g += 1;
+            match run.conclusion.as_str() {
+                "success" => s += 1,
+                "failure" => f += 1,
+                "cancelled" => c += 1,
+                _ => {}
+            }
+        }
+        graded += g;
+        green += s;
+        red += f;
+        cancelled += c;
+        // Only a PR that diverged earns a record: one graded green run is the
+        // ideal and says nothing a reader needs.
+        if g > 1 || f > 0 {
+            records.push(format!(
+                "pr\tnumber={}\tbranch={}\tgraded={g}\tgreen={s}\tred={f}\tcancelled={c}",
+                tsv(number),
+                tsv(branch)
+            ));
+        }
+    }
+    (graded, green, red, cancelled)
+}
+
+/// Each cancelled run's lifetime — LATENCY, never count — with its record.
+fn cancellations(runs: &[Run], records: &mut Vec<String>) -> Vec<i64> {
+    let mut latencies = Vec::new();
+    for run in runs.iter().filter(|run| {
+        run.conclusion == "cancelled" && !run.started.is_empty() && !run.updated.is_empty()
+    }) {
+        let (Some(started), Some(updated)) = (epoch(&run.started), epoch(&run.updated)) else {
+            continue;
+        };
+        let latency = updated - started;
+        latencies.push(latency);
+        records.push(format!(
+            "cancel\trun={}\tbranch={}\tlatency={latency}",
+            tsv(&run.id),
+            tsv(&run.branch)
+        ));
+    }
+    latencies
+}
+
+/// The queue delay per JOB (CLOUD-501), for graded runs only, and how many
+/// runs' jobs could not be read.
+///
+/// One request per graded run, bounded rather than waved at; a run whose jobs
+/// cannot be read is counted, never dropped — dropping it would report a p90
+/// over the legs that happened to answer.
+fn job_queue(
+    spec: &Divergence,
+    slug: &str,
+    git_dir: &Path,
+    runs: &[Run],
+    fetch: Transport<'_>,
+    records: &mut Vec<String>,
+) -> (Vec<i64>, u64) {
+    let (mut latencies, mut unreadable) = (Vec::new(), 0_u64);
+    for run in runs
+        .iter()
+        .filter(|run| !run.skipped() && run.conclusion != "-")
+    {
+        let jobs_path = format!("repos/{slug}/actions/runs/{}/jobs", run.id);
+        match forge::window_over(
+            git_dir,
+            &jobs_path,
+            &[("per_page", PAGE)],
+            Shape::Wrapped("jobs"),
+            spec.max_pages,
+            fetch,
+        ) {
+            Window::Whole(jobs) => {
+                for job in &jobs {
+                    let (Some(created), Some(started)) =
+                        (field(job, "created_at"), field(job, "started_at"))
+                    else {
+                        continue;
+                    };
+                    let (Some(created), Some(started)) = (epoch(&created), epoch(&started)) else {
+                        continue;
+                    };
+                    let seconds = started - created;
+                    latencies.push(seconds);
+                    // A zero-wait leg is the ideal and earns no record.
+                    if seconds > 0 {
+                        let name = field(job, "name").unwrap_or_else(|| String::from("-"));
+                        records.push(format!(
+                            "job\trun={}\tjob={}\tqueue={seconds}",
+                            tsv(&run.id),
+                            tsv(&name)
+                        ));
+                    }
+                }
+            }
+            _ => unreadable += 1,
+        }
+    }
+    (latencies, unreadable)
+}
+
+/// Peak concurrency: a sweep over start/end events.
+///
+/// At one instant a start sorts before an end, as the retired `sort -k2,2r`
+/// ordered them, so two runs touching at a boundary count as overlapping.
+fn peak_concurrency(runs: &[Run]) -> i64 {
+    let mut events: Vec<(i64, i64)> = Vec::new();
+    for run in runs
+        .iter()
+        .filter(|run| !run.skipped() && !run.started.is_empty() && !run.updated.is_empty())
+    {
+        let (Some(started), Some(updated)) = (epoch(&run.started), epoch(&run.updated)) else {
+            continue;
+        };
+        events.push((started, 1));
+        events.push((updated, -1));
+    }
+    events.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+    let (mut current, mut peak) = (0_i64, 0_i64);
+    for (_, step) in events {
+        current += step;
+        peak = peak.max(current);
+    }
+    peak
+}
+
 /// Measure the divergence over `spec`'s window and compose the record.
 ///
 /// Every input is an argument — the slug, the git directory, the transport — so
@@ -268,12 +415,13 @@ fn updated_before(row: &Value, since_at: i64) -> bool {
 // fixture forge so the mutation has to survive the whole path: flags, the walk,
 // the join, the store. Each row restores a failure the retired suite caught.
 //MUTANT-SUITE crates/batten/tests/it/land_divergence.rs
-//MUTANT post-merge-run-attributed|s@^                    && run.created.as_str\(\) <= merged.as_str\(\)$@                    \&\& true@|the_producer_joins_runs_to_landings_and_records_what_the_module_reads
-//MUTANT skipped-run-graded|s@^                    && !run.skipped\(\)$@                    \&\& true@|the_producer_joins_runs_to_landings_and_records_what_the_module_reads
-//MUTANT truncated-walk-reads-whole|s@^            \*unreadable \+= 1;$@@|a_truncated_ci_walk_is_judged_as_a_prefix_and_counted_unreadable
-//MUTANT unreadable-jobs-dropped|s@^            _ => unreadable \+= 1,$@            _ => {}@|a_run_whose_jobs_cannot_be_read_is_unreadable_never_a_zero_wait
-//MUTANT merged-list-unpaged|s@^    let stop = move .row: .Value. \{$@    let stop = move |_row: \&Value| { return false;@|the_merged_pr_list_is_paged_until_it_leaves_the_window
-//MUTANT stale-record-survives|s@^            crate::record::clear_named\(DIVERGENCE, DIVERGENCE_FAMILY\)\?;$@@|an_unreadable_ci_window_is_could_not_look_and_removes_the_stale_record
+//MUTANT post-merge-run-attributed|s@^            run.branch == \*branch && run.created.as_str() <= merged.as_str() && !run.skipped()$@            run.branch == *branch \&\& !run.skipped()@|the_producer_joins_runs_to_landings_and_records_what_the_module_reads
+//MUTANT skipped-run-graded|s@ <= merged.as_str() && !run.skipped()$@ <= merged.as_str()@|the_producer_joins_runs_to_landings_and_records_what_the_module_reads
+//MUTANT truncated-walk-reads-whole|s@^            \*unreadable += 1;$@@|a_truncated_ci_walk_is_judged_as_a_prefix_and_counted_unreadable
+//MUTANT unreadable-jobs-dropped|s@^            _ => unreadable += 1,$@            _ => {}@|a_run_whose_jobs_cannot_be_read_is_unreadable_never_a_zero_wait
+//MUTANT merged-list-unpaged|s@^    at < since_at$@    at < i64::MIN@|the_merged_pr_list_is_paged_until_it_leaves_the_window
+//MUTANT stale-record-survives|s@^            crate::record::clear_named(verb, family)?;$@@|an_unreadable_ci_window_is_could_not_look_and_removes_the_stale_record
+//MUTANT environment-unread|s@^                .ok()$@                .ok().and(None::<String>)@|the_environment_names_the_window_when_no_flag_does
 #[must_use]
 pub fn divergence(spec: &Divergence, slug: &str, git_dir: &Path, fetch: Transport<'_>) -> Produced {
     let mut unreadable = 0_u64;
@@ -361,59 +509,9 @@ pub fn divergence(spec: &Divergence, slug: &str, git_dir: &Path, fetch: Transpor
         }
     };
 
-    // --- per-PR attribution -------------------------------------------------------
-    //
-    // Joined by branch AND bounded by `merged_at`, so a branch's post-merge runs
-    // and a reused name's later life are not attributed to it. The bound compares
-    // TEXT, as the retired `awk` did: both are the forge's own fixed-width UTC
-    // spelling, where text order is time order.
     let mut records: Vec<String> = Vec::new();
-    let (mut graded, mut green, mut red, mut cancelled) = (0_u64, 0_u64, 0_u64, 0_u64);
-    for (number, branch, merged) in &landed {
-        let (mut g, mut s, mut f, mut c) = (0_u64, 0_u64, 0_u64, 0_u64);
-        for run in runs.iter().filter(|run| {
-            run.branch == *branch && run.created.as_str() <= merged.as_str() && !run.skipped()
-        }) {
-            g += 1;
-            match run.conclusion.as_str() {
-                "success" => s += 1,
-                "failure" => f += 1,
-                "cancelled" => c += 1,
-                _ => {}
-            }
-        }
-        graded += g;
-        green += s;
-        red += f;
-        cancelled += c;
-        // Only a PR that diverged earns a record: one graded green run is the
-        // ideal and says nothing a reader needs.
-        if g > 1 || f > 0 {
-            records.push(format!(
-                "pr\tnumber={}\tbranch={}\tgraded={g}\tgreen={s}\tred={f}\tcancelled={c}",
-                tsv(number),
-                tsv(branch)
-            ));
-        }
-    }
-
-    // --- cancel latency: latency, never count --------------------------------------
-    let mut cancel_lat = Vec::new();
-    for run in runs.iter().filter(|run| {
-        run.conclusion == "cancelled" && !run.started.is_empty() && !run.updated.is_empty()
-    }) {
-        let (Some(started), Some(updated)) = (epoch(&run.started), epoch(&run.updated)) else {
-            continue;
-        };
-        let latency = updated - started;
-        cancel_lat.push(latency);
-        records.push(format!(
-            "cancel\trun={}\tbranch={}\tlatency={latency}",
-            tsv(&run.id),
-            tsv(&run.branch)
-        ));
-    }
-    let cancel_p50 = floor_rank(cancel_lat, 50);
+    let (graded, green, red, cancelled) = attribute(&landed, &runs, &mut records);
+    let cancel_p50 = floor_rank(cancellations(&runs, &mut records), 50);
 
     // --- queue delay: created -> run_started, per run -------------------------------
     let queue: Vec<i64> = runs
@@ -423,74 +521,10 @@ pub fn divergence(spec: &Divergence, slug: &str, git_dir: &Path, fetch: Transpor
         .collect();
     let queue_p90 = floor_rank(queue, 90);
 
-    // --- the same delay per JOB (CLOUD-501), for graded runs only ---------------------
-    //
-    // One request per graded run, bounded rather than waved at; a run whose jobs
-    // cannot be read is counted, never dropped — dropping it would report a p90
-    // over the legs that happened to answer.
-    let mut job_lat = Vec::new();
-    for run in runs
-        .iter()
-        .filter(|run| !run.skipped() && run.conclusion != "-")
-    {
-        let jobs_path = format!("repos/{slug}/actions/runs/{}/jobs", run.id);
-        match forge::window_over(
-            git_dir,
-            &jobs_path,
-            &[("per_page", PAGE)],
-            Shape::Wrapped("jobs"),
-            spec.max_pages,
-            fetch,
-        ) {
-            Window::Whole(jobs) => {
-                for job in &jobs {
-                    let (Some(created), Some(started)) =
-                        (field(job, "created_at"), field(job, "started_at"))
-                    else {
-                        continue;
-                    };
-                    let (Some(created), Some(started)) = (epoch(&created), epoch(&started)) else {
-                        continue;
-                    };
-                    let seconds = started - created;
-                    job_lat.push(seconds);
-                    // A zero-wait leg is the ideal and earns no record.
-                    if seconds > 0 {
-                        let name = field(job, "name").unwrap_or_else(|| String::from("-"));
-                        records.push(format!(
-                            "job\trun={}\tjob={}\tqueue={seconds}",
-                            tsv(&run.id),
-                            tsv(&name)
-                        ));
-                    }
-                }
-            }
-            _ => unreadable += 1,
-        }
-    }
+    let (job_lat, unread_jobs) = job_queue(spec, slug, git_dir, &runs, fetch, &mut records);
+    unreadable += unread_jobs;
     let queue_job_p90 = floor_rank(job_lat, 90);
-
-    // --- peak concurrency: a sweep over start/end events -------------------------------
-    //
-    // At one instant a start sorts before an end, as the retired `sort -k2,2r`
-    // ordered them, so two runs touching at a boundary count as overlapping.
-    let mut events: Vec<(i64, i64)> = Vec::new();
-    for run in runs
-        .iter()
-        .filter(|run| !run.skipped() && !run.started.is_empty() && !run.updated.is_empty())
-    {
-        let (Some(started), Some(updated)) = (epoch(&run.started), epoch(&run.updated)) else {
-            continue;
-        };
-        events.push((started, 1));
-        events.push((updated, -1));
-    }
-    events.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
-    let (mut current, mut peak) = (0_i64, 0_i64);
-    for (_, step) in events {
-        current += step;
-        peak = peak.max(current);
-    }
+    let peak = peak_concurrency(&runs);
 
     let retries = runs
         .iter()
@@ -559,11 +593,15 @@ fn classify(job: &Value, verdict_steps: &[String]) -> (&'static str, String) {
 }
 
 /// Classify the failed required jobs over `spec`'s window and compose the record.
-//MUTANT-SUITE crates/batten/tests/it/nonverdict.rs
-//MUTANT roster-ignored|s@^                    && spec.roster.iter\(\).any\(.required. required == name\)$@                    \&\& true@|the_producer_classifies_failed_required_jobs_and_the_module_decides
-//MUTANT fan-in-counted|s@^                    && !spec.excluded.iter\(\).any\(.excluded. excluded == name\)$@                    \&\& true@|the_producer_classifies_failed_required_jobs_and_the_module_decides
-//MUTANT every-failure-a-verdict|s@^        Some\(step\) => \("verdict", step\),$@        Some(step) => ("nonverdict", step),@|the_producer_classifies_failed_required_jobs_and_the_module_decides
-//MUTANT unreadable-run-dropped|s@^            _ => unreadable \+= 1,$@            _ => continue,@|a_run_whose_jobs_cannot_be_read_is_counted_unreadable
+// THE CLASSIFIER'S OWN DISCRIMINATION. Its cases live in `nonverdict.rs`: the
+// gate's one suite declaration above names `land_divergence.rs`, and a Rust suite
+// runs `cargo test -- <case>` across every target, so each filter still selects.
+//MUTANT roster-ignored|s@^                    && spec.roster.iter().any(.required. required == name))$@                    \&\& true)@|the_producer_classifies_failed_required_jobs_and_the_module_decides
+//MUTANT fan-in-counted|s@^                (!spec.excluded.iter().any(.excluded. excluded == name)$@                (true@|the_producer_classifies_failed_required_jobs_and_the_module_decides
+//MUTANT every-failure-a-verdict|s@^        Some(step) => ("verdict", step),$@        Some(step) => ("nonverdict", step),@|the_producer_classifies_failed_required_jobs_and_the_module_decides
+//MUTANT unreadable-run-dropped|s@^            unread_runs += 1;$@@|a_run_whose_jobs_cannot_be_read_is_counted_unreadable
+//MUTANT verdict-steps-unread|s@^    let verdict_steps = listed(verdict_steps, "CI_VERDICT_STEPS", false);$@    let verdict_steps = verdict_steps.to_vec();@|the_producer_classifies_failed_required_jobs_and_the_module_decides
+//MUTANT fan-in-unread|s@^    let excluded = listed(excluded, "CI_FANIN_CHECK", true);$@    let excluded = excluded.to_vec();@|the_producer_classifies_failed_required_jobs_and_the_module_decides
 #[must_use]
 pub fn nonverdict(spec: &Nonverdict, slug: &str, git_dir: &Path, fetch: Transport<'_>) -> Produced {
     let per_page = spec.window.to_string();
@@ -594,7 +632,7 @@ pub fn nonverdict(spec: &Nonverdict, slug: &str, git_dir: &Path, fetch: Transpor
     ids.sort_unstable();
 
     let mut records = Vec::new();
-    let (mut failed_jobs, mut nonverdicts, mut verdicts, mut unreadable) =
+    let (mut failed_jobs, mut nonverdicts, mut verdicts, mut unread_runs) =
         (0_u64, 0_u64, 0_u64, 0_u64);
     for id in &ids {
         let jobs_path = format!("repos/{slug}/actions/runs/{id}/jobs");
@@ -608,7 +646,7 @@ pub fn nonverdict(spec: &Nonverdict, slug: &str, git_dir: &Path, fetch: Transpor
             DEFAULT_PAGES,
             fetch,
         ) else {
-            unreadable += 1;
+            unread_runs += 1;
             continue;
         };
         let mut failed: Vec<(String, &Value)> = jobs
@@ -641,7 +679,7 @@ pub fn nonverdict(spec: &Nonverdict, slug: &str, git_dir: &Path, fetch: Transpor
     }
     let window = format!(
         "window\truns={}\tfailed_jobs={failed_jobs}\tnonverdict={nonverdicts}\t\
-         verdict={verdicts}\tunreadable={unreadable}",
+         verdict={verdicts}\tunreadable={unread_runs}",
         ids.len()
     );
     Produced::Recorded(compose(records, &window))
@@ -658,6 +696,32 @@ fn flag_or_env(flag: Option<&str>, variable: &str) -> Option<String> {
                 .ok()
                 .filter(|value| !value.trim().is_empty())
         })
+}
+
+/// A repeatable flag's values, else a comma-separated environment variable's.
+///
+/// **The environment is the consumer's one spelling.** The scheduled job, the
+/// `[[record]]` writer and every route that names this verb would otherwise each
+/// carry the same list, and a spelling added to one and missed in another
+/// classifies a verdict as a non-verdict without a word. `trim` is `false` for a
+/// list whose entries are PREFIXES: `Run mise run ` ends in the space that stops
+/// it matching `Run mise runner`, and trimming would drop exactly that.
+fn listed(flags: &[String], variable: &str, trim: bool) -> Vec<String> {
+    let given: Vec<String> = flags
+        .iter()
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .collect();
+    if !given.is_empty() {
+        return given;
+    }
+    std::env::var(variable)
+        .unwrap_or_default()
+        .split(',')
+        .map(|entry| if trim { entry.trim() } else { entry })
+        .filter(|entry| !entry.trim().is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 /// A page budget or window size: a whole number in `1..=ceiling`.
@@ -736,33 +800,30 @@ pub fn run_divergence(
         Some(value) => bounded(DIVERGENCE, "--max-pages", value, u32::MAX)?,
         None => DEFAULT_PAGES,
     };
-    let (since, since_at) = match flag_or_env(since, "BATTEN_DIVERGENCE_SINCE") {
-        Some(text) => {
-            let Some(at) = epoch(text.trim()) else {
-                return Err(UsageError::raise(format!(
-                    "{DIVERGENCE}: `--since` is not an RFC 3339 instant with a zone"
-                )));
-            };
-            (text.trim().to_owned(), at)
+    let (since, since_at) = if let Some(text) = flag_or_env(since, "BATTEN_DIVERGENCE_SINCE") {
+        let Some(at) = epoch(text.trim()) else {
+            return Err(UsageError::raise(format!(
+                "{DIVERGENCE}: `--since` is not an RFC 3339 instant with a zone"
+            )));
+        };
+        (text.trim().to_owned(), at)
+    } else {
+        // A CLOCK THAT DID NOT READ IS NOT AN INSTANT: `now_unix` answers 0 on
+        // failure, and a window measured back from the epoch is not the day.
+        let now = crate::now_unix();
+        if now == 0 {
+            crate::record::clear_named(DIVERGENCE, DIVERGENCE_FAMILY)?;
+            writeln!(
+                err,
+                "batten: {DIVERGENCE}: could not look: the clock did not read, so the window has no start"
+            )?;
+            return Ok(ExitCode::Internal);
         }
-        None => {
-            // A CLOCK THAT DID NOT READ IS NOT AN INSTANT: `now_unix` answers 0 on
-            // failure, and a window measured back from the epoch is not the day.
-            let now = crate::now_unix();
-            if now == 0 {
-                crate::record::clear_named(DIVERGENCE, DIVERGENCE_FAMILY)?;
-                writeln!(
-                    err,
-                    "batten: {DIVERGENCE}: could not look: the clock did not read, so the window has no start"
-                )?;
-                return Ok(ExitCode::Internal);
-            }
-            let at = i64::try_from(now).unwrap_or(i64::MAX).saturating_sub(DAY);
-            (
-                crate::receipt::rfc3339_utc(u64::try_from(at).unwrap_or(0)),
-                at,
-            )
-        }
+        let at = i64::try_from(now).unwrap_or(i64::MAX).saturating_sub(DAY);
+        (
+            crate::receipt::rfc3339_utc(u64::try_from(at).unwrap_or(0)),
+            at,
+        )
     };
     let spec = Divergence {
         ci_workflow,
@@ -788,7 +849,8 @@ pub fn run_divergence(
 /// # Errors
 ///
 /// A [`UsageError`] when `$CI_REQUIRED_CHECKS` is empty — without the roster a
-/// count over every job is meaningless — when no verdict step is named, or when
+/// count over every job is meaningless — when neither `--verdict-step` nor
+/// `$CI_VERDICT_STEPS` names a verdict step, or when
 /// `--window` cannot be read; an internal error when the store cannot be
 /// written. Could-not-look is [`ExitCode::Internal`], as for
 /// [`run_divergence`].
@@ -812,10 +874,12 @@ pub fn run_nonverdict(
              required job from an unrelated one. Nothing was recorded."
         )));
     }
-    if verdict_steps.iter().all(|prefix| prefix.is_empty()) {
+    let verdict_steps = listed(verdict_steps, "CI_VERDICT_STEPS", false);
+    let excluded = listed(excluded, "CI_FANIN_CHECK", true);
+    if verdict_steps.is_empty() {
         return Err(UsageError::raise(format!(
-            "{NONVERDICT}: no `--verdict-step` names how a verdict is rendered, so every \
-             failure would read as a non-verdict"
+            "{NONVERDICT}: neither `--verdict-step` nor `$CI_VERDICT_STEPS` names how a \
+             verdict is rendered, so every failure would read as a non-verdict"
         )));
     }
     let window = match window {
@@ -825,12 +889,8 @@ pub fn run_nonverdict(
     let spec = Nonverdict {
         window,
         roster,
-        excluded: excluded.to_vec(),
-        verdict_steps: verdict_steps
-            .iter()
-            .filter(|prefix| !prefix.is_empty())
-            .cloned()
-            .collect(),
+        excluded,
+        verdict_steps,
     };
     let (slug, git_dir) = locate()?;
     let produced = match slug {

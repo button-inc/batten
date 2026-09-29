@@ -1710,9 +1710,10 @@ pub enum RecordCommand {
         /// How many recent failed runs to read; absent is 30.
         window: Option<String>,
         /// Jobs excluded by name, such as a fan-in whose failure its siblings
-        /// manufacture.
+        /// manufacture; none reads `$CI_FANIN_CHECK`.
         exclude_jobs: Vec<String>,
-        /// Step-name prefixes that mark a failed step as verdict-bearing.
+        /// Step-name prefixes that mark a failed step as verdict-bearing; none
+        /// reads `$CI_VERDICT_STEPS`.
         verdict_steps: Vec<String>,
     },
     /// The reclaim census (CLOUD-843, retiring `[tasks.reclaim-census]`).

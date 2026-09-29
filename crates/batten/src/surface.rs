@@ -2736,26 +2736,27 @@ const NONVERDICT_WINDOW: FlagDecl = FlagDecl::valued(
 
 /// `--exclude-job <name>` on `record nonverdict`, repeatable: a job whose
 /// failure its siblings manufacture, such as a fan-in, which is the consumer's
-/// name to give.
+/// name to give. Absent, the verb reads `$CI_FANIN_CHECK`, the fan-in `land`
+/// already reads.
 const NONVERDICT_EXCLUDE: FlagDecl = FlagDecl {
     value: ValueDecl::StrMany,
     ..FlagDecl::valued(
         "exclude_job",
         "exclude-job",
-        "A job never counted, such as a fan-in whose failure its siblings cause (repeatable)",
+        "A job never counted, such as a fan-in whose failure its siblings cause (repeatable; default: $CI_FANIN_CHECK)",
     )
 };
 
-/// `--verdict-step <prefix>` on `record nonverdict`, repeatable and REQUIRED:
-/// how a job renders a verdict is the consumer's fact, and with no prefix every
-/// failure would read as a non-verdict.
+/// `--verdict-step <prefix>` on `record nonverdict`, repeatable: how a job
+/// renders a verdict is the consumer's fact. Absent, the verb reads
+/// `$CI_VERDICT_STEPS`, comma-separated, and refuses when neither names one —
+/// with no prefix every failure would read as a non-verdict.
 const NONVERDICT_STEP: FlagDecl = FlagDecl {
     value: ValueDecl::StrMany,
-    required: true,
     ..FlagDecl::valued(
         "verdict_step",
         "verdict-step",
-        "A step-name prefix that marks a failed step as verdict-bearing (repeatable)",
+        "A step-name prefix that marks a failed step as verdict-bearing (repeatable; default: $CI_VERDICT_STEPS)",
     )
 };
 
