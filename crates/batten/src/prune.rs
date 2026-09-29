@@ -2125,8 +2125,77 @@ fn reclaim_superseded(root: &Path, keep: usize) -> (usize, u64) {
                 }
             }
         }
+        // AFTER the superseded pass, so a unit it just forgot sheds its debuginfo
+        // in the same lap rather than the next one (CLOUD-1293).
+        if let Some(fingerprints) = &fingerprints {
+            let (orphans, orphan_bytes) = reclaim_orphaned_debuginfo(&deps, fingerprints);
+            pruned += orphans;
+            bytes += orphan_bytes;
+        }
     }
     (pruned, bytes)
+}
+
+/// Remove every `.dwo` in `deps` whose owning unit has no fingerprint (CLOUD-1293).
+///
+/// `[profile.dev] split-debuginfo = "unpacked"` moves debuginfo out of the linked
+/// binary into `<crate>-<hash>.<cgu>.rcgu.dwo` files beside it, and
+/// [`RECLAIMED_KINDS`] is closed, so nothing ever removed them: the superseded
+/// pass reclaimed a unit's artifact and fingerprint and left its `.dwo` set
+/// behind. Measured 2026-09-29: 48,692 of them, 7,498 MB, every one belonging to
+/// a unit whose fingerprint was already gone — the residue that refused the day's
+/// lap closes at 83–520 MB under the warm floor.
+///
+/// **BY OWNERSHIP, NOT BY KIND.** A `.dwo` is never grouped or retained by mtime:
+/// it names its owner's hash, and the owner's liveness is already decided by
+/// whether `.fingerprint/<crate>-<hash>` exists — the same token
+/// [`forget_fingerprint`] matches on. A live unit keeps its fingerprint for as
+/// long as the caller's `claim` holds the directory, so this never reaches one.
+///
+/// Could-not-look reclaims NOTHING: an unreadable fingerprint directory would
+/// otherwise read as "no unit is live" and take every `.dwo` in the tree.
+fn reclaim_orphaned_debuginfo(deps: &Path, fingerprints: &Path) -> (usize, u64) {
+    let Ok(entries) = std::fs::read_dir(fingerprints) else {
+        return (0, 0);
+    };
+    let live: std::collections::BTreeSet<String> = entries
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            name.rsplit_once('-').map(|(_, hash)| hash.to_owned())
+        })
+        .collect();
+    let Ok(files) = std::fs::read_dir(deps) else {
+        return (0, 0);
+    };
+    let mut removed = 0;
+    let mut bytes = 0;
+    for entry in files.flatten() {
+        // A FILE BY ITS OWN TYPE, never through a link, for `superseded_in`'s reason.
+        if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(hash) = name.to_str().and_then(dwo_owner_hash) else {
+            continue;
+        };
+        if !live.contains(hash) {
+            let size = entry.metadata().map_or(0, |meta| meta.len());
+            if std::fs::remove_file(entry.path()).is_ok() {
+                removed += 1;
+                bytes += size;
+            }
+        }
+    }
+    (removed, bytes)
+}
+
+/// The owning unit's hash of a split-debuginfo file: `batten-<hash>.<cgu>.rcgu.dwo`
+/// is owned by `batten-<hash>`, read by [`artifact_hash`] so the two parses agree.
+fn dwo_owner_hash(name: &str) -> Option<&str> {
+    let owner = name.strip_suffix(".dwo")?.split('.').next()?;
+    artifact_hash(owner)
 }
 
 /// Remove the `.fingerprint/<crate>-<hash>` entry for a reclaimed artifact.

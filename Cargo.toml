@@ -843,9 +843,11 @@ strip = true
 # cannot answer: `target/debug/deps` 10.97 GB -> 5.87 GB and `target/debug`
 # 13.03 GB -> 7.76 GB, because the 5.20 GB that left the binaries is replaced by
 # 111.8 MB of `.dwo`. Those `.dwo` files are a class `prune.rs`'s closed
-# `RECLAIMED_KINDS` cannot see, so they accumulate per build hash where the
-# binary they came out of was reclaimable — CLOUD-1293, filed rather than fixed
-# here because the fix is in `prune.rs` and the trade is 5.20 GB against 111.8 MB.
+# `RECLAIMED_KINDS` cannot see, so they accumulated per build hash where the
+# binary they came out of was reclaimable — 7,498 MB across 48,692 files by
+# 2026-09-29, against the 111.8 MB per hash measured here. CLOUD-1293 fixed it in
+# `prune.rs`: `reclaim_orphaned_debuginfo` removes a `.dwo` whose owning unit has
+# no fingerprint, in the same pass that reclaims the unit.
 #
 # `debug = 1` is untouched, so this changes WHERE debuginfo is stored and never
 # whether it exists: every `batten` frame still reports its file and line, and

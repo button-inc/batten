@@ -1841,6 +1841,44 @@ fn generations_of_one_unit_still_supersede() {
     assert!(!deps.join("cli-aaaaaaaaaaaa").exists(), "the oldest goes");
 }
 
+/// CLOUD-1293. A `.dwo` whose owning unit has no fingerprint is reclaimed; one
+/// whose unit is live is not. The live one is the control: the case cannot pass by
+/// the pass sweeping `.dwo` wholesale, which would cost every live unit its
+/// debuginfo and `file:line` in a backtrace.
+///
+/// Measured before the fix: 48,692 orphaned `.dwo`, 7,498 MB, left behind by the
+/// superseded pass on two days of laps — the residue that refused lap closes
+/// under the warm floor.
+//
+// The declared mutation, in a plain comment for CLOUD-1913's reason above;
+// killed by hand:
+// MUTANT orphaned-dwo-kept|s@        if !live.contains(hash) {@        if false {@|a_dwo_whose_unit_has_no_fingerprint_is_reclaimed_and_a_live_ones_is_not
+#[test]
+fn a_dwo_whose_unit_has_no_fingerprint_is_reclaimed_and_a_live_ones_is_not() {
+    let repo = repo("target-prune-dwo");
+    let deps = repo.join("target/debug/deps");
+    unit(&deps, "cli", "aaaaaaaaaaaa", 60, 101, 5);
+    let live = deps.join("cli-aaaaaaaaaaaa.cli.1a2b3c4d-cgu.0.rcgu.dwo");
+    let orphan = deps.join("cli-dddddddddddd.cli.1a2b3c4d-cgu.0.rcgu.dwo");
+    std::fs::write(&live, b"debuginfo").unwrap();
+    std::fs::write(&orphan, b"debuginfo").unwrap();
+
+    let output = prune(&repo, "99999", &["-y"]);
+    assert!(output.status.success(), "{}", said(&output));
+    assert!(
+        !orphan.exists(),
+        "a .dwo whose unit has no fingerprint can never be read again and must go"
+    );
+    assert!(
+        live.exists(),
+        "a live unit keeps its debuginfo, or a backtrace loses file:line"
+    );
+    assert!(
+        deps.join("cli-aaaaaaaaaaaa").exists(),
+        "the live unit itself stays"
+    );
+}
+
 // CLOUD-1913's declared mutation, in THIS file for the reason CLOUD-1885's block
 // above gives: `test name undefined` cannot see `crates/batten/src/**`. The
 // expression belongs to `prune.rs`'s `reclaim_superseded`; inert under the sweep,
