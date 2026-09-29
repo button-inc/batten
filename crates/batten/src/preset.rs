@@ -459,6 +459,20 @@ value is what does the work, and it is a boolean rather than the string `true`."
                     "policy/presets/ci-signal/required-failures-reach-a-verdict.rego"
                 ),
             },
+            PresetModule {
+                scope: RuleScope::Tree,
+                // A job key two spaces under `jobs:`, a job-level `timeout-minutes:`
+                // at four, and a matrix leg reported as `<key> (<axis>)` are GitHub
+                // Actions' grammar and its jobs endpoint's naming. Another provider's
+                // documents carry no `jobs:` mapping in that shape, so the module
+                // would read no budget and report a clean tree it never read
+                // (CLOUD-1625).
+                provider: Some("github-actions"),
+                pointer: "<preset:ci-signal>/timeout-tracks-its-measurement.rego",
+                source: include_str!(
+                    "policy/presets/ci-signal/timeout-tracks-its-measurement.rego"
+                ),
+            },
         ],
         verdicts: &[
             VendoredVerdict {
@@ -582,33 +596,6 @@ ran.",
                 )],
                 applicability: crate::verdict::Applicability::Advice,
             },
-        ],
-        // Both modules would cite `whole-number` if a preset could read one; each
-        // writes the literal inline instead (`rules/policy-modules.md`).
-        patterns: &["whole-number"],
-    },
-    // CLOUD-843. What the CI signal says about a consumer's own configuration
-    // over a window: a job's committed timeout budget still matches its measured
-    // p95. The records are `batten record query`'s, under the family names the
-    // module reads; the endpoints, windows and credential are the consumer's
-    // `[[forge.query]]` rows and the budgets are its workflows' own lines, so
-    // nothing here names a repository, a workflow or a job.
-    Manifest {
-        name: "ci-signal",
-        version: 1,
-        modules: &[PresetModule {
-            scope: RuleScope::Tree,
-            // A job key two spaces under `jobs:`, a job-level `timeout-minutes:`
-            // at four, and a matrix leg reported as `<key> (<axis>)` are GitHub
-            // Actions' grammar and its jobs endpoint's naming. Another provider's
-            // documents carry no `jobs:` mapping in that shape, so the module
-            // would read no budget and report a clean tree it never read
-            // (CLOUD-1625).
-            provider: Some("github-actions"),
-            pointer: "<preset:ci-signal>/timeout-tracks-its-measurement.rego",
-            source: include_str!("policy/presets/ci-signal/timeout-tracks-its-measurement.rego"),
-        }],
-        verdicts: &[
             VendoredVerdict {
                 id: "bound pin loose",
                 gloss: "a job's declared timeout sits well above what its measurement justifies",
@@ -667,9 +654,11 @@ than its producer, which writes whole or removes, and reads the same way.",
                 applicability: crate::verdict::Applicability::Advice,
             },
         ],
-        // The provider grammar the module writes inline, for the reason
-        // `Manifest::patterns` gives.
+        // Every module writes the grammar it cites inline, for the reason
+        // `Manifest::patterns` gives: `whole-number` for the two record readers,
+        // GitHub Actions' job and timeout lines for the budget reader.
         patterns: &[
+            "whole-number",
             "workflow-job-key",
             "workflow-top-level-key",
             "job-timeout-line",
@@ -1252,48 +1241,6 @@ asserted rather than tested.",
         ],
         patterns: &[],
     },
-    // CLOUD-843. What a consumer's supply-chain artefacts owe beyond existing: a
-    // released binary's own inventory catalogs something, and only what the
-    // lockfile declares. The records it reads are `batten sbom --binary`'s, the
-    // lockfiles the row's `line_sources`; it names neither a family nor a path.
-    Manifest {
-        name: "supply-chain",
-        version: 1,
-        modules: &[PresetModule {
-            scope: RuleScope::Tree,
-            provider: None,
-            pointer: "<preset:supply-chain>/binary-inventory-is-lockfile-bound.rego",
-            source: include_str!(
-                "policy/presets/supply-chain/binary-inventory-is-lockfile-bound.rego"
-            ),
-        }],
-        verdicts: &[
-            VendoredVerdict {
-                id: "cargo list empty",
-                gloss: "a binary's inventory recovered fewer than two rust-crate packages",
-                class: "0 is a build that lost its `cargo auditable` wrapper, 1 is the binary \
-cataloging only itself; both are an empty document that exits 0, and a gate that checks nothing \
-must not report green. Rebuild the binary through the wrapper and scan it again.",
-                routes: &[run(
-                    "task run first",
-                    "batten sbom --binary <binary> --target <triple>",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "cargo list wrong",
-                gloss: "a binary's inventory names a crate the lockfile does not declare",
-                class: "Subset, never equality: the lockfile spans every target's build and dev \
-dependencies. A recovered crate outside it means the binary was not built from this lockfile.",
-                routes: &[run(
-                    "task run first",
-                    "batten sbom --binary <binary> --target <triple>",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-        ],
-        patterns: &[],
-    },
     // CLOUD-843. The board's own claims held to what the tree and the forge
     // already say: a Done that no release carries, a Done over a pull request
     // still open, a duplicate close taken in its target's operation, a deferral
@@ -1476,6 +1423,137 @@ census is written last and counts the lines above it.",
                 routes: &[run(
                     "task run first",
                     "record the board again with `batten record derive duplicate-close`",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+        ],
+        patterns: &[],
+    },
+    // CLOUD-843's `supply-chain`: what a release and a commit claim about where
+    // they came from is checkable. ONE MANIFEST FOR THE WHOLE BUNDLE: the SBOM
+    // readings (`binary-inventory-is-lockfile-bound.rego`, `cargo list empty`,
+    // `cargo list wrong`) are further modules and verdicts in THIS entry, never a
+    // second `Manifest` of the same name — `no_preset_is_declared_twice` refuses
+    // that, and `find` would answer with whichever came first. Each module binds
+    // its own `package` so their helpers cannot collide. These two read records
+    // the ENGINE's own producers write under the producer's name (`record derive
+    // signing-posture`, `record attestation`), and git facts a row declares, so no
+    // consumer fact travels inside one.
+    Manifest {
+        name: "supply-chain",
+        version: 1,
+        modules: &[
+            PresetModule {
+                scope: RuleScope::Tree,
+                // A forge's attestation endpoint answered through the engine's
+                // producer, never a workflow's expression language.
+                provider: None,
+                pointer: "<preset:supply-chain>/attestation-is-verified.rego",
+                source: include_str!("policy/presets/supply-chain/attestation-is-verified.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                // git's own config scopes and commit headers; no CI provider.
+                provider: None,
+                pointer: "<preset:supply-chain>/signer-is-verifiable.rego",
+                source: include_str!("policy/presets/supply-chain/signer-is-verifiable.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:supply-chain>/binary-inventory-is-lockfile-bound.rego",
+                source: include_str!(
+                    "policy/presets/supply-chain/binary-inventory-is-lockfile-bound.rego"
+                ),
+            },
+        ],
+        verdicts: &[
+            VendoredVerdict {
+                id: "release ship unsafe",
+                gloss: "a release archive's binary carries no verifiable provenance",
+                class: "The verifier refused the executable inside a published archive while the \
+platform DOES offer attestation for this repository. That is a release to fix rather than a gap \
+to report, and the two are told apart by the attestations endpoint's own status code: 200 with an \
+empty list where the feature exists, 404 on the resource where it does not. The subject is the \
+BINARY and not the archive, because a release attests the executable so that repackaging cannot \
+launder the claim.",
+                routes: &[run(
+                    "record run first",
+                    "batten record attestation <tag> --binary <name>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "release carry missing",
+                gloss: "a release archive carries no executable to verify",
+                class: "The archive unpacked and held no binary of the declared name, so there was \
+nothing for the verifier to judge. A packaging problem rather than a provenance one, and its own \
+class for that reason: collapsing it into the unverified finding would send a reader after a \
+signing identity when the build matrix dropped a file.",
+                routes: &[run(
+                    "record run first",
+                    "batten record attestation <tag> --binary <name>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "release list empty",
+                gloss: "the producer looked at a tag and found no archive on it",
+                class: "A green verdict over a release carrying nothing would be about nothing. \
+Present-and-empty and absent are different readings and must not collapse: an absent record is \
+the producer unable to look, where this is the producer having looked and found a tag with no \
+archives.",
+                routes: &[run(
+                    "record run first",
+                    "batten record attestation <tag> --binary <name>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "config carry unsafe",
+                gloss: "signing is on in this checkout with a signer whose key cannot be verified or reproduced",
+                class: "NOT A VERDICT ABOUT SIGNING, which is good. It is about a signature that \
+LOOKS like provenance and carries none: a key whose public half cannot be read, or a signer under \
+a directory the environment reclaims. The refusal is the CONFLICT — something turns signing on and \
+no local `false` answers it — never the mere absence of a local override, because a CI runner has \
+no launcher and an absent local value is correct there.",
+                routes: &[run("repair run first", "batten attribution signing")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "commit carry unsafe",
+                gloss: "a commit in range carries a gpgsig from a key this repository cannot verify or reproduce",
+                class: "The posture already produced one. Config can be repaired AFTER a commit was \
+written, so a repaired checkout still carries what it signed before the repair — and those are \
+exactly what must not land. That is why this is a separate class from the config one rather than \
+the same finding twice: repairing the config clears that arm and leaves this one firing. Rewrite \
+the range unsigned, or publish the key's public half so the signature becomes verifiable.",
+                routes: &[read(
+                    "module read first",
+                    "<preset:supply-chain>/signer-is-verifiable.rego",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "cargo list empty",
+                gloss: "a binary's inventory recovered fewer than two rust-crate packages",
+                class: "0 is a build that lost its `cargo auditable` wrapper, 1 is the binary \
+cataloging only itself; both are an empty document that exits 0, and a gate that checks nothing \
+must not report green. Rebuild the binary through the wrapper and scan it again.",
+                routes: &[run(
+                    "task run first",
+                    "batten sbom --binary <binary> --target <triple>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "cargo list wrong",
+                gloss: "a binary's inventory names a crate the lockfile does not declare",
+                class: "Subset, never equality: the lockfile spans every target's build and dev \
+dependencies. A recovered crate outside it means the binary was not built from this lockfile.",
+                routes: &[run(
+                    "task run first",
+                    "batten sbom --binary <binary> --target <triple>",
                 )],
                 applicability: crate::verdict::Applicability::Advice,
             },

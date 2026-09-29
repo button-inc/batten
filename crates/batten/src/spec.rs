@@ -813,6 +813,10 @@ mod tests {
             "attribution".to_owned(),
             "attribution check".to_owned(),
             "attribution identity".to_owned(),
+            // CLOUD-843, retiring `[tasks.signing-posture-repair]`: the signature
+            // half of `attribution identity`'s repo-local write, off the
+            // read-only allowlist for the same reason.
+            "attribution signing".to_owned(),
             // CLOUD-1789. The third verb under the noun, and the one that reads
             // an identity nothing else in this tree could: an annotated tag's
             // TAGGER, which is a different identity from the author and committer
@@ -1157,6 +1161,10 @@ mod tests {
             // CLOUD-1190 inverts those when the imperative grammar lands, and
             // a third row spelled the old way would be a third row to invert.
             "record".to_owned(),
+            // A release's attestation posture and each archive's verifier verdict
+            // (CLOUD-843, retiring `[tasks.attestation-record]`): a forge read,
+            // a verifier spawn and a store write, so off the read-only allowlist.
+            "record attestation".to_owned(),
             // The reclaim census (CLOUD-843, retiring `reclaim-census`). Three
             // leaves record; `tally` folds and is on the read-only allowlist.
             "record census".to_owned(),

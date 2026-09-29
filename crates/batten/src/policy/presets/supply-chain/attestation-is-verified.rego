@@ -1,53 +1,51 @@
-# A release's binaries carry build provenance (CLOUD-583, ported under CLOUD-1717).
+# A release's binaries carry build provenance (CLOUD-583, ported under CLOUD-1717,
+# and moved into the `supply-chain` preset under CLOUD-843 with its producer
+# retired onto `batten record attestation`).
 #
-# THE WHOLE DESIGN IS ONE DISTINCTION, and the retired program's header names it:
-# `gh attestation verify` exits 1 both when an artifact has no provenance and when
-# the platform never offered any, and those are opposite facts. The first is a
-# release to fix; the second is a plan feature this private repository does not
-# have. A gate that cannot tell them apart is worse than no gate, because it reds
-# every release for a reason no branch causes.
+# THE WHOLE DESIGN IS ONE DISTINCTION: the verifier refuses both an artifact with
+# no provenance and every artifact on a platform that never offered any, and
+# those are opposite facts. The first is a release to fix; the second is a plan
+# feature the repository does not have. A gate that cannot tell them apart is
+# worse than no gate, because it reds every release for a reason no branch causes.
 #
 # The control that separates them is the endpoint's own status code, and it stays
 # the producer's reading: where attestation IS available an unknown digest answers
 # 200 with an empty array, and 404 on the resource is the feature being absent.
-# `[tasks.attestation-record]` probes with an all-zeros digest and records which.
+# `batten record attestation` probes with an all-zeros digest and records which.
 #
 # WHY THE SPAWN STAYS OUTSIDE, and it is not a convention. The verifier is a
-# process — `gh attestation verify` over a binary unpacked from a downloaded
-# archive — and house style §5 makes `check` `read` and structurally incapable of
-# spawning one. So what moves in here is not the verification but the ADJUDICATION
-# of what the verifier said, which is CLOUD-1559's reading rule: carry the
-# decisions, not the steps. The download, the unpack and the verify are steps.
+# process run over a binary unpacked from a downloaded archive, and house style §5
+# makes `check` `read` and structurally incapable of spawning one. So what is here
+# is not the verification but the ADJUDICATION of what the verifier said.
 #
-# A 404 POSTURE FIRES NOTHING, deliberately, and that is the ported behaviour
-# rather than a gap. The retired program exited 0 and reported the gap, because
-# nothing there is a claim about an artifact — `release-artifacts.yml` runs its
-# attestation step `continue-on-error: true` for the same fact, so a release is
-# published unattested BY DESIGN until the repository is public (CLOUD-585). The
-# record being present with `posture 404` is what keeps that readable: it says the
-# producer looked and the platform offers none, where an absent record says nobody
-# looked at all.
+# A 404 POSTURE FIRES NOTHING, deliberately: nothing there is a claim about an
+# artifact, and a release may be published unattested BY DESIGN while the
+# platform offers none. The record being present with `posture 404` is what keeps
+# that readable: the producer looked and the platform offers none, where an
+# absent record says nobody looked at all.
 #
-# COULD-NOT-LOOK IS AN ABSENT RECORD, and every one of the retired program's exit-2
-# arms is now the producer refusing at write time — no credential, no remote, a
-# failed download, an unreadable status, a posture that is neither 200 nor 404. The
-# producer refuses while its author is watching and writes nothing; this module
-# then says nothing, which is the honest reading and not a pass. Carrying the
-# shell's exit 2 in here would have made could-not-look a VIOLATION on the engine's
-# contract, where 2 means a finding.
+# COULD-NOT-LOOK IS AN ABSENT RECORD: no credential, no remote, a failed download,
+# an unreadable status, a posture neither 200 nor 404 — the producer answers exit
+# 3 and removes any stale record, and this module then says nothing, which is the
+# honest reading and not a pass.
+#
+# THE RECORD FAMILY IS THE PRODUCER'S NAME, not a consumer's: `attestation` is
+# what `batten record attestation` writes, so reading it by name ships no
+# consumer fact (rule 1). EVERY NAME IS PREFIXED `attestation_`, because a
+# preset's modules share one engine.
 #MUTANT-SUITE crates/batten/tests/it/attestation.rs
 #MUTANT unverified-passes|s@^\tentry.verdict == "unverified"$@\tfalse@|an_unverified_archive_is_reported_over_the_engines_projection
-#MUTANT gap-judged-as-unverified|s@^\tposture == "200"$@\ttrue@|a_platform_gap_judges_nothing_even_with_archives_recorded
-#MUTANT empty-tag-passes|s@^\tcount(archives) == 0$@\tfalse@|a_tag_carrying_no_archive_is_refused_rather_than_read_as_clean
+#MUTANT gap-judged-as-unverified|s@^\tattestation_posture == "200"$@\ttrue@|a_platform_gap_judges_nothing_even_with_archives_recorded
+#MUTANT empty-tag-passes|s@^\tcount(attestation_archives) == 0$@\tfalse@|a_tag_carrying_no_archive_is_refused_rather_than_read_as_clean
 
 # METADATA
 # description: |
-#   Bound to the TREE surface: this row is `scope = "tree"`, so it reads
-#   `input.tree` and never the mediated call.
+#   Bound to the TREE surface: a row enabling this preset is `scope = "tree"`,
+#   so it reads `input.tree` and never the mediated call.
 #   THIS BLOCK IS YAML AND MUST STAY THE LAST COMMENT BLOCK BEFORE `package`.
 # schemas:
 #   - input: schema["policy-input.schema"]
-package batten.attestation
+package batten.supply_chain_attestation
 
 import rego.v1
 
@@ -57,14 +55,14 @@ rules contains "release carry missing"
 
 rules contains "release list empty"
 
-# The producer's lines, or nothing. `recorded` being undefined is the
+# The producer's lines, or nothing. `attestation_recorded` being undefined is the
 # could-not-look the header describes, and every rule below inherits it.
-recorded := input.tree.records.attestation
+attestation_recorded := input.tree.records.attestation
 
-# `posture <status>` — the one line that decides whether anything below is judged
-# at all. One line, because the producer makes one probe.
-posture := columns[1] if {
-	some raw in recorded
+# `posture <status>` — the one line that decides whether anything below is
+# judged at all. One line, because the producer makes one probe.
+attestation_posture := columns[1] if {
+	some raw in attestation_recorded
 	columns := split(raw, "\t")
 	count(columns) == 2
 	columns[0] == "posture"
@@ -74,18 +72,18 @@ posture := columns[1] if {
 # what the verifier said about the BINARY inside it.
 #
 # THE SUBJECT IS THE BINARY, NOT THE ARCHIVE, and that is the retired program's own
-# correction to its issue's wording. `release-artifacts.yml` attests the binary
-# deliberately, so that repackaging cannot launder the claim — verifying a
+# correction to its issue's wording. A release attests the binary deliberately,
+# so that repackaging cannot launder the claim — verifying a
 # `.tar.gz` would compute a digest nothing ever attested.
 #
-# ONLY THE THREE VERDICTS THE PRODUCER WRITES (review of #962). `record named`
-# stores its input unvalidated, so `archive<TAB>x<TAB>unexpected` could join this
+# ONLY THE THREE VERDICTS THE PRODUCER WRITES (review of #962). A record store takes
+# its input unvalidated, so `archive<TAB>x<TAB>unexpected` could join this
 # set, match no violation below, and — being an archive — keep `release list
 # empty` from firing: a clean reading over a record nothing understood. An
 # unknown verdict is not an archive, so a record of nothing but unknowns reads
 # as the empty list it is.
-archives contains {"name": columns[1], "verdict": columns[2]} if {
-	some raw in recorded
+attestation_archives contains {"name": columns[1], "verdict": columns[2]} if {
+	some raw in attestation_recorded
 	columns := split(raw, "\t")
 	count(columns) == 3
 	columns[0] == "archive"
@@ -102,8 +100,8 @@ violation contains {
 	"verdict": "release ship unsafe",
 	"subjects": [{"artifact": entry.name}],
 } if {
-	posture == "200"
-	some entry in archives
+	attestation_posture == "200"
+	some entry in attestation_archives
 	entry.verdict == "unverified"
 }
 
@@ -118,8 +116,8 @@ violation contains {
 	"verdict": "release carry missing",
 	"subjects": [{"artifact": entry.name}],
 } if {
-	posture == "200"
-	some entry in archives
+	attestation_posture == "200"
+	some entry in attestation_archives
 	entry.verdict == "no-binary"
 }
 
@@ -131,34 +129,34 @@ violation contains {
 	"rule": "release list empty",
 	"verdict": "release list empty",
 } if {
-	posture == "200"
-	count(archives) == 0
+	attestation_posture == "200"
+	count(attestation_archives) == 0
 }
 
 # --- cases ---------------------------------------------------------------
 
-tree(lines) := {"tree": {"records": {"attestation": lines}}}
+attestation_tree(lines) := {"tree": {"records": {"attestation": lines}}}
 
-available(lines) := tree(array.concat(["posture\t200"], lines))
+attestation_available(lines) := attestation_tree(array.concat(["posture\t200"], lines))
 
 test_an_unverified_archive_is_refused if {
-	some v in violation with input as available(["archive\tbatten-x86_64.tar.gz\tunverified"])
+	some v in violation with input as attestation_available(["archive\tbatten-x86_64.tar.gz\tunverified"])
 	v.verdict == "release ship unsafe"
 }
 
 test_a_verified_archive_is_clean if {
-	count(violation) == 0 with input as available(["archive\tbatten-x86_64.tar.gz\tverified"])
+	count(violation) == 0 with input as attestation_available(["archive\tbatten-x86_64.tar.gz\tverified"])
 }
 
 # POINTER, NEVER PAYLOAD: the asset name, never a bundle, a digest, or a byte of
 # the verifier's report — the retired program's rule 4 boundary, kept.
 test_the_finding_names_the_archive_and_nothing_else if {
-	some v in violation with input as available(["archive\tbatten-x86_64.tar.gz\tunverified"])
+	some v in violation with input as attestation_available(["archive\tbatten-x86_64.tar.gz\tunverified"])
 	v.subjects == [{"artifact": "batten-x86_64.tar.gz"}]
 }
 
 test_an_archive_with_no_binary_is_its_own_finding if {
-	some v in violation with input as available(["archive\tbatten-x86_64.tar.gz\tno-binary"])
+	some v in violation with input as attestation_available(["archive\tbatten-x86_64.tar.gz\tno-binary"])
 	v.verdict == "release carry missing"
 }
 
@@ -166,17 +164,17 @@ test_an_archive_with_no_binary_is_its_own_finding if {
 # the verifier refuses every artifact, so judging here would red every release for
 # a reason no branch causes.
 test_a_platform_gap_judges_nothing if {
-	count(violation) == 0 with input as tree([
+	count(violation) == 0 with input as attestation_tree([
 		"posture\t404",
 		"archive\tbatten-x86_64.tar.gz\tunverified",
 	])
 }
 
-# AND THE GAP IS STILL A READING. This case is why `posture` is recorded at all
+# AND THE GAP IS STILL A READING. This case is why the posture is recorded at all
 # rather than inferred from an empty archive list: a present 404 record says the
 # producer looked, where the case below says nobody did.
 test_a_gap_record_is_present_and_readable if {
-	posture == "404" with input as tree(["posture\t404"])
+	attestation_posture == "404" with input as attestation_tree(["posture\t404"])
 }
 
 test_no_record_at_all_says_nothing if {
@@ -184,7 +182,7 @@ test_no_record_at_all_says_nothing if {
 }
 
 test_a_tag_carrying_no_archive_is_refused if {
-	some v in violation with input as tree(["posture\t200"])
+	some v in violation with input as attestation_tree(["posture\t200"])
 	v.verdict == "release list empty"
 }
 
@@ -194,7 +192,7 @@ test_a_tag_carrying_no_archive_is_refused if {
 # the case — without it the record holds no archive and `release list empty` fires,
 # which would let this pass for a reason that has nothing to do with skipping.
 test_a_line_this_reader_cannot_parse_is_skipped if {
-	count(violation) == 0 with input as available([
+	count(violation) == 0 with input as attestation_available([
 		"archive\tbatten-x86_64.tar.gz\tverified",
 		"nonsense",
 	])

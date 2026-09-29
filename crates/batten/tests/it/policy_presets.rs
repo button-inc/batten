@@ -147,7 +147,6 @@ const PRESET_SCOPES: &[(&str, bool)] = &[
     ("supply-chain", true),
     ("tracker-hygiene", true),
     ("release-hygiene", true),
-    ("ci-signal", true),
 ];
 
 /// A row enabling `name` at the scope it is really enabled with.

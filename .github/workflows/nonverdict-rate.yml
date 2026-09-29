@@ -110,4 +110,4 @@ jobs:
       - name: Judge the rate against its budget
         if: always()
         shell: bash
-        run: mise run batten -- check --rule 'workflow measure other' --fail-on-warning
+        run: mise run batten -- check --rule 'bound grade other' --fail-on-warning

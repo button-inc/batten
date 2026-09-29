@@ -808,6 +808,10 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // THAT FILLS A BODY REMOVES ITS NAME HERE, in the same change — a name left
     // behind after its verb answers is the widening this list's header forbids.
     "board check",
+    // CLOUD-843, retiring `[tasks.attestation-record]`: it reaches the FORGE,
+    // and this corpus carries no credential, so its honest answer here is the
+    // could-not-look report — asserted pointer-only all the same.
+    "record attestation",
 ];
 
 /// One entry per leaf verb of [`SURFACE`], asserted total by
@@ -1704,6 +1708,23 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "attribution identity",
         args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // Its signature twin (CLOUD-843): it reports the signer's STATE and the
+    // reason it is broken, never the key path or the signer program.
+    Verb {
+        path: "attribution signing",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // The attestation producer (CLOUD-843). Its record carries an archive NAME
+    // and a closed verdict token; the verifier's own report — which names the
+    // attesting workflow and signer — is dropped at the spawn.
+    Verb {
+        path: "record attestation",
+        args: &["--binary", "a-binary"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },

@@ -44,7 +44,9 @@
 //! **A gate's suite comes from a DECLARED mapping**: `#MUTANT-SUITE <path>`
 //! beside the `#MUTANT` rows, defaulting to `tests/<gate>.bats` when absent. A
 //! `.rego` module can therefore name `crates/batten/tests/<x>.rs` — the tier
-//! that actually drives the engine — as the suite a mutation must redden.
+//! that actually drives the engine — as the suite a mutation must redden. The
+//! declaration is read PER SOURCE: a preset gate is a directory of modules, and
+//! each module's rows run under its own module's suite (see `Gate::suite_for`).
 //!
 //! Everything else is conserved from the predecessor, one signal at a time,
 //! because each of them is a could-not-look and collapsing one into a pass is
@@ -254,6 +256,7 @@ fn task_names(lines: &[String]) -> Vec<String> {
 /// reach another task's rows (CLOUD-1909).
 //MUTANT-SUITE crates/batten/tests/it/mutate.rs
 //MUTANT task-block-unscoped|s@        Some(task) if task_manifest().as_deref() == Some(source) => task_block(&lines, task),@        Some(_) if task_manifest().as_deref() == Some(source) => Some(lines),@|a_task_gate_sweeps_only_its_own_block
+//MUTANT suite-first-only|s@own_suites.get(&row.source)@own_suites.get(\&row.slug)@|each_preset_module_row_runs_under_its_own_declared_suite
 fn declaring_lines(root: &Path, name: &str, source: &str) -> Option<Vec<String>> {
     let lines = lines_of(root, source)?;
     match name.strip_prefix(TASK_PREFIX) {
@@ -371,13 +374,44 @@ pub struct Gate {
     pub name: String,
     /// The sources this gate's rows are read from, repo-relative.
     pub sources: Vec<String>,
-    /// The declared suite, or the default.
+    /// The declared suite, or the default: the first source's declaration.
+    /// A row whose own source declares none runs under it.
     pub suite: Suite,
+    /// Each source's OWN `#MUTANT-SUITE`, keyed by that source.
+    ///
+    /// **ONE DECLARATION PER SOURCE, NOT ONE PER GATE.** A preset gate is a
+    /// directory of modules, and each module declares the suite its own cases
+    /// live in. Keeping only the first declaration found made every later
+    /// module's line decide nothing: every row was judged under the first
+    /// module's suite, so the census counted the wrong file and a declaration
+    /// naming a missing file was never checked. [`Gate::suite_for`] reads this.
+    pub own_suites: BTreeMap<String, Suite>,
     /// The declared mutations, in file then declaration order.
     pub rows: Vec<Row>,
     /// The owning row a known-dead predicate declares, echoed on a survivor and
     /// deciding nothing.
     pub owner: Option<String>,
+}
+
+impl Gate {
+    /// The suite a row is judged under: its own source's declaration, else
+    /// the gate's.
+    #[must_use]
+    pub fn suite_for(&self, row: &Row) -> &Suite {
+        self.own_suites.get(&row.source).unwrap_or(&self.suite)
+    }
+
+    /// Every suite this gate's rows run under, the gate's own first, each once.
+    #[must_use]
+    pub fn suites(&self) -> Vec<&Suite> {
+        let mut all = vec![&self.suite];
+        for suite in self.own_suites.values() {
+            if !all.contains(&suite) {
+                all.push(suite);
+            }
+        }
+        all
+    }
 }
 
 /// What one row, or one gate, resolved to.
@@ -714,12 +748,22 @@ pub fn resolve(root: &Path, name: &str) -> Option<Gate> {
     let mut rows = Vec::new();
     let mut malformed = Vec::new();
     let mut suite = None;
+    let mut own_suites = BTreeMap::new();
     let mut owner = None;
     for source in &sources {
         let Some(lines) = declaring_lines(root, name, source) else {
             continue;
         };
-        suite = suite.or_else(|| declared(&lines, SUITE));
+        if let Some(own) = declared(&lines, SUITE) {
+            // The same fallback the gate's own suite takes below, so a source
+            // naming a path this runner cannot run is reported as `no-suite`
+            // under its own name rather than silently judged under another's.
+            let resolved = Suite::declared(&own).unwrap_or_else(|| Suite::Bats(own.clone()));
+            own_suites.insert(source.clone(), resolved);
+            if suite.is_none() {
+                suite = Some(own);
+            }
+        }
         owner = owner.or_else(|| declared(&lines, OWNER));
         for row in rows_in(&lines, source) {
             match row {
@@ -746,6 +790,7 @@ pub fn resolve(root: &Path, name: &str) -> Option<Gate> {
         sources,
         suite: Suite::declared(&declared_suite)
             .unwrap_or_else(|| Suite::Bats(declared_suite.clone())),
+        own_suites,
         rows,
         owner,
     })
@@ -1619,13 +1664,16 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
     // this row's suite may compose over it.
     staged.restore(root)?;
     staged.stage_subject(root, &row.source)?;
+    // The row's OWN source's suite, never merely the gate's first: a preset
+    // gate is several modules, each naming where its cases live.
+    let suite = gate.suite_for(row);
 
     // THE CASE MUST BE GREEN BEFORE IT IS MUTATED. "Red under mutation" is only
     // evidence if the row was green without it: a case that CANNOT pass — an
     // assertion that never holds, a fixture that never builds — is red either
     // way, and every mutation aimed at it reads as caught. Costs one extra
     // filtered run per row, which is what an anti-vacuity term is worth.
-    let clean = run_suite(staged, root, &gate.suite, &row.want)?;
+    let clean = run_suite(staged, root, suite, &row.want)?;
     // AND THE BOUND IS READ BEFORE EITHER (CLOUD-1860), for the same reason one
     // rung up: a killed run selects no case and exits non-zero, so it satisfies
     // both tests below while meaning neither. Reported as `names-no-case` it sent
@@ -1633,7 +1681,7 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
     // how the whole Rust half of this mechanism read as coverage.
     if clean.timed_out {
         return Ok(Verdict::SuiteTimedOut {
-            seconds: suite_bound(&gate.suite).as_secs(),
+            seconds: suite_bound(suite).as_secs(),
         });
     }
     if !clean.ran {
@@ -1657,7 +1705,7 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
     // The other side of `names-no-case`: a filter matching EVERY case is the
     // same vacuity, because the row stops naming a case and redness under
     // mutation can then come from anywhere in the suite.
-    let total = total_cases(root, &gate.suite);
+    let total = total_cases(root, suite);
     if total > 1 && clean.selected >= total {
         return Ok(Verdict::FilterNamesEveryCase {
             want: row.want.clone(),
@@ -1675,7 +1723,7 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
         return Ok(Verdict::SelfMutatingRow);
     }
 
-    let mutated = run_suite(staged, root, &gate.suite, &row.want)?;
+    let mutated = run_suite(staged, root, suite, &row.want)?;
     // THE SAME GUARD, AND HERE IT IS THE DANGEROUS DIRECTION. The clean run's
     // timeout costs a could-not-look reported under the wrong name; this one
     // would be read as evidence. A killed run exits non-zero, so without this
@@ -1684,7 +1732,7 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
     // Fail-closed is not enough when the failure mode is a forged pass.
     if mutated.timed_out {
         return Ok(Verdict::SuiteTimedOut {
-            seconds: suite_bound(&gate.suite).as_secs(),
+            seconds: suite_bound(suite).as_secs(),
         });
     }
     if !mutated.ran {
@@ -1718,7 +1766,11 @@ pub fn sweep(root: &Path, names: &[String], work: PathBuf) -> Result<Sweep> {
     if names
         .iter()
         .filter_map(|name| resolve(root, name))
-        .any(|gate| matches!(gate.suite, Suite::Cargo { .. }))
+        .any(|gate| {
+            gate.suites()
+                .into_iter()
+                .any(|suite| matches!(suite, Suite::Cargo { .. }))
+        })
     {
         let args = vec![String::from("test"), String::from("--no-run")];
         let _ = spawn(
@@ -1741,12 +1793,19 @@ pub fn sweep(root: &Path, names: &[String], work: PathBuf) -> Result<Sweep> {
             });
             continue;
         };
-        if !root.join(gate.suite.path()).is_file() {
+        // EVERY suite the gate's rows run under must exist, not only the first:
+        // a later module's declaration naming a missing file is as much a
+        // could-not-look as the first one's.
+        if let Some(missing) = gate
+            .suites()
+            .into_iter()
+            .find(|suite| !root.join(suite.path()).is_file())
+        {
             findings.push(Finding {
                 gate: name.clone(),
                 slug: None,
                 verdict: Verdict::NoSuite {
-                    suite: gate.suite.path().to_owned(),
+                    suite: missing.path().to_owned(),
                 },
                 owner: gate.owner.clone(),
             });
@@ -2164,6 +2223,53 @@ mod tests {
                 path: String::from("crates/batten/tests/it/shell_retirement.rs"),
             })
         );
+    }
+
+    /// A preset gate is several modules, and each row runs under ITS OWN
+    /// module's `#MUTANT-SUITE`, falling back to the gate's only where its
+    /// module declares none.
+    ///
+    /// Fails by: `suite_for` returning `&self.suite` (the first declaration
+    /// found, which is what `resolve` used to keep alone) — `b.rego`'s row then
+    /// resolves to `a.rs`, and a second module's declaration decides nothing.
+    #[test]
+    fn each_preset_module_row_runs_under_its_own_declared_suite() {
+        let root = std::env::temp_dir().join(format!(
+            "batten-mutate-own-suite-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join(PRESETS).join("probe");
+        std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("mkdir: {e}"));
+        for (file, text) in [
+            (
+                "a.rego",
+                "#MUTANT-SUITE tests/it/a.rs\n#MUTANT one|s/x/y/|case_a\n",
+            ),
+            (
+                "b.rego",
+                "#MUTANT-SUITE tests/it/b.rs\n#MUTANT two|s/x/y/|case_b\n",
+            ),
+            ("c.rego", "#MUTANT three|s/x/y/|case_c\n"),
+        ] {
+            std::fs::write(dir.join(file), text).unwrap_or_else(|e| panic!("write: {e}"));
+        }
+        let Some(gate) = resolve(&root, "probe") else {
+            panic!("the preset directory resolves to a gate");
+        };
+        let _ = std::fs::remove_dir_all(&root);
+        let suite_of = |slug: &str| {
+            let Some(row) = gate.rows.iter().find(|row| row.slug == slug) else {
+                panic!("row {slug} is declared");
+            };
+            gate.suite_for(row).path().to_owned()
+        };
+        assert_eq!(suite_of("one"), "tests/it/a.rs");
+        assert_eq!(suite_of("two"), "tests/it/b.rs");
+        assert_eq!(suite_of("three"), "tests/it/a.rs");
+        let every: Vec<&str> = gate.suites().into_iter().map(Suite::path).collect();
+        assert_eq!(every, vec!["tests/it/a.rs", "tests/it/b.rs"]);
     }
 
     #[test]

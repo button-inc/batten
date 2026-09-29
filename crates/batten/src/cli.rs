@@ -1505,6 +1505,12 @@ pub enum AttributionCommand {
     },
     /// Set this clone's repo-local git identity when it is unset or denied.
     Identity,
+    /// Switch signing off in this checkout when its signer cannot be verified
+    /// or reproduced (CLOUD-669, retiring `[tasks.signing-posture-repair]`
+    /// under CLOUD-843). The SIGNATURE surface beside `Identity`'s identity one.
+    ///
+    /// APPENDED LAST, for the reason every enum here records.
+    Signing,
 }
 
 /// Subcommands of `capture` (CLOUD-121).
@@ -1858,6 +1864,19 @@ pub enum RecordCommand {
         tag: Option<String>,
         /// The manifest's file name — the consumer's, never a literal here.
         manifest: String,
+    },
+    /// Record a release's attestation posture and each archive's verifier
+    /// verdict (CLOUD-583, retiring `[tasks.attestation-record]` under
+    /// CLOUD-843).
+    ///
+    /// APPENDED LAST, for the reason every enum here records.
+    Attestation {
+        /// The release; empty or absent is the latest.
+        tag: Option<String>,
+        /// The binary's file name inside each archive — the consumer's.
+        binary: String,
+        /// The verifier program; absent is the forge's own client.
+        verifier: Option<String>,
     },
 }
 
@@ -2362,6 +2381,7 @@ fn attribution_of(matches: &ArgMatches) -> Option<AttributionCommand> {
             json: flag(matches, "json"),
         }),
         ("identity", _) => Some(AttributionCommand::Identity),
+        ("signing", _) => Some(AttributionCommand::Signing),
         _ => None,
     }
 }
@@ -3388,6 +3408,13 @@ fn record_of(matches: &ArgMatches) -> Option<RecordCommand> {
         ("release", matches) => Some(RecordCommand::Release {
             tag: matches.get_one::<String>("tag").cloned(),
             manifest: matches.get_one::<String>("manifest")?.clone(),
+        }),
+        // `--binary` is required by the surface, so clap has refused an argv
+        // without it before this runs.
+        ("attestation", matches) => Some(RecordCommand::Attestation {
+            tag: matches.get_one::<String>("tag").cloned(),
+            binary: matches.get_one::<String>("binary")?.clone(),
+            verifier: matches.get_one::<String>("verifier").cloned(),
         }),
         _ => None,
     }

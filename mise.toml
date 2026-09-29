@@ -683,7 +683,7 @@ CI_VERDICT_STEPS = "Run mise run ,Run mise exec -- "
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,engine-cargo-graph,branch-age,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,macos-link,ntia,task-pr-unsubscribed,task-test:cargo,release-tracking,sbom-actions,task-sonar-gate,task-callable,transcript-corpus,engine-rules,release-assets,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,ci-signal,engine-ci-signal,docs-tree-absent,ripcord-untracked,hk-pin-agreement,engine-record,hk-fix-selection.pkl,engine-dist,engine-sbom,supply-chain,engine-reclaim,engine-durable,engine-step,engine-step-table,engine-mcp-grant,engine-mcp-posture,engine-preflight,engine-trust,engine-sweep,sweep-exit-table,tracker-hygiene,engine-tracker-reading,task-duplicate-close-check,engine-release,release-hygiene,task-sbom-binary-record,engine-hk,hook-profile"
+MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,run-arg-shape,engine-cargo-graph,branch-age,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,macos-link,ntia,task-pr-unsubscribed,task-test:cargo,release-tracking,sbom-actions,task-sonar-gate,task-callable,transcript-corpus,engine-rules,release-assets,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,ci-signal,engine-ci-signal,docs-tree-absent,ripcord-untracked,hk-pin-agreement,engine-record,hk-fix-selection.pkl,engine-dist,engine-sbom,supply-chain,engine-reclaim,engine-durable,engine-step,engine-step-table,engine-mcp-grant,engine-mcp-posture,engine-preflight,engine-trust,engine-sweep,sweep-exit-table,tracker-hygiene,engine-tracker-reading,task-duplicate-close-check,engine-release,release-hygiene,task-sbom-binary-record,engine-hk,hook-profile,engine-attestation"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -1940,7 +1940,7 @@ run = "cargo run --quiet -p batten -- sbom"
 
 # Produce, and — as its OWN task — the one rule. The binary's inventory is
 # `batten sbom --binary`'s, its record the `supply-chain` preset's to decide
-# (`cargo list other`).
+# (`commit grade unsafe`, the row enabling it; `cargo list other` is the module's own rule).
 #
 # TWO TASKS, BECAUSE THEY SPEAK ON TWO CHANNELS. The release workflow appends
 # `sbom-binary`'s stdout to `$GITHUB_OUTPUT`, where only `sbom=`/`packages=` belong;
@@ -1960,145 +1960,7 @@ run = "cargo run --quiet -p batten -- sbom --binary {{usage.binary}} --target {{
 
 [tasks.sbom-binary-check]
 description = "Gate: refuse a binary inventory that catalogs nothing, or crates the lockfile does not hold — over `sbom-binary`'s record"
-run = "cargo run --quiet -p batten -- check --rule 'cargo list other'"
-
-# CLOUD-583's probe and verifier, ported off `attestation-check.sh` under
-# CLOUD-1717.
-#
-# THE SPAWN STAYS OUT HERE AND ONLY THE ADJUDICATION MOVED IN (house-style §5).
-# `policy/attestation.rego` decides what an unverified archive is; this fetches
-# what it decides over, and every step of the fetching is a process `check` may
-# not start: the endpoint probe, the release download, the unpack, and
-# `gh attestation verify` itself.
-#
-# EVERY COULD-NOT-LOOK WRITES NOTHING, which is the half that makes the module's
-# silence honest. No credential, no github.com remote, a posture that is neither
-# 200 nor 404, an unreadable status line, a tag that will not resolve, a download
-# that fails — each refuses here, loudly, while its author is watching, and leaves
-# the record absent. The retired program spelled these as exit 2; on the engine's
-# contract 2 means a finding, so carrying that over would have made could-not-look
-# a violation.
-#
-# THE ZERO DIGEST IS THE PROBE, and it is a question about the REPOSITORY rather
-# than about any file: where attestation is available an unknown digest answers
-# 200 with an empty array, and where it is not the resource itself answers 404.
-[tasks.attestation-record]
-description = "Record the platform's attestation posture and each release archive's verdict, for `release grade unsafe`"
-shell = "bash -c"
-run = '''
-set -euo pipefail
-
-gh_bin="${ATTESTATION_GH:-gh}"
-zero=0000000000000000000000000000000000000000000000000000000000000000
-
-# THE OFFLINE HALF, and the narrowness is the design. It asserts that the
-# verifier resolves and NOTHING about the repository, the credential or the
-# platform, because this is what the `release check unread` row runs at `deny` on
-# every gate invocation — and a gate that blocks on ambient environment blocks
-# everything the moment an environment differs. Measured on the retired program:
-# an earlier version also required GH_TOKEN and a github.com remote, and it
-# reported a violation inside `tests/prebuilt-lint.bats`' fixture repositories,
-# which carry neither. A credential is could-not-look, and could-not-look is the
-# world half's to report rather than this one's to enforce.
-if ! command -v "$gh_bin" >/dev/null 2>&1; then
-	echo "::error:: attestation-record: no verifier at '$gh_bin', so no attestation could ever be checked. Run: mise install aqua:cli/cli" >&2
-	exit 2
-fi
-if [ "${1:-}" = "--precondition" ]; then
-	echo "attestation-record: precondition holds — the verifier resolves"
-	exit 0
-fi
-if [ -z "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]; then
-	echo "::error:: attestation-record: no GH_TOKEN/GITHUB_TOKEN, so a 404 could not be told from a denial. Nothing recorded." >&2
-	exit 2
-fi
-
-remote=$(git remote get-url origin)
-# `${remote#*github.com[:/]}` hands back the WHOLE remote when the pattern does
-# not match, so a non-GitHub origin produced a non-empty slug, the probe asked
-# `repos/<url>/…`, the API answered 404, and `posture 404` suppressed every
-# finding. Refused explicitly, before anything is asked or recorded.
-case "$remote" in
-*github.com[:/]*) ;;
-*)
-	echo "::error:: attestation-record: the origin remote is not on github.com, so there is no repository to ask about. Nothing recorded." >&2
-	exit 2
-	;;
-esac
-slug=${remote#*github.com[:/]}
-slug=${slug%.git}
-if [ -z "$slug" ]; then
-	echo "::error:: attestation-record: no github.com origin remote, so there is no repository to ask about." >&2
-	exit 2
-fi
-
-status=$("$gh_bin" api "repos/$slug/attestations/sha256:$zero" -i 2>/dev/null |
-	awk 'NR==1 { for (i = 1; i <= NF; i++) if ($i ~ /^[0-9][0-9][0-9]$/) { print $i; exit } }' || true)
-case "$status" in
-404) printf 'posture\t404\n' | cargo run --quiet -p batten -- record named attestation; exit 0 ;;
-200) ;;
-*)
-	echo "::error:: attestation-record: the attestations endpoint answered '${status:-nothing readable}' — neither 200 nor 404, so the platform's posture is unknown and nothing was recorded." >&2
-	exit 2
-	;;
-esac
-
-tag="${1:-}"
-if [ -z "$tag" ]; then
-	if ! tag=$("$gh_bin" release view --json tagName --jq '.tagName' 2>/dev/null) || [ -z "$tag" ]; then
-		echo "::error:: attestation-record: no tag given and no latest release to read, so there is nothing to verify." >&2
-		exit 2
-	fi
-fi
-
-scratch=$(mktemp -d)
-trap 'rm -rf "$scratch"' EXIT
-if ! "$gh_bin" release download "$tag" --dir "$scratch" --pattern '*.tar.gz' --pattern '*.zip' >/dev/null 2>&1; then
-	echo "::error:: attestation-record: could not download $tag's archives, so their provenance is unread. Nothing recorded." >&2
-	exit 2
-fi
-
-# BUFFERED, THEN RECORDED. The loop used to run in a brace group piped straight
-# into `record named`, so its `exit 2` left only that subshell: the recorder got
-# EOF and stored `posture 200` plus the archives read so far — the short list
-# the module reads as complete. `timeout-drift-record` fixes the same shape the
-# same way.
-census="$scratch/census"
-{
-	printf 'posture\t200\n'
-	for archive in "$scratch"/*.tar.gz "$scratch"/*.zip; do
-		[ -f "$archive" ] || continue
-		name=${archive##*/}
-		into="$scratch/x-$name"
-		mkdir -p "$into"
-		# AN EXTRACTION THAT FAILED IS NOT AN ARCHIVE WITHOUT A BINARY. Both
-		# commands discarded their status with `|| true`, so a corrupt archive or a
-		# missing extractor left `find` with nothing to find and the producer wrote
-		# `no-binary` — a RELEASE VERDICT, where the honest reading is
-		# could-not-look. The WHOLE record is abandoned rather than the one line
-		# dropped, because a posture line plus a short archive list is a window the
-		# module reads as complete.
-		extracted=ok
-		case "$name" in
-		*.zip) unzip -q -o "$archive" -d "$into" >/dev/null 2>&1 || extracted=failed ;;
-		*) tar -xzf "$archive" -C "$into" >/dev/null 2>&1 || extracted=failed ;;
-		esac
-		if [ "$extracted" = failed ]; then
-			echo "::error:: attestation-record: could not extract $name, so its provenance is unread. Nothing recorded." >&2
-			exit 2
-		fi
-		binary=$(find "$into" -type f \( -name batten -o -name batten.exe \) | head -n1)
-		if [ -z "$binary" ]; then
-			printf 'archive\t%s\tno-binary\n' "$name"
-		elif "$gh_bin" attestation verify "$binary" --repo "$slug" >/dev/null 2>&1; then
-			printf 'archive\t%s\tverified\n' "$name"
-		else
-			printf 'archive\t%s\tunverified\n' "$name"
-		fi
-	done
-} >"$census"
-cargo run --quiet -p batten -- record named attestation <"$census"
-'''
+run = "cargo run --quiet -p batten -- check --rule 'commit grade unsafe'"
 
 # CLOUD-266's measurement half: three declared forge reads, in order, because
 # each fans out over the family the one before it recorded (CLOUD-843). The
@@ -2210,154 +2072,23 @@ run = [
 #
 # POINTER-ONLY: one token. The probe log carries module bodies and paths, and no
 # byte of it reaches the record.
-# CLOUD-669's reading, ported off `mise-tasks/signing-posture.sh` under
-# CLOUD-1717. The things that are not decisions: the git config reads, the
-# filesystem tests behind them, and the range scan.
+# THE SIGNING GATE UNDER ONE NAME, and the name is what `commit-lint` depends on
+# (CLOUD-669). A `depends` entry names ONE task, so the producer and the judge
+# compose here rather than at every call site.
 #
-# THE SIGNER CLASSIFICATION IS `crates/batten/src/signer_posture.rs`, because
-# seven of the dying suite's cases are about exactly which configurations are
-# unverifiable — an empty key, a directory, an unreadable file, a path that does
-# not exist, an inline literal, a `/tmp` signer, and a healthy one. Those are the
-# substance; the module's half is two set memberships. They are `#[cfg(test)]`
-# cases beside the function now, where a scratch path exercises them directly;
-# it was a `.py` beside this task, which was the campaign to delete bash routing
-# a reading into another interpreter (CLOUD-1717).
-#
-# THE CONFLICT, NEVER THE MERE ABSENCE OF A LOCAL KEY. `config conflict` is
-# recorded only where something OUTSIDE the checkout turns signing on and nothing
-# local answers it. A runner has no launcher and no global setting, so an absent
-# local value is correct there and nothing is recorded.
-#
-# RANGE, NEVER HISTORY: `origin/main..HEAD` by default, the range
-# `commit-attribution` and `commit-lint` already share.
-#
-# `git cat-file … | sed '/^$/q'` is captured and matched in the shell rather than
-# piped into `grep -q`: under `pipefail` a `grep -q` exits the moment it matches,
-# the producer takes SIGPIPE, and the pipeline reports FAILURE on a match — so
-# the signed commit this gate exists to catch would read as clean.
-# `pipefail-grep-check` caught what the retired suite could not.
-#
-# OUTSIDE A GIT REPOSITORY THIS REFUSES, AND THAT IS THE RETIRED PROGRAM'S OWN
-# REASON RESTORED. The port wrote `|| exit 0` here, which turns could-not-look
-# into silence — and `signing-posture.sh:87-89` exited 2 on exactly this branch,
-# saying why in as many words: *a gate that cannot look must not report the
-# posture in force*. Silence is that reading inverted, because the module cannot
-# tell an absent record from a clean one. Exit 2 keeps the reading loud on the
-# one caller that can act on it.
-[tasks.signing-posture-record]
-description = "Effect: record this checkout's signer posture and any signed commit in range, for `commit grade unsafe`"
-shell = "bash -c"
-run = """
-if ! git rev-parse --git-dir >/dev/null 2>&1; then
-	echo "::error:: signing-posture-record: not a git repository, so the signer posture could not be read. Nothing recorded." >&2
-	exit 2
-fi
-
-# THE GATHERING IS THIS TASK'S — `git config`, `git rev-list` and `git
-# cat-file` are spawns house-style §5 keeps outside the engine. What the facts
-# MEAN, including the signer classification and the record's own shape, is
-# `crates/batten/src/signer_posture.rs` (CLOUD-1717).
-key=$(git config --get user.signingkey 2>/dev/null || true)
-prog=$(git config --get gpg.ssh.program 2>/dev/null || true)
-
-# `--type=bool` IS LOAD-BEARING, NOT TIDINESS. `git config --get` returns the
-# stored value verbatim and git accepts `1`, `on`, `yes`, `0`, `off` and `no` as
-# booleans, so a comparison against the literals `true`/`false` is wrong in BOTH
-# directions: a global `commit.gpgsign = 1` matched no `*true*` and recorded no
-# conflict, grading a conflicting configuration clean; a local `off` was not
-# equal to `false`, so the guard passed and a global `true` recorded a conflict
-# over a checkout where signing is disabled. `--type=bool` makes git normalise
-# both before either comparison runs.
-gpgsign=none
-local_setting=$(git config --type=bool --local --get commit.gpgsign 2>/dev/null || true)
-inherited=$(git config --type=bool --global --get commit.gpgsign 2>/dev/null || true)
-if [ "$local_setting" != false ]; then
-  case "$inherited$local_setting" in
-  *true*) gpgsign=conflict ;;
-  esac
-fi
-
-signed=
-base="${BASE_SHA:-}"
-head="${HEAD_SHA:-}"
-[ -n "$base" ] || base=$(git rev-parse --verify --quiet origin/main) || base=""
-[ -n "$head" ] || head=$(git rev-parse --verify --quiet HEAD) || head=""
-if [ -n "$base" ] && [ -n "$head" ]; then
-  for sha in $(git rev-list --no-merges "$base..$head" 2>/dev/null || true); do
-    header=$(git cat-file commit "$sha" 2>/dev/null | sed '/^$/q')
-    case $'\\n'"$header" in
-    *$'\\n'gpgsig' '*) signed="${signed:+$signed,}$sha" ;;
-    esac
-  done
-fi
-
-cargo run --quiet -p batten -- record derive signing-posture \\
-  --input "signingkey=$key" --input "ssh-program=$prog" \\
-  --input "gpgsign=$gpgsign" --input "signed=$signed"
-"""
-
-# THE PAIR UNDER ONE NAME, and the name is what `commit-lint` depends on.
-#
-# `signing-posture.sh` was one program that gathered AND judged, and `commit-lint`
-# named it in `depends`. The port split it (§5 makes `check` `read` and incapable
-# of spawning `git config`), and the retirement deleted the program while leaving
-# that `depends` entry naming it — `mise ERROR task not found: signing-posture`,
-# so `commit-lint` could not run at all, in CI, in `verify`, and from the
-# `commit-msg` hook. A `depends` entry names ONE task, so the two halves compose
-# here rather than at the four call sites that would otherwise each need both.
-#
-# Guarded by hand: this body declares `shell = "bash -c"` and so does not run
-# under `set -e`. A producer that could not write its record must not fall through
-# to a judge that would read the absence as silence — which is the whole failure
-# class CLOUD-1810 exists to close, and it would be reintroduced here by a bare
-# two-line body.
+# ARGV, NO SHELL, since CLOUD-843. The producer body that ran `git config`,
+# `git rev-list` and `git cat-file` retired: the engine reads the signer itself
+# (`record derive signing-posture`), and the conflict between config scopes and
+# the signed commits in range are git facts the `supply-chain` preset reads off
+# `commit grade unsafe`'s declared columns. An array stops at its first failing
+# entry, so a producer that could not write its record never falls through to a
+# judge that would read the absence as silence — what the hand guard here did.
 [tasks.signing-posture-check]
 description = "Gate: this checkout's signer is verifiable and no commit in range carries a key nobody can check (CLOUD-669)"
-shell = "bash -c"
-run = """
-if ! mise run signing-posture-record; then
-  echo "::error:: signing-posture-check: the posture could not be recorded, so there is nothing to judge." >&2
-  exit 2
-fi
-mise run batten -- check --rule 'commit grade unsafe'
-"""
-
-# THE WRITE, self-declared per house style §5 and kept a task because a module
-# cannot write. It fires ONLY against the broken configuration: disabling signing
-# unconditionally would also switch off a correctly configured signer, which is
-# the outcome CLOUD-591 is working toward.
-#
-# Local-only, NEVER `--global` — a developer's own unrelated repositories are not
-# this repo's business, the same boundary `attribution-identity` draws — and
-# local beats global, which matters because the launcher rewrites global every
-# session.
-[tasks.signing-posture-repair]
-description = "Write: switch signing off in THIS checkout when its signer cannot be verified or reproduced (CLOUD-669)"
-shell = "bash -c"
-run = """
-git rev-parse --git-dir >/dev/null 2>&1 || {
-  echo "::error:: signing-posture-repair: not a git repository" >&2
-  exit 2
-}
-# ONE READING, ONE CALLER OF IT. This used to run the classification a second
-# time beside the record task; it now reads the posture off the record the
-# producer just wrote and printed, so the two can never disagree about a
-# checkout they both looked at (CLOUD-1717).
-recorded=$(mise run signing-posture-record) || exit 2
-signer=${recorded#*signer }
-signer=${signer%%$'\\n'*}
-case "$signer" in
-verifiable)
-  echo "signing-posture: signer is verifiable, leaving signing on"
-  exit 0
-  ;;
-esac
-if ! git config --local commit.gpgsign false; then
-  echo "::error:: signing-posture-repair: could not write commit.gpgsign to this checkout's config" >&2
-  exit 2
-fi
-echo "signing-posture: signing disabled in this checkout — ${signer#broken }"
-"""
+run = [
+  "cargo run --quiet -p batten -- record derive signing-posture",
+  "cargo run --quiet -p batten -- check --rule 'commit grade unsafe'",
+]
 
 [tasks.evaluator-io-record]
 description = "Effect: record whether the IO-free evaluator test goes red under `probe-evaluator-io`, for `test judge never`"
@@ -4115,7 +3846,7 @@ description = "Session start: put the not-signing posture into force, quietly �
 # own rather than a flattened `1`.
 quiet = true
 silent = "stdout"
-run = "mise run signing-posture-repair"
+run = "mise run batten -- attribution signing"
 
 [tasks."session:wiring"]
 description = "Session start: reclaim the hook surface from launcher-provisioned siblings — the third repair of the class `session:identity` and `session:signing` already close (CLOUD-1079)"
@@ -6292,7 +6023,7 @@ description = "Gate: every commit subject in BASE_SHA..HEAD_SHA follows the conv
 # The range half of the subject convention, split out of `commit-lint`'s body so
 # the pattern can live in `batten.toml` where policy belongs rather than as a
 # `mise.toml [env]` variable (CLOUD-701). It rides `commit-lint`'s env contract
-# for the same reason `commit-attribution` and `signing-posture` do: both callers
+# for the same reason `commit-attribution` does: both callers
 # already export BASE_SHA/HEAD_SHA, so a dependency lights up the local pre-flight
 # and the CI backstop at once with no second task name in a workflow — which is
 # what keeps `ci-local-parity` satisfied without editing `verify`.
@@ -6311,13 +6042,15 @@ description = "Validate every commit in BASE_SHA..HEAD_SHA is Conventional Commi
 # lights up the local pre-flight and the CI backstop at once, with no second
 # definition of which commits are in scope. It also fails closed for free: mise
 # stops before this body runs, so the no-`set -e` trap does not apply (CLOUD-274).
-# `signing-posture-check` rides the same contract for the same reason, and it is
-# the signature half of what `commit-attribution` does for the identity half
-# (CLOUD-669): both judge BASE_SHA..HEAD_SHA, so neither needs a second call
-# site and `ci-local-parity` stays satisfied without editing a workflow. It is
-# spelled `-check` since CLOUD-1717 split the gathering from the judging; the
-# entry named the retired program for as long as nothing asked whether a
-# `depends` target still resolves.
+# `signing-posture-check` rides the same DEPENDENCY for the same reason, and it
+# is the signature half of what `commit-attribution` does for the identity half
+# (CLOUD-669), so it needs no second call site and `ci-local-parity` stays
+# satisfied without editing a workflow. It does NOT ride the BASE_SHA/HEAD_SHA
+# env contract since CLOUD-843: its range is the static `commits` column on the
+# `commit grade unsafe` row in batten.toml, so that row, not this env, says
+# which commits it judges. It is spelled `-check` since CLOUD-1717 split the
+# gathering from the judging; the entry named the retired program for as long
+# as nothing asked whether a `depends` target still resolves.
 depends = ["commit-attribution", "signing-posture-check", "commit-check"]
 shell = "bash -c"                                                         # uses ${sha:0:8}; mise defaults tasks to /bin/sh (dash)
 # The SERVER-SIDE half of CLOUD-431. The claim receipt lives in `.git/` and never
