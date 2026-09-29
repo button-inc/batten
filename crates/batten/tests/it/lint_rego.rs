@@ -22,11 +22,13 @@
 //! predicate below admits that spelling beside the piped one, and refuses the
 //! substitution shape either way.
 //!
-//! # opa, where installed
+//! # opa, always
 //!
 //! The two behavioural cases run the pinned `opa` through `mise which opa`, the
-//! way the retired suite ran it through `mise run`. A host without it has learned
-//! nothing about the corpus and returns rather than failing.
+//! way the retired suite ran it through `mise run`. A host without it FAILS them,
+//! as the retired suite did: `mise run lint:rego` with no opa was a red case, and
+//! every CI job that runs this tier installs opa. Returning green there would be
+//! a pass that judged no corpus.
 
 // CLOUD-1268's fifth arm: `mise.toml` does not die, so every `ported` arm names
 // it. Three cases are `changed`, each for the reason on its row.
@@ -86,8 +88,9 @@ fn tracked_modules() -> Vec<String> {
         .collect()
 }
 
-/// The `opa` this clone pins, or `None` where it is not installed.
-fn opa_binary() -> Option<PathBuf> {
+/// The `opa` this clone pins. A host without it fails the case rather than
+/// passing it unjudged.
+fn opa_binary() -> PathBuf {
     #[expect(
         clippy::disallowed_types,
         reason = "stays — CLOUD-843: resolving the pinned tool is what the retired `tests/lint-rego.bats` did through `mise run`, and the formatter is opa's"
@@ -96,12 +99,23 @@ fn opa_binary() -> Option<PathBuf> {
         .args(["which", "opa"])
         .current_dir(common::at_root("."))
         .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let path = PathBuf::from(String::from_utf8(output.stdout).ok()?.trim());
-    path.is_file().then_some(path)
+        .expect("run `mise which opa` — the pinned opa is this tier's instrument");
+    assert!(
+        output.status.success(),
+        "`mise which opa` found no pinned opa, so no corpus can be judged: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let path = PathBuf::from(
+        String::from_utf8(output.stdout)
+            .expect("`mise which` prints a UTF-8 path")
+            .trim(),
+    );
+    assert!(
+        path.is_file(),
+        "the pinned opa is not a file: {}",
+        path.display()
+    );
+    path
 }
 
 /// `opa fmt -l` over git's index at the repository root: its status and listing.
@@ -148,16 +162,14 @@ fn the_fixture_hazard_an_unparseable_rego_outside_the_index_is_never_judged() {
     fs::create_dir_all(&fixture).expect("create the fixture directory");
     fs::write(fixture.join("broken.rego"), "this is not = = rego\n").expect("write the fixture");
     let listed = tracked_modules();
-    let judged = opa_binary().map(|opa| list_unformatted(&opa));
+    let (clean, listing) = list_unformatted(&opa_binary());
     let _ = fs::remove_dir_all(&fixture);
     assert!(
         !listed.iter().any(|path| path.ends_with("broken.rego")),
         "git's index lists the untracked fixture: {listed:?}"
     );
-    if let Some((clean, listing)) = judged {
-        assert!(clean, "opa failed over the tracked corpus: {listing}");
-        assert!(!listing.contains("broken.rego"), "the fixture was judged");
-    }
+    assert!(clean, "opa failed over the tracked corpus: {listing}");
+    assert!(!listing.contains("broken.rego"), "the fixture was judged");
 }
 
 #[test]
@@ -204,8 +216,7 @@ fn the_fixer_writes_in_place_and_the_checker_never_does() {
 
 #[test]
 fn a_clean_corpus_passes() {
-    let Some(opa) = opa_binary() else { return };
-    let (clean, listing) = list_unformatted(&opa);
+    let (clean, listing) = list_unformatted(&opa_binary());
     assert!(clean, "opa failed over the tracked corpus: {listing}");
     assert!(
         listing.trim().is_empty(),

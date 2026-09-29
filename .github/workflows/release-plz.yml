@@ -347,8 +347,9 @@ jobs:
           version: 2026.9.1
           # What the `musl` job installs, for its stated reason: `tests/cli.rs`
           # materializes fixtures carrying this repository's `batten.toml`, whose
-          # rules spawn hk and jq.
-          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest
+          # rules spawn hk and jq; opa for `lint_rego.rs`, which judges the
+          # corpus with the pinned formatter and fails where it is absent.
+          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest aqua:open-policy-agent/opa
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         # Read by the compile step below; `ci-local-parity` property 17 holds the
         # `id` and the guard together.

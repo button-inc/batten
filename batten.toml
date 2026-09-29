@@ -9793,8 +9793,8 @@ required_checks = ["final"]
 #
 # The six slow steps and the hk globs that select them, measured 2026-08-21:
 # `token-bench-check` regenerates from COMMITTED fixtures and never reads the live
-# tree; `sbom-check` reads `Cargo.lock` and the workflows; `test:bats` reads
-# `mise-tasks/**` and `tests/*.bats`; `test` reads the Rust tree, the manifests
+# tree; `sbom-check` reads `Cargo.lock` and the workflows; `test:bats` (retired,
+# CLOUD-843) read `mise-tasks/**` and `tests/*.bats`; `test` reads the Rust tree, the manifests
 # and `batten.toml`; `cargo-clippy` declares no glob but is a pure-Rust verdict;
 # and `batten-check` declares `**`, which is why the `ci` job runs it
 # unconditionally rather than behind this list — `no-secrets` is the repository's
@@ -9805,42 +9805,11 @@ required_checks = ["final"]
 # a `.coderabbit.yaml` entry cannot quietly cover `.coderabbit.yaml.bak`.
 slow_inert = [".serena/memories/", ".coderabbit.yaml"]
 
-# THE PATHS EVERY BATS SUITE DEPENDS ON WITHOUT NAMING (CLOUD-1716), ported out
-# of `mise-tasks/suite-select.sh`. A suite declares its subject in a
-# `# subject:` header, and a change to one of these moves suites whose header
-# names none of them — so a diff touching one runs everything.
-#
-# CONSUMER DATA, and it was a constant in `crates/batten/src/suites.rs` until
-# `no_artifact_name_reaches_the_core` refused it (non-negotiable rule 1). The
-# engine knows the relationship; these five paths are this repository's.
-#
-# EACH ENTRY HAS ITS OWN ARGUMENT, and the direction of a mistake here is the
-# opposite of `slow_inert`'s: a path missing from this list makes the selection
-# NARROWER, and a too-narrow selection has no symptom — the suites do not run and
-# a regression lands green.
-#
-#   `mise.toml`               defines the tasks the suites invoke
-#   `mise.lock`               pins the tools those tasks resolve
-#   `hk.pkl`                  defines the gate the suites assert about
-#   `batten.toml`             is the policy authority every gate reads
-#   `.claude/settings.json`   is the harness wiring several suites drive
-#   `tests/helpers.bash`      is sourced by almost every suite
-#
-# Measured on CLOUD-807: subject-intersection alone selected 7 suites for a
-# `mise.toml` edit and skipped `tests/land.bats`, which is worse than running
-# everything.
-#
-# Same spelling as `slow_inert` one key up: a trailing `/` covers a directory,
-# anything else must match exactly — so a `mise.toml` entry cannot quietly cover
-# `mise.toml.bak`.
-suite_shared = [
-  ".claude/settings.json",
-  "batten.toml",
-  "hk.pkl",
-  "mise.lock",
-  "mise.toml",
-  "tests/helpers.bash",
-]
+# NO `suite_shared` (CLOUD-843). It named the paths every bats suite depended on
+# without naming, for `batten ci suites`, whose one caller was `test:bats`. That
+# task retired with the last suite, so the key had no reader and listed a deleted
+# file (`tests/helpers.bash`). A consumer that selects shell suites declares its
+# own; an undeclared set widens, which is the safe direction.
 
 # The workflow whose matrix names the targets a release builds (CLOUD-65),
 # ported out of `mise-tasks/install-check.sh`. `release install` compares three

@@ -180,8 +180,8 @@ pub fn derive(root: &Path, tracked: &BTreeSet<String>) -> Result<(Vec<Row>, Stri
     let path = root.join(REPORT);
     let Ok(report) = std::fs::read_to_string(&path) else {
         return Err(UsageError::raise(format!(
-            "record suites: no report at {REPORT} — `test:bats` has not run in this tree, or its \
-             receipt let it skip. Run `mise run test:bats` first; this reads a report and measures \
+            "record suites: no report at {REPORT} — the suite runner has not written one in this \
+             tree, or a receipt let it skip. Run the suite first; this reads a report and measures \
              nothing itself."
         )));
     };
@@ -197,7 +197,7 @@ pub fn derive(root: &Path, tracked: &BTreeSet<String>) -> Result<(Vec<Row>, Stri
         return Err(UsageError::raise(format!(
             "record suites: {REPORT} names {} suite(s) this tree does not track — the report \
              predates the tree, so deriving from it would publish a cost for a suite that is gone. \
-             Run `mise run test:bats` to produce a report over the suites that exist, then re-run.",
+             Run the suite again to produce a report over the suites that exist, then re-run.",
             orphans.len()
         )));
     }

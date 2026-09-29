@@ -27,9 +27,9 @@
 //! # Where hk is not installed
 //!
 //! Resolved through `mise which hk`, the pinned tool, exactly as the retired suite
-//! resolved it through its runner's PATH. A host with no hk has learned nothing
-//! about the plan, so each case returns rather than failing — the shape
-//! `hk_fix_selection.rs` already uses for the same tool.
+//! resolved it through its runner's PATH. A host with no hk FAILS every case, as
+//! the retired suite did: it had no `skip`, and every CI job that runs this tier
+//! installs hk. Returning green there would be a pass that looked at nothing.
 
 // CLOUD-1268's fifth arm. `hk.pkl` is this repository's gate definition: it does
 // not die, so what is spelled here is a port WITHOUT a retirement, and every arm
@@ -72,8 +72,11 @@ const SLOW_TIER: &[&str] = &[
     "sbom-check",
 ];
 
-/// The hk this clone pins, or `None` where it is not installed.
-fn hk_binary() -> Option<PathBuf> {
+/// The hk this clone pins. **A host without it FAILS the case**, as the retired
+/// suite did: it called `hk check --plan` with no `skip` guard, so an absent hk
+/// was a red case there, and a case that returned green here would be a vacuous
+/// pass wearing a `ported:` arm that claims the same assertion.
+fn hk_binary() -> PathBuf {
     #[expect(
         clippy::disallowed_types,
         reason = "stays — CLOUD-843: resolving the pinned tool is what the retired `tests/hk-selection.bats` did through its runner's PATH, and the plan is hk's to print"
@@ -82,12 +85,23 @@ fn hk_binary() -> Option<PathBuf> {
         .args(["which", "hk"])
         .current_dir(common::at_root("."))
         .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let path = PathBuf::from(String::from_utf8(output.stdout).ok()?.trim());
-    path.is_file().then_some(path)
+        .expect("run `mise which hk` — the pinned hk is this tier's instrument");
+    assert!(
+        output.status.success(),
+        "`mise which hk` found no pinned hk, so the plan cannot be read: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let path = PathBuf::from(
+        String::from_utf8(output.stdout)
+            .expect("`mise which` prints a UTF-8 path")
+            .trim(),
+    );
+    assert!(
+        path.is_file(),
+        "the pinned hk is not a file: {}",
+        path.display()
+    );
+    path
 }
 
 /// `hk check --plan --json <args>` at the repository root, parsed.
@@ -162,7 +176,7 @@ fn every_path_selects_batten_check_once_a_rule_globs_the_whole_tree() {
     // and narrowing the rule would be choosing which files may carry one. The
     // question is whether the glob is still TOTAL; a narrowing that reintroduced
     // a skip fails here. The economy moved to the TIER — `batten-check` is `slow`.
-    let Some(hk) = hk_binary() else { return };
+    let hk = hk_binary();
     assert_eq!(status_of(&hk, "batten-check", &["README.md"]), "included");
 }
 
@@ -171,13 +185,13 @@ fn agents_md_does_select_batten_check_a_budget_file_is_an_input() {
     // `[budget.instructions] files = ["AGENTS.md"]`, and a declared budget is a
     // gate under `check` (CLOUD-50). Globbing this step on non-Markdown alone
     // would switch the gate off for the most-edited Markdown file in the repo.
-    let Some(hk) = hk_binary() else { return };
+    let hk = hk_binary();
     assert_eq!(status_of(&hk, "batten-check", &["AGENTS.md"]), "included");
 }
 
 #[test]
 fn the_engine_selects_batten_check() {
-    let Some(hk) = hk_binary() else { return };
+    let hk = hk_binary();
     assert_eq!(
         status_of(&hk, "batten-check", &["crates/batten/src/lib.rs"]),
         "included"
@@ -186,7 +200,7 @@ fn the_engine_selects_batten_check() {
 
 #[test]
 fn the_config_authority_selects_batten_check() {
-    let Some(hk) = hk_binary() else { return };
+    let hk = hk_binary();
     assert_eq!(status_of(&hk, "batten-check", &["batten.toml"]), "included");
 }
 
@@ -194,7 +208,7 @@ fn the_config_authority_selects_batten_check() {
 fn a_dependency_change_selects_batten_check() {
     // The gate runs the working tree's engine, so a change to what that engine is
     // built from must run it.
-    let Some(hk) = hk_binary() else { return };
+    let hk = hk_binary();
     assert_eq!(status_of(&hk, "batten-check", &["Cargo.lock"]), "included");
     assert_eq!(status_of(&hk, "batten-check", &["Cargo.toml"]), "included");
 }
@@ -204,7 +218,7 @@ fn every_non_crates_path_a_rule_globs_selects_batten_check() {
     // mise.toml, the workflows, and a bats suite path — the ones the issue's
     // proposed glob would have dropped. A suite path still matters after this
     // change: the ratchet row over `tests/**/*.bats` stays in `batten.toml`.
-    let Some(hk) = hk_binary() else { return };
+    let hk = hk_binary();
     assert_eq!(status_of(&hk, "batten-check", &["mise.toml"]), "included");
     assert_eq!(
         status_of(&hk, "batten-check", &[".github/workflows/ci.yml"]),
@@ -218,7 +232,7 @@ fn every_non_crates_path_a_rule_globs_selects_batten_check() {
 
 #[test]
 fn the_embedded_budget_path_selects_batten_check() {
-    let Some(hk) = hk_binary() else { return };
+    let hk = hk_binary();
     assert_eq!(
         status_of(&hk, "batten-check", &[".serena/project.yml"]),
         "included"
@@ -231,7 +245,7 @@ fn the_embedded_budget_path_selects_batten_check() {
 fn a_manifest_change_selects_macos_link_check_a_doc_change_does_not() {
     // Its predicate is `cargo metadata --filter-platform` over the resolved graph,
     // so the manifests are exactly its inputs.
-    let Some(hk) = hk_binary() else { return };
+    let hk = hk_binary();
     assert_eq!(
         status_of(&hk, "macos-link-check", &["Cargo.lock"]),
         "included"
@@ -248,7 +262,7 @@ fn a_manifest_change_selects_macos_link_check_a_doc_change_does_not() {
 fn every_slow_tier_step_is_skipped_when_the_profile_is_off() {
     // The pre-commit economy. `.claude/hooks/git-hook.sh` passes exactly this
     // flag, so this is the selection a commit actually gets.
-    let Some(hk) = hk_binary() else { return };
+    let hk = hk_binary();
     let plan = plan_at_profile(&hk, "!slow");
     for name in SLOW_TIER {
         assert_eq!(status_in(&plan, name), "skipped", "{name} at !slow");
@@ -259,7 +273,7 @@ fn every_slow_tier_step_is_skipped_when_the_profile_is_off() {
 fn every_slow_tier_step_still_runs_under_check_which_is_what_ci_drives() {
     // THE ONE THAT MATTERS. `mise run ci` -> `hk check --all` uses this mapping,
     // so a step missing here is a step CI has silently stopped running.
-    let Some(hk) = hk_binary() else { return };
+    let hk = hk_binary();
     let plan = plan_default(&hk);
     for name in SLOW_TIER {
         assert_eq!(status_in(&plan, name), "included", "{name} under check");
@@ -270,7 +284,7 @@ fn every_slow_tier_step_still_runs_under_check_which_is_what_ci_drives() {
 fn an_unprofiled_step_is_selected_in_both_tiers() {
     // The control. Without it, a run that excluded EVERYTHING would satisfy the
     // skipped-assertion above and look like a working split.
-    let Some(hk) = hk_binary() else { return };
+    let hk = hk_binary();
     let fast = plan_at_profile(&hk, "!slow");
     let full = plan_default(&hk);
     assert_eq!(status_in(&fast, "taplo"), "included");
@@ -300,7 +314,7 @@ fn the_profile_skip_is_reported_as_profile_exclude_not_as_a_filter_miss() {
     // selection bug wearing the same status. The JSON kind is snake_case
     // `profile_exclude` — NOT the kebab-case `profile-not-enabled` that names the
     // same condition in hk's `display_skip_reasons` setting.
-    let Some(hk) = hk_binary() else { return };
+    let hk = hk_binary();
     let plan = plan_at_profile(&hk, "!slow");
     let kinds: Vec<&str> = step(&plan, "batten-check")
         .and_then(|entry| entry.get("reasons"))
@@ -320,7 +334,7 @@ fn no_docs_tree_keeps_no_glob_so_it_runs_on_a_change_it_does_not_read() {
     // Its input is the whole INDEX — any tracked docs/ path, including one an
     // earlier commit left behind — so a glob would let a violation persist
     // unreported on every commit that did not touch it.
-    let Some(hk) = hk_binary() else { return };
+    let hk = hk_binary();
     assert_eq!(status_of(&hk, "no-docs-tree", &["README.md"]), "included");
 }
 
@@ -330,7 +344,7 @@ fn no_docs_tree_keeps_no_glob_so_it_runs_on_a_change_it_does_not_read() {
 fn deno_fmt_selects_the_harness_json_that_had_no_syntax_gate() {
     // CLOUD-104: a malformed `.mcp.json` used to reach the gate only by accident
     // of which content check happened to parse it first.
-    let Some(hk) = hk_binary() else { return };
+    let hk = hk_binary();
     assert_eq!(status_of(&hk, "deno-fmt", &[".mcp.json"]), "included");
     assert_eq!(
         status_of(&hk, "deno-fmt", &[".serena/project.yml"]),
@@ -342,7 +356,7 @@ fn deno_fmt_selects_the_harness_json_that_had_no_syntax_gate() {
 fn deno_fmt_leaves_markdown_to_prettier() {
     // `deno fmt` rewrites documentation whose whitespace is load-bearing, so
     // widening this glob to `**/*.md` would corrupt it.
-    let Some(hk) = hk_binary() else { return };
+    let hk = hk_binary();
     assert_eq!(status_of(&hk, "deno-fmt", &["AGENTS.md"]), "skipped");
     assert_eq!(status_of(&hk, "prettier", &["AGENTS.md"]), "included");
 }
@@ -352,7 +366,7 @@ fn the_deno_fmt_trigger_is_wider_than_the_lint_deno_coverage_deliberately() {
     // These two report `included` and the task then excludes both. Pinned so that
     // if either side moves, the divergence is a failing case rather than
     // something a reader has to re-derive with `hk check --plan`.
-    let Some(hk) = hk_binary() else { return };
+    let hk = hk_binary();
     assert_eq!(
         status_of(&hk, "deno-fmt", &[".github/workflows/ci.yml"]),
         "included"

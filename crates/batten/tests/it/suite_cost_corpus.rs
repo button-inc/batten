@@ -21,7 +21,11 @@
 // THE HISTORICAL LEDGER, KEPT AS WRITTEN. The rows below record where the retired
 // shell gate's cases went under CLOUD-1753; the module they name retired under
 // CLOUD-843 with the task that fed it, and no case of theirs is dropped by that
-// change — it drops the module the cases had already moved into.
+// change — it drops the module the cases had already moved into. So the target
+// they name is NOT IN THE TREE, deliberately: rewriting a settled arm to point
+// somewhere else would falsify where the case went at the time. The module is
+// read from history, `git log --diff-filter=D -- policy/suite-cost-corpus.rego`
+// naming the commit that retired it.
 //
 // carried: mise-tasks/suite-bench-check.sh policy/suite-cost-corpus.rego crates/batten/tests/it/suite_cost_corpus.rs
 // carried: tests/suite-bench-check.bats policy/suite-cost-corpus.rego crates/batten/tests/it/suite_cost_corpus.rs

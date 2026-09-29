@@ -297,7 +297,9 @@ jobs:
           # fixture that loads that config cannot evaluate ANY rule without hk.
           # `jq` is read at runtime by the mise tasks three more command rules
           # invoke. Neither is about the libc, which is why both belong here.
-          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest
+          # opa is `lint_rego.rs`'s instrument: it judges the tracked corpus with
+          # the pinned formatter and fails, as the retired suite did, without it.
+          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest aqua:open-policy-agent/opa
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # A DISTINCT FAMILY, because this target dir holds musl artifacts the
@@ -762,7 +764,7 @@ jobs:
           # `ci-tools-check` keeps these names honest against mise.toml but
           # cannot know which a job needs; that is what this comment and the
           # `windows` job's own red run are for. See the ci job for the rest.
-          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest
+          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest aqua:open-policy-agent/opa
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # A DISTINCT KEY, because this job's target dir is built by a different
@@ -988,7 +990,7 @@ jobs:
           # config cannot evaluate ANY rule without hk. `jq` is read at runtime
           # by the mise tasks three more command rules invoke. Neither is about
           # the OS, which is why both belong on every leg that runs the suite.
-          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest
+          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest aqua:open-policy-agent/opa
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # A DISTINCT FAMILY, for `windows`'s reason rather than by analogy:
