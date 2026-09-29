@@ -9,6 +9,14 @@
 publish = false           # do not publish to any cargo registry
 git_release_enable = true # create a GitHub release when the version changes
 git_tag_enable = true
+# THE BASELINE IS THE LATEST RELEASE TAG, read by release-plz itself (CLOUD-1991).
+# With no registry to download the last release from, release-plz reports "next
+# version is 0.0.0" forever; `[tasks.release-pr]` used to work around that in
+# shell, checking the latest `v*` tag out into a scratch worktree and passing it
+# as `--registry-manifest-path`. `git_only` is release-plz's own spelling of that
+# same baseline — measured on v0.0.188: "Latest release of package batten: tag
+# `v0.0.188`", then "next version is 0.0.189" — so the task is one argv again.
+git_only = true
 # CLOUD-346. The release PR is refreshed on every push to `main`, and a non-draft
 # one turns each refresh into a full CI matrix over a version bump and a
 # changelog entry — measured at 5 of 30 `ci.yml` runs in one 37-minute window,

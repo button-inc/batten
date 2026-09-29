@@ -728,7 +728,6 @@ run = "hk fix --all"
 
 [tasks.snapshots]
 description = "Accept the snapshot corpus and the golden manifests — this repo's `insta accept` (CLOUD-106)"
-shell = "bash -c"
 # The fourth derivation, beside `completions`, `man` and `schema`. The compiled
 # binary's own output is authoritative (§1); the committed `.snap` files and the
 # two golden manifests are derived from it, and `mise run test:cargo` is what
@@ -760,11 +759,14 @@ shell = "bash -c"
 # pruned. `no_pending_snapshot_is_left_in_the_tree` is the sensor on the first,
 # and `--unreferenced` is what a pinned binary would have bought for the second.
 #
-# ONE LINE, not a `'''` body, and that is `inline-task-bodies-not-growing`'s
-# doing rather than taste: this file's inline-body count is a ratchet, and that
-# row's own note names the one-line `run = "…"` shim as what the campaign's WINS
-# look like. `&&` short-circuits, so the accept still fails loudly if the clear
-# does.
+# TWO ARGV ENTRIES, NOT A SHELL LINE (CLOUD-843, CLOUD-1991). mise runs an array
+# in order and stops at the first entry that fails, with that entry's exit code —
+# so the accept still fails loudly if the clear does, which is all the `&&` of the
+# one-liner this replaced was buying. `INSTA_UPDATE` is the task's `env` rather
+# than a `VAR=` prefix, and the clear is `git clean` over a pathspec rather than
+# `find -delete`: the same set (a `.snap.new` is never tracked, and `-x` reaches
+# it whether or not it is ignored), and a missing directory is an empty clean
+# rather than a failure that never reaches `cargo`.
 #
 # The clear comes FIRST. Under `INSTA_UPDATE=always` every snapshot a run reaches
 # is written in place, so a `.snap.new` that survives is by definition stale — the
@@ -783,11 +785,14 @@ shell = "bash -c"
 # `--test it` would run the whole suite under `cargo test`'s threads-in-one-
 # process model, which is exactly what `document_read_count` cannot survive. A
 # module filter selects the same cases the old per-file target did.
-run = "find crates/batten/tests/it/snapshots -name '*.snap.new' -delete && INSTA_UPDATE=always cargo test --test it snapshots::"
+env = { INSTA_UPDATE = "always" }
+run = [
+  "git clean -fqx -- 'crates/batten/tests/it/snapshots/*.snap.new'",
+  "cargo test --test it snapshots::",
+]
 
 [tasks.fix]
 description = "Everything `fmt` does, plus clippy's autofixes and the derived artifacts — the one command that empties a messy tree"
-shell = "bash -c"
 # The symmetric partner to `lint`: where `lint` reports every fixable thing,
 # this fixes every one it can. `fmt` stays the formatters-only subset, because
 # it is what CONTRIBUTING.md, rules/toolchain.md and .editorconfig point
@@ -813,20 +818,19 @@ shell = "bash -c"
 # --allow-dirty/--allow-staged because a tree with uncommitted work is the only
 # state this task is ever run from; refusing there would make it useless.
 #
-# Task bodies do not run under `set -e` (rules/toolchain.md), and a
-# half-applied fix that reported success would send the user to commit a tree
-# the gates still reject, so the body opts in.
-run = '''
-set -eu
-cargo clippy --fix --allow-dirty --allow-staged --all-targets --all-features
-mise run completions
-mise run man
-mise run schema
-mise run snapshots
-mise run hk-contract
-hk fix --all
-echo "fix: clippy autofixes applied, derived artifacts regenerated, every fixer run"
-'''
+# AN ARGV SEQUENCE, NOT A SHELL BODY (CLOUD-843, CLOUD-1991). The `set -eu` the
+# body opted into is what mise does to an array anyway: the entries run in order
+# and the first one that fails ends the task with its own exit code, so a
+# half-applied fix still cannot report success.
+run = [
+  "cargo clippy --fix --allow-dirty --allow-staged --all-targets --all-features",
+  "mise run completions",
+  "mise run man",
+  "mise run schema",
+  "mise run snapshots",
+  "mise run hk-contract",
+  "hk fix --all",
+]
 
 [tasks.lint]
 description = "Every linter over the whole tree — Rust, TOML, workflows, Markdown/JSON/YAML — fanned out"
@@ -1442,10 +1446,13 @@ description = "Gate: the committed [ci] table still matches the host ruleset (CL
 # is what a tree-scoped MODULE would need; this is a verb reading an argument, so
 # it needs none of it.
 #
-# `:?` RATHER THAN A DEFAULT: an unset payload path is the caller's mistake, and
-# defaulting it would make the gate read a file nobody fetched, which is the
-# could-not-look-as-clean shape the deleted program's own `#MUTANT` row named.
-run = 'cargo run --quiet -p batten -- config lint --host-rules "${CI_DRIFT_RULES:?the host ruleset payload path; the workflow fetches it one step earlier}"'
+# A REQUIRED VARIABLE RATHER THAN A DEFAULT: an unset payload path is the caller's
+# mistake, and defaulting it would make the gate read a file nobody fetched, which
+# is the could-not-look-as-clean shape the deleted program's own `#MUTANT` row
+# named. It was the shell's `:?` until CLOUD-1991; mise's template refuses to
+# render a variable the environment does not carry, naming it, and the task fails
+# before the engine starts — the same refusal with no shell line behind it.
+run = 'cargo run --quiet -p batten -- config lint --host-rules "{{env.CI_DRIFT_RULES}}"'
 
 [tasks."hooks-wiring-check"]
 description = "Gate: batten is registered exactly once on every hook surface (doctor hooks), and every other registration names the issue retiring it (harness-wiring)"
@@ -1464,13 +1471,14 @@ description = "Gate: batten is registered exactly once on every hook surface (do
 # NAME, because a command line carries a path (rule 4) and whether a hook beside
 # batten's is legitimate is this repository's judgement (rule 1).
 #
-# `&&` RATHER THAN `;`: the first call carries a verdict, and a list that
-# discards it is the shape `verdict-not-discarded` refuses everywhere else.
-#
-# ONE LINE, DELIBERATELY, for the reason the task below gives: the multi-line
-# spellings are where a predicate can hide, and there is no decision here to hide
-# — both are the engine's.
-run = "cargo run --quiet -p batten -- doctor hooks && cargo run --quiet -p batten -- check --rule 'hook wire missing'"
+# AN ARGV PAIR RATHER THAN `&&` (CLOUD-1991): mise runs the array in order and
+# stops at the first entry that fails, with its exit code, so the first call's
+# verdict is never discarded — the property the `&&` was spelled for, without a
+# shell line to carry it. There is no decision here to hide: both are the engine's.
+run = [
+  "cargo run --quiet -p batten -- doctor hooks",
+  "cargo run --quiet -p batten -- check --rule 'hook wire missing'",
+]
 
 [tasks."config-lint"]
 description = "Gate: batten.toml carries no policy smell, and no weakening the groom never saw (arm with CONFIG_LINT_BASE)"
@@ -1506,7 +1514,12 @@ description = "Gate: batten.toml carries no policy smell, and no weakening the g
 # the working config alone; `verify` and CI arm it, and CI arms it with the PR's
 # OWN base ref rather than a hardcoded `main` — a gate that pinned the trunk here
 # would be answering a question about the world, which is `lock-complete`'s split.
-run = 'cargo run --quiet -p batten -- config lint ${CONFIG_LINT_BASE:+--config-from "$CONFIG_LINT_BASE"}'
+#
+# THE ARGV IS ASSEMBLED BY mise's TEMPLATE, NOT BY A SHELL EXPANSION (CLOUD-1991).
+# The `${VAR:+...}` was argv assembly and nothing else, and the template's `if`
+# is the same assembly — an unset or empty `CONFIG_LINT_BASE` adds no flag — with
+# no shell line left to carry it.
+run = 'cargo run --quiet -p batten -- config lint {% if env.CONFIG_LINT_BASE %}--config-from "{{env.CONFIG_LINT_BASE}}"{% endif %}'
 
 [tasks.semver]
 description = "Gate: the API delta on this branch is compatible with the bump release-plz will infer, unless a commit declares the break"
@@ -1869,10 +1882,10 @@ description = "Gate: run every registered policy module's and enabled preset's o
 # binary is the tier that proves the ENGINE produces the shape a predicate reads,
 # and a `with input as` cannot substitute for it (CLOUD-845). That is why this row
 # also carries `tests/privileged-lane.bats` rather than stopping here.
-run = '''
-set -eu
-cargo run --quiet -p batten -- policy test
-'''
+#
+# ONE ARGV (CLOUD-1991): the `set -eu` the body carried guarded a single command,
+# whose exit code a one-command task already is.
+run = "cargo run --quiet -p batten -- policy test"
 
 # The repository SBOM's producer (CLOUD-262), ported off `mise-tasks/sbom.sh`
 # under CLOUD-1717. ONE definition of the syft invocation, the exclude list and the
@@ -7126,7 +7139,9 @@ description = "Measure tree-surface acquisition cost as declared-document count 
 # the two and read a step change that never happened. That is the hazard
 # `rules/rust.md` records for a future instruction-count series, and
 # `crates/batten/tests/acquisition_metric.rs` asserts this line rather than
-# trusting it.
+# trusting it. It is the task's `env` table rather than a `VAR=` prefix on the
+# command since CLOUD-1991: the prefix made the body a shell line, and a task's
+# own `env` reaches the example's process exactly as the prefix did.
 #
 # OFF THE LANDING PATH, like `perf` itself: it builds a release binary and spends
 # minutes in hyperfine, and it answers a question about a measurement rather than
@@ -7136,7 +7151,8 @@ description = "Measure tree-surface acquisition cost as declared-document count 
 # example target does not build it. Dropping this line makes every arm answer
 # could-not-look on a clean tree.
 depends = ["build:release"]
-run = "BENCH_METRIC=acquisition-wall-clock cargo run --quiet --release -p batten --example acquisition-bench"
+env = { BENCH_METRIC = "acquisition-wall-clock" }
+run = "cargo run --quiet --release -p batten --example acquisition-bench"
 
 [tasks.address-transport-bench]
 description = "Price inline versus addressed transport over a payload corpus, writing bench/address-transport/RESULTS.md (CLOUD-1367)"
@@ -7161,7 +7177,8 @@ description = "Price inline versus addressed transport over a payload corpus, wr
 # measurement rather than about a commit — the split
 # `.claude/rules/toolchain.md` draws between a gate and a schedule.
 depends = ["build:release"]
-run = "BENCH_METRIC=address-transport-characters cargo run --quiet --release -p batten --example address-transport-bench"
+env = { BENCH_METRIC = "address-transport-characters" }
+run = "cargo run --quiet --release -p batten --example address-transport-bench"
 
 [tasks.config-load-bench]
 description = "Price `config::load` over the committed batten.toml, with its own null (CLOUD-1291)"
@@ -7187,7 +7204,8 @@ description = "Price `config::load` over the committed batten.toml, with its own
 # INVOCATION series' `wall-clock`. This is a third axis — a per-call in-process
 # figure — so it takes a third stamp, and `crates/batten/tests/acquisition_metric.rs`
 # asserts every bench task carries one and that no two of them collide.
-run = "BENCH_METRIC=config-load-wall-clock cargo run --quiet -p batten --example config-load-bench"
+env = { BENCH_METRIC = "config-load-wall-clock" }
+run = "cargo run --quiet -p batten --example config-load-bench"
 
 [tasks.refusal-render-bench]
 description = "Price refusal rendering by strategy and explicit residency, writing bench/refusal-render/RESULTS.md (CLOUD-1606)"
@@ -7212,7 +7230,8 @@ description = "Price refusal rendering by strategy and explicit residency, writi
 # check is the tier's rather than this task's: `crates/batten/tests/it/refusal_render_bench.rs`
 # re-renders the six records in-process and diffs them against the committed
 # file, so the report cannot go stale without `test:cargo` reddening.
-run = "BENCH_METRIC=refusal-render-characters cargo run --quiet -p batten --example refusal-render-bench"
+env = { BENCH_METRIC = "refusal-render-characters" }
+run = "cargo run --quiet -p batten --example refusal-render-bench"
 
 [tasks."doctor:mediator"]
 description = "Report whether the engine adjudicating this tree was built from it"
@@ -7369,13 +7388,12 @@ description = "Provision the host dependencies mise does not: the released `batt
 # `-y` because a provisioning script has no terminal; after `install.sh` because
 # the verb is the binary that script installs.
 #
-# ONE LINE, JOINED BY `&&`, rather than a `"""` body: the reap must not run when
-# the install failed, which is the whole of what `set -e` bought here, and `&&`
-# says it in the form `inline-task-bodies-not-growing-basic` is counting. That
-# row is `non_increasing` against `origin/main` with no `admits_with`, so its
-# only routes are extraction or a waiver — and neither is worth spending on two
-# commands whose sequencing is the single thing being expressed.
-run = "./install.sh && batten wiring reclaim -y"
+# AN ARGV PAIR, NOT A SHELL LINE (CLOUD-1991): the reap must not run when the
+# install failed, which is the whole of what `set -e` and then `&&` bought here —
+# and what mise does to an array: the entries run in order and the first failure
+# ends the task with its own exit code, so `install.sh`'s `1`/`2` still reach the
+# caller unreworded.
+run = ["./install.sh", "batten wiring reclaim -y"]
 
 # The report half of the same seam, and the setup script calls this one too.
 #
@@ -7389,10 +7407,11 @@ run = "./install.sh && batten wiring reclaim -y"
 # `.claude/settings.json` registers `batten hook` by BARE NAME on every event — so
 # the path PATH actually finds is the answer, and printing it is the report. It
 # also supplies the failure for free: `command -v` exits non-zero when the name
-# does not resolve, and `&&` carries that out without a branch to write.
+# does not resolve, and an argv sequence stops there without a branch to write —
+# the `&&` it was until CLOUD-1991, with no shell line to carry it.
 [tasks.deps]
 description = "Report the host dependencies `deps-install` provisions, so an absent one is visible in the setup log and not at first use"
-run = "command -v batten && batten --version"
+run = ["command -v batten", "batten --version"]
 
 # The memory graph's edges, retired onto the policy engine (CLOUD-1163).
 #
@@ -9168,9 +9187,14 @@ esac
 # rather than compiled in: which ref is trunk is this repository's own fact, and
 # `crates/batten` refusing to guess it is non-negotiable rule 1 (see
 # `run_land_fast_forward`'s `$LAND_WORKFLOW` refusal for the same shape).
+#
+# DECLARED IN `usage`, NOT CALLED AS A TEMPLATE FUNCTION (CLOUD-1991): the inline
+# `arg(...)` call made the body read as shell, and the usage spec declares the
+# same optional positional with the same default, which mise then binds.
 [tasks.land]
 description = "Land this branch's PR: rebase, verify, push, wait for CI, /fast-forward — lapping until it merges or a rebase conflicts"
-run = 'cargo run --quiet -p batten -- land lap "{{arg(name="reference", default="main")}}"'
+usage = 'arg "[reference]" default="main" help="the trunk to land onto"'
+run = 'cargo run --quiet -p batten -- land lap "{{usage.reference}}"'
 
 # Is HEAD linear on the CURRENT origin/main, so the PR can fast-forward-land?
 # Retired off `mise-tasks/linear-check.sh` under CLOUD-1717; the name and the
@@ -10158,7 +10182,10 @@ run = 'if command -v batten >/dev/null 2>&1; then batten commit check --message 
 description = "Gate: no vendor authorship, branding or session links in BASE_SHA..HEAD_SHA (policy: [attribution] in batten.toml)"
 # `cargo run` for the same reason `batten-check` and `policy-budget` use it: the
 # gate must judge the working tree's engine and config as the pair that ships.
-run = "cargo run --quiet -p batten -- attribution check ${BASE_SHA:?}..${HEAD_SHA:?}"
+# The range is assembled by mise's template rather than a shell `:?` expansion
+# (CLOUD-1991): a template variable the environment does not carry refuses to
+# render, naming it, so an unarmed caller still fails before the engine starts.
+run = "cargo run --quiet -p batten -- attribution check {{env.BASE_SHA}}..{{env.HEAD_SHA}}"
 
 [tasks."commit:precheck"]
 description = "Run both commit-msg gates over a drafted message file BEFORE `git commit`, so a subject or attribution refusal never costs the pre-commit suite"
@@ -10244,7 +10271,10 @@ description = "Gate: every commit subject in BASE_SHA..HEAD_SHA follows the conv
 # already export BASE_SHA/HEAD_SHA, so a dependency lights up the local pre-flight
 # and the CI backstop at once with no second task name in a workflow — which is
 # what keeps `ci-local-parity` satisfied without editing `verify`.
-run = "cargo run --quiet -p batten -- commit check ${BASE_SHA:?}..${HEAD_SHA:?}"
+# The range is assembled by mise's template rather than a shell `:?` expansion
+# (CLOUD-1991): a template variable the environment does not carry refuses to
+# render, naming it, so an unarmed caller still fails before the engine starts.
+run = "cargo run --quiet -p batten -- commit check {{env.BASE_SHA}}..{{env.HEAD_SHA}}"
 
 [tasks.commit-lint]
 description = "Validate every commit in BASE_SHA..HEAD_SHA is Conventional Commits and names the issue it serves"
@@ -10366,29 +10396,26 @@ exit $fail
 [tasks.release-pr]
 description = "Open/update the release PR (version bump + changelog)"
 # release-plz derives the next version by diffing each crate against its last
-# *published* release, downloaded from a cargo registry. This workspace is
-# `publish = false` and never reaches a registry, so that download fails
-# ("Package batten not found") and release-plz can never bump past the initial
-# version — every run reports "next version is 0.0.0". The documented fix for
-# unpublished crates is to supply the baseline as a checkout of the latest
-# release tag via --registry-manifest-path. With no tag yet (first release),
-# pass nothing and let release-plz treat it as the initial version.
-run = '''
-set -eu
-base_args=""
-tag="$(git describe --tags --match 'v[0-9]*' --abbrev=0 2>/dev/null || true)"
-if [ -n "$tag" ]; then
-  worktree="$(mktemp -d)"
-  git worktree add -q --detach "$worktree" "$tag"
-  trap 'git worktree remove --force "$worktree" >/dev/null 2>&1 || true' EXIT
-  base_args="--registry-manifest-path $worktree/Cargo.toml"
-fi
-release-plz release-pr --git-token "${GITHUB_TOKEN:?}" $base_args
-'''
+# release. This workspace is `publish = false` and never reaches a registry, so
+# the registry download fails ("Package batten not found") and release-plz can
+# never bump past the initial version — every run reports "next version is
+# 0.0.0". THE BASELINE IS `release-plz.toml`'s `git_only = true` since CLOUD-1991:
+# release-plz reads the latest release tag itself, which is exactly the baseline
+# this body used to build in shell (the latest `v*` tag, checked out into a
+# scratch worktree and passed as `--registry-manifest-path`).
+#
+# THE TOKEN TRAVELS IN THE ENVIRONMENT, never on the command line: release-plz
+# reads `GIT_TOKEN`, and mise prints a task's command before running it, so an
+# argv token would be printed into the job log. `{{env.GITHUB_TOKEN}}` refuses to
+# render when the variable is absent, which is the `:?` the shell spelling had.
+env = { GIT_TOKEN = "{{env.GITHUB_TOKEN}}" }
+run = "release-plz release-pr"
 
 [tasks.release]
 description = "Tag and publish a GitHub release when the version changed"
-run = "release-plz release --git-token ${GITHUB_TOKEN:?}"
+# The token rides the environment for `release-pr`'s reason directly above.
+env = { GIT_TOKEN = "{{env.GITHUB_TOKEN}}" }
+run = "release-plz release"
 
 [settings]
 # OFF, so that installing is never a write (CLOUD-223). With it on, any cold
