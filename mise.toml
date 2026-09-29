@@ -266,7 +266,7 @@ zig = "0.16" # the linker for the macOS release build and the darwin-link gate: 
 # fewer is the failure this swap could hide, and it is asserted rather than
 # eyeballed.
 "github:nextest-rs/nextest" = "cargo-nextest-0.9.104"
-# The binary-level SBOM's producer (CLOUD-263). `[tasks.sbom]` inventories the
+# The binary-level SBOM's producer (CLOUD-263). `batten sbom` inventories the
 # repository at the tag; syft against a plain Rust binary recovers ZERO
 # rust-crate packages, because a Rust binary carries no dependency metadata unless
 # something puts it there. `cargo auditable` puts it there — a `dep-v0` linker

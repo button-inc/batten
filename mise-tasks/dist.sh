@@ -97,10 +97,10 @@ main() {
 		usage
 		return 0
 		;;
-	# The stem, without building. `[tasks.sbom-binary-record]` names its asset from
-	# this rather than re-spelling `archive_stem`, so the naming contract
-	# CLOUD-65's install path reads stays decided in one place — the same reason
-	# `sbom --names` exists for the platform-independent documents.
+	# The stem, without building. CLOUD-65's install path reads the naming contract
+	# from this. `batten sbom --binary` spells the same rule in-process
+	# (`sbom::archive_stem`), so a rename here must be made there too;
+	# `sbom --names` prints the platform-independent documents' names.
 	--stem)
 		if [[ -z "${2:-}" ]]; then
 			usage

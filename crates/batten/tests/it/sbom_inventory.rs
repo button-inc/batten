@@ -19,9 +19,10 @@
 //!
 //! `sbom-check.sh` re-ran `sbom.sh` twice and adjudicated the documents in shell.
 //! The scan stays outside — §9's prior art, and §5 makes `check` `read` — so
-//! `mise run record-sbom` derives and records, and the adjudication moves here.
-//! The producer itself decides nothing, so it became `[tasks.sbom]` under
-//! CLOUD-1717; `sbom_producer.rs` is its tier.
+//! `batten sbom --record` derives and records, and the adjudication moves here.
+//! The producer itself decides nothing: it became `[tasks.sbom]` under
+//! CLOUD-1717 and the `batten sbom` verb under CLOUD-843; `sbom_producer.rs` is
+//! its tier.
 
 // carried: mise-tasks/sbom-check.sh policy/sbom-inventory.rego crates/batten/tests/it/sbom_inventory.rs
 // carried: tests/sbom-check.bats policy/sbom-inventory.rego crates/batten/tests/it/sbom_inventory.rs

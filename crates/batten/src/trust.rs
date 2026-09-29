@@ -969,6 +969,20 @@ pub enum WeakeningKind {
     /// so a variant inserted among its neighbours shifts every later discriminant
     /// and `semver` reports the whole tail as moved.
     WiringDisarmRemoved,
+    /// `[sbom] actions` is gone, so `batten sbom` skips the actions pass and the
+    /// pinned actions' licence and copyright go back to `NOASSERTION` in a
+    /// published document (CLOUD-843). The REMOVED direction only: declaring
+    /// the table where the base had none adds a pass.
+    SbomActionsRemoved,
+    /// `[sbom.conformance] checker` names a different program, or the table is
+    /// gone. The ntia gate's verdict IS that program's exit code, so a swap to
+    /// any program that exits `0` passes every standard — the reading
+    /// `FactCommandChanged` takes for a fact's command. Appended, as above.
+    SbomCheckerChanged,
+    /// A standard the base asked `[sbom.conformance]` to check is no longer
+    /// asked, so the gate stops judging the document against it. The REMOVED
+    /// direction only: a standard added is one more question. Appended, as above.
+    SbomStandardRemoved,
 }
 
 impl WeakeningKind {
@@ -1041,6 +1055,9 @@ impl WeakeningKind {
         WeakeningKind::VerifiedCheckRemoved,
         WeakeningKind::FastForwardLaneAdded,
         WeakeningKind::WiringDisarmRemoved,
+        WeakeningKind::SbomActionsRemoved,
+        WeakeningKind::SbomCheckerChanged,
+        WeakeningKind::SbomStandardRemoved,
     ];
 
     /// The stable, lowercase identifier used in machine output (§6).
@@ -1064,6 +1081,9 @@ impl WeakeningKind {
             WeakeningKind::LandingPathRemoved => "landing-path-removed",
             WeakeningKind::FastForwardLaneAdded => "fast-forward-lane-added",
             WeakeningKind::WiringDisarmRemoved => "wiring-disarm-removed",
+            WeakeningKind::SbomActionsRemoved => "sbom-actions-removed",
+            WeakeningKind::SbomCheckerChanged => "sbom-checker-changed",
+            WeakeningKind::SbomStandardRemoved => "sbom-standard-removed",
             WeakeningKind::ReadyCutoverRelaxed => "ready-cutover-relaxed",
             WeakeningKind::PerfExemptionAdded => "perf-exemption-added",
             WeakeningKind::VerbRemoved => "verb-removed",
@@ -1489,15 +1509,20 @@ pub const CENSUS: &[FieldCoverage] = &[
     },
     FieldCoverage {
         field: "sbom",
-        coverage: Coverage::NotPolicyBearing(
-            "the SBOM producer's declarations (CLOUD-843): the subject's name, where \
-             `batten sbom` writes, what a scan skips and which record it writes under. It \
-             PRODUCES and decides nothing. The gates over its output hold the documents to \
-             committed text the producer cannot edit — `Cargo.lock`'s sourced entries and the \
-             licence table's pins are `line_sources` the modules read themselves — so an \
-             exclusion that dropped a component reads as a count that disagrees, never as a \
-             smaller agreement, and the verb reads the table from the committed authority alone",
-        ),
+        // THREE KEYS SET A BAR, and the rest do not. `conformance.checker` and
+        // `conformance.standards` decide the ntia verdict — it is the checker's
+        // exit code per standard — and `actions` decides whether the pinned
+        // actions' licences are filled at all. The subject, the directories, the
+        // exclusions and the record names produce: the gates over the output hold
+        // the documents to committed text the producer cannot edit (`Cargo.lock`'s
+        // sourced entries and the licence table's pins are `line_sources` the
+        // modules read themselves), so an exclusion that dropped a component reads
+        // as a count that disagrees, never as a smaller agreement.
+        coverage: Coverage::Compared(&[
+            WeakeningKind::SbomActionsRemoved,
+            WeakeningKind::SbomCheckerChanged,
+            WeakeningKind::SbomStandardRemoved,
+        ]),
     },
     FieldCoverage {
         field: "provisions",
@@ -1588,7 +1613,7 @@ pub struct Weakening {
 }
 
 impl Weakening {
-    fn new(
+    pub(crate) fn new(
         kind: WeakeningKind,
         key: impl Into<String>,
         base: impl Into<String>,
@@ -2461,6 +2486,13 @@ fn scalar_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         &disarm_paths(base),
         &disarm_paths(working),
         "wiring.disarm",
+    ));
+
+    // The three `[sbom]` keys that set a bar (CLOUD-843). The comparison lives
+    // beside the table it reads, where the producer's mutation rows reach it.
+    found.extend(crate::sbom::weakenings(
+        base.sbom.as_ref(),
+        working.sbom.as_ref(),
     ));
 
     // The judge's privacy boundary (CLOUD-135). Compared from both sides
@@ -4123,6 +4155,90 @@ mod tests {
         assert!(
             weakenings(&row, &edited).is_empty(),
             "the path is the subject, so a re-worded marker disarms the same script"
+        );
+    }
+
+    #[test]
+    fn the_sbom_keys_that_decide_are_compared_and_the_rest_are_not() {
+        // `[sbom.conformance]`'s checker exit code IS the ntia verdict, so a
+        // swapped checker or a dropped standard lowers the bar; dropping
+        // `actions` skips the pass that fills the pinned actions' licences
+        // (CLOUD-843). BOTH DIRECTIONS, for the reason the disarm case states.
+        let table = |actions: &str, checker: &str, standards: &str| {
+            config(&format!(
+                "[sbom]\nsubject = \"s\"\nout_dir = \"d\"\nbinary_out_dir = \"d\"\n{actions}\
+                 [sbom.conformance]\nrecord = \"r\"\nchecker = \"{checker}\"\n\
+                 standards = [{standards}]\n"
+            ))
+        };
+        let base = table("actions = \"t.tsv\"\n", "sbomcheck", "\"ntia\", \"fsct\"");
+        assert!(weakenings(&base, &base).is_empty());
+
+        assert_eq!(
+            only(&base, &table("", "sbomcheck", "\"ntia\", \"fsct\"")),
+            Weakening::new(
+                WeakeningKind::SbomActionsRemoved,
+                "sbom.actions",
+                "present",
+                "absent",
+            )
+        );
+        assert_eq!(
+            only(
+                &base,
+                &table("actions = \"t.tsv\"\n", "true", "\"ntia\", \"fsct\"")
+            ),
+            Weakening::new(
+                WeakeningKind::SbomCheckerChanged,
+                "sbom.conformance.checker",
+                "sbomcheck",
+                "true",
+            )
+        );
+        assert_eq!(
+            only(
+                &base,
+                &table("actions = \"t.tsv\"\n", "sbomcheck", "\"fsct\"")
+            ),
+            Weakening::new(
+                WeakeningKind::SbomStandardRemoved,
+                "sbom.conformance.standards[ntia]",
+                "present",
+                "absent",
+            )
+        );
+
+        // The added direction is a new producer or one more question.
+        assert!(weakenings(&config(""), &base).is_empty());
+        let wider = table(
+            "actions = \"t.tsv\"\n",
+            "sbomcheck",
+            "\"ntia\", \"fsct\", \"x\"",
+        );
+        assert!(weakenings(&base, &wider).is_empty());
+
+        // THE PRODUCING KEYS ARE NOT COMPARED: a renamed subject or a moved
+        // directory is caught downstream as a count that disagrees.
+        let moved = config(
+            "[sbom]\nsubject = \"other\"\nout_dir = \"e\"\nbinary_out_dir = \"e\"\n\
+             actions = \"t.tsv\"\n[sbom.conformance]\nrecord = \"r\"\n\
+             checker = \"sbomcheck\"\nstandards = [\"ntia\", \"fsct\"]\n",
+        );
+        assert!(weakenings(&base, &moved).is_empty());
+
+        // The whole table gone is every decision gone at once.
+        let dropped: Vec<WeakeningKind> = weakenings(&base, &config(""))
+            .iter()
+            .map(|found| found.kind)
+            .collect();
+        assert_eq!(
+            dropped,
+            [
+                WeakeningKind::SbomActionsRemoved,
+                WeakeningKind::SbomCheckerChanged,
+                WeakeningKind::SbomStandardRemoved,
+                WeakeningKind::SbomStandardRemoved,
+            ]
         );
     }
 

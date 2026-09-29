@@ -89,6 +89,12 @@ use crate::resolve::Overrides;
 //MUTANT sbom-binary-stale-record-survives|s@^                    Mode::Binary . .. . => crate::record::clear_named.VERB, BINARY_FAMILY..,$@                    Mode::Binary { .. } => {}@|a_scan_that_cannot_look_removes_the_previous_record
 //MUTANT-SUITE crates/batten/tests/it/ntia.rs
 //MUTANT conformance-exit-code-dropped|s@^        let code = spawn_code@        let code = 0 * spawn_code@|a_nonconformant_document_fails
+// The three `[sbom]` keys that decide, as `config lint --config-from` compares
+// them: each comparison removed must leave its key unreported.
+//MUTANT-SUITE crates/batten/tests/it/config_trust.rs
+//MUTANT sbom-actions-removal-unreported|s@^    if base.actions.is_some.. && working@    if false \&\& working@|the_sbom_keys_that_decide_are_reported_as_weakenings
+//MUTANT sbom-checker-swap-unreported|s@^    if checker != base.checker .$@    if false {@|the_sbom_keys_that_decide_are_reported_as_weakenings
+//MUTANT sbom-standard-removal-unreported|s@^        if !asked.contains.&standard.as_str... .$@        if false {@|the_sbom_keys_that_decide_are_reported_as_weakenings
 
 /// The verb, as its diagnostics name it.
 const VERB: &str = "sbom";
@@ -197,6 +203,62 @@ impl Declared {
         }
         Ok(())
     }
+}
+
+/// The three `[sbom]` keys that set a bar, compared for `config lint
+/// --config-from` (CLOUD-843); `trust::CENSUS` says why the rest of the table
+/// does not.
+///
+/// `[sbom.conformance]`'s checker exit code IS the ntia verdict, so a different
+/// checker or a standard no longer asked lowers it; `actions` absent skips the
+/// pass that fills the pinned actions' licences. Only a base that DECLARED a
+/// key can lose it: `[sbom]` arriving where the base had none is a new
+/// producer, and a standard added is one more question.
+#[must_use]
+pub(crate) fn weakenings(
+    base: Option<&Declared>,
+    working: Option<&Declared>,
+) -> Vec<crate::trust::Weakening> {
+    use crate::trust::{Weakening, WeakeningKind};
+    let Some(base) = base else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    if base.actions.is_some() && working.and_then(|sbom| sbom.actions.as_ref()).is_none() {
+        found.push(Weakening::new(
+            WeakeningKind::SbomActionsRemoved,
+            "sbom.actions",
+            "present",
+            "absent",
+        ));
+    }
+    let Some(base) = base.conformance.as_ref() else {
+        return found;
+    };
+    let working = working.and_then(|sbom| sbom.conformance.as_ref());
+    let checker = working.map_or("absent", |conformance| conformance.checker.as_str());
+    if checker != base.checker {
+        found.push(Weakening::new(
+            WeakeningKind::SbomCheckerChanged,
+            "sbom.conformance.checker",
+            base.checker.clone(),
+            checker,
+        ));
+    }
+    let asked: Vec<&str> = working.map_or_else(Vec::new, |conformance| {
+        conformance.standards.iter().map(String::as_str).collect()
+    });
+    for standard in &base.standards {
+        if !asked.contains(&standard.as_str()) {
+            found.push(Weakening::new(
+                WeakeningKind::SbomStandardRemoved,
+                format!("sbom.conformance.standards[{standard}]"),
+                "present",
+                "absent",
+            ));
+        }
+    }
+    found
 }
 
 /// A reading the verb could not take. Never a verdict and never a pass.
