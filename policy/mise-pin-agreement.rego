@@ -30,11 +30,15 @@
 # would gate the cost of the fix and not the fix.
 #
 # SELECTED BY ARGV, NOT BY `command`. The command is no longer always `mise`:
-# CLOUD-714 interposes `mise-tasks/<server>-mcp`, a shim that records the spawn and
-# `exec`s `mise "$@"` with these same args. Keying on `command == "mise"` would
-# have made that shim silently exempt — the gate reporting a clean pass while the
-# property it exists for went unchecked. `args[0] == "exec"` is what actually
-# identifies a mise exec launch, shim or no.
+# CLOUD-714 interposes a launcher that records the spawn and then execs the launch
+# line — first a shim that ran `mise "$@"` with these same args, now
+# `batten mcp spawn <server> -- mise exec …` (CLOUD-843). Keying on
+# `command == "mise"` would have made either silently exempt — the gate reporting
+# a clean pass while the property it exists for went unchecked. So a mise exec
+# launch is found in the ARGV: an `exec` as the first word (the command is mise, or
+# a shim that execs mise with these args), or an `exec` right after a `mise` word
+# further in (a launcher fronting it). Reading only `args[0]` went blind the day the
+# launcher became a verb, because the verb's own words come first.
 #
 # ─── A PIN IS THE PLAIN STRING FORM, AND ONLY THAT ───────────────────────────
 #
@@ -60,7 +64,8 @@
 # its OWN declaration line, which is `self-mutating-row` rather than coverage.
 #MUTANT pin-disagreement-passes|s@have != entry.want@false@|a_version_the_authority_pins_differently_is_refused
 #MUTANT unpinned-tool-passes|s@not is_string(pins\[tool\])@false@|a_tool_the_authority_does_not_carry_is_refused
-#MUTANT unscoped-exec-passes|s@scoped_operands(args) == 0@false@|a_bare_exec_is_refused_even_though_it_names_no_version
+#MUTANT unscoped-exec-passes|s@scoped_operands(args, at) == 0@false@|a_bare_exec_is_refused_even_though_it_names_no_version
+#MUTANT fronted-exec-unseen|s@^\targs\[i - 1\] == "mise"$@\tfalse@|a_launcher_fronted_bare_exec_is_still_refused
 # NO `#MUTANT` ROW FOR THE COULD-NOT-LOOK CLAUSE, and that is a measurement
 # rather than an oversight. `input.tree.missing` is never populated on the tree
 # surface — measured with a probe module over an absent `documents` path, an
@@ -176,31 +181,39 @@ violation contains {
 } if {
 	some server, body in servers
 	args := body.args
-	args[0] == "exec"
-	scoped_operands(args) == 0
+	some at in exec_starts(args)
+	scoped_operands(args, at) == 0
 }
 
-# Everything between `exec` and the first `--` is what the launch is scoped to. A
-# bare exec has nothing between them.
-scoped_operands(args) := count([operand |
-	some i, operand in args
+# Every index at which a `mise exec` launch begins in a server's argv.
+exec_starts(args) := {i |
+	some i, word in args
+	word == "exec"
+	launches_mise(args, i)
+}
+
+# The first word: the command itself is mise, or a shim that execs mise with
+# these same args.
+launches_mise(_, i) if i == 0
+
+# Further in: a launcher's own words come first and hand `mise exec …` on.
+launches_mise(args, i) if {
 	i > 0
-	i < terminator(args)
+	args[i - 1] == "mise"
+}
+
+# Everything between `exec` and the first `--` after it is what the launch is
+# scoped to. A bare exec has nothing between them.
+scoped_operands(args, at) := count([operand |
+	some i, operand in args
+	i > at
+	i < terminator(args, at)
 ])
 
-# The index of the first `--`, or one past the end when there is none — so a
-# launch that never terminates mise's own argv still counts its operands.
-terminator(args) := at if {
-	candidates := [i | some i, word in args; word == "--"]
-	count(candidates) > 0
-	at := candidates[0]
-}
-
-terminator(args) := count(args) if {
-	every word in args {
-		word != "--"
-	}
-}
+# The index of the first `--` after `at`, or one past the end when there is none
+# — so a launch that never terminates mise's own argv still counts its operands.
+# A launcher's OWN `--`, before the exec, is not mise's and is not counted.
+terminator(args, at) := min({i | some i, word in args; i > at; word == "--"} | {count(args)})
 
 # ---------------------------------------------------------------------------
 # D: could not look at the AUTHORITY.
@@ -229,8 +242,11 @@ violation contains {
 scoped_tree(version) := {"tree": {
 	"documents": {
 		".mcp.json": {"mcpServers": {"serena": {
-			"command": "mise-tasks/serena-mcp.sh",
-			"args": ["exec", sprintf("pipx:serena-agent@%s", [version]), "--", "serena", "start-mcp-server"],
+			"command": "batten",
+			"args": [
+				"mcp", "spawn", "serena", "--",
+				"mise", "exec", sprintf("pipx:serena-agent@%s", [version]), "--", "serena", "start-mcp-server",
+			],
 		}}},
 		"mise.toml": {"tools": {"pipx:serena-agent": "1.6.1", "uv": "0.8"}},
 	},
@@ -290,13 +306,40 @@ test_a_server_not_launched_through_mise_is_left_alone if {
 		with data.batten.patterns as {"mise-tool-reference": `^[a-z0-9]+:.+@.+$`}
 }
 
-# THE SELECTOR IS ARGV, NOT THE COMMAND NAME (CLOUD-714). A shimmed launch is
-# still checked; keying on `command == "mise"` would exempt every one of them.
-test_a_shimmed_bare_exec_is_still_refused if {
+# THE SELECTOR IS ARGV, NOT THE COMMAND NAME (CLOUD-714). A launch fronted by a
+# launcher is still checked; keying on `command == "mise"` would exempt every one
+# of them, and so would keying on `args[0]` once the launcher's own words lead.
+test_a_launcher_fronted_bare_exec_is_still_refused if {
 	found := violation with input as {"tree": {
 		"documents": {
 			".mcp.json": {"mcpServers": {"serena": {
-				"command": "mise-tasks/serena-mcp.sh",
+				"command": "batten",
+				"args": ["mcp", "spawn", "serena", "--", "mise", "exec", "--", "serena", "start-mcp-server"],
+			}}},
+			"mise.toml": {"tools": {"pipx:serena-agent": "1.6.1"}},
+		},
+		"missing": {},
+	}}
+		with data.batten.patterns as {"mise-tool-reference": `^[a-z0-9]+:.+@.+$`}
+	count(found) == 1
+	some finding in found
+	finding.verdict == "call run loose"
+}
+
+# A fronted launch that IS scoped passes, and its pin is still read: the
+# launcher's own `--` precedes the exec and is not mise's terminator.
+test_a_launcher_fronted_scoped_launch_passes_and_its_pin_is_read if {
+	count(violation) == 0 with input as scoped_tree("1.6.1")
+		with data.batten.patterns as {"mise-tool-reference": `^[a-z0-9]+:.+@.+$`}
+}
+
+# A shim that execs mise with the args it was given still reads as a mise exec,
+# because `exec` is its first word.
+test_a_shim_bare_exec_is_still_refused if {
+	found := violation with input as {"tree": {
+		"documents": {
+			".mcp.json": {"mcpServers": {"serena": {
+				"command": "some-shim",
 				"args": ["exec", "--", "serena", "start-mcp-server"],
 			}}},
 			"mise.toml": {"tools": {"pipx:serena-agent": "1.6.1"}},
@@ -309,9 +352,15 @@ test_a_shimmed_bare_exec_is_still_refused if {
 	finding.verdict == "call run loose"
 }
 
-# A shimmed launch that IS scoped passes, and its pin is still read.
-test_a_shimmed_scoped_launch_passes_and_its_pin_is_read if {
-	count(violation) == 0 with input as scoped_tree("1.6.1")
+# An `exec` that no `mise` precedes is some other program's word, not a launch.
+test_an_exec_word_no_mise_precedes_is_not_a_launch if {
+	count(violation) == 0 with input as {"tree": {
+		"documents": {
+			".mcp.json": {"mcpServers": {"s": {"command": "x", "args": ["run", "exec", "--", "y"]}}},
+			"mise.toml": {"tools": {}},
+		},
+		"missing": {},
+	}}
 		with data.batten.patterns as {"mise-tool-reference": `^[a-z0-9]+:.+@.+$`}
 }
 

@@ -45,6 +45,7 @@ pub mod defects;
 pub mod deferral;
 pub mod design;
 pub mod disk_watch;
+pub mod dist;
 pub mod doctor;
 pub mod drain;
 pub mod durable;
@@ -453,7 +454,10 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             cli::StepCommand::Run { .. } => unimplemented("step run"),
         },
         Some(Command::Sbom(_)) => unimplemented("sbom"),
-        Some(Command::Dist(_)) => unimplemented("dist"),
+        // The workspace is `cargo metadata`'s answer from where the verb stands;
+        // the §8 chain supplies nothing, because what a build is called is the
+        // package's own declaration rather than a policy question.
+        Some(Command::Dist(request)) => dist::run(&request, out, err),
         Some(Command::Board { command }) => match command {
             cli::BoardCommand::Check { .. } => unimplemented("board check"),
         },
@@ -808,6 +812,7 @@ fn release_survey(
     matrix: &std::collections::BTreeSet<String>,
     binstall: &install::Binstall,
     repo: &str,
+    name: &str,
     version: &str,
     ask: &dyn Fn(&str, &[&str]) -> Result<String>,
     err: &mut dyn Write,
@@ -821,18 +826,11 @@ fn release_survey(
     let mut installable: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
     for target in matrix {
-        let stem = ask("mise-tasks/dist.sh", &["--stem", target])?
-            .trim()
-            .to_owned();
-        if stem.is_empty() {
-            writeln!(
-                err,
-                "::error:: release install: mise-tasks/dist.sh --stem {target} printed nothing. \
-                 Its naming is what every other reader agrees with; if it cannot be asked, \
-                 nothing here has been checked."
-            )?;
-            return Ok(None);
-        }
+        // `dist`'s own stem rule, asked in process: the naming contract has one
+        // authority and it is `dist::archive_stem`, which the release build
+        // itself calls. The name is the package's, read from its manifest, so
+        // no consumer's crate name is spelled here.
+        let stem = dist::archive_stem(name, version, target);
 
         // The archive suffix is the BINSTALL manifest's answer, which is the one
         // cargo acts on. Deriving it from the triple here would put a second
@@ -879,7 +877,7 @@ fn release_survey(
         }
 
         let expected = format!("{repo}/releases/download/v{version}/{dist_name}");
-        let resolved = binstall.resolve(repo, "batten", version, target)?;
+        let resolved = binstall.resolve(repo, name, version, target)?;
         if resolved != expected {
             found.push(install::Disagreement::BinstallUrl {
                 target: target.clone(),
@@ -966,20 +964,22 @@ fn run_release(
         )?;
         return Ok(ExitCode::Internal);
     };
-    let (Some(repo), Some(version)) = (
+    let (Some(repo), Some(version), Some(name)) = (
         install::manifest_scalar(&workspace, "repository"),
         install::manifest_scalar(&workspace, "version"),
+        install::manifest_scalar(&manifest, "name"),
     ) else {
         writeln!(
             err,
-            "::error:: release install: the workspace manifest declares no repository or no \
-             version, so binstall's placeholders cannot be resolved."
+            "::error:: release install: the manifests declare no repository, no version or no \
+             package name, so binstall's placeholders cannot be resolved."
         )?;
         return Ok(ExitCode::Internal);
     };
 
-    // The two interim spawns. Both programs are wave 2's; when they are engine
-    // code this asks a function and the contract is unchanged.
+    // The one interim spawn. `install.sh` stays shell because it runs before
+    // the engine exists; `dist`'s naming is engine code now and is asked as a
+    // function inside `release_survey`.
     //
     // THROUGH `exec::piped`, NOT A `Command::new` HERE. `lib` is the CLI
     // dispatch and `policy/spawn-adapters.rego` deliberately does not place it:
@@ -1008,7 +1008,7 @@ fn run_release(
         return Ok(ExitCode::Internal);
     }
 
-    let survey = release_survey(&matrix, &binstall, &repo, &version, &ask, err)?;
+    let survey = release_survey(&matrix, &binstall, &repo, &name, &version, &ask, err)?;
     let Some((mut found, installable)) = survey else {
         return Ok(ExitCode::Internal);
     };

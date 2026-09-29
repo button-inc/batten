@@ -10,9 +10,10 @@ Project-scoped Serena MCP server (LSP-backed semantic navigation/edits). Wired i
 `.mcp.json`. It does **not** "just start" on a cold container — see "Two gates"
 below. Pinned like every tool: `"pipx:serena-agent"`
 in `mise.toml [tools]` (pipx backend installs with pinned `uv`), version in
-`mise.lock`. `.mcp.json` launches it through `mise-tasks/serena-mcp.sh`, a shim
-that records the spawn and then `exec`s the scoped, pinned launch line the file
-still carries verbatim: `mise exec pipx:serena-agent@<v> -- serena
+`mise.lock`. `.mcp.json` launches it through `batten mcp spawn serena --`, which
+records the spawn and then `exec`s the scoped, pinned launch line the file
+still carries verbatim (the shell shim `mise-tasks/serena-mcp.sh` retired onto
+the verb under CLOUD-843): `mise exec pipx:serena-agent@<v> -- serena
 start-mcp-server --context claude-code --project .`. The argv stayed in
 `.mcp.json` on purpose — `mise-pin-agreement` reads the pin out of it.
 
@@ -35,7 +36,7 @@ why the first fix was validated green and Serena stayed absent anyway.
    answers** (CLOUD-714). `mise install` guarantees the files exist; it never
    reads them, and Serena still spends ~1.2 s importing 2,664 `.py` files before
    it opens its own log. That gap is why an absent serena log is _not_ proof the
-   process never ran, and why `mise-tasks/serena-mcp.sh` records the spawn.
+   process never ran, and why `batten mcp spawn` records the spawn.
 
    **And MCP connections ARE retried** — this memory said they are not, on
    CLOUD-196's evidence. Measured 2026-08-19: after failures at 07:05:17 and
@@ -291,8 +292,8 @@ honest:
   not answer. The fault is downstream of the spawn.
 - **never-spawned** — the ledger has seen this server before and recorded
   nothing for this attempt. The fault is in the client's spawn path.
-- **unrecorded** — no ledger, or none for this server. _Not_ a verdict: the shim
-  is not wired here, so its silence means nothing.
+- **unrecorded** — no ledger, or none for this server. _Not_ a verdict: the
+  launcher is not wired here, so its silence means nothing.
 
 Do not re-derive this from `/root/.serena/logs/` mtimes. A day went into that on
 2026-08-19 and it cannot answer the question: Serena opens its log ~1.2 s of

@@ -6,9 +6,11 @@
 //! `install::{matrix_targets, binstall_in, parametric, is_executable}` are pure
 //! and their own cases cover the anchored matrix form, the override table, the
 //! placeholder set and the magic bytes. None of them can show that the VERB
-//! resolves a repository root, asks the two programs through the flags they
-//! publish, derives the installable set from the archive suffix rather than from
-//! a triple list, or reports could-not-look for a workflow that declares no
+//! resolves a repository root, asks `install.sh` through the flags it publishes
+//! and `dist`'s naming rule in process (`dist::archive_stem`, since
+//! `mise-tasks/dist.sh` retired onto `batten dist` under CLOUD-843), derives
+//! the installable set from the archive suffix rather than from a triple list,
+//! or reports could-not-look for a workflow that declares no
 //! matrix. Those are properties of the compiled binary.
 //!
 //! # THE COULD-NOT-LOOK CASES ARE THE ONES THAT MATTER
@@ -54,12 +56,12 @@ use std::process::Output;
 const WORKFLOW: &str = "jobs:\n  build:\n    strategy:\n      matrix:\n        include:\n          \
                         - target: x86_64-unknown-linux-gnu\n          - target: x86_64-pc-windows-msvc\n";
 
-/// A manifest whose template resolves to what `dist` names.
+/// A manifest whose template resolves to what `dist` names: `name-vVERSION-TARGET`.
 const MANIFEST: &str = r#"[package]
 name = "batten"
 
 [package.metadata.binstall]
-pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-{ target }{ archive-suffix }"
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-{ target }{ archive-suffix }"
 pkg-fmt = "tgz"
 
 [package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
@@ -69,18 +71,14 @@ pkg-fmt = "zip"
 const WORKSPACE: &str =
     "[workspace.package]\nversion = \"1.2.3\"\nrepository = \"https://example/r\"\n";
 
-/// A `dist` stand-in answering only the query flag this gate uses.
-const DIST: &str = "#!/usr/bin/env bash\nset -u\n\
-                    if [[ \"${1:-}\" == \"--stem\" ]]; then printf 'batten-1.2.3-%s\\n' \"$2\"; fi\n";
-
-/// An `install.sh` stand-in that agrees with `DIST`.
+/// An `install.sh` stand-in that agrees with `dist::archive_stem`.
 const INSTALL_AGREEING: &str = "#!/usr/bin/env bash\nset -u\n\
     case \"${1:-}\" in\n\
     --targets) printf 'x86_64-unknown-linux-gnu\\n' ;;\n\
     --asset-name)\n\
       case \"$3\" in\n\
-      *windows*) printf 'batten-%s-%s.zip\\n' \"$2\" \"$3\" ;;\n\
-      *) printf 'batten-%s-%s.tar.gz\\n' \"$2\" \"$3\" ;;\n\
+      *windows*) printf 'batten-v%s-%s.zip\\n' \"$2\" \"$3\" ;;\n\
+      *) printf 'batten-v%s-%s.tar.gz\\n' \"$2\" \"$3\" ;;\n\
       esac ;;\n\
     esac\n";
 
@@ -97,12 +95,13 @@ const INSTALL_HARDCODED: &str = "#!/usr/bin/env bash\nset -u\n\
     --targets) printf 'x86_64-unknown-linux-gnu\\n' ;;\n\
     --asset-name)\n\
       case \"$3\" in\n\
-      *windows*) printf 'batten-1.2.3-%s.zip\\n' \"$3\" ;;\n\
-      *) printf 'batten-1.2.3-%s.tar.gz\\n' \"$3\" ;;\n\
+      *windows*) printf 'batten-v1.2.3-%s.zip\\n' \"$3\" ;;\n\
+      *) printf 'batten-v1.2.3-%s.tar.gz\\n' \"$3\" ;;\n\
       esac ;;\n\
     esac\n";
 
-/// A repository fixture carrying the four files the contract is written in.
+/// A repository fixture carrying the files the contract is written in. No `dist`
+/// stand-in: the naming rule is engine code now and is asked in process.
 fn fixture(name: &str, install: &str, workflow: &str) -> PathBuf {
     let repo = scratch(&format!("release-install-{name}"));
     // THE WORKFLOW IS DECLARED, not guessed (rule 1). `[ci] release_workflow`
@@ -118,7 +117,6 @@ fn fixture(name: &str, install: &str, workflow: &str) -> PathBuf {
     write(&repo, ".github/workflows/release-artifacts.yml", workflow);
     write(&repo, "crates/batten/Cargo.toml", MANIFEST);
     write(&repo, "Cargo.toml", WORKSPACE);
-    write(&repo, "mise-tasks/dist.sh", DIST);
     write(&repo, "install.sh", install);
     // `cfg(unix)` because `cross-check` TYPE-CHECKS this crate for
     // `x86_64-pc-windows-gnu`, where `std::os::unix` does not exist at all --
@@ -126,8 +124,8 @@ fn fixture(name: &str, install: &str, workflow: &str) -> PathBuf {
     // difference. The executable bit is what makes `install.sh` askable, and a
     // target with no such bit needs nothing set.
     #[cfg(unix)]
-    for program in ["mise-tasks/dist.sh", "install.sh"] {
-        let path = repo.join(program);
+    {
+        let path = repo.join("install.sh");
         let mut mode = std::fs::metadata(&path).unwrap().permissions();
         std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
         std::fs::set_permissions(&path, mode).unwrap();
@@ -206,7 +204,7 @@ fn a_target_install_lists_that_ships_a_zip_is_refused() {
 /// A NAME `dist` DOES NOT WRITE. The 404 this whole gate exists to prevent.
 #[test]
 fn an_asset_name_dist_does_not_write_is_refused() {
-    let renamed = INSTALL_AGREEING.replace("batten-%s-%s.tar.gz", "batten_%s_%s.tar.gz");
+    let renamed = INSTALL_AGREEING.replace("batten-v%s-%s.tar.gz", "batten_v%s_%s.tar.gz");
     let repo = fixture("renamed", &renamed, WORKFLOW);
     let outcome = run(&repo);
     let cause = stderr(&outcome);

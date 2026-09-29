@@ -2722,7 +2722,7 @@ const DIST_STEM: FlagDecl = FlagDecl::switch(
 const DIST_BUILD_TOOL: FlagDecl = FlagDecl::valued(
     "build_tool",
     "build-tool",
-    "How to build for the target: cargo, cross or zigbuild (default: cargo)",
+    "How to build for the target: cargo, cross or zigbuild (default: $DIST_BUILD_TOOL, else cargo)",
 );
 
 /// `[tool]` on `mcp grant`: the tool name to resolve.
@@ -3448,9 +3448,9 @@ pub const SURFACE: &[CommandDecl] = &[
     // STDOUT IS THE MCP TRANSPORT. One stray byte corrupts the JSON-RPC stream
     // and takes the server down looking exactly like the bug this records. So
     // Batten emits nothing on stdout at all, and the record it keeps is a file.
-    // unreached: "mcp spawn" CLOUD-1753 the only caller is `.mcp.json`, which the MCP
-    // client reads with the `batten` on PATH — a release — and no release ships this
-    // verb yet; the repoint lands in the commit after the release that does.
+    // unreached: "mcp spawn" CLOUD-1753 the only caller is `.mcp.json`, whose JSON argv
+    // spells the verb as separate array elements, which a text needle does not read
+    // as a call. The release on PATH ships the verb (v0.0.188 answers its --help).
     CommandDecl {
         path: "mcp spawn",
         id: "mcp.spawn",
@@ -3610,10 +3610,11 @@ pub const SURFACE: &[CommandDecl] = &[
         flags: &[],
     },
     // `Unclassified` RATHER THAN `Read`, and the reason is the interim: this
-    // asks `mise-tasks/dist.sh` and `install.sh` through the query flags they
-    // publish, so it spawns, and its reach is whatever theirs is. An optimistic
-    // `read` here would put a process-spawning verb on the derived allowlist.
-    // When wave 2 retires both, this becomes `Read` in the same change.
+    // asks `install.sh` through the query flags it publishes, so it spawns, and
+    // its reach is whatever that program's is. An optimistic `read` here would
+    // put a process-spawning verb on the derived allowlist. `dist`'s naming is
+    // asked in process now (`dist::archive_stem`); `install.sh` stays shell
+    // because it runs before the engine exists, so this stays `Unclassified`.
     CommandDecl {
         path: "release install",
         id: "release.install",

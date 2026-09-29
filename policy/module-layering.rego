@@ -696,6 +696,13 @@ declared_modules := {
 	# reading its two families do. It reaches the network, so it joins
 	# `forge_query` on every forbidden edge below.
 	"ci_signal",
+	# `dist` arrived with CLOUD-843, retiring `mise-tasks/dist.sh`. An EFFECT verb
+	# in `sbom`'s class: it builds and archives a release binary. It reaches
+	# `exec` for its one spawn shape (`piped_argv`, so the census grows no site),
+	# `cli` for its request, and `error`/`exit` for its answer. It decides nothing
+	# about a tree and mints no `Finding`; `lib` calls its naming rule for
+	# `release install` so the asset name keeps one authority.
+	"dist",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.

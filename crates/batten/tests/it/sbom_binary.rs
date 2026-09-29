@@ -139,7 +139,17 @@ fn repo(name: &str) -> PathBuf {
             verdict("cargo list wrong"),
         ),
     );
-    write(&dir, "Cargo.toml", "version = \"9.9.9\"\n");
+    // A REAL, if tiny, workspace: the asset name is `batten dist --stem`'s now
+    // (CLOUD-843), which reads the package through `cargo metadata` rather than
+    // scraping a `version =` line, so the manifest has to be one cargo accepts.
+    // `[workspace]` keeps cargo from walking up into the tree the scratch sits in.
+    write(
+        &dir,
+        "Cargo.toml",
+        "[workspace]\n\n[package]\nname = \"batten\"\nversion = \"9.9.9\"\nedition = \"2021\"\n\n\
+         [[bin]]\nname = \"batten\"\npath = \"main.rs\"\n",
+    );
+    write(&dir, "main.rs", "fn main() {}\n");
     // The lockfile declares the crates the stub recovers plus one it does not.
     write(
         &dir,

@@ -783,6 +783,18 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // nonverdict` is NOT here: `run_in` clears `$CI_REQUIRED_CHECKS`, so it
     // refuses with `Usage` before any request.
     "record divergence",
+    // `dist` reads its package through `cargo metadata`, which WALKS UP from the
+    // directory it stands in. The corpus carries no manifest of its own, so its
+    // answer is decided by where `scratch` put it, not by the corpus: under a
+    // `CARGO_TARGET_TMPDIR` inside this checkout (the default, and the
+    // integrator's shared target dir) cargo finds THIS repository's workspace and
+    // `--stem` answers exit 0 with batten's own stem — which the assertions still
+    // judge; under a target dir outside any workspace it finds none and answers
+    // could-not-look. The entry is here for that second placement only. Its body
+    // is filled (CLOUD-843), so this is its subject's location, not a skeleton;
+    // giving the corpus a manifest would make every verb that reads one see a
+    // workspace, which is a different corpus.
+    "dist",
     // CLOUD-843's FOUNDATION SKELETONS, here on a bar of their own and named as
     // such rather than waved through under the one above: each row's arguments
     // are final and its body lands with the package retiring the shell it
@@ -794,7 +806,6 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     "step record",
     "step run",
     "sbom",
-    "dist",
     "mcp grant",
     "mcp posture",
     "board check",
