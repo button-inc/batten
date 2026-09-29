@@ -147,11 +147,14 @@ fn the_skip_says_why_rather_than_only_that() {
 /// then a bail anyway, because the binary landed in the enclosing tree's
 /// `target/` rather than the fixture's. A stub `cargo` first on `PATH` records the
 /// argv and refuses, so this case builds nothing either way.
-#[cfg(unix)]
+///
+/// COMPILED ON EVERY TARGET, and the off-unix contract is stated here rather than
+/// gated away (`policy/cfg-gated-test.rego`). A `#!/bin/sh` stub cannot stand in
+/// for `cargo.exe`, so off unix the real cargo runs — and with the manifest pinned
+/// it refuses the fixture's absent `Cargo.toml` at once, which is still the verb
+/// failing without building anything.
 #[test]
 fn a_measurement_builds_the_repository_it_was_asked_about() {
-    use std::os::unix::fs::PermissionsExt as _;
-
     let repo = repo("perf-measure-confined");
     let bin = repo.join("stub-bin");
     std::fs::create_dir_all(&bin).unwrap();
@@ -165,7 +168,7 @@ fn a_measurement_builds_the_repository_it_was_asked_about() {
         ),
     )
     .unwrap();
-    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    make_executable(&stub);
     let path = std::env::join_paths(
         std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
     )
@@ -181,6 +184,9 @@ fn a_measurement_builds_the_repository_it_was_asked_about() {
         !output.status.success(),
         "a build that failed is could-not-look, never a measurement"
     );
+    if !cfg!(unix) {
+        return;
+    }
 
     let argv = std::fs::read_to_string(&recorded).expect("perf measure ran cargo");
     let argv: Vec<&str> = argv.lines().collect();
@@ -197,6 +203,15 @@ fn a_measurement_builds_the_repository_it_was_asked_about() {
          walks up and builds whatever workspace encloses it: {argv:?}"
     );
 }
+
+#[cfg(unix)]
+fn make_executable(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod the stub");
+}
+
+#[cfg(not(unix))]
+fn make_executable(_path: &std::path::Path) {}
 
 #[test]
 fn the_verb_is_reachable_and_declares_its_flag() {
