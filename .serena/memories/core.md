@@ -2839,7 +2839,25 @@ view` and no argument, which reads the CURRENT BRANCH — so under a detached
   the stale record and exits 3, since a module cannot date a window. The row's
   `id` must be a declared `[[record]]` family, refused at load, so a query no
   module can read is unwritable. `[forge]` is read from the committed authority
-  alone (`resolve::committed`), never layered.
+  alone (`resolve::committed`), never layered. **Two derived columns (p9-signal):**
+  `each = {query, field, input}` walks the row once per distinct value the
+  SOURCE family recorded (read back through `record::load_named`, never
+  re-walked), tags every kept row with its member under `input`, and closes with
+  `members=<n><TAB>truncated=<n>`; one unreadable member makes the whole family
+  could-not-look. `[[forge.query.span]] {name, from, to?, unit}` records seconds
+  or UTC civil days between two instants — `to` absent is the PRODUCER's clock,
+  which is how an age reaches a module that has none. `timeout-drift` and
+  `branch-age` are three chained rows each.
+- `record validate <id>` / `record forge <ref> --fetch` (p9-signal, retiring
+  `[tasks.record-verdicts]`' body). `validate` runs a `[[rule.tools]]` row's
+  declared `run` argv through `exec::run_in` (no new spawn site) and records
+  `exit <n>` under the row's key — the module decides what a code means.
+  `--fetch --answered <set> [--fanin <check>]` reads HEAD's check-runs through
+  `pr_watch::read`, keeps the latest ANSWERED conclusion per name
+  (`record::graded`), and writes nothing until the fan-in answered
+  (`record::forge_body`). `[[rule.plan]] profile = ["!slow"]` passes
+  `--profile` words to hk, so `hook-profile.rego` derives the slow tier from two
+  acquired plans instead of a recorded `jq` join.
 - `severity.rs` — the severity taxonomy (CLOUD-168): one rank table plus the
   adapter across the three axes — `RuleSeverity` (config, CLOUD-61),
   `AdvisoryTier` (the one _stored_ severity, CLOUD-80/78), `ReportLevel`
