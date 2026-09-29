@@ -1521,18 +1521,25 @@ pub fn log_messages(dir: &Path, base: &str) -> Result<Option<String>> {
 /// some base would silently drop every landing older than it — a landed row then
 /// reads as live and, idle, as abandoned. Content, never output (rule 4).
 ///
-/// `None` is could-not-look — no checkout, or a `tip` that does not resolve —
-/// and never an empty history, which the caller would read as "nothing closes".
+/// `None` is could-not-look — no checkout, a `tip` that does not resolve, or a
+/// walk that FAILS PARTWAY — and never an empty or a shortened history, which
+/// the caller would read as "nothing (more) closes".
+///
+/// **A BROKEN WALK IS NOT A SHORTER HISTORY**, and this is where it differs from
+/// [`log_messages`], which skips what it cannot read. A missing object — a
+/// partial clone, a corrupted pack — would otherwise hand back every message
+/// ABOVE the break: each landing below it reads as live and, idle, as abandoned,
+/// which is the direction the paragraph above warns about. The retired
+/// `git log ... || true` swallowed the same failure; the port refuses it.
 #[must_use]
 pub fn messages_reachable(dir: &Path, tip: &str) -> Option<String> {
     let repo = open(dir).ok()?;
     let tip_id = repo.rev_parse_single(tip).ok()?;
     let walk = repo.rev_walk([tip_id.detach()]).all().ok()?;
     let mut messages = String::new();
-    for info in walk.flatten() {
-        let Ok(commit) = repo.find_commit(info.id) else {
-            continue;
-        };
+    for info in walk {
+        let info = info.ok()?;
+        let commit = repo.find_commit(info.id).ok()?;
         messages.push_str(&commit.message_raw_sloppy().to_string());
         messages.push('\n');
     }
@@ -6424,4 +6431,8 @@ row naming a closure or a disjunction mutates the one operand it is about.
 #MUTANT untracked-dropped|s@                fact.untracked.push(path.clone());@@|divergence_and_untracked_paths_are_reported_beneath_the_pathspec_only
 #MUTANT file-mode-ignored|s@^    filemode .. !want_link @    !want_link @|a_flipped_executable_bit_diverges_only_where_file_mode_counts
 #MUTANT magic-pathspec-accepted|s@    !spec.is_empty() .. !spec.starts_with(':')@    !spec.is_empty()@|a_magic_pathspec_is_refused_at_load_rather_than_read_as_a_literal
+
+CLOUD-843's p6-board package: a trunk walk that breaks partway is could-not-look,
+never the shorter history above the break (`messages_reachable`).
+#MUTANT walk-break-is-a-shorter-history|s@        let info = info.ok()?;@        let Ok(info) = info else { break };@|a_trunk_whose_history_breaks_partway_is_could_not_look
 */

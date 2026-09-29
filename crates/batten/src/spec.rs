@@ -570,6 +570,13 @@ mod tests {
                 // `git ls-remote`, so this arm starts no program either. That
                 // was the design constraint the flag exists to satisfy.
                 //
+                // `--gather` (CLOUD-843) keeps it: the verb may now acquire the
+                // arms itself, but from the trunk's history in process and from
+                // the forge through the vendored client — `claim merged`'s own
+                // route — so it still starts no program. A forge that client
+                // cannot list is could-not-look on that arm, and `--refs` is
+                // still how such a consumer supplies it.
+                //
                 // Before its sibling because the list is compared SORTED, not as
                 // a set: `abandoned` precedes `check`.
                 "landed abandoned".to_owned(),

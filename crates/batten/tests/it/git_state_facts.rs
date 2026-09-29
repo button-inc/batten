@@ -723,3 +723,102 @@ fn an_undeclared_config_or_index_family_is_null() {
     );
     assert!(fired(&index_null), "no pathspec declared: null");
 }
+
+/// A TRUNK WALK THAT BREAKS PARTWAY IS COULD-NOT-LOOK, never the shorter history
+/// above the break (`git::messages_reachable`, CLOUD-843's p6-board package).
+///
+/// Asserted through the one verb that reads it, `landed abandoned --gather`, and
+/// twice over the same repository: whole, the walk reaches the commit that
+/// closes the key and the row is landed-unswept; with that commit's object gone —
+/// a partial clone, a corrupted pack — the verb refuses to answer rather than
+/// reading the row as live. A walk that skipped the break would hand back every
+/// message above it, and the row would pass as clean.
+#[test]
+fn a_trunk_whose_history_breaks_partway_is_could_not_look() {
+    let dir = scratch("git-walk-broken");
+    common::init_repo(&dir);
+    std::fs::copy(common::at_root("batten.toml"), dir.join("batten.toml")).expect("config");
+    write(&dir, "merged.tsv", "");
+    write(&dir, "refs.txt", "");
+    git_in(
+        &dir,
+        &["commit", "-q", "--allow-empty", "-m", "chore: init"],
+    );
+    git_in(
+        &dir,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "feat: work\n\nCloses CLOUD-179",
+        ],
+    );
+    let closing = git_in(&dir, &["rev-parse", "HEAD"]);
+    git_in(
+        &dir,
+        &["commit", "-q", "--allow-empty", "-m", "chore: later"],
+    );
+    git_in(&dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git_in(
+        &dir,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widgets.git",
+        ],
+    );
+    let payload = r#"[{"id":"CLOUD-179","status":"In Progress","updatedAt":"2026-08-20T10:00:00.000Z","gitBranchName":"x","attachments":[]}]"#;
+    let drain = |dir: &Path| {
+        common::run_with_stdin(
+            dir,
+            &[
+                "landed",
+                "abandoned",
+                "--gather",
+                "--merged-prs",
+                "merged.tsv",
+                "--refs",
+                "refs.txt",
+                "--instant",
+                "2026-08-20",
+            ],
+            payload,
+        )
+    };
+
+    let whole = drain(&dir);
+    assert_eq!(
+        whole.status.code(),
+        Some(2),
+        "the whole walk reaches the closing commit\n{}{}",
+        stdout(&whole),
+        stderr(&whole)
+    );
+    assert!(
+        format!("{}{}", stdout(&whole), stderr(&whole)).contains("landed-unswept"),
+        "{}{}",
+        stdout(&whole),
+        stderr(&whole)
+    );
+
+    // The closing commit's loose object, removed: the walk from the tip reaches
+    // it and cannot read it.
+    let (fan, rest) = closing.split_at(2);
+    std::fs::remove_file(dir.join(".git").join("objects").join(fan).join(rest))
+        .expect("the closing commit is a loose object");
+    let broken = drain(&dir);
+    assert_eq!(
+        broken.status.code(),
+        Some(3),
+        "a broken walk is could-not-look\n{}{}",
+        stdout(&broken),
+        stderr(&broken)
+    );
+    assert!(
+        stderr(&broken).contains("could not look"),
+        "{}",
+        stderr(&broken)
+    );
+}

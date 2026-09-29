@@ -773,6 +773,13 @@
           "items": {
             "type": "string"
           }
+        },
+        "sweep": {
+          "description": "The gates `batten board sweep` runs over ONE payload set, in order\n(CLOUD-825, retiring `[tasks.board-sweep]` under CLOUD-843).\n\n**Declared here rather than known to the engine** (non-negotiable rule 1):\nwhich gates a board has, and which argv reaches each, are this consumer's\nfacts. Read from the committed authority alone, like every other key in\nthis table — an uncommitted layer that could drop a gate from the sweep\nwould narrow what \"the board is coherent\" means without a trace.\n\nEmpty is undeclared, and the verb refuses rather than reporting a clean\nboard over zero gates.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SweepGate"
+          }
         }
       },
       "additionalProperties": false
@@ -4793,6 +4800,47 @@
           "type": "string",
           "const": "strict"
         }
+      ]
+    },
+    "SweepGate": {
+      "description": "One gate the board sweep runs (CLOUD-843).\n\n**Each row carries its own exit table**, because the gates a consumer\ncomposes do not share one. The engine's verbs answer `2` for a refusal; the\ncorpus a retirement campaign is still draining answers `1`. A composer that\nassumed either would read the other's refusal as could-not-look, or its\ncould-not-look as a refusal — the two answers a board sweep most needs apart.\n\nEvery exit a row does not classify — and a gate that could not be run at all\n— is COULD NOT LOOK. That is the safe direction: an unclassified answer never\nreads as a clean board.",
+      "type": "object",
+      "properties": {
+        "abstains": {
+          "description": "The exits meaning the gate cannot answer on THIS CLONE — a property of the\ncheckout rather than of the board, so a refusal elsewhere still outranks\nit (CLOUD-921).",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "name": {
+          "description": "The name the report prints for this gate.",
+          "type": "string"
+        },
+        "refuses": {
+          "description": "The exits meaning the gate REFUSED the board. The engine's violation,\n`2`, when the row names none.",
+          "type": "array",
+          "default": [
+            2
+          ],
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "run": {
+          "description": "The argv the gate runs with the payload set on stdin. The first word\nresolves on `PATH`; nothing here is a shell string.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "run"
       ]
     },
     "TaskQuery": {

@@ -969,6 +969,34 @@ pub enum WeakeningKind {
     /// so a variant inserted among its neighbours shifts every later discriminant
     /// and `semver` reports the whole tail as moved.
     WiringDisarmRemoved,
+    /// A `[[board.sweep]]` gate the base ref ran and the working tree does not
+    /// (CLOUD-843, retiring `[tasks.board-sweep]`).
+    ///
+    /// A gate is a question the sweep asks of every payload set, so dropping
+    /// one narrows what "the board is coherent" means — the reading
+    /// `StartupRowRemoved` takes of a precondition, keyed on the gate's `name`
+    /// because that is the identity the report prints. An EDITED `run` is not
+    /// compared, for that variant's reason: whether one argv decides more than
+    /// another is a runtime fact about two programs, not something two parsed
+    /// configs can settle (non-negotiable rule 3).
+    ///
+    /// **Appended, never inserted**, for `PerfExemptionAdded`'s reason.
+    BoardSweepGateRemoved,
+    /// A `[[board.sweep]]` gate's `abstains` gained an exit the base ref's did
+    /// not carry (CLOUD-843).
+    ///
+    /// THE ONE EXIT-TABLE MOVE THAT LOWERS A BAR. An exit a row does not
+    /// classify is could-not-look, which OUTRANKS a refusal; an exit it names
+    /// under `refuses` is a refusal; an exit it names under `abstains` ranks BELOW
+    /// a refusal (CLOUD-921). So moving an exit into `abstains` — from either
+    /// place — can only turn a sweep that would have failed louder into one that
+    /// fails quieter, and beside a clean board it is the difference between
+    /// "could not look" and "coherent, but this clone abstained". Narrowing
+    /// `refuses` is NOT this kind: the exit it drops falls to could-not-look,
+    /// which is the stricter lane, so that edit tightens.
+    ///
+    /// **Appended, never inserted**, for `PerfExemptionAdded`'s reason.
+    BoardSweepAbstentionAdded,
 }
 
 impl WeakeningKind {
@@ -1041,6 +1069,8 @@ impl WeakeningKind {
         WeakeningKind::VerifiedCheckRemoved,
         WeakeningKind::FastForwardLaneAdded,
         WeakeningKind::WiringDisarmRemoved,
+        WeakeningKind::BoardSweepGateRemoved,
+        WeakeningKind::BoardSweepAbstentionAdded,
     ];
 
     /// The stable, lowercase identifier used in machine output (§6).
@@ -1064,6 +1094,8 @@ impl WeakeningKind {
             WeakeningKind::LandingPathRemoved => "landing-path-removed",
             WeakeningKind::FastForwardLaneAdded => "fast-forward-lane-added",
             WeakeningKind::WiringDisarmRemoved => "wiring-disarm-removed",
+            WeakeningKind::BoardSweepGateRemoved => "board-sweep-gate-removed",
+            WeakeningKind::BoardSweepAbstentionAdded => "board-sweep-abstention-added",
             WeakeningKind::ReadyCutoverRelaxed => "ready-cutover-relaxed",
             WeakeningKind::PerfExemptionAdded => "perf-exemption-added",
             WeakeningKind::VerbRemoved => "verb-removed",
@@ -1206,22 +1238,27 @@ pub const CENSUS: &[FieldCoverage] = &[
         field: "ready",
         coverage: Coverage::Compared(&[WeakeningKind::ReadyCutoverRelaxed]),
     },
+    // `board` WAS `NotPolicyBearing`, on a reason that was true of the column
+    // vocabulary alone and stays true of it: an override cannot speak to the
+    // table at all (the key is absent from `OverrideConfig` and `resolve` reads
+    // it from the committed authority alone, `epoch`'s structural guarantee), and
+    // a column name has no DIRECTION — renaming a queue is not more or less
+    // permissive as config, because which rows it admits is tracker state rather
+    // than a bar this file sets (CLOUD-1623).
+    //
+    // CLOUD-843 gave the table a sub-table that IS a bar: `[[board.sweep]]`, the
+    // gates `board sweep` runs over every payload set. Between two committed refs
+    // a dropped gate, or an exit moved into `abstains`, narrows what the sweep
+    // judges, and while the whole field read as not policy-bearing that edit was
+    // invisible under `--config-from` — `hook`'s history with `[[hook.handler]]`
+    // repeated one table over. The columns still contribute nothing here; the
+    // field is compared by the one sub-table that can lower a bar.
     FieldCoverage {
         field: "board",
-        coverage: Coverage::NotPolicyBearing(
-            "this board's column vocabulary (CLOUD-1623). It IS read by gates — `claim check` \
-             admits only the ready-queue column and `landed` selects on the pulled and started \
-             ones — so the reason is not that it lacks policy weight. It is that an override \
-             cannot speak to it at all: the key is absent from `OverrideConfig` and `resolve` \
-             reads the table from the committed authority alone, `contract`'s structural \
-             guarantee for `epoch`'s reason. That is what makes the obvious attack unwritable — \
-             an uncommitted layer renaming `ready` to a column every row already sits in would \
-             make every row pullable at once. A weakening row would be the wrong instrument, \
-             `mcp`'s point below: it reports a DIRECTION, and a column name has none. Renaming \
-             a queue is not more or less permissive as config — which rows it admits depends on \
-             where the board has put them, which is tracker state rather than a bar this file \
-             sets",
-        ),
+        coverage: Coverage::Compared(&[
+            WeakeningKind::BoardSweepGateRemoved,
+            WeakeningKind::BoardSweepAbstentionAdded,
+        ]),
     },
     FieldCoverage {
         field: "perf",
@@ -2451,6 +2488,25 @@ fn scalar_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         "wiring.disarm",
     ));
 
+    // The gates the board sweep runs (CLOUD-843). A gate gone is a question the
+    // sweep stopped asking, by the reading above; an exit gained under a SAME
+    // gate's `abstains` is the one edit to its exit table that answers quieter
+    // (`WeakeningKind::BoardSweepAbstentionAdded` carries why the others do not).
+    found.extend(removed_entries(
+        WeakeningKind::BoardSweepGateRemoved,
+        &sweep_gate_names(base),
+        &sweep_gate_names(working),
+        "board.sweep",
+    ));
+    // Only over gates the BASE ran: a gate the working tree adds is a question
+    // gained, so whatever its own table abstains on, it cannot lower a bar the
+    // base set.
+    found.extend(added_entries(
+        WeakeningKind::BoardSweepAbstentionAdded,
+        &sweep_abstentions(base, base),
+        &sweep_abstentions(working, base),
+    ));
+
     // The judge's privacy boundary (CLOUD-135). Compared from both sides
     // regardless of whether either declares the table: an absent `[judge]` is
     // the *tightest* setting — pointer-only, at the engine's ceiling — so a
@@ -2717,6 +2773,37 @@ fn startup_ids(config: &Config) -> Vec<String> {
 fn disarm_paths(config: &Config) -> Vec<String> {
     config.wiring.as_ref().map_or_else(Vec::new, |wiring| {
         wiring.disarm.iter().map(|row| row.path.clone()).collect()
+    })
+}
+
+/// The board sweep's gate names, which are what identifies a `[[board.sweep]]`
+/// row: the name is what the report prints and what an operator reads a lane
+/// against.
+fn sweep_gate_names(config: &Config) -> Vec<String> {
+    config.board.as_ref().map_or_else(Vec::new, |board| {
+        board.sweep.iter().map(|gate| gate.name.clone()).collect()
+    })
+}
+
+/// Every exit `config`'s sweep gates abstain on, rendered as its own key path,
+/// for the gates `ran` also declares.
+///
+/// Scoped by `ran` so a comparison reads only gates both sides carry: a gate
+/// the working tree ADDS is a question gained, and its table cannot lower a bar
+/// the base set.
+fn sweep_abstentions(config: &Config, ran: &Config) -> Vec<String> {
+    let known = sweep_gate_names(ran);
+    config.board.as_ref().map_or_else(Vec::new, |board| {
+        board
+            .sweep
+            .iter()
+            .filter(|gate| known.contains(&gate.name))
+            .flat_map(|gate| {
+                gate.abstains
+                    .iter()
+                    .map(move |code| format!("board.sweep[{}].abstains[{code}]", gate.name))
+            })
+            .collect()
     })
 }
 
@@ -4112,6 +4199,49 @@ mod tests {
             weakenings(&row, &edited).is_empty(),
             "the path is the subject, so a re-worded marker disarms the same script"
         );
+    }
+
+    #[test]
+    fn dropping_a_sweep_gate_or_adding_an_abstention_is_a_weakening() {
+        // `[[board.sweep]]` (CLOUD-843) is the one sub-table of `board` that is
+        // a bar. BOTH DIRECTIONS per kind, for the disarm case's reason above.
+        let gate = |extra: &str| {
+            config(&format!(
+                "[[board.sweep]]\nname = \"drain\"\nrun = [\"x\"]\n{extra}"
+            ))
+        };
+        let plain = gate("");
+        assert_eq!(
+            only(&plain, &config("")),
+            Weakening::new(
+                WeakeningKind::BoardSweepGateRemoved,
+                "board.sweep[drain]",
+                "present",
+                "absent",
+            )
+        );
+        assert!(weakenings(&config(""), &plain).is_empty());
+
+        // An exit moved into `abstains` answers quieter, and is reported; taking
+        // it back out is a tightening.
+        let abstaining = gate("abstains = [3]\n");
+        assert_eq!(
+            only(&plain, &abstaining),
+            Weakening::new(
+                WeakeningKind::BoardSweepAbstentionAdded,
+                "board.sweep[drain].abstains[3]",
+                "absent",
+                "present",
+            )
+        );
+        assert!(weakenings(&abstaining, &plain).is_empty());
+
+        // NARROWING `refuses` IS NOT ONE: the exit it drops falls to
+        // could-not-look, which outranks a refusal. And a gate the working tree
+        // ADDS is a question gained, whatever it abstains on.
+        let corpus = gate("refuses = [1, 2]\n");
+        assert!(weakenings(&corpus, &plain).is_empty());
+        assert!(weakenings(&config(""), &abstaining).is_empty());
     }
 
     #[test]

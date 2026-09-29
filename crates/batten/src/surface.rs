@@ -2123,13 +2123,20 @@ const DECLINED: FlagDecl = FlagDecl {
 /// The remote's branch names, one per line. **Evidence rather than a spawn, and
 /// that is what keeps the arm on the read-only allowlist**: `spec.rs` admits
 /// `landed check` there precisely because it "starts no program", so resolving
-/// this with a `git ls-remote` would take the arm off it. The program being
-/// retired gathered them itself; gathering is the caller's half of
-/// agents-fetch-gates-decide, where a credential belongs.
+/// this with a `git ls-remote` would take the arm off it.
 ///
-/// Absent is an empty list, which is a legitimate reading: a repository whose
-/// branches the caller did not gather cannot rescue any claim, and the refusal
-/// for a gather that FAILED belongs to the caller that ran it.
+/// Since CLOUD-843 the verb can also acquire the names itself, under `--gather`
+/// — through the forge's REST listing and the vendored client, which is still
+/// no program started, so the verb stays `read` the way `claim merged` (a forge
+/// read by the same client) is. That listing is one forge's; a consumer whose
+/// forge does not serve it gathers could-not-look on this arm and names the
+/// branches here instead — `git ls-remote --heads` output reduced to names,
+/// from whatever credential the caller holds. A file named here is never
+/// replaced by a gathered reading.
+///
+/// Absent without `--gather` is an empty list, which is a legitimate reading: a
+/// repository whose branches the caller did not gather cannot rescue any claim,
+/// and the refusal for a gather that FAILED belongs to the caller that ran it.
 const REFS: FlagDecl = FlagDecl {
     id: "refs",
     long: Some("refs"),
@@ -2149,10 +2156,16 @@ const REFS: FlagDecl = FlagDecl {
 ///
 /// A SWITCH over the arms rather than a replacement for them: an arm the caller
 /// names a file for is read from that file, and only an arm left unnamed is
-/// acquired — the trunk's closing keys from its history in process, the merged
-/// pull requests and the remote's branches from the forge through the vendored
-/// client. Off, every arm keeps its caller-supplied contract unchanged. A gather
-/// that cannot finish is could-not-look, never a thinner evidence set.
+/// acquired — the trunk's closing keys from the declared trunk's (`must_land_on`)
+/// history in process, the merged pull requests and the remote's branches from
+/// the forge through the vendored client, both from the one repository
+/// `GH_REPO` / `LAND_LOCK_REMOTE` resolve. Off, every arm keeps its
+/// caller-supplied contract unchanged. A gather that cannot finish is
+/// could-not-look, never a thinner evidence set.
+///
+/// Still `read`: every acquisition is in process or through the vendored forge
+/// client, so the verb starts no program — the property its place on the
+/// read-only allowlist rests on.
 const GATHER: FlagDecl = FlagDecl::switch(
     "gather",
     "gather",

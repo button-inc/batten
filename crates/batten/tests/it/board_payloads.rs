@@ -57,15 +57,36 @@ struct Store {
 
 impl Store {
     fn new(name: &str) -> Self {
+        Self::with_config(
+            name,
+            "version = 1\n\n[[board.sweep]]\nname = \"reads\"\nrun = [\"true\"]\n",
+        )
+    }
+
+    fn with_config(name: &str, config: &str) -> Self {
         let dir = common::scratch(&format!("board-payloads-{name}"));
         common::init_repo(&dir);
-        common::write(
-            &dir,
-            "batten.toml",
-            "version = 1\n\n[[board.sweep]]\nname = \"reads\"\nrun = [\"true\"]\n",
-        );
+        common::write(&dir, "batten.toml", config);
         let home = common::scratch(&format!("board-payloads-{name}-home"));
         Self { dir, home }
+    }
+
+    /// A store whose one sweep gate DECIDES over what it is handed: the drain,
+    /// which is clean over a `Todo` row and could-not-look over an `In Progress`
+    /// one carrying none of the keys its verdict reads. So the gate's lane says
+    /// WHICH stored response reached it.
+    fn deciding(name: &str) -> Self {
+        let store = Self::with_config(
+            name,
+            &format!(
+                "version = 1\n{}\n[[board.sweep]]\nname = \"drain\"\nrun = ['{}', 'landed', 'abandoned', '--merged-prs', 'merged.tsv', '--refs', 'refs.txt', '--instant', '2026-08-20']\n",
+                common::declared_board(),
+                env!("CARGO_BIN_EXE_batten")
+            ),
+        );
+        common::write(&store.dir, "merged.tsv", "");
+        common::write(&store.dir, "refs.txt", "");
+        store
     }
 
     /// One post-tool event, in the MCP content-block shape a host hands over.
@@ -158,6 +179,25 @@ fn a_later_save_issue_response_does_not_displace_the_get_issue_payload() {
         r#"{"id":"CLOUD-9","status":"Done","attachments":[]}"#,
     );
     assert_eq!(only.recovered("CLOUD-9").0, Some(1));
+}
+
+/// THE SAME RULE, THROUGH THE SWEEP. `board sweep --issue` chooses its tools
+/// apart from `capture find --tool`, so the case above says nothing about it: a
+/// sweep that also took the write's response would hand its gates the later,
+/// poorer payload. Here the gate DECIDES over what it is handed — clean over the
+/// read's `Todo`, could-not-look over the write's keyless `In Progress` — so the
+/// sweep's answer names which response reached it.
+#[test]
+fn a_later_save_issue_response_does_not_displace_the_read_the_sweep_hands_its_gates() {
+    let store = Store::deciding("sweep-save-later")
+        .call("mcp__Linear__get_issue", TODO)
+        .call(
+            "mcp__Linear__save_issue",
+            r#"{"id":"CLOUD-9","status":"In Progress","attachments":[]}"#,
+        );
+    let out = store.batten(&["board", "sweep", "--issue", "CLOUD-9"]);
+    assert_eq!(out.status.code(), Some(0), "{}", said(&out));
+    assert!(said(&out).contains("drain ok"), "{}", said(&out));
 }
 
 #[test]

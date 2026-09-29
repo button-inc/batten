@@ -178,6 +178,20 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   `mcp grant|posture`, `board check`, `record divergence`, `record census …`)
   carry final arguments and answer `unimplemented` at exit 3 until their package
   lands; the serena launcher's home is the existing `mcp spawn`.
+- `sweep.rs` — `batten board sweep` (CLOUD-825; retired `[tasks.board-sweep]`
+  and `[tasks.board-payloads]` under CLOUD-843): every `[[board.sweep]]` gate in
+  `batten.toml` run over ONE payload set (stdin, or `--issue <key>...` = each
+  key's newest stored `get_issue` READ from the capture store, never the later
+  `save_issue`), reported as a set. Each row carries its own exit table
+  (`refuses`, default `[2]`; `abstains`); an unclassified exit is could-not-look.
+  The fold is `ExitCode::combine(refused, could-not-look)` plus one clone-scoped
+  abstention lane below a refusal. Gate removal and an added abstention are
+  `config lint` weakenings (`board-sweep-gate-removed`,
+  `board-sweep-abstention-added`). Its drain row is `landed abandoned --gather`,
+  which acquires each evidence arm no file names: closing keys from
+  `must_land_on`'s whole history (a broken walk is could-not-look), merged PRs
+  and branches from the forge via `repo_slug`; on a forge without that branch
+  listing pass `--refs`.
 - `claim.rs` — whether an issue is pullable, and the receipt that records the
   pull (CLOUD-272, CLOUD-431; ported off `mise-tasks/claim-check.sh` by
   CLOUD-1121). The tracker's automation fires on the PR event — the END of the

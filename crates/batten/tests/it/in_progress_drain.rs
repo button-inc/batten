@@ -544,3 +544,51 @@ fn a_gather_that_cannot_read_the_trunk_is_could_not_look() {
     assert_eq!(code, COULD_NOT_LOOK, "{text}");
     assert!(text.contains("origin/main"), "{text}");
 }
+
+/// A MERGED-PR GATHER THAT FAILS IS THE DRAIN'S COULD-NOT-LOOK — the translation
+/// `claimed_keys.rs` records as belonging to this port. The forge answers, and
+/// its answer holds no merged pull request at all, which `claim merged`'s own
+/// body refuses as impossible of a repository with a trunk. Read as an empty
+/// arm instead, every row a merged pull request closed would be live and, idle,
+/// abandoned; here the row is fresh, so a laundered failure reads as CLEAN.
+#[test]
+fn a_gather_whose_merged_pull_requests_cannot_be_read_is_could_not_look() {
+    let b = Board::new("gather-merged-empty");
+    b.forge("/pulls", "pulls", "[]");
+    let (code, text) = b.drain_with(
+        &set(&[row("CLOUD-124", TODAY, "feat/gone", "")]),
+        &["--refs", "refs.txt"],
+        false,
+    );
+    assert_eq!(code, COULD_NOT_LOOK, "{text}");
+    assert!(text.contains("could not look"), "{text}");
+    assert!(text.contains("merged pull requests:"), "{text}");
+}
+
+/// THE TRUNK IS THE CONSUMER'S DECLARATION, never a literal `origin/main`. This
+/// fixture's trunk is `origin/trunk` and no `origin/main` exists at all, so a
+/// gather reading the literal is could-not-look forever; reading `must_land_on`
+/// it finds the closing key and the row is landed-unswept.
+#[test]
+fn the_gather_reads_the_declared_trunk_not_origin_main() {
+    let b = Board::new("declared-trunk");
+    let config = std::fs::read_to_string(b.repo.join("batten.toml")).expect("config");
+    let declared = "must_land_on = \"origin/main\"";
+    assert!(config.contains(declared), "the fixture's trunk line moved");
+    std::fs::write(
+        b.repo.join("batten.toml"),
+        config.replace(declared, "must_land_on = \"origin/trunk\""),
+    )
+    .expect("config");
+    b.git(&["checkout", "-q", "main"]);
+    b.git(&["commit", "-q", "--allow-empty", "-m", CLOSES]);
+    b.git(&["update-ref", "refs/remotes/origin/trunk", "main"]);
+    b.git(&["update-ref", "-d", "refs/remotes/origin/main"]);
+    b.git(&["checkout", "-q", "work"]);
+    let (code, text) = b.drain(&set(&[row("CLOUD-179", TODAY, "feat/x", "")]));
+    assert_eq!(code, VIOLATION, "{text}");
+    assert!(
+        text.contains("landed-unswept") && text.contains("CLOUD-179"),
+        "{text}"
+    );
+}

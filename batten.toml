@@ -11230,6 +11230,38 @@ review = "In Review"
 # unwritable.
 started = ["In Progress", "In Review", "Done"]
 
+# THE BOARD SWEEP'S GATES (CLOUD-825), which `batten board sweep` runs over ONE
+# payload set — the retired `[tasks.board-sweep]` composer's six gates, as rows
+# (CLOUD-843). Committed authority only, like the columns above: `config lint`
+# reports a dropped row (`board-sweep-gate-removed`) and an exit moved into
+# `abstains` (`board-sweep-abstention-added`).
+#
+# `graph-check` (and `ready-lint` behind it) and `spec-ref-check` retired into
+# `batten board check` and its `--refs` arm; `in-progress-drain` into `landed
+# abandoned --gather`. Each is an engine verb, so each reads on the engine's
+# table: 2 refuses, anything else unclassified is could-not-look.
+#
+# TWO OF THE SIX ARE NOT ROWS YET, and that is a gap, not a decision. `released`
+# needs a tag and `done-pr-check` needs pull-request state merged into the set;
+# the retired composer acquired both itself (`git tag --sort`, `gh pr list`) and
+# abstained when it could not. A row is one argv over the payload set, so each
+# rejoins when its own successor acquires what it needs.
+[[board.sweep]]
+name = "board-check"
+run = ["batten", "board", "check"]
+
+[[board.sweep]]
+name = "spec-ref-check"
+run = ["batten", "board", "check", "--refs"]
+
+[[board.sweep]]
+name = "duplicate-close-check"
+run = ["mise", "run", "-q", "duplicate-close-check"]
+
+[[board.sweep]]
+name = "in-progress-drain"
+run = ["batten", "landed", "abandoned", "--gather"]
+
 # ACCEPTED INVOCATION-LATENCY REGRESSIONS (CLOUD-1163 unit 10), transcribed
 # verbatim off the `EXEMPT` heredoc of the retired `mise-tasks/perf-compare.sh`.
 #

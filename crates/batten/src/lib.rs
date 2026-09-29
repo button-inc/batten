@@ -3218,11 +3218,6 @@ struct AbandonAsk<'a> {
     gather: bool,
 }
 
-/// The trunk whose history the gather reads for closing keys — the ref every
-/// other claim reader in this crate reads (`claim keys`, `landed check`'s
-/// callers), so the drain and the sweep that fed it agree on what "on main" is.
-const TRUNK: &str = "origin/main";
-
 /// Pages of 100 the branch listing may walk before it refuses as truncated.
 const BRANCH_PAGES: u32 = 50;
 
@@ -3240,13 +3235,17 @@ struct Gathered {
 }
 
 // The gather's mutations (CLOUD-843, retiring `[tasks.in-progress-drain]`). Each
-// drops one gathered arm, and the named case is the compiled tier that stops
-// discriminating; `board sweep`'s `--issue` read is the last row.
+// drops one gathered arm, or launders one arm's could-not-look into an empty
+// reading, and the named case is the compiled tier that stops discriminating;
+// `board sweep`'s `--issue` read is the last two rows.
 //MUTANT gather-trunk-ignored|s@        evidence.claimed.extend(keys.iter().cloned());@        let _ = keys;@|an_in_progress_issue_whose_commits_are_on_main_is_landed_unswept
 //MUTANT gather-merged-ignored|s@        evidence.merged.extend(keys.iter().cloned());@        let _ = keys;@|the_merged_set_is_gathered_when_no_file_names_it
 //MUTANT gather-refs-ignored|s@            Ok(names) => gathered.refs = Some(names),@            Ok(_) => {}@|the_remote_branch_list_is_gathered_and_an_empty_one_could_not_look
-//MUTANT gather-trunk-unread-is-empty|s@git::messages_reachable(root, TRUNK)@Some(String::new())@|a_gather_that_cannot_read_the_trunk_is_could_not_look
+//MUTANT gather-trunk-unread-is-empty|s@git::messages_reachable(root, &trunk)@Some(String::new())@|a_gather_that_cannot_read_the_trunk_is_could_not_look
+//MUTANT gather-trunk-hardcoded|s@worktree::land_target(root, config.must_land_on.as_deref())@Ok::<_, anyhow::Error>(Some(String::from("origin/main")))@|the_gather_reads_the_declared_trunk_not_origin_main
+//MUTANT gather-merged-failure-is-empty|s@            Err(why) => return Ok(Err(format!("merged pull requests: {why}"))),@            Err(_) => gathered.merged = Some(std::collections::BTreeSet::new()),@|a_gather_whose_merged_pull_requests_cannot_be_read_is_could_not_look
 //MUTANT sweep-issue-read-dropped|s@        stream.push_str(&text);@        let _ = \&text;@|several_ids_are_resolved_in_one_sweep
+//MUTANT sweep-issue-reads-the-write|s@    let tools = \[READ_TOOL.to_owned()\];@    let tools = [READ_TOOL.to_owned(), WRITE_TOOL.to_owned()];@|a_later_save_issue_response_does_not_displace_the_read_the_sweep_hands_its_gates
 
 /// Acquire every evidence arm the caller named no file for.
 ///
@@ -3257,6 +3256,16 @@ struct Gathered {
 /// that call. The merged set is [`merged_pr_lines`], `claim merged`'s own body.
 /// The branches are the forge's listing, which is what `git ls-remote --heads`
 /// read, through the vendored client rather than a spawn.
+///
+/// **ONE TRUNK AND ONE REPOSITORY FOR ALL THREE ARMS** (review of CLOUD-843's
+/// port). The trunk is [`worktree::land_target`] — the consumer's declared
+/// `must_land_on`, else the remote's recorded default — which is the answer
+/// `worktree status` and the baseline already read; a literal `origin/main` here
+/// was a second answer, and on any consumer whose trunk is named otherwise it
+/// made the drain could-not-look forever. Both forge arms derive their
+/// repository from [`repo_slug`], so a consumer pointing `LAND_LOCK_REMOTE` or
+/// `GH_REPO` at another repository reads its merged pull requests and its
+/// branches from the SAME one rather than one from each.
 ///
 /// # Errors
 ///
@@ -3272,9 +3281,18 @@ fn gather_evidence(
 ) -> Result<std::result::Result<Gathered, String>> {
     let mut gathered = Gathered::default();
     if ask.claimed.is_none() {
-        let Some(log) = git::messages_reachable(root, TRUNK) else {
+        let config = resolve::resolve(Path::new("."), overrides)?;
+        let Some(trunk) = worktree::land_target(root, config.must_land_on.as_deref())? else {
+            return Ok(Err(
+                "no trunk to read: `must_land_on` is not declared and the remote records no \
+                 default branch, so which keys the trunk closes cannot be read"
+                    .to_owned(),
+            ));
+        };
+        let Some(log) = git::messages_reachable(root, &trunk) else {
             return Ok(Err(format!(
-                "{TRUNK} did not resolve, so which keys the trunk closes cannot be read"
+                "{trunk} did not resolve, or its history could not be walked to the end, so \
+                 which keys the trunk closes cannot be read"
             )));
         };
         let grammar = board_grammar(overrides)?;
@@ -3301,7 +3319,12 @@ fn gather_evidence(
     if ask.refs.is_none() {
         match remote_branches(root) {
             Ok(names) => gathered.refs = Some(names),
-            Err(why) => return Ok(Err(format!("the remote's branches: {why}"))),
+            Err(why) => {
+                return Ok(Err(format!(
+                    "the remote's branches: {why}. On a forge this listing does not reach, \
+                     name the branches with --refs instead"
+                )));
+            }
         }
     }
     Ok(Ok(gathered))
@@ -3314,6 +3337,15 @@ fn gather_evidence(
 /// reach the end, and a listing with no branch at all — which cannot be true of
 /// a repository with a trunk, and read as empty would make every claim's branch
 /// read as gone.
+///
+/// **A FORGE LISTING, NOT A GIT TRANSPORT, and that narrows who can gather this
+/// arm.** The retired `git ls-remote --heads` worked against any remote git's
+/// own credential could reach; this reads the forge's REST listing through the
+/// vendored client, so it starts no program and the verb stays a `read` — but a
+/// consumer whose forge does not serve that listing gets could-not-look here on
+/// every run. That is the safe direction, and the arm is not lost to them:
+/// `--refs <file>` still takes the names, and an arm the caller names a file for
+/// is never gathered.
 fn remote_branches(root: &Path) -> std::result::Result<std::collections::BTreeSet<String>, String> {
     let Some(slug) = repo_slug(root) else {
         return Err("no remote this can derive a repository from".to_owned());
@@ -4695,10 +4727,15 @@ fn merged_pr_lines(
     limit: usize,
     overrides: &resolve::Overrides,
 ) -> Result<std::result::Result<std::collections::BTreeSet<String>, String>> {
-    let remotes = git::remote_fact(repo)?.remotes;
-    let Some(slug) = remotes.get("origin").and_then(|url| race::slug_of(url)) else {
+    // [`repo_slug`], never a second derivation: `landed abandoned --gather` reads
+    // the remote's branches through it, and two arms asking two repositories —
+    // `GH_REPO` or `LAND_LOCK_REMOTE` for one, `origin` for the other — would
+    // judge one repository's claims against another's merges.
+    let Some(slug) = repo_slug(repo) else {
         return Ok(Err(
-            "no origin remote this can derive a repository from".to_owned()
+            "no remote this can derive a repository from (`GH_REPO`, else the \
+             `LAND_LOCK_REMOTE` remote, else `origin`)"
+                .to_owned(),
         ));
     };
     let git_dir = git::git_dir(repo)?;

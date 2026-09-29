@@ -84,18 +84,21 @@ pub fn lane_of(gate: &SweepGate, code: Option<i32>) -> Lane {
 
 /// Fold every gate's lane into the one exit the sweep answers with.
 ///
-/// The ORDER is the whole function, and each branch is a sentence of CLOUD-921:
-/// could-not-look first, then a refusal, then an abstention, then clean.
+/// **[`ExitCode::combine`] DECIDES, and this adds one lane below it.** Which of
+/// a finding and a blind spot outranks the other is the exit contract's, and
+/// `combine` is where that contract says it is decided — once, for every verb.
+/// A sweep is a verb reporting refusals it reached and gates it could not run,
+/// so it hands `combine` exactly those two counts rather than restating the
+/// ranking. The one thing `combine` has no word for is an ABSTENTION (CLOUD-921):
+/// a gate declaring this CLONE cannot answer. It ranks below a refusal, so it
+/// can only turn what would otherwise be a clean board into could-not-look,
+/// never a refusal into anything weaker.
 #[must_use]
 pub fn fold(lanes: &[Lane]) -> ExitCode {
-    if lanes.contains(&Lane::CouldNotLook) {
-        ExitCode::Internal
-    } else if lanes.contains(&Lane::Refused) {
-        ExitCode::Violation
-    } else if lanes.contains(&Lane::Abstained) {
-        ExitCode::Internal
-    } else {
-        ExitCode::Success
+    let count = |lane: Lane| lanes.iter().filter(|seen| **seen == lane).count();
+    match ExitCode::combine(count(Lane::Refused), count(Lane::CouldNotLook)) {
+        ExitCode::Success if count(Lane::Abstained) > 0 => ExitCode::Internal,
+        code => code,
     }
 }
 
@@ -357,13 +360,15 @@ mod tests {
 }
 
 /*
-The composer's own mutations. Each removes one sentence of CLOUD-921, and the
-named case is the compiled tier that stops discriminating.
+The composer's own mutations. Each removes one sentence of CLOUD-921, or cuts
+the payload set off from the gates it feeds, and the named case is the compiled
+tier that stops discriminating.
 
 #MUTANT-SUITE crates/batten/tests/it/board_sweep.rs
-#MUTANT sweep-refusal-laundered|s@    } else if lanes.contains(&Lane::Refused) {@    } else if false {@|a_refusal_outranks_a_clone_scoped_abstention
-#MUTANT sweep-could-not-look-laundered|s@    if lanes.contains(&Lane::CouldNotLook) {@    if false {@|a_board_scoped_could_not_look_outranks_a_refusal
-#MUTANT sweep-abstention-is-clean|s@    } else if lanes.contains(&Lane::Abstained) {@    } else if false {@|an_abstaining_gate_is_not_a_clean_board
+#MUTANT sweep-refusal-laundered|s@ExitCode::combine(count(Lane::Refused), @ExitCode::combine(0, @|a_refusal_outranks_a_clone_scoped_abstention
+#MUTANT sweep-could-not-look-laundered|s@, count(Lane::CouldNotLook))@, 0)@|a_board_scoped_could_not_look_outranks_a_refusal
+#MUTANT sweep-abstention-is-clean|s@        ExitCode::Success if count(Lane::Abstained) > 0 => ExitCode::Internal,@        ExitCode::Success if false => ExitCode::Internal,@|an_abstaining_gate_is_not_a_clean_board
+#MUTANT sweep-gate-fed-nothing|s@^            payload,$@            "",@|the_payload_set_reaches_every_gate_on_stdin
 #MUTANT sweep-unclassified-is-refusal|s@        _ => Lane::CouldNotLook,@        _ => Lane::Refused,@|a_gate_exiting_outside_its_table_is_not_laundered_into_the_refusal_lane
 #MUTANT sweep-empty-set-is-clean|s@    if set.is_empty() {@    if false {@|an_empty_payload_set_is_could_not_look
 */

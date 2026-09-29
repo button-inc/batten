@@ -309,6 +309,41 @@ fn a_consumer_with_another_board_vocabulary_is_swept() {
     assert_eq!(live.status.code(), Some(0), "{}", said(&live));
 }
 
+/// THIS REPOSITORY'S TABLE IS DECLARED AND WELL-FORMED — the analogue of the
+/// retired composer's `drain-not-invoked` and `graph-check-not-a-leaf` mutants.
+/// An undeclared table makes `board sweep` refuse on every run, so a sweep this
+/// repository could not run would otherwise read as a gate it has.
+#[test]
+fn this_repositorys_sweep_declares_the_board_check_and_the_drain() {
+    let text = std::fs::read_to_string(common::at_root("batten.toml")).expect("the config");
+    let config: toml::Value = toml::from_str(&text).expect("the config parses");
+    let rows = config
+        .get("board")
+        .and_then(|board| board.get("sweep"))
+        .and_then(toml::Value::as_array)
+        .expect("`[[board.sweep]]` is declared");
+    let runs: Vec<Vec<&str>> = rows
+        .iter()
+        .map(|row| {
+            row.get("run")
+                .and_then(toml::Value::as_array)
+                .expect("every row has a run")
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .collect()
+        })
+        .collect();
+    for want in [
+        vec!["batten", "board", "check"],
+        vec!["batten", "landed", "abandoned", "--gather"],
+    ] {
+        assert!(
+            runs.contains(&want),
+            "{want:?} is not a sweep row: {runs:?}"
+        );
+    }
+}
+
 #[test]
 fn the_report_carries_no_issue_body() {
     let board = Board::new("pointer", &drain_gate());
