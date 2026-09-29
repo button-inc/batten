@@ -7529,6 +7529,8 @@ verbose\:"Explain what is being checked"
 debug\:"Add resolution detail"
 trace\:"Add everything"))' \
 '--names[Print the asset names as KEY=VALUE lines and exit, without scanning]' \
+'--record[Derive the tree'\''s documents twice into scratch and record their counts under the declared tool row]' \
+'--conformance[Derive the SPDX document into scratch and record the declared checker'\''s exit code per standard]' \
 '--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
 '*--silent[Say nothing but a verdict or a usage error]' \
 '*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \

@@ -174,7 +174,7 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   an exempt file is measured and set apart, never totalled, and this repo's
   exempt list is asserted equal to the ban's `stays_bash`. Not layered (§8): a
   local file able to add an exempt glob could make a wave read as progress. The
-  other CLOUD-843 foundation verbs (`step check|record|run`, `sbom`,
+  other CLOUD-843 foundation verbs (`step check|record|run`,
   `mcp grant|posture`, `board check`, `record census …`)
   carry final arguments and answer `unimplemented` at exit 3 until their package
   lands; the serena launcher's home is the existing `mcp spawn`, which
@@ -2367,6 +2367,20 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   dual-HMAC). Behavioural churn fixtures live in
   `crates/batten/tests/identity_churn.rs` (CLOUD-169); they compose the matcher
   with this module because a `Finding` carries no fingerprint yet (CLOUD-164).
+- `sbom.rs` — `batten sbom`, the SPDX and CycloneDX inventories of a tree or a
+  built binary (CLOUD-262/263), retiring the `sbom`, `record-sbom`,
+  `sbom-binary-record` and `ntia-record` bodies under CLOUD-843. It DECIDES
+  NOTHING: `syft` and `cargo fetch|metadata` are annotated inventory spawns, and
+  the identity normaliser (the DESCRIBES subject is never merged), the
+  supplier/originator split, the anchored copyright holder line and the
+  slash-to-`OR` licence spelling are serde_json passes in-process. Every could-not-look
+  is exit 3 with nothing written behind it. `--binary --target` records the
+  `sbom-binary` family the `supply-chain` preset decides over (the stem is
+  `archive_stem`); `--record` derives twice into scratch and keys the counts
+  under the `[[rule.tools]]` row `[sbom] inventory` names; `--conformance` runs
+  `[sbom.conformance]`'s checker per standard into its named family. Every
+  consumer fact — subject, directories, excludes, the actions table — is the
+  committed `[sbom]` table's (rule 1), never layered.
 - `scratch.rs` — out-of-tree TEST scratch, owned in one place and reaped by
   liveness (CLOUD-1148). Test support rather than product surface, and `pub`
   only because the call sites live in three scopes that cannot share a

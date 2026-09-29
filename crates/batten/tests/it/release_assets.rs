@@ -5,8 +5,8 @@
 //! fixture workflow and a stub `gh` serving a directory of REAL files — the
 //! manifest rules hash bytes, so a stub answering names alone would leave half
 //! the gate untested. The engine then decides over what was recorded. The
-//! per-target SBOM names are derived by the live `mise run sbom-binary -- --names`, the
-//! way the producer derives them, so a literal here cannot rot at a version bump.
+//! SBOM names are derived by the live `batten sbom --names [--target]`, the way the
+//! producer derives them, so a literal here cannot rot at a version bump.
 //!
 //! The last cases are properties of the COMMITTED workflow rather than of the
 //! gate: they pin that the parser is pointed at a shape production actually has.
@@ -88,7 +88,8 @@ fn repo(name: &str) -> PathBuf {
              regex = '[.](tar[.]gz|zip)$'\n\n{}{}{}\
              [[rule]]\nid = \"release grade other\"\nkind = \"policy\"\nscope = \"tree\"\n\
              module = \"policy/release-assets.rego\"\nseverity = \"deny\"\n\n\
-             [[record]]\nrecord = \"release-assets\"\nwriter = \"mise run release-assets-record\"\n",
+             [[record]]\nrecord = \"release-assets\"\nwriter = \"mise run release-assets-record\"\n\n\
+             [sbom]\nsubject = \"batten\"\nout_dir = \"sbom\"\nbinary_out_dir = \"dist\"\n",
             verdict("release ship missing"),
             verdict("release pin broken"),
             verdict("release read partial"),
@@ -174,18 +175,16 @@ fn manifest(dir: &Path, names: Option<&[String]>) {
 
 /// The binary SBOM a composed leg publishes, derived as the producer derives it.
 fn binary_sbom(dir: &Path, target: &str) -> String {
-    // The producer's `--names` arm, through the shared task-body spawn.
-    let out = common::task_command(dir, "sbom-binary-record")
-        .current_dir(at_root("."))
-        .env("SBOM_BINARY_ROOT", dir)
-        .env("usage_binary", "--names")
-        .env("usage_target", target)
+    // The producer's `--names` arm, over the fixture's own `[sbom]` table.
+    let out = common::batten()
+        .args(["sbom", "--names", "--target", target])
+        .current_dir(dir)
         .stdin(Stdio::null())
         .output()
-        .expect("sbom-binary-record --names");
+        .expect("sbom --names --target");
     assert!(
         out.status.success(),
-        "sbom-binary --names: {}",
+        "sbom --names --target: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     let line = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -220,7 +219,6 @@ fn produce(dir: &Path, tag: Option<&str>) -> Output {
     let mut command = common::task_command(dir, "release-assets-record");
     command
         .env("BATTEN_RELEASE_WORKFLOW", dir.join("workflow.yml"))
-        .env("BATTEN_TASKS_DIR", at_root("mise-tasks"))
         .env(
             "BATTEN_CHECKSUM_MANIFEST",
             common::task_env("BATTEN_CHECKSUM_MANIFEST"),

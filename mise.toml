@@ -266,7 +266,7 @@ zig = "0.16" # the linker for the macOS release build and the darwin-link gate: 
 # fewer is the failure this swap could hide, and it is asserted rather than
 # eyeballed.
 "github:nextest-rs/nextest" = "cargo-nextest-0.9.104"
-# The binary-level SBOM's producer (CLOUD-263). `[tasks.sbom]` inventories the
+# The binary-level SBOM's producer (CLOUD-263). `batten sbom` inventories the
 # repository at the tag; syft against a plain Rust binary recovers ZERO
 # rust-crate packages, because a Rust binary carries no dependency metadata unless
 # something puts it there. `cargo auditable` puts it there — a `dep-v0` linker
@@ -673,7 +673,7 @@ CI_VERDICT_STEPS = "Run mise run ,Run mise exec -- "
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,macos-link,task-mcp-allow-check,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,ci-signal,engine-ci-signal,docs-tree-absent,ripcord-untracked,hk-pin-agreement,engine-record,hk-fix-selection.pkl,engine-dist"
+MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,done,task-connector-allow-resolve,task-mcp-attach-check,task-done-pr-check,duplicate-close,task-duplicate-close-record,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,macos-link,task-mcp-allow-check,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,sbom-actions,task-sonar-gate,task-callable,transcript-corpus,engine-rules,deferral,closing-key,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,ci-signal,engine-ci-signal,docs-tree-absent,ripcord-untracked,hk-pin-agreement,engine-record,hk-fix-selection.pkl,engine-dist,engine-sbom,supply-chain"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -1899,628 +1899,44 @@ description = "Gate: run every registered policy module's and enabled preset's o
 # whose exit code a one-command task already is.
 run = "cargo run --quiet -p batten -- policy test"
 
-# The repository SBOM's producer (CLOUD-262), ported off `mise-tasks/sbom.sh`
-# under CLOUD-1717. ONE definition of the syft invocation, the exclude list and the
-# asset names: `release-artifacts.yml` owns only the upload, and `record-sbom` and
-# `ntia-check` re-run THIS task rather than restating the flags, so the bytes a
-# gate judges are the bytes a release publishes.
+# The repository SBOM (CLOUD-262) and the binary SBOM (CLOUD-263), retired onto
+# `batten sbom` under CLOUD-843. The derivation — syft's scan, the identity
+# normaliser, the cargo supplier/originator/licence/copyright pass and the pinned
+# actions' licence table — is the verb's mechanism, and what it scans and names is
+# `batten.toml`'s `[sbom]` table. The two names survive as argv glue because
+# `release-artifacts.yml` runs them and appends their KEY=VALUE pointers to
+# `$GITHUB_OUTPUT`: ONE definition of the invocation, so the bytes a gate judges are
+# the bytes a release publishes.
 #
 #   mise run sbom              derive both documents, print `spdx=`/`cdx=`
-#   mise run sbom -- --names   the asset names, without scanning
-#
-# IT DECIDES NOTHING. Every step here derives or enriches the documents; the one
-# refusal the program made about committed text — a licence-table row short of
-# three fields, or a key carrying no 40-hex pin — is `policy/sbom-actions.rego`'s
-# (`pin parse other`), and this reads only rows of the right shape. Whether the
-# documents are right is `policy/sbom-inventory.rego`'s, over `record-sbom`.
-# What stays is could-not-look, and every such path is exit 2 with nothing
-# written behind it: no version, syft or cargo that cannot run, a lockfile package
-# absent from the registry cache, an unreadable table, a jq pass that failed.
-#
-# The exclude list is load-bearing: the vendored `tests/bats` submodule is not in
-# the release checkout (23 of 43 github-action packages came from it, measured
-# 2026-08-10), and `./fuzz` is a detached workspace with its own lockfile that
-# ships nothing and would break the cargo-count invariant (175 -> 281).
-#
-# COMPONENT IDENTITY (CLOUD-664) is the triple `(name, versionInfo, purl)`: syft
-# emits a component per REFERENCE SITE, so duplicates merge onto the
-# lexicographically first id and relative-path or `UNKNOWN`-version entries drop.
-# THE SUBJECT IS NEVER MERGED — resolved from the document's own DESCRIBES edge,
-# because since syft 1.50.0 it shares its triple with the workspace member, and a
-# naive dedupe eats it and leaves a document that describes nothing.
-#
-# SUPPLIER AND ORIGINATOR (CLOUD-630) are two fields with two authorities: the
-# supplier is the lockfile's resolved source (only the crates.io index maps to
-# `Organization: crates.io`; anything else is NOASSERTION, never a guess), the
-# originator is the first `authors` entry or honestly NOASSERTION. Keyed on the
-# component's name and version, never its purl, which percent-encodes `+`.
-#
-# COPYRIGHT (CLOUD-629) is read from the bytes `Cargo.lock` pins by checksum: the
-# registry cache's CONTENT is a function of the lockfile, and its AVAILABILITY is
-# a hard failure rather than a silent NOASSERTION. Only an anchored holder line
-# counts — a loose search writes Apache-2.0 prose into the field — license files
-# first, then the most frequent anchored line in the tree (ties on the sorted
-# line, so two runs agree), and the residue is `NONE`, which `sbomcheck` 5.0.3
-# accepts and NOASSERTION is not.
-#
-# LICENSE (CLOUD-628) is `cargo metadata`'s, into both SPDX fields, with the
-# deprecated `/` spelling rewritten to ` OR ` and an empty one left NOASSERTION.
-# The pinned ACTIONS (CLOUD-667) take license and copyright from
-# `mise-tasks/sbom-actions.tsv`, matched on the repo because syft keys them by the
-# `# vX` comment rather than the pin.
-#
-# `SBOM_SYFT` and `SBOM_CARGO` name the two tools explicitly, the `SBOMCHECK` idiom
-# `ntia-check` already uses: both are mise-managed, so a stub earlier in PATH
-# loses to the tool path this task runs under.
-# THE PRODUCER'S MUTATIONS, carried from `mise-tasks/sbom.sh` onto this body. The
-# normaliser and the enrichment are where it can silently stop doing its job, and
-# `record-sbom`'s inflation clause shares the identity rule, so removing each pass
-# is what shows the tier discriminates.
+#   batten sbom --names        the asset names, without scanning
 [tasks.sbom]
-#MUTANT-SUITE crates/batten/tests/it/sbom_producer.rs
-#MUTANT sbom-skips-spdx-normalization|s@^rewrite "\$spdx" "the inventory would overstate.*$@true@|one_action_referenced_twice_yields_one_component
-#MUTANT sbom-skips-cdx-normalization|s@^rewrite "\$cdx" "the inventory would overstate.*$@true@|the_cyclonedx_graph_is_rewritten_too
-#MUTANT sbom-dedupes-the-subject|s@select(.relationshipType == "DESCRIBES")@select(false)@|the_guard_the_document_still_describes_its_subject
-#MUTANT sbom-skips-entity-enrichment|s@^rewrite "\$spdx" "its cargo components.*$@true@|the_documents_own_subject_carries_the_workspace_supplier
-#MUTANT sbom-conflates-supplier-and-originator|s@else "Organization: " + .\[0\] end)@else $own end)@|a_crate_with_authors_gets_both_and_the_originator_is_the_author
-#MUTANT sbom-copyright-residue-is-noassertion|s@== "" then "NONE"@== "" then "NOASSERTION"@|the_boilerplate_trap_an_apache_license_yields_none
-#MUTANT sbom-tolerates-an-absent-source|s@\[\[ "\$missing" -eq 0 \]\]@[[ "$missing" -ge 0 ]]@|a_lockfile_package_absent_from_the_cache_is_a_hard_failure
-#MUTANT sbom-keeps-the-slash-license-form|s@gsub("\[\[:space:\]\]\*/\[\[:space:\]\]\*"; " OR ")@.@|the_deprecated_slash_spelling_is_rewritten_to_or
-#MUTANT sbom-invents-a-missing-license|s@if . == "" then "NOASSERTION"@if . == "" then "Apache-2.0"@|honest_absence_an_empty_manifest_license_leaves_noassertion
-#MUTANT sbom-skips-the-actions-table|s@^rewrite "\$spdx" "the pinned actions.*$@true@|a_mapped_action_carries_its_license_and_copyright
-#MUTANT sbom-reads-a-short-action-row|s@NF < 3 { next }@NF < 0 { next }@|the_producer_reads_only_whole_pinned_rows
-#MUTANT sbom-reads-a-short-pin|s#index(\$1, "@") != 40#index($1, "@") < 0#|the_producer_reads_only_whole_pinned_rows
 description = "Effect: derive the SPDX and CycloneDX inventories of this tree, under the names the release assets carry"
-shell = "bash -c"
-usage = '''
-flag "--names" help="print the asset names and exit, without scanning"
-'''
-run = '''
-{% raw %}
-set -euo pipefail
-ACTIONS_TABLE="${SBOM_ACTIONS_TABLE:-$PWD/mise-tasks/sbom-actions.tsv}"
-SYFT="${SBOM_SYFT:-syft}"
-CARGO="${SBOM_CARGO:-cargo}"
-refuse() { echo "::error:: sbom: $*" >&2; exit 2; }
-readonly BIN=batten
-OUT_DIR="${SBOM_OUT_DIR:-sbom}"
-spdx="${OUT_DIR}/${BIN}.spdx.json"
-cdx="${OUT_DIR}/${BIN}.cdx.json"
-# Before any read, so the names answer from anywhere without paying for a scan.
-if [[ "${usage_names:-false}" == "true" ]]; then
-	echo "spdx=$spdx"
-	echo "cdx=$cdx"
-	exit 0
-fi
-cd "${SBOM_ROOT:-$(git rev-parse --show-toplevel)}"
-# `**/fuzz/**`, NOT `./fuzz`: measured on syft 1.51.1, `./fuzz` and `./fuzz/**`
-# both still catalog the fuzz workspace (8 of its packages, 3306 artifacts),
-# while `./tests/bats` and `./target` do exclude — so the document listed the
-# detached fuzz lockfile's crates, none with a supplier, and failed NTIA.
-readonly EXCLUDES=(--exclude ./tests/bats --exclude ./target --exclude '**/fuzz/**')
-version=$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)
-[[ -n "$version" ]] || refuse "could not read a version from Cargo.toml"
+run = "cargo run --quiet -p batten -- sbom"
 
-readonly SPDX_NORMALIZE='
-  ([.relationships[]? | select(.relationshipType == "DESCRIBES") | .relatedSpdxElement] | first) as $subject
-  | def ident: [(.name // ""), (.versionInfo // ""),
-                ([.externalRefs[]? | select(.referenceType == "purl") | .referenceLocator] | first // "")];
-    def rid: (.SPDXID // "");
-    [.packages[]? | select(rid != "") | select(rid != $subject)
-     | select(((.name // "") | startswith("./")) or ((.versionInfo // "") == "UNKNOWN"))
-     | rid] as $dropped
-  | (reduce (.packages[]?
-      | select(rid != "") | select(rid != $subject)
-      | select([rid] | inside($dropped) | not))
-      as $p ({}; .[($p | ident | tojson)] += [$p | rid])) as $by_ident
-  | (reduce ($by_ident | to_entries[]) as $g ({};
-      ($g.value | sort) as $ids | reduce $ids[1:][] as $id (.; .[$id] = $ids[0]))) as $merged
-  | ($dropped | map({(.): true}) | add // {}) as $gone
-  | .packages = [.packages[]? | select(($gone[rid] // false) | not)
-                              | select(($merged[rid] // rid) == rid)]
-  | .relationships = ([.relationships[]?
-      | select((($gone[.spdxElementId] // false) or ($gone[.relatedSpdxElement] // false)) | not)
-      | .spdxElementId = ($merged[.spdxElementId] // .spdxElementId)
-      | .relatedSpdxElement = ($merged[.relatedSpdxElement] // .relatedSpdxElement)]
-      | unique)
-'
-# CycloneDX: `metadata.component` is the subject and is not in `.components`.
-readonly CDX_NORMALIZE='
-  def ident: [(.name // ""), (.version // ""), (.purl // "")];
-    def rid: (."bom-ref" // "");
-    [.components[]? | select(rid != "")
-     | select(((.name // "") | startswith("./")) or ((.version // "") == "UNKNOWN"))
-     | rid] as $dropped
-  | (reduce (.components[]? | select(rid != "") | select([rid] | inside($dropped) | not))
-      as $c ({}; .[($c | ident | tojson)] += [$c | rid])) as $by_ident
-  | (reduce ($by_ident | to_entries[]) as $g ({};
-      ($g.value | sort) as $ids | reduce $ids[1:][] as $id (.; .[$id] = $ids[0]))) as $merged
-  | ($dropped | map({(.): true}) | add // {}) as $gone
-  | .components = [.components[]? | select(($gone[rid] // false) | not)
-                                  | select(($merged[rid] // rid) == rid)]
-  | if has("dependencies") then
-      .dependencies = ([.dependencies[]?
-        | select(($gone[.ref] // false) | not)
-        | .ref = ($merged[.ref] // .ref)
-        | if has("dependsOn") then
-            .dependsOn = ([.dependsOn[]? | select(($gone[.] // false) | not)
-                                         | ($merged[.] // .)] | unique)
-          else . end]
-        | group_by(.ref) | map(.[0] + {dependsOn: ([.[].dependsOn // []] | add | unique)}))
-    else . end
-'
-readonly CRATES_IO_SOURCE='registry+https://github.com/rust-lang/crates.io-index'
-readonly COPYRIGHT_RE='^[[:space:]]*(#|//|\*|;)?[[:space:]]*Copyright[[:space:]]*(\(c\)|©)?[[:space:]]*[0-9][0-9,[:space:]-]*[[:alpha:]].*'
-# Extended regex: BRE `\|` alternation is a GNU extension BSD sed reads literally.
-readonly COPYRIGHT_TIDY='s/^[[:space:]]*//; s/^(#|\/\/|\*|;)[[:space:]]*//'
-readonly SPDX_ACTIONS='
-  .packages = [.packages[]?
-    | ([.externalRefs[]? | select(.referenceType == "purl") | .referenceLocator] | first // "") as $purl
-    | if ($purl | startswith("pkg:github/")) and $actions[(.name // "")]
-      then .licenseDeclared = $actions[(.name // "")].license
-        | .licenseConcluded = $actions[(.name // "")].license
-        | .copyrightText = $actions[(.name // "")].copyright
-      else . end]
-'
-readonly CDX_ACTIONS='
-  .components = [.components[]?
-    | (.purl // "") as $purl
-    | if ($purl | startswith("pkg:github/")) and $actions[(.name // "")]
-      then .licenses = [{expression: $actions[(.name // "")].license}]
-        | (if $actions[(.name // "")].copyright == "NONE" then .
-           else .copyright = $actions[(.name // "")].copyright end)
-      else . end]
-'
-# `pkg:github` entries keep the supplier and originator syft derived from the
-# namespace owner; everything else is keyed on its own name and version.
-readonly SPDX_ENTITIES='
-  .packages = [.packages[]?
-    | ([.externalRefs[]? | select(.referenceType == "purl") | .referenceLocator] | first // "") as $purl
-    | "\(.name // "")@\(.versionInfo // "")" as $key
-    | if ($purl | startswith("pkg:github/")) then .
-      elif $entities[$key] then
-        .supplier = $entities[$key].supplier
-        | .originator = $entities[$key].originator
-        | .copyrightText = $entities[$key].copyright
-        | .licenseDeclared = $entities[$key].license
-        | .licenseConcluded = $entities[$key].license
-      else . end]
-'
-readonly CDX_ENTITIES='
-  .components = [.components[]?
-    | (.purl // "") as $purl
-    | "\(.name // "")@\(.version // "")" as $key
-    | if ($purl | startswith("pkg:github/")) then .
-      elif $entities[$key] then
-        .publisher = $entities[$key].supplier
-        | (if $entities[$key].originator == "NOASSERTION" then .
-           else .author = ($entities[$key].originator | ltrimstr("Organization: ")) end)
-        | (if $entities[$key].copyright == "NONE" or $entities[$key].copyright == "NOASSERTION" then .
-           else .copyright = $entities[$key].copyright end)
-        | (if $entities[$key].license == "NOASSERTION" then .
-           else .licenses = [{expression: $entities[$key].license}] end)
-      else . end]
-'
-
-# `<holder line>` or empty, for one unpacked `<name>-<version>` directory.
-copyright_of() {
-	local dir="$1" line="" files=()
-	shopt -s nullglob nocaseglob
-	files=("$dir"/LICENSE* "$dir"/COPYING* "$dir"/COPYRIGHT* "$dir"/NOTICE*)
-	shopt -u nocaseglob
-	if [[ "${#files[@]}" -gt 0 ]]; then
-		line=$(grep -hoiE "$COPYRIGHT_RE" "${files[@]}" 2>/dev/null | sed -E "$COPYRIGHT_TIDY" | head -1) || line=""
-	fi
-	if [[ -z "$line" ]]; then
-		line=$(grep -rhoiE "$COPYRIGHT_RE" "$dir" 2>/dev/null | sed -E "$COPYRIGHT_TIDY" |
-			sort | uniq -c | sort -k1,1nr -k2 | head -1 | sed 's/^ *[0-9]* //') || line=""
-	fi
-	printf '%s' "$line"
-}
-
-# The workspace's own statement: root license-shaped files only, never recursive —
-# this tree's fixtures carry copyright lines that are not this package's.
-workspace_copyright() {
-	local line="" files=()
-	shopt -s nullglob nocaseglob
-	files=(LICENSE* COPYING* COPYRIGHT* NOTICE*)
-	shopt -u nocaseglob
-	if [[ "${#files[@]}" -gt 0 ]]; then
-		line=$(grep -hoiE "$COPYRIGHT_RE" "${files[@]}" 2>/dev/null | sed -E "$COPYRIGHT_TIDY" | head -1) || line=""
-	fi
-	printf '%s' "${line:-NONE}"
-}
-
-workspace_supplier() {
-	local authors
-	authors=$(awk -F'"' '/^authors = \[/ { print $2; exit }' Cargo.toml)
-	if [[ -z "$authors" ]]; then
-		printf 'NOASSERTION'
-	else
-		printf 'Organization: %s' "$authors"
-	fi
-}
-
-# `{"<owner>/<repo>": {license, copyright}}` from the rows of the right shape.
-action_entities() {
-	[[ -r "$ACTIONS_TABLE" ]] || refuse "cannot read ${ACTIONS_TABLE##*/}, so no pinned action can be given its license or copyright"
-	awk -F'\t' '
-		/^[[:space:]]*#/ { next }
-		/^[[:space:]]*$/ { next }
-		NF < 3 { next }
-		$1 !~ /^[^@\t]+@[0-9a-f]+$/ || length($1) - index($1, "@") != 40 { next }
-		{ repo = $1; sub(/@.*$/, "", repo); printf "%s\t%s\t%s\n", repo, $2, $3 }
-	' "$ACTIONS_TABLE" | jq -Rn '[inputs
-	   | select(length > 0)
-	   | split("\t")
-	   | {key: .[0], value: {license: .[1], copyright: .[2]}}]
-	  | from_entries'
-}
-
-# `{"<name>@<version>": {supplier, originator, copyright, license}}`.
-cargo_entities() {
-	local meta
-	"$CARGO" fetch --locked >/dev/null 2>&1 ||
-		refuse "\`cargo fetch --locked\` failed, so the pinned sources the copyright statements are read from are not present"
-	meta=$("$CARGO" metadata --format-version 1 --locked --offline 2>/dev/null) ||
-		refuse "could not read cargo metadata, so supplier and originator are unknown for every cargo component"
-	local home="${CARGO_HOME:-$HOME/.cargo}"
-	local -a roots=()
-	local root_line
-	while IFS= read -r root_line; do
-		roots+=("$root_line")
-	done < <(printf '%s\n' "$home"/registry/src/*/)
-	local copyrights="{}" missing=0 name version dir found root
-	while IFS=$'\t' read -r name version; do
-		found=""
-		for root in "${roots[@]}"; do
-			dir="${root%/}/${name}-${version}"
-			if [[ -d "$dir" ]]; then
-				found="$dir"
-				break
-			fi
-		done
-		if [[ -z "$found" ]]; then
-			missing=$((missing + 1))
-			continue
-		fi
-		copyrights=$(jq -c --arg k "${name}@${version}" --arg v "$(copyright_of "$found")" \
-			'.[$k] = $v' <<<"$copyrights") || refuse "could not collect the copyright statements"
-	done < <(jq -r '.packages[] | select(.source != null) | "\(.name)\t\(.version)"' <<<"$meta")
-	# Pointer-only: a count, never the crate names.
-	[[ "$missing" -eq 0 ]] ||
-		refuse "$missing lockfile package(s) have no unpacked source under \$CARGO_HOME/registry/src, so their copyright statements could not be read. Run \`cargo fetch --locked\`; a document that reported NOASSERTION here would depend on this machine's cache rather than on the lockfile."
-	jq -c --arg crates "$CRATES_IO_SOURCE" --arg own "$WORKSPACE_SUPPLIER" \
-		--arg owncopyright "$WORKSPACE_COPYRIGHT" \
-		--argjson copyrights "$copyrights" '
-	  [.packages[]
-	   | "\(.name)@\(.version)" as $key
-	   | {key: $key,
-	      value: {
-	        supplier:
-	          (if .source == $crates then "Organization: crates.io"
-	           elif .source == null then $own
-	           else "NOASSERTION" end),
-	        originator:
-	          ((.authors // []) | if length == 0 then "NOASSERTION"
-	                              else "Organization: " + .[0] end),
-	        license:
-	          ((.license // "")
-	           | if . == "" then "NOASSERTION"
-	             else gsub("[[:space:]]*/[[:space:]]*"; " OR ") end),
-	        copyright:
-	          (if .source == null then $owncopyright
-	           elif ($copyrights[$key] // "") == "" then "NONE"
-	           else $copyrights[$key] end)
-	  }}]
-	  | from_entries' <<<"$meta"
-}
-
-# In place via a temporary file, so a failed pass never leaves a truncated
-# document where a valid one was.
-rewrite() { # rewrite <doc> <what it would cost> <jq args...>
-	local doc="$1" cost="$2" tmp="${1}.rewriting"
-	shift 2
-	if ! jq "$@" "$doc" >"$tmp"; then
-		rm -f "$tmp"
-		refuse "could not rewrite ${doc##*/}, so $cost"
-	fi
-	mv "$tmp" "$doc"
-}
-
-# Bound before the scan, so a manifest this cannot read fails before syft spends
-# a minute cataloguing a tree whose subject it could not name.
-WORKSPACE_SUPPLIER=$(workspace_supplier)
-WORKSPACE_COPYRIGHT=$(workspace_copyright)
-mkdir -p "$OUT_DIR"
-
-# One scan, both formats.
-"$SYFT" scan "dir:." "${EXCLUDES[@]}" \
-	--source-name "$BIN" --source-version "$version" \
-	--output "spdx-json=${spdx}" --output "cyclonedx-json=${cdx}" --quiet ||
-	refuse "syft could not scan the tree, so no inventory was produced"
-
-rewrite "$spdx" "the inventory would overstate what this repository depends on" "$SPDX_NORMALIZE"
-rewrite "$cdx" "the inventory would overstate what this repository depends on" "$CDX_NORMALIZE"
-
-entities=$(cargo_entities)
-rewrite "$spdx" "its cargo components would claim NOASSERTION over data this tree states" --argjson entities "$entities" "$SPDX_ENTITIES"
-rewrite "$cdx" "its cargo components would claim NOASSERTION over data this tree states" --argjson entities "$entities" "$CDX_ENTITIES"
-
-actions=$(action_entities)
-rewrite "$spdx" "the pinned actions would claim NOASSERTION over committed data" --argjson actions "$actions" "$SPDX_ACTIONS"
-rewrite "$cdx" "the pinned actions would claim NOASSERTION over committed data" --argjson actions "$actions" "$CDX_ACTIONS"
-
-# Pointers to the artifacts, never their bytes; KEY=VALUE for $GITHUB_OUTPUT.
-echo "spdx=$spdx"
-echo "cdx=$cdx"
-{% endraw %}
-'''
-
-# The binary-level SBOM (CLOUD-263), ported off `mise-tasks/sbom-binary.sh` under
-# CLOUD-1717. `[tasks.sbom]` inventories the REPOSITORY at the tag; this
-# inventories what is inside an archive a user downloads.
+# Produce, and — as its OWN task — the one rule. The binary's inventory is
+# `batten sbom --binary`'s, its record the `supply-chain` preset's to decide
+# (`cargo list other`).
 #
-# THE READING HALF. syft scans the binary ONCE, rendering the asset and a
-# syft-json read for `rust-crate` artifacts only — syft reports the FILE itself as
-# an artifact on some inputs, so an unfiltered count reads 1 on a binary carrying
-# no dependency data. What is recorded is the asset's name and one
-# `crate\t<name> <version>` line per recovered crate; whether that is vacuous or
-# foreign to `Cargo.lock` is `policy/sbom-binary.rego`'s (`cargo list other`).
-# Every could-not-look the program had stays here at exit 2 and records nothing:
-# no binary, no lockfile, syft that cannot run, a scan that cannot be read.
-#
-# The asset name comes from `dist`'s own stem rule, never re-derived: seven legs
-# upload seven names, and a second spelling of that contract is how two legs end
-# up racing for one asset. `SBOM_BINARY_SYFT` names syft explicitly for the reason
-# `[tasks.sbom]` gives.
-[tasks.sbom-binary-record]
-description = "Effect: scan a built binary, write its SPDX asset, and record the crates it recovered (CLOUD-263)"
-shell = "bash -c"
-usage = """
-arg "[binary]" help="the built binary, or --names to print the asset name without scanning"
-arg "[target]" help="the target triple the binary was built for"
-"""
-run = '''
-{% raw %}
-set -euo pipefail
-if [[ -n "${BATTEN_BIN:-}" ]]; then batten=("$BATTEN_BIN"); else batten=(cargo run --quiet -p batten --); fi
-refuse() { echo "::error:: sbom-binary: $*" >&2; exit 2; }
-usage() {
-	echo "usage: mise run sbom-binary <binary> <target>" >&2
-	echo "       mise run sbom-binary -- --names <target>" >&2
-	exit 2
-}
-cd "${SBOM_BINARY_ROOT:-$(git rev-parse --show-toplevel)}"
-readonly BIN=batten
-OUT_DIR="${SBOM_BINARY_OUT_DIR:-dist}"
-SYFT="${SBOM_BINARY_SYFT:-syft}"
-binary="${usage_binary:-}"
-target="${usage_target:-}"
-[[ -n "$target" ]] || usage
-stem=$("${batten[@]}" dist --stem "$target") || refuse "dist could not name the asset for $target"
-[[ -n "$stem" ]] || refuse "dist named no asset for $target"
-asset="$OUT_DIR/$stem.spdx.json"
-if [[ "$binary" = "--names" ]]; then
-	echo "sbom=$asset"
-	exit 0
-fi
-[[ -n "$binary" ]] || usage
-[[ -f "$binary" ]] || refuse "no binary at $binary, so there is nothing to inventory."
-[[ -f Cargo.lock ]] || refuse "no Cargo.lock, so the recovered crates cannot be held against anything. A gate that checks nothing must not report green."
-version=$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)
-[[ -n "$version" ]] || refuse "could not read a version from Cargo.toml"
-mkdir -p "$(dirname "$asset")"
-scratch=$(mktemp -d)
-trap 'rm -rf "$scratch"' EXIT
-"$SYFT" scan "file:$binary" \
-	--source-name "$BIN" --source-version "$version" \
-	--output "spdx-json=$asset" --output "syft-json=$scratch/scan.json" --quiet ||
-	refuse "syft could not scan $binary, so its contents are unverified."
-recovered=$(jq -r '[.artifacts[]? | select(.type == "rust-crate")
-	| "\(.name) \(.version)"] | .[]' "$scratch/scan.json" 2>/dev/null) ||
-	refuse "could not read the scan's artifact list, so the inventory is unverified."
-{
-	printf 'asset\t%s\n' "${asset##*/}"
-	[[ -z "$recovered" ]] || awk 'NF { print "crate\t" $0 }' <<<"$recovered"
-} | "${batten[@]}" record named sbom-binary || refuse "could not record the scan of $binary"
-count=$(printf '%s' "$recovered" | grep -c . || true)
-echo "sbom=$asset"
-echo "packages=$count"
-{% endraw %}
-'''
-
-# The name `release-artifacts.yml` runs, kept: produce, then the one rule. A
-# refused inventory leaves no asset behind — publishing a document the gate
-# refused would put what a consumer reads outside anything a check approved —
-# and the finding goes to stderr, because stdout is `$GITHUB_OUTPUT`'s.
+# TWO TASKS, BECAUSE THEY SPEAK ON TWO CHANNELS. The release workflow appends
+# `sbom-binary`'s stdout to `$GITHUB_OUTPUT`, where only `sbom=`/`packages=` belong;
+# a refusal's pointer line on that same stdout would land in the output file
+# instead of the job log (and is not a KEY=VALUE line the runner accepts). The
+# retired body routed it with `>&2`; argv glue has no redirect, so the finding
+# gets a step of its own whose stdout IS the log. `sbom-binary-check` is the
+# workflow's step between the inventory and the upload, so a refusal fails the
+# job before the asset can be published.
 [tasks.sbom-binary]
-description = "Effect+gate: inventory a built binary from its own bytes, and refuse an inventory that catalogs nothing"
-shell = "bash -c"
+description = "Effect: inventory a built binary from its own bytes, printing the asset's `sbom=`/`packages=` pointers"
 usage = """
-arg "[binary]" help="the built binary, or --names to print the asset name without scanning"
-arg "[target]" help="the target triple the binary was built for"
+arg "<binary>" help="the built binary"
+arg "<target>" help="the target triple the binary was built for"
 """
-run = '''
-{% raw %}
-set -euo pipefail
-if [[ -n "${BATTEN_BIN:-}" ]]; then batten=("$BATTEN_BIN"); else batten=(cargo run --quiet -p batten --); fi
-produced=$(mise run sbom-binary-record -- "${usage_binary:-}" "${usage_target:-}")
-if [[ "${usage_binary:-}" = "--names" ]]; then
-	printf '%s\n' "$produced"
-	exit 0
-fi
-code=0
-"${batten[@]}" check --rule 'cargo list other' >&2 || code=$?
-if [[ "$code" -ne 0 ]]; then
-	asset=$(sed -n 's/^sbom=//p' <<<"$produced")
-	case "$asset" in
-	'' | /*) ;;
-	*) asset="${SBOM_BINARY_ROOT:-$PWD}/$asset" ;;
-	esac
-	[[ -z "$asset" ]] || rm -f "$asset"
-	exit "$code"
-fi
-printf '%s\n' "$produced"
-{% endraw %}
-'''
+run = "cargo run --quiet -p batten -- sbom --binary {{usage.binary}} --target {{usage.target}}"
 
-[tasks.record-sbom]
-description = "Effect: derive the SBOM twice OUTSIDE the engine and record the counts where `batten check` reads them (CLOUD-1318)"
-# The producer half of `sbom-check`'s retirement. `policy/sbom-inventory.rego`
-# decides; this runs the scan that surface structurally cannot.
-#
-# A SEPARATE TASK FROM `record-verdicts`, and the reason is cost rather than
-# taste. That task is wired into three hk steps on their own globs and runs on
-# every one; this is two whole-tree `syft scan dir:.` passes, which is why the
-# retired gate declared `profiles = List("slow")` and globbed on `Cargo.lock` plus
-# the workflows. Folding these in would put both scans on every hk invocation that
-# validates a config file. `hk.pkl` keeps the profile and the globs and points
-# here instead.
-#
-# AN INLINE TASK RATHER THAN A `mise-tasks/` PROGRAM, and it is forced:
-# `governed_at_head` selects any `mise-tasks/` path carrying a shebang or a
-# `#MISE description=`, so a new program there is `shell add refused` — refused at
-# `deny`, in the same change that is retiring one.
-#
-# IT RE-RUNS `[tasks.sbom]` RATHER THAN RESTATING ITS FLAGS — one definition of the
-# invocation, so this cannot certify bytes a release would not publish. Both runs
-# go to scratch directories: a producer that rewrote the tree it measures could
-# not measure it twice, and would launder drift into a clean second run.
-#
-# WHAT IT DOES NOT DECIDE. Every line here is a COUNT. Whether a count is a
-# finding — and which of the four verdict classes it belongs to — is
-# `policy/sbom-inventory.rego`'s. The two counts readable from committed text are
-# deliberately NOT recorded: `Cargo.lock`'s sourced entries and the action pins
-# against the licence table are `line_sources` the module reads itself, so this
-# producer cannot get them wrong on its behalf.
-#
-# `bash -c` DECLARED RATHER THAN ASSUMED, and it is not decoration: the body uses
-# herestrings (`<<<`) to feed `sed` and `jq`, which are a bashism — measured, the
-# first run of this task under the default shell died at `sh: Syntax error:
-# redirection unexpected` before reaching a single count. Declaring the shell
-# drops `-e` (`rules/toolchain.md`), which is why `set -eu` is the first
-# line: every failure here must stop the body rather than record a partial scan.
-shell = "bash -c"
-run = '''
-set -eu
-
-# The task's own config root, captured before the cd: `mise -C` runs `sbom` from
-# the manifest that declares it whichever tree is being measured.
-tasks_root="$PWD"
-cd "${SBOM_ROOT:-$(git rev-parse --show-toplevel)}"
-
-scratch=$(mktemp -d)
-trap 'rm -rf "$scratch"' EXIT
-
-if ! first=$(SBOM_OUT_DIR="$scratch/one" mise -C "$tasks_root" run sbom); then
-	echo "::error:: record-sbom: could not derive the SBOM, so its contents are unverified" >&2
-	exit 1
-fi
-if ! second=$(SBOM_OUT_DIR="$scratch/two" mise -C "$tasks_root" run sbom); then
-	echo "::error:: record-sbom: could not derive the SBOM a second time, so its stability is unverified" >&2
-	exit 1
-fi
-
-# The asset paths come from `sbom`'s own KEY=VALUE output, so the names stay owned
-# by the one script that decides them.
-path_of() { sed -n "s/^$1=//p" <<<"$2"; }
-
-spdx_one=$(path_of spdx "$first")
-cdx_one=$(path_of cdx "$first")
-spdx_two=$(path_of spdx "$second")
-cdx_two=$(path_of cdx "$second")
-
-for path in "$spdx_one" "$cdx_one" "$spdx_two" "$cdx_two"; do
-	if [ -z "$path" ] || [ ! -f "$path" ]; then
-		echo "::error:: record-sbom: sbom did not report a readable document path, so there is nothing to record" >&2
-		exit 1
-	fi
-done
-
-# The four leaves two scans of one tree legitimately differ in: SPDX stamps a
-# fresh document namespace and creation time, CycloneDX a fresh serial number and
-# timestamp. Deleting an absent key is a no-op in jq, so one expression serves
-# both formats without asking which it is holding.
-normalize() { jq -S 'del(.documentNamespace, .creationInfo.created, .serialNumber, .metadata.timestamp)' "$1"; }
-
-stable() { # $1 = first run's document, $2 = the second run's
-	if normalize "$1" >"$scratch/a" && normalize "$2" >"$scratch/b" && cmp -s "$scratch/a" "$scratch/b"; then
-		echo yes
-	else
-		echo no
-	fi
-}
-
-# Each format renders purls differently, so both are counted: a regression in one
-# renderer is invisible if only the other is ever read.
-spdx_cargo=$(jq '[.packages[]? | .externalRefs[]?
-	| select(.referenceType == "purl")
-	| .referenceLocator
-	| select(startswith("pkg:cargo/"))] | length' "$spdx_one")
-cdx_cargo=$(jq '[.components[]? | (.purl // "")
-	| select(startswith("pkg:cargo/"))] | length' "$cdx_one")
-
-if ! meta=$(cargo metadata --format-version 1 --offline 2>/dev/null); then
-	echo "::error:: record-sbom: could not read cargo metadata, so originator agreement is unverified" >&2
-	exit 1
-fi
-authored=$(jq -c '[.packages[] | select((.authors // []) | length > 0)
-	| {key: "\(.name)@\(.version)", value: true}] | from_entries' <<<"$meta")
-
-# THE SUBJECT IS EXEMPT from the component counts, for the reason `[tasks.sbom]`
-# records at length: the document root and the workspace member are two roles, not
-# two entries for one thing, and since syft stopped emitting a workspace purl they
-# are indistinguishable by triple. Resolved from the document's own DESCRIBES
-# edge, so a rename upstream does not turn this into a demand to corrupt the file.
-counts=$(jq -r --argjson authored "$authored" '
-  ([.relationships[]? | select(.relationshipType == "DESCRIBES") | .relatedSpdxElement] | first) as $subject
-  | [.packages[]? | select(.SPDXID != $subject)] as $components
-  | [$components[]
-     | select(([.externalRefs[]? | select(.referenceType == "purl") | .referenceLocator] | first // "")
-              | startswith("pkg:github/") | not)] as $cargo
-  | [$components[]
-     | select(([.externalRefs[]? | select(.referenceType == "purl") | .referenceLocator] | first // "")
-              | startswith("pkg:github/"))] as $gh
-  | {
-      subject: (if $subject == null then 0 else 1 end),
-      entries: ($components | length),
-      distinct: ($components
-                 | map([(.name // ""), (.versionInfo // ""),
-                        ([.externalRefs[]? | select(.referenceType == "purl") | .referenceLocator] | first // "")])
-                 | unique | length),
-      pathlike: ($components | map(select((.name // "") | startswith("./"))) | length),
-      unversioned: ($components | map(select((.versionInfo // "") == "UNKNOWN")) | length),
-      nosupplier: ($cargo | map(select((.supplier // "NOASSERTION") == "NOASSERTION")) | length),
-      subjectunset: ([.packages[]? | select(.SPDXID == $subject)
-                      | select((.supplier // "NOASSERTION") == "NOASSERTION")] | length),
-      disagrees: ($cargo | map(
-          "\(.name // "")@\(.versionInfo // "")" as $key
-          | ((.originator // "NOASSERTION") != "NOASSERTION") as $set
-          | select($set != (($authored[$key] // false)))) | length),
-      copyunset: ($cargo | map(select(((.copyrightText // "NOASSERTION") == "NOASSERTION")
-                                  or ((.copyrightText // "") == ""))) | length),
-      nolicense: ($cargo | map(select(((.licenseConcluded // "NOASSERTION") == "NOASSERTION")
-                                      or ((.licenseConcluded // "") == ""))) | length),
-      slashed: ($cargo | map(select(((.licenseConcluded // "") | test("/")))) | length),
-      actionunset: ($gh | map(select(((.licenseConcluded // "NOASSERTION") == "NOASSERTION")
-                                     or ((.copyrightText // "NOASSERTION") == "NOASSERTION"))) | length)
-    }
-  | "subject \(.subject)\nentries \(.entries)\ndistinct \(.distinct)\npathlike \(.pathlike)\nunversioned \(.unversioned)\nnosupplier \(.nosupplier)\nsubject-unset \(.subjectunset)\noriginator-disagrees \(.disagrees)\ncopyright-unset \(.copyunset)\nlicense-unset \(.nolicense)\nlicense-slashed \(.slashed)\naction-unset \(.actionunset)"
-' "$spdx_one")
-
-# A REDUCTION, NEVER THE DOCUMENT. Only integers and two yes/no tokens reach the
-# record: the SBOM carries author names, email addresses and copyright holders,
-# and `tools.rs` names a tool's report as the likeliest place in this family for
-# personal data to appear.
-{
-	printf 'spdx-cargo %s\n' "$spdx_cargo"
-	printf 'cdx-cargo %s\n' "$cdx_cargo"
-	printf 'spdx-stable %s\n' "$(stable "$spdx_one" "$spdx_two")"
-	printf 'cdx-stable %s\n' "$(stable "$cdx_one" "$cdx_two")"
-	printf '%s\n' "$counts"
-} | cargo run --quiet -p batten -- record tool sbom
-'''
+[tasks.sbom-binary-check]
+description = "Gate: refuse a binary inventory that catalogs nothing, or crates the lockfile does not hold — over `sbom-binary`'s record"
+run = "cargo run --quiet -p batten -- check --rule 'cargo list other'"
 
 # CLOUD-349's two forge reads, ported off `branch-age-check.sh` under CLOUD-1717.
 #
@@ -3657,7 +3073,6 @@ composed=$(awk '
 	/^[[:space:]]*-[[:space:]]+target:[[:space:]]*/ { t = $NF; next }
 	/^[[:space:]]*build-tool:[[:space:]]*/ { if (t != "" && $NF != "cross") print t; t = "" }
 ' "$WORKFLOW" | sort -u)
-TASKS="${BATTEN_TASKS_DIR:-mise-tasks}"
 uploads=$(grep -F 'gh release upload' "$WORKFLOW" || true)
 literal=$(tr ' ' '\n' <<<"$uploads" | sed -nE 's#^"?([A-Za-z0-9_./-]+\.(json|sh))"?$#\1#p' || true)
 # Guarded on the SCRAPE: the derived names always contribute, so a union test
@@ -3666,9 +3081,7 @@ literal=$(tr ' ' '\n' <<<"$uploads" | sed -nE 's#^"?([A-Za-z0-9_./-]+\.(json|sh)
 # The SBOM names from the tasks that decide them, run from the manifest that
 # declares them. An answer they cannot give is could-not-look, never a silently
 # shorter list of demanded assets.
-TASKS_ROOT=$(dirname "$TASKS")
-here="$PWD"
-names=$(mise -C "$TASKS_ROOT" run sbom --names) || refuse "sbom could not name its assets"
+names=$("${batten[@]}" sbom --names) || refuse "sbom could not name its assets"
 derived=$(sed -nE 's/^(spdx|cdx)=//p' <<<"$names")
 [[ -n "$derived" ]] || refuse "sbom named no assets"
 REFERENCE="${BATTEN_CLI_REFERENCE:-}"
@@ -3676,8 +3089,8 @@ REFERENCE="${BATTEN_CLI_REFERENCE:-}"
 derived=$(printf '%s\n%s\n' "$derived" "$REFERENCE")
 while IFS= read -r leg; do
 	[[ -n "$leg" ]] || continue
-	names=$(SBOM_BINARY_ROOT="${SBOM_BINARY_ROOT:-$here}" mise -C "$TASKS_ROOT" run sbom-binary -- --names "$leg") ||
-		refuse "sbom-binary could not name the asset for $leg"
+	names=$("${batten[@]}" sbom --names --target "$leg") ||
+		refuse "sbom could not name the binary asset for $leg"
 	derived=$(printf '%s\n%s\n' "$derived" "$(sed -nE 's/^sbom=//p' <<<"$names")")
 done <<<"$composed"
 extras=$(printf '%s\n%s\n' "$literal" "$derived" | sed 's#^.*/##' | sed '/^$/d' | sort -u)
@@ -3805,73 +3218,23 @@ printf 'activity-age\t%d\nrelease-age\t%s\nquiet\t%d\nmax-wait\t%d\n' \
 description = "Gate: a shipped tag reaches Linear — both release-tracking invocations present, pinned, and bound to the tag, on the release path and the backfill path alike"
 run = "cargo run --quiet -p batten -- check --rule 'release wire other'"
 
-# CLOUD-580/666's reading half, ported off `mise-tasks/ntia-check.sh` under
-# CLOUD-1717. The decision is `policy/ntia.rego`; this derives the document through
-# `[tasks.sbom]` into scratch and records its name, its `spdxVersion`, and the
-# checker's EXIT CODE per standard (report counts beside it, for a reader only).
-# Every mechanism arm the program exited 2 on refuses here at EXIT 3 and records
-# nothing, so could-not-look can never read as `check`'s finding code. Injectable:
-# `NTIA_SBOM` (the producer), `SBOMCHECK` (the checker — a mise shim cannot be made
-# absent by shadowing PATH), `NTIA_STANDARDS` (default `ntia` alone, CLOUD-666).
-[tasks.ntia-record]
-description = "Effect: derive the SBOM and record the NTIA checker's exit code per standard plus the document's spdxVersion (CLOUD-580)"
-shell = "bash -c"
-run = '''
-{% raw %}
-set -euo pipefail
-if [[ -n "${BATTEN_BIN:-}" ]]; then batten=("$BATTEN_BIN"); else batten=(cargo run --quiet -p batten --); fi
-refuse() { echo "::error:: ntia-record: $*. Nothing recorded." >&2; exit 3; }
-if [[ -n "${NTIA_SBOM:-}" ]]; then sbom=("$NTIA_SBOM"); else sbom=(mise run sbom); fi
-CHECKER="${SBOMCHECK:-sbomcheck}"
-read -r -a standards <<<"${NTIA_STANDARDS:-ntia}"
-[[ ${#standards[@]} -gt 0 ]] || refuse "NTIA_STANDARDS names no standard"
-[[ -z "${NTIA_SBOM:-}" || -x "$NTIA_SBOM" ]] || refuse "cannot execute $NTIA_SBOM, so no document can be derived and conformance is unverified"
-command -v "$CHECKER" >/dev/null 2>&1 || refuse "no checker at '$CHECKER' (\$SBOMCHECK overrides), so conformance is unverified. Run: mise install pipx:ntia-conformance-checker"
-"$CHECKER" --version >/dev/null 2>&1 || refuse "$CHECKER does not answer --version, so no verdict it gave could be trusted"
-scratch=$(mktemp -d)
-trap 'rm -rf "$scratch"' EXIT
-derived=$(SBOM_OUT_DIR="$scratch/sbom" "${sbom[@]}") || refuse "could not derive the SBOM, so its conformance is unverified"
-spdx=$(sed -n 's/^spdx=//p' <<<"$derived")
-[[ -n "$spdx" && -f "$spdx" ]] || refuse "sbom did not report a readable SPDX document, so there is nothing to judge"
-# An absent or unparseable version is RECORDED empty: the module raises it.
-version=$(jq -r '.spdxVersion // ""' "$spdx" 2>/dev/null) || version=""
-version=${version//[$'\t\n']/ }
-out=$(printf 'document\t%s\nspdx-version\t%s' "${spdx##*/}" "$version")
-for standard in "${standards[@]}"; do
-	json="$scratch/report-$standard.json"
-	rc=0
-	# `--output-file` keeps the human report, which names every component, off
-	# every stream (rule 4).
-	"$CHECKER" "$spdx" --comply "$standard" --output json --output-file "$json" >/dev/null 2>&1 || rc=$?
-	counts="-"
-	if [[ "$rc" -ne 0 && -s "$json" ]] && c=$(jq -r '"components=\(.totalNumberComponents // 0)"
-		+ " no-supplier=\(.componentSuppliers.nonconformantComponents // [] | length)"
-		+ " no-license=\(.componentConcludedLicenses.nonconformantComponents // [] | length)"
-		+ " no-copyright=\(.componentCopyrightTexts.nonconformantComponents // [] | length)"' "$json" 2>/dev/null); then
-		counts="$c"
-	fi
-	out+=$(printf '\nstandard\t%s\t%d\t%s' "$standard" "$rc" "$counts")
-done
-printf '%s\n' "$out" | "${batten[@]}" record named ntia
-{% endraw %}
-'''
-
 # `ntia-check`'s name, kept for every hand that types it: record, then decide.
 # THE RECEIPT IS NOT A VERDICT (CLOUD-631): it caches an answer already given, so
 # a runner whose transcript is unreadable reports the miss and still exits 0.
 [tasks.ntia-check]
 description = "Gate: the SBOM this tree produces meets the NTIA minimum elements — the checker's exit code, never its report"
 #
-# AN ARGV SEQUENCE SINCE CLOUD-1991. mise stops an array at its first failing
-# entry with that entry's code, so a refusal (`2`) ends the task before the
-# receipt and a conforming document reaches it — `set -e`'s whole job. What
-# changed is the tolerance: a receipt that cannot be WRITTEN now fails the task
-# with the write's own `1`, the `linear-check` shape, and never the `2` a
-# nonconformance carries. An unreadable transcript is not such a failure:
-# `receipt record` reports it and records anyway (CLOUD-819). The `BATTEN_BIN`
-# switch is gone with the body; `cargo run` resolves the tree's engine.
+# AN ARGV SEQUENCE SINCE CLOUD-1991, AND THE PRODUCER IS THE VERB SINCE CLOUD-843.
+# `batten sbom --conformance` derives the document and records the checker's
+# verdict, retiring `[tasks.ntia-record]`'s body. mise stops an array at its first
+# failing entry with that entry's code, so a refusal (`2`) ends the task before the
+# receipt and a conforming document reaches it — `set -e`'s whole job. A receipt
+# that cannot be WRITTEN fails the task with the write's own `1`, the
+# `linear-check` shape, and never the `2` a nonconformance carries. An unreadable
+# transcript is not such a failure: `receipt record` reports it and records anyway
+# (CLOUD-819). `cargo run` resolves the tree's engine.
 run = [
-  "mise run ntia-record",
+  "cargo run --quiet -p batten -- sbom --conformance",
   "cargo run --quiet -p batten -- check --rule 'manifest cover other'",
   "cargo run --quiet -p batten -- receipt record sbom-ntia",
 ]

@@ -127,6 +127,7 @@ pub mod rest;
 pub mod review;
 pub mod ripcord;
 pub mod rules;
+pub mod sbom;
 pub mod scratch;
 pub mod secret;
 pub mod secrets;
@@ -453,7 +454,9 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             cli::StepCommand::Record { .. } => unimplemented("step record"),
             cli::StepCommand::Run { .. } => unimplemented("step run"),
         },
-        Some(Command::Sbom(_)) => unimplemented("sbom"),
+        // The §8 chain supplies the `[sbom]` declarations from the committed
+        // authority alone; the tree is the repository root's.
+        Some(Command::Sbom(request)) => sbom::run(&request, &overrides, out, err),
         // The workspace is `cargo metadata`'s answer from where the verb stands;
         // the §8 chain supplies nothing, because what a build is called is the
         // package's own declaration rather than a policy question.
@@ -471,6 +474,9 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(Command::Census { command }) => match command {
             cli::CensusCommand::Shell { json } => {
                 let resolved = resolve::resolve(Path::new("."), &overrides)?;
+                // The WORKTREE's tree: what a branch counts is what it carries,
+                // and a linked worktree rooted on the repository would count the
+                // main checkout's shell instead (CLOUD-843).
                 let root = git::worktree_root(Path::new("."))?;
                 let declared = resolved
                     .census

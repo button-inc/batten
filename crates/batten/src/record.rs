@@ -144,7 +144,8 @@ fn declared(overrides: &Overrides) -> Result<Vec<ToolQuery>> {
 /// line carries no token. An internal error when the store cannot be written.
 pub fn run_tool(id: &str, overrides: &Overrides) -> Result<ExitCode> {
     let text = verdict_lines()?;
-    store_tool(id, &text, overrides)
+    store_tool(id, &text, overrides)?;
+    Ok(ExitCode::Success)
 }
 
 /// Record a declared tool row's verdict out of `key=value` measurement lines
@@ -177,7 +178,8 @@ pub fn run_tool_picked(id: &str, pick: &str, overrides: &Overrides) -> Result<Ex
             "record tool {id}: could not look: no line on stdin opens with `{name}=` and carries `{token}=`; nothing recorded"
         ));
     }
-    store_tool(id, &text, overrides)
+    store_tool(id, &text, overrides)?;
+    Ok(ExitCode::Success)
 }
 
 /// The `<name> <token>` lines `pick` reduces `raw` to, in order.
@@ -222,9 +224,15 @@ fn picked(raw: &str, name: &str, token: &str) -> String {
 //MUTANT pick-any-line|s@^    for line in raw.lines().filter(|line| line.starts_with(&opener)) {$@    for line in raw.lines() {@|a_picked_measurement_skips_a_line_that_does_not_open_with_the_name
 //MUTANT pick-empty-recorded|s@^    if text.is_empty() {$@    if false {@|a_picked_measurement_with_no_record_line_is_could_not_look
 
-/// Store one reduced verdict under `id`'s key: [`run_tool`]'s tail, shared with
-/// [`run_tool_picked`] so the two cannot compose different keys.
-fn store_tool(id: &str, text: &str, overrides: &Overrides) -> Result<ExitCode> {
+/// Record `text` under the declared tool row `id`: [`run_tool`]'s tail, shared with
+/// [`run_tool_picked`] and with an in-process producer, so a verb that reduced a
+/// tool's output itself (CLOUD-843's `sbom --record`) keys the record the same way
+/// the piped doors do — one composition of the key, in one place.
+///
+/// # Errors
+///
+/// As [`run_tool`].
+pub(crate) fn store_tool(id: &str, text: &str, overrides: &Overrides) -> Result<()> {
     let rows = declared(overrides)?;
     let Some(row) = rows.into_iter().find(|row| row.id == id) else {
         return Err(UsageError::raise(format!(
@@ -247,8 +255,7 @@ fn store_tool(id: &str, text: &str, overrides: &Overrides) -> Result<ExitCode> {
 
     let key = tools::record_key(&row, &tools::digest(&bytes));
     let git_dir = git::git_dir(Path::new("."))?;
-    store(&tools::record_path(&git_dir, &key), validated(text)?)?;
-    Ok(ExitCode::Success)
+    store(&tools::record_path(&git_dir, &key), validated(text)?)
 }
 
 /// Record the forge's verdicts for one commit.

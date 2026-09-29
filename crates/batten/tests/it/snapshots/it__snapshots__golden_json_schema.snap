@@ -3287,6 +3287,14 @@ expression: stdout_of(&output)
           "help": "Inventory this built binary from its own bytes instead of the tree"
         },
         {
+          "name": "conformance",
+          "short": null,
+          "long": "conformance",
+          "takes_value": false,
+          "positional": false,
+          "help": "Derive the SPDX document into scratch and record the declared checker's exit code per standard"
+        },
+        {
           "name": "names",
           "short": null,
           "long": "names",
@@ -3301,6 +3309,14 @@ expression: stdout_of(&output)
           "takes_value": true,
           "positional": false,
           "help": "Write the documents under this directory instead of the declared one"
+        },
+        {
+          "name": "record",
+          "short": null,
+          "long": "record",
+          "takes_value": false,
+          "positional": false,
+          "help": "Derive the tree's documents twice into scratch and record their counts under the declared tool row"
         },
         {
           "name": "target",

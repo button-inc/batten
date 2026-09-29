@@ -6225,7 +6225,7 @@ scope = "tree"
 # published inventory DESCRIBES this tree; these two ask whether it is USABLE by
 # whoever receives it — the NTIA 2021 minimum elements and CISA's 2024 FSCT
 # minimum expectation, which is what a procurement review actually checks.
-# `policy/ntia.rego` carries the reasoning; `[tasks.ntia-record]` the reading.
+# `policy/ntia.rego` carries the reasoning; `batten sbom --conformance` the reading.
 #
 # The clause set is the tool's, named by its own `--comply` flag: no clause list
 # in the engine and no crosswalk table (CLOUD-279 verdict 2).
@@ -6239,7 +6239,7 @@ scope = "tree"
 # `ntia-check` step produces the record on the inputs that move the document.
 [[record]]
 record = "ntia"
-writer = "mise run ntia-record"
+writer = "batten sbom --conformance"
 
 [[verdict]]
 id = "manifest check unread"
@@ -6248,13 +6248,13 @@ class = """
 Could we even ask: a document declaring no or an unclassifiable `spdxVersion`, \
 or a standard requiring SPDX 3 over a document that is not one (CLOUD-666). A \
 constant refusal is not a verdict about this tree; drop the standard from \
-`NTIA_STANDARDS` or change the producer.
+`[sbom.conformance] standards` or change the producer.
 """
 
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "mise run ntia-record"
+target = "batten sbom --conformance"
 
 [[verdict]]
 id = "manifest cover partial"
@@ -6267,7 +6267,7 @@ The checker's exit code, never its report. The per-standard counts are on the \
 [[verdict.route]]
 id = "task run first"
 kind = "command"
-target = "mise run ntia-record"
+target = "batten sbom --conformance"
 
 # THE VERDICT is `deny` as of CLOUD-631 — promoted in the change
 # that makes it pass, which is that row's own acceptance clause rather than a
@@ -8211,9 +8211,9 @@ input = "hk.pkl"
 #
 # THE SCAN STAYS OUTSIDE, which is `validator-verdict-clean`'s disposition and the
 # same one house style §5 forces: `check` is `read` and cannot spawn, so `syft`
-# stays a command on PATH and `[tasks.sbom]` stays the producer that derives
-# the documents. `[tasks.record-sbom]` runs it twice and records the counts; this
-# row adjudicates them. The producer decides nothing, so it moved inline rather
+# stays a command on PATH and `batten sbom` is the producer that derives the
+# documents. `batten sbom --record` derives them twice into scratch and records the
+# counts under the `inventory` tool row `[sbom]` names; this row adjudicates them. The producer decides nothing, so it moved inline rather
 # than into a module (CLOUD-1752, which settles CLOUD-1159's disposition).
 #
 # `line_sources` CARRIES TWO OF THE PREDICATES OUTRIGHT, and that is what keeps the
@@ -8250,6 +8250,33 @@ id = "sbom"
 tool = "syft"
 version = "1.51.1"
 input = "Cargo.lock"
+
+# What `batten sbom` inventories and under which names (CLOUD-843, retiring the
+# `sbom`, `record-sbom`, `sbom-binary-record` and `ntia-record` task bodies). The
+# derivation is the engine's; every value here is this repository's layout.
+#
+# THE EXCLUDE LIST IS LOAD-BEARING: the vendored `tests/bats` submodule is not in
+# the release checkout (23 of 43 github-action packages came from it, measured
+# 2026-08-10), and `**/fuzz/**` rather than `./fuzz` because syft 1.51.1 still
+# catalogs the detached fuzz workspace under the latter, whose crates carry no
+# supplier and fail NTIA.
+#
+# `inventory` is the `[[rule.tools]]` row `--record` keys its counts under (the
+# `manifest list wrong` row above), and `[sbom.conformance]` is what
+# `--conformance` asks: `ntia` alone by default (CLOUD-666), since the SPDX-3-only
+# `fsct3-min` can never be satisfied by the SPDX 2.3 document syft writes.
+[sbom]
+subject = "batten"
+out_dir = "sbom"
+binary_out_dir = "dist"
+exclude = ["./tests/bats", "./target", "**/fuzz/**"]
+actions = "mise-tasks/sbom-actions.tsv"
+inventory = "sbom"
+
+[sbom.conformance]
+record = "ntia"
+checker = "sbomcheck"
+standards = ["ntia"]
 
 # What has shipped, from a tag GLOB rather than a named ref (CLOUD-1200, the
 # successor shape for the `released` family).
@@ -13119,7 +13146,7 @@ target = ".claude/hooks/git-hook.sh"
 id = "tool read broken"
 gloss = "the recorded SBOM scan cannot be judged, so the inventory is unverified"
 class = """
-Four states reach this class and none of them is a drifted document: a catalog that found nothing, two scans of one tree that disagree once the volatile fields are removed, a document carrying no DESCRIBES edge to measure its components against, and a producer that recorded no counts at all. What they share is that the SCAN is at fault rather than the tree, so the remedy is never to edit an SBOM field: re-run `mise run record-sbom` and read what `mise-tasks/sbom.sh` actually produced. An empty catalog is the one that most looks like success -- two empty documents agree with each other and with every count -- which is why it refuses here instead of passing every equality trivially.
+Four states reach this class and none of them is a drifted document: a catalog that found nothing, two scans of one tree that disagree once the volatile fields are removed, a document carrying no DESCRIBES edge to measure its components against, and a producer that recorded no counts at all. What they share is that the SCAN is at fault rather than the tree, so the remedy is never to edit an SBOM field: re-run `batten sbom --record` and read what `batten sbom` actually produced. An empty catalog is the one that most looks like success -- two empty documents agree with each other and with every count -- which is why it refuses here instead of passing every equality trivially.
 """
 
 [[verdict.route]]
@@ -13131,25 +13158,25 @@ target = "policy/sbom-inventory.rego"
 id = "manifest count wrong"
 gloss = "the document and the tree it claims to describe do not agree"
 class = """
-The cargo count is stated against `Cargo.lock`'s own `source = ` entries rather than a number anyone wrote down, because the issue that specified this recorded 156 cargo and 175 total and the total had moved by 2 a day later. So a disagreement means a cataloger missed something, or emitted a component per REFERENCE SITE rather than per thing depended on -- 340 entries for 290 distinct things, measured. Fix the normalisation in `[tasks.sbom]` in `mise.toml` and re-record; never adjust the expected count to match what the scan happened to produce, which is the one repair that makes the gate decide nothing.
+The cargo count is stated against `Cargo.lock`'s own `source = ` entries rather than a number anyone wrote down, because the issue that specified this recorded 156 cargo and 175 total and the total had moved by 2 a day later. So a disagreement means a cataloger missed something, or emitted a component per REFERENCE SITE rather than per thing depended on -- 340 entries for 290 distinct things, measured. Fix the normalisation in `batten sbom` and re-record; never adjust the expected count to match what the scan happened to produce, which is the one repair that makes the gate decide nothing.
 """
 
 [[verdict.route]]
 id = "source read first"
 kind = "document"
-target = "mise.toml"
+target = "crates/batten/src/sbom.rs"
 
 [[verdict]]
 id = "manifest state missing"
 gloss = "a field the tree states is NOASSERTION in the published document"
 class = """
-Supplier, originator, copyright and licence each have a source in this tree -- the lockfile's resolution, `cargo metadata`'s authors, the bytes `Cargo.lock` pins by checksum, and the manifests `cargo-deny` already reads. A `NOASSERTION` in any of them is data the tree states and the document dropped, and `NONE` is conformant where `NOASSERTION` is not, so only the third state refuses. The remedy is to enrich the field in `[tasks.sbom]` in `mise.toml` and re-record. Findings here are counts and never values on purpose: an author name, an email address and a copyright holder are all personal data, and echoing one would publish it into every CI log that reads this gate.
+Supplier, originator, copyright and licence each have a source in this tree -- the lockfile's resolution, `cargo metadata`'s authors, the bytes `Cargo.lock` pins by checksum, and the manifests `cargo-deny` already reads. A `NOASSERTION` in any of them is data the tree states and the document dropped, and `NONE` is conformant where `NOASSERTION` is not, so only the third state refuses. The remedy is to enrich the field in `batten sbom` and re-record. Findings here are counts and never values on purpose: an author name, an email address and a copyright holder are all personal data, and echoing one would publish it into every CI log that reads this gate.
 """
 
 [[verdict.route]]
 id = "source read first"
 kind = "document"
-target = "mise.toml"
+target = "crates/batten/src/sbom.rs"
 
 # CLOUD-667's table refusals, ported off `mise-tasks/sbom.sh` under CLOUD-1717.
 # The key shape is `owner/repo@<40-hex>`, spelled as a workflow's `uses:`, with an
@@ -13188,39 +13215,24 @@ id = "module read first"
 kind = "document"
 target = "policy/sbom-actions.rego"
 
-# CLOUD-263, ported off `mise-tasks/sbom-binary.sh` under CLOUD-1717.
-# `mise run sbom-binary` produces then checks this one rule; silent with no record.
+# CLOUD-263, ported off `mise-tasks/sbom-binary.sh` under CLOUD-1717, and the
+# decision moved into the vendored `supply-chain` preset under CLOUD-843: nothing in
+# it was this repository's, so consumer #1 enables it by name like any other
+# consumer would, and its two verdicts (`cargo list empty`, `cargo list wrong`) are
+# the preset's vocabulary. `mise run sbom-binary` produces (`batten sbom --binary`)
+# and `mise run sbom-binary-check` checks this one rule; silent with no record. `line_sources` is which
+# lockfile the recovered crates are held against.
 [[record]]
 record = "sbom-binary"
-writer = "mise run sbom-binary-record"
+writer = "batten sbom --binary <binary> --target <triple>"
 
 [[rule]]
 id = "cargo list other"
 kind = "policy"
 scope = "tree"
-module = "policy/sbom-binary.rego"
+preset = "supply-chain"
 line_sources = ["Cargo.lock"]
 severity = "deny"
-
-[[verdict]]
-id = "cargo list empty"
-gloss = "a binary's inventory recovered fewer than two rust-crate packages"
-class = "0 is a build that lost its `cargo auditable` wrapper, 1 is the binary cataloging only itself; both are an empty document that exits 0, and a gate that checks nothing must not report green. Rebuild through `mise run dist` on a leg the wrapper is proven on."
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run sbom-binary-record"
-
-[[verdict]]
-id = "cargo list wrong"
-gloss = "a binary's inventory names a crate `Cargo.lock` does not declare"
-class = "Subset, never equality: the lockfile spans every target's build and dev dependencies. A recovered crate outside it means the binary was not built from this lockfile."
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run sbom-binary-record"
 
 [[verdict]]
 id = "pin table missing"

@@ -254,6 +254,12 @@ jobs:
         id: sbom
         shell: bash
         run: mise run sbom-binary "${{ steps.dist.outputs.binary }}" "${{ matrix.target }}" >>"$GITHUB_OUTPUT"
+      # The decision, as its own step so its finding reaches THIS log rather than
+      # the `$GITHUB_OUTPUT` the step above appends to.
+      - name: Refuse an inventory that catalogs nothing
+        if: matrix.build-tool != 'cross'
+        shell: bash
+        run: mise run sbom-binary-check
       - name: Upload the binary SBOM to the release
         if: matrix.build-tool != 'cross'
         shell: bash

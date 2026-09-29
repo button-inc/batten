@@ -288,7 +288,12 @@ fn authority(spawning: bool) -> String {
          [[census.shell.manifest]]\n\
          path = \"tasks.toml\"\n\
          keys = [\"run\"]\n\
-         unit = \"[tasks.\"\n",
+         unit = \"[tasks.\"\n\
+         \n\
+         [sbom]\n\
+         subject = \"subject\"\n\
+         out_dir = \"sbom\"\n\
+         binary_out_dir = \"dist\"\n",
         rulepat = canary("rulepat"),
         markertok = canary("markertok"),
         waived = canary("waived"),
@@ -805,7 +810,6 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     "step check",
     "step record",
     "step run",
-    "sbom",
     "mcp grant",
     "mcp posture",
     "board check",
