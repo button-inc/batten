@@ -15560,6 +15560,21 @@ fn names_the_config_authority(path: &str) -> bool {
     name == config::CONFIG_FILE || name == resolve::LOCAL_CONFIG_FILE
 }
 
+/// The remedy [`deny_unadjudicable`] names: the one repair
+/// [`recoverable_without_rules`] admits, and nothing it refuses (CLOUD-2037).
+///
+/// A function rather than a literal so the tier and the refusal cannot drift:
+/// the case asserts the rendered remedy names the write route and never a shell
+/// command, and both read this.
+#[must_use]
+pub fn unadjudicable_remedy() -> String {
+    format!(
+        "edit `{}` in place with the host's file-write tool, the one route this state \
+         admits; every shell command is refused until the config loads",
+        config::CONFIG_FILE
+    )
+}
+
 /// Refuse a call whose rules this build could not load (CLOUD-1677).
 ///
 /// Lifted out of [`run_hook`] rather than left inline because that function is
@@ -15646,10 +15661,20 @@ fn deny_unadjudicable(
             "this build could not load the rules it is registered to enforce, so nothing judged \
              this call: {pointer}"
         ),
-        // No remedy the ENGINE may declare: the repair is rebuilding or
-        // reinstalling the binary, or fixing the config, and each is the
-        // consumer's own command (non-negotiable rule 1).
-        Fix::None,
+        // THE REMEDY IS THE ONE ROUTE THIS STATE ADMITS, and naming any other is a
+        // broken gate (CLOUD-2037). `Fix::None` rendered the crate's general
+        // recourse — "or restore it with git" — and [`recoverable_without_rules`]
+        // refuses every shell command, git included, so the prescribed repair was
+        // itself refused. Measured 2026-09-29: a merge left conflict markers in the
+        // authority and every Bash, Grep and Edit elsewhere was refused, with the
+        // refusal naming a command it would not run. The write to the authority is
+        // the floor's own exemption, so it is the remedy, and it covers every arm
+        // here: a parse error is edited out, and a key this build predates is
+        // edited out until a build that knows it is installed. The file name is
+        // this crate's own constant, never a consumer string (rule 1).
+        //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
+        //MUTANT unadjudicable-remedy-unreachable|s@^        Fix::Run(unadjudicable_remedy()),$@        Fix::None,@|the_refusal_over_an_unloadable_config_names_only_a_route_it_admits
+        Fix::Run(unadjudicable_remedy()),
     );
     let rendering = Rendering {
         ceiling: None,

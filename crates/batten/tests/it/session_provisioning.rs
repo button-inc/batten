@@ -125,7 +125,7 @@ use common::{at_root, git_in, scratch, stderr, stdout, write};
 ///
 /// A LIST RATHER THAN A COUNT, because a count cannot tell an added row from a
 /// renamed one, and the ordering claim below needs the names anyway.
-const DECLARED: [&str; 13] = [
+const DECLARED: [&str; 12] = [
     // NO `session-stamp`: the engine writes the stamp itself before any row runs
     // (CLOUD-1991), which `a_session_start_writes_the_stamp_before_any_row_runs`
     // asserts over the compiled binary.
