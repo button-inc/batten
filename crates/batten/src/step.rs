@@ -82,6 +82,15 @@
 //! `crate::exec::piped_argv` and the step's command through
 //! [`crate::exec::run`] — the placed boundary — so the spawn inventory does not
 //! grow by the cache.
+//!
+//! # What the layering table holds here, and what it does not
+//!
+//! `step -> rules` and `step -> hook` are forbidden as DIRECT edges: this
+//! module names nothing that decides. It is not a transitive guarantee. The
+//! index read goes through `crate::git::index_facts`, and `git` reaches `rules`
+//! for its tree walker and glob selector, so `rules` is two hops out. What
+//! crosses that hop is a file list, never a verdict: no `Finding` is minted on
+//! this path and no rule is evaluated.
 
 use std::collections::BTreeMap;
 use std::io::Write;

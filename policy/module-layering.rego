@@ -702,9 +702,13 @@ declared_modules := {
 	# of `step` in review (CLOUD-843). With the type in `step`, `config` reached
 	# `step` and `step` reached `resolve`, so `config -> step -> resolve -> config`
 	# closed a cycle through the `config -> resolve` edge the table forbids --
-	# the one-hop route this file's own standard refuses (CLOUD-1260). It is a
-	# LEAF: `error` for the refusal and `git` for the pathspec predicate `rules`
-	# already shares, and nothing that loads a config.
+	# the one-hop route this file's own standard refuses (CLOUD-1260). Its OWN
+	# edges are `error` for the refusal and `git` for the pathspec predicate
+	# `rules` already shares, neither of them a loader. That is a claim about
+	# DIRECT edges, which is all this table decides: `git -> rules -> config`
+	# still reaches the loader two hops out, through the `config <-> rules`
+	# cycle that predates this row and that the split neither adds to nor
+	# removes. The same holds for `step -> git -> rules` below.
 	"step_table",
 }
 
@@ -920,11 +924,17 @@ forbidden[from] contains to if {
 		"forge_query": {"rules", "hook"},
 		# `step -> {rules, hook}`, the same pair for the same reason: a cache that
 		# reached the engine deciding over the step it caches would be a receipt
-		# that knew which verdict it was standing in for (CLOUD-843).
+		# that knew which verdict it was standing in for (CLOUD-843). DIRECT
+		# edges only, stated rather than implied: `step -> git -> rules` remains,
+		# since `index_facts` walks with `rules::tree_files`. What crosses that
+		# hop is a file list, never a verdict; forbidding `step -> git` would
+		# forbid the index read that is the cache's whole key.
 		"step": {"rules", "hook"},
-		# `step_table -> {step, resolve, config, rules, hook}`: the leaf the loader
-		# reaches must reach nothing that loads a config or decides, or the cycle
-		# it was split out to break comes back one name later (CLOUD-843).
+		# `step_table -> {step, resolve, config, rules, hook}`: the loader's leaf
+		# must name nothing that loads a config or decides, or the cycle it was
+		# split out to break comes back one name later (CLOUD-843). Direct edges,
+		# like every row here; the two-hop `git -> rules -> config` route is the
+		# pre-existing `config <-> rules` cycle, stated at `declared_modules`.
 		"step_table": {"step", "resolve", "config", "rules", "hook"},
 	}
 	some to in targets

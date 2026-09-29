@@ -5,8 +5,15 @@
 //! at load; `step` reads the committed table back through `resolve`. With the
 //! type in `step`, `config -> step -> resolve -> config` was a module cycle —
 //! the `config -> resolve` edge the layering table forbids, routed around in
-//! one hop. Here the row reaches `error` and `git`'s pathspec predicate and
-//! nothing that loads a config.
+//! one hop. Here the row's OWN edges are `error` and `git`'s pathspec
+//! predicate, and neither is a module that loads a config.
+//!
+//! **What that does not claim.** The layering table decides over direct edges,
+//! and `git` reaches `rules` (for its tree walker and glob selector), which
+//! reaches `config`. So this module reaches the loader transitively — through
+//! the `config <-> rules` cycle that already exists and that this split neither
+//! adds to nor removes. What the split removed is the edge that was the row's
+//! own: `step -> resolve`, with the loader naming `step`.
 
 use std::collections::BTreeSet;
 
