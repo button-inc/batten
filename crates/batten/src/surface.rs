@@ -1524,14 +1524,6 @@ const TASK_PROGRAM_ROOT: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
-/// `--since <rev>` on `check`: judge what changed against a rev (CLOUD-519).
-///
-/// [`CHECK_STAGED`]'s sibling, for the caller who knows a base rather than an
-/// index — a CI step judging a branch, or a hook judging a push range.
-///
-/// **An unresolvable rev is a usage error, never a clean run over nothing**, for
-/// the reason [`CHECK_RULE`] states at greater length: a narrowing that matched
-/// nothing and exited `0` reads to its caller as a gate that passed.
 /// `record tool --pick <name>=<token>` (CLOUD-1991): reduce `key=value`
 /// measurement lines to `<name> <token>` in the writer.
 ///
@@ -1553,6 +1545,14 @@ const TOOL_PICK: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--since <rev>` on `check`: judge what changed against a rev (CLOUD-519).
+///
+/// [`CHECK_STAGED`]'s sibling, for the caller who knows a base rather than an
+/// index — a CI step judging a branch, or a hook judging a push range.
+///
+/// **An unresolvable rev is a usage error, never a clean run over nothing**, for
+/// the reason [`CHECK_RULE`] states at greater length: a narrowing that matched
+/// nothing and exited `0` reads to its caller as a gate that passed.
 const CHECK_SINCE: FlagDecl = FlagDecl {
     id: "since",
     long: Some("since"),
