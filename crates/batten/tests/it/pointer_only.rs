@@ -786,7 +786,6 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     "dist",
     "mcp grant",
     "mcp posture",
-    "board check",
     "record divergence",
     "record census note",
     "record census record-boot",

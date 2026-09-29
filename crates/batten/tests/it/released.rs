@@ -1,12 +1,13 @@
 //! `[tasks.released]` — which issues a release tag shipped (CLOUD-174), and the
 //! two refusals that make shipping necessary but not sufficient for Done: the
-//! hold marker (CLOUD-257) and `graph-check`'s verdict (CLOUD-309), over the
-//! task's own body (CLOUD-1752).
+//! hold marker (CLOUD-257) and `batten board check`'s verdict (CLOUD-309), over
+//! the task's own body (CLOUD-1752).
 //!
 //! Every case runs the committed body in a fixture clone with two tags: `v0.0.1`
-//! naming CLOUD-1, and `v0.0.2` adding CLOUD-2 and CLOUD-3. `graph-check`
-//! resolves from this checkout's `mise-tasks/` through `MISE_CONFIG_FILE`, which
-//! is how a caller's clone is judged by this manifest's gates.
+//! naming CLOUD-1, and `v0.0.2` adding CLOUD-2 and CLOUD-3. `board check` reads
+//! this checkout's `batten.toml` through `--config-in` on the directory of
+//! `MISE_CONFIG_FILE` (CLOUD-1221, which retired `graph-check`), which is how a
+//! caller's clone is judged by this manifest's gates.
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!

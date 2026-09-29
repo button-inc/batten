@@ -689,6 +689,15 @@ declared_modules := {
 	# mints no `Finding` and reaches no decider, and it starts no program, which
 	# is what keeps the verb on the derived read-only allowlist.
 	"census",
+	# `board_check` arrived with CLOUD-1221, retiring the three board gates. It
+	# sits ABOVE the Ready grammar it composes: it asks `ready` for the one
+	# definition of Ready, reads `board` for the column vocabulary, `git` for the
+	# tracked tree and a deleted path, and `rules` for the one glob semantics the
+	# crate has. It decides over a PAYLOAD SET, which no mediated call carries,
+	# so its `hook` edge is forbidden below — a mediated call reaching a verb that
+	# reads the whole tracked tree is the per-call cost CLOUD-689's ceiling
+	# refuses.
+	"board_check",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
@@ -892,6 +901,10 @@ forbidden[from] contains to if {
 		# producer that reached the engine deciding over its record would be a
 		# measurement that knew which verdict it was feeding (CLOUD-843).
 		"forge_query": {"rules", "hook"},
+		# `board_check -> hook`, see its placement above: the board verb reads a
+		# payload set and the whole tracked tree, and must not reach the module
+		# that adjudicates a mediated call.
+		"board_check": {"hook"},
 	}
 	some to in targets
 }
@@ -1137,6 +1150,24 @@ test_the_forge_query_producer_reaches_what_it_composes if {
 	count(violation) == 0 with input as judging(
 		"crates/batten/src/record.rs",
 		[internal("forge_query", 20)],
+	)
+}
+
+# CLOUD-1221's placement, both directions. The board verb must not reach the
+# mediated call's adjudicator, and it DOES reach the grammar, the vocabulary and
+# the tracked tree it is built on — a table that banned the module outright would
+# satisfy the first half alone.
+test_the_board_check_must_not_reach_the_mediated_call if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/board_check.rs",
+		[internal("hook", 40)],
+	)
+}
+
+test_the_board_check_reaches_what_it_composes if {
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/board_check.rs",
+		[internal("ready", 80), internal("board", 76), internal("git", 290), internal("rules", 285)],
 	)
 }
 

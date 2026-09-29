@@ -975,7 +975,7 @@ pattern = "gh pr create"
 requires_key = '(?i)\bCLOUD-[0-9]+\b'
 base = "origin/main"
 reason = """
-Search the board first (`mise run graph-check` prints the ready frontier), then \
+Search the board first (`batten board check` prints the ready frontier), then \
 name the issue: in the branch, in a commit on it, or in the PR body as `Closes \
 CLOUD-<n>`. A PR that names no issue cannot move the board when it merges, so \
 the work lands with nothing recording that it did."""
@@ -1389,7 +1389,7 @@ trigger = "write"
 checks_any = ["claim", "bot", "carry"]
 key = "branch"
 reason = """
-Pull the issue first: search the board (`mise run graph-check` prints the ready \
+Pull the issue first: search the board (`batten board check` prints the ready \
 frontier), then read it with `batten mcp call Linear get_issue '{"id":"<KEY>"}'` and pipe \
 `batten capture find <KEY> --tool get_issue --raw` to `mise run claim-check`. \
 It exits non-zero if someone is already on it, and mints the receipt if not. \
@@ -1694,13 +1694,12 @@ body = "{git:HEAD} {now}"
 # inversion is CLOUD-909's trap and the function's own header is where it is
 # written down.
 #
-# `mise-tasks/ready-lint.sh` STAYS IN THE TREE and is not edited. It cannot
-# retire: `mise-tasks/graph-check.sh` and `mise-tasks/pipefail-grep-check.sh`
-# resolve it BY PATH, repointing either at the compiled verb is an ADDED line,
-# and `only_drops_a_retired_reference` admits only a removed line naming a path
-# the same delta retires. So it is dormant behind the compiled authority, which
-# is the honest state rather than a shim. `crates/batten/tests/ready.rs` carries
-# its 82 cases and the single `// carried:` ledger arm.
+# `mise-tasks/ready-lint.sh` IS GONE (CLOUD-1221). It sat dormant behind the
+# compiled authority while `mise-tasks/graph-check.sh` resolved it BY PATH, and it
+# retired in the one delta that retired its caller onto `batten board check`,
+# which asks `ready::lint` for the same verdict in process.
+# `crates/batten/tests/it/ready.rs` carries its 82 cases and the `// carried:`
+# ledger arm.
 #
 # `board-diff-overlap.sh` IS NOW THE CRATE'S TOO (CLOUD-1716). The paragraph
 # here said it owned "basename resolution and the tracked-only bound, neither of
@@ -2269,6 +2268,70 @@ regex = '(?i)[0-9][^.]{0,40}fir(e|ed|ing)|fir(e|ed|ing)[^.]{0,40}[0-9]|would-fir
 [[pattern]]
 id = "ready-blockers-label"
 regex = '(?i)Blockers \((§|clause )8\)'
+
+# ─── THE BOARD CHECK'S OWN ROWS (CLOUD-1221) ─────────────────────────────────────
+#
+# `batten board check` retired `graph-check`, `ready-cites-check` and
+# `spec-ref-check`, and every expression those three programs spelled inline is
+# this repository's vocabulary rather than the crate's, so it lives here. The
+# Ready grammar above is reused rather than restated: the opener, the clause label
+# and the issue key are one definition each, read by the refinement gate and the
+# board check alike.
+
+# The §7 label: where a Ready block's test obligations begin. `--cites` judges the
+# backticked test names inside this clause only, up to the next clause label — a
+# greedier span would read an unrelated symbol in a later clause as an obligation.
+[[pattern]]
+id = "ready-obligations-label"
+regex = '^[[:space:]]*([*-][[:space:]]*)?\*\*[^*]*\((§|clause )7\)|^#{2,6}[[:space:]]+[^#]*\((§|clause )7\)'
+
+# A CITED TEST NAME: a backticked all-lowercase token with THREE OR MORE
+# underscores. The threshold is what makes it decidable — it captures this
+# repository's test-naming shape and excludes ordinary API names (`check_ignore`,
+# `update_ref`, one underscore each), so a false positive costs a rename rather
+# than a wrong refusal.
+[[pattern]]
+id = "ready-cited-test"
+regex = '`[a-z][a-z0-9]*(_[a-z0-9]*){3,}`'
+
+# A CITED PATH: a backticked token ending in a source extension. The engine adds
+# the one generic condition — it carries a `/` — so a bare file name is never
+# resolved against the root.
+[[pattern]]
+id = "ready-cited-path"
+regex = '`[A-Za-z0-9_./-]+\.(rs|toml|yml|yaml|bats|md|json|pkl|sh|lock|rego)`'
+
+# A CLAUSE TAG on a clause-label line, its number captured. `--refs` reads EVERY
+# tag on a label line, not just the one that matched the label: a label naming two
+# numbers declares both, which can only make that gate report less.
+[[pattern]]
+id = "ready-clause-tag"
+regex = '\((§|clause )(?P<clause>[0-9]+)\)'
+
+# A CLAUSE CITATION IN THE TREE, after its issue key: optionally possessive, then
+# a section sign and a clause number. A sub-number resolves to its parent, because
+# the parent is what a Ready block labels. The KEY is not spelled here — the engine
+# composes `ready-issue-key` in front of this row, so the key keeps one definition.
+# A basic string rather than a literal one, because the possessive needs a quote.
+[[pattern]]
+id = "board-clause-citation"
+regex = "('s)? §(?P<clause>[0-9]+)(\\.[0-9]+)?"
+
+# A LINKED PULL REQUEST, by its attachment URL. "At least one" is a deliberate
+# approximation of "landed", checkable from the payload alone; commit containment
+# is the release transition's question, not this column check's.
+[[pattern]]
+id = "board-pr-attachment"
+regex = 'github\.com/.*/pull/'
+
+# THE PRESENT-TENSE CONNECTIVE a status claim may carry between a key and a column
+# word, and nothing else may stand there but punctuation, emphasis and whitespace.
+# An ALLOWLIST, because the blocklist it replaced — past-tense narration verbs —
+# has no end: measured over this repository's prose, `went`, `sat`, `still read`
+# and `was` each fired on narration, and the next one is always another verb.
+[[pattern]]
+id = "board-status-connective"
+regex = 'is now|is|now'
 
 # A HAND-OFF VERB, for the deferral scan — claims, not mentions. "The same failure
 # shape as CLOUD-195" is a comparison, "split out of CLOUD-177" is provenance,
@@ -3459,24 +3522,22 @@ key_from = "input-id"
 key_shape = "^[A-Z][A-Z0-9]*-[0-9]+$"
 max_age = 900
 reason = """
-In Review means the code is on `main`. `graph-check` decides that from the row's \
-PR attachments and it is the only thing that does — reading `git log --grep` does \
-not, because a commit can CITE a row without implementing it. Adjudicate the \
+In Review means the code is on `main`. `batten board check` decides that from the \
+row's PR attachments and it is the only thing that does — reading `git log --grep` \
+does not, because a commit can CITE a row without implementing it. Adjudicate the \
 closure, then move it: `batten mcp call Linear get_issue` for each row with \
-`includeRelations: true`, KEEPING attachments, then pipe that array to `mise run graph-check`. Exit 0 \
-records which ids it judged and that is what authorises the move; exit 1 means the \
-board is signalling falsely, so fix that first; exit 2 means it could not look, so \
-re-fetch with attachments. The payload comes from `mise run board-payloads <key>` \
-on a host with a transcript, or from the capture store on any host (CLOUD-990): \
-`batten capture list`, then `batten capture show <handle> --grep '"id":"<key>"'` \
-to find it, then `batten capture show <handle> --raw | mise run graph-check`. A \
-CCR container writes no transcript, so there the capture store is the only route — \
-and it hands over bytes the tracker returned, so it is as valid as a recovered \
-payload. Do not re-type a payload by hand. Measured 2026-08-13: a bulk sweep moved \
-fifteen rows to In Review, CLOUD-480 among them with nothing of it landed, and it \
-sat wrong for 4.5 hours — `graph-check` refused it in one invocation the moment it \
-was finally asked (CLOUD-512). Every other column is a different question with a \
-different owner and is not gated here."""
+`includeRelations: true`, KEEPING attachments — the capture store mints itself from \
+each read — then `batten board check --issue <key> --issue <key> …` over the whole \
+closure. Exit 0 records which ids it judged and that is what authorises the move; \
+exit 2 means the board is signalling falsely, so fix that first; exit 3 means it \
+could not look, so re-fetch with attachments and relations. A piped set works too \
+(`batten capture show <handle> --raw | batten board check`), and it hands over \
+bytes the tracker returned, so it is as valid as a fresh read. Do not re-type a \
+payload by hand. Measured 2026-08-13: a bulk sweep moved fifteen rows to In \
+Review, CLOUD-480 among them with nothing of it landed, and it sat wrong for 4.5 \
+hours — the board gate refused it in one invocation the moment it was finally \
+asked (CLOUD-512). Every other column is a different question with a different \
+owner and is not gated here."""
 
 # CLOUD-375's slot, filled (CLOUD-1100). THE FOURTH ARM OVER ONE TOOL, and the
 # one the row above's own comment reserves by name: "In Progress is
@@ -9686,7 +9747,7 @@ glob = "crates/batten/src/race.rs"
 check = "mise run claim-race"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "a raced claim is resolved on the board, not in this tree: take the frontier from `mise run graph-check`, and close the competing PR if it is stale rather than racing it"
+no_fix_reason = "a raced claim is resolved on the board, not in this tree: take the frontier from `batten board check`, and close the competing PR if it is stale rather than racing it"
 
 # The one legitimate reduction this ratchet has seen, taken through the hatch its
 # own `no_fix_reason` names — "restore the tests, or waive the reduction
@@ -11231,6 +11292,37 @@ review = "In Review"
 # sitting there is `DO-NOT-CLOSE` working, and refusing it would make the marker
 # unwritable.
 started = ["In Progress", "In Review", "Done"]
+#
+# ─── PENDING THE SCHEMA REGENERATION, AND ONLY THAT (CLOUD-1221) ───────────────
+#
+# The seven keys below are `board check`'s vocabulary and they are this table's,
+# declared by `crates/batten/src/board.rs`. They are written commented because
+# `schema/batten.schema.json` is GENERATED from that struct and the package that
+# added the fields was not permitted to compile, so the committed schema still
+# refuses them at the commit gate. The integration build regenerates the schema
+# with the repository's own task and then removes the leading `# ` from each of
+# the seven lines — the compiled tiers read this table and go red until it does.
+#
+# The status TYPES that settle a blocker, so its dependent may reach the ready
+# frontier (`batten board check`, CLOUD-477). Measured over the live board on
+# 2026-08-23: `Canceled` is `canceled` and `Duplicate` is `duplicate` — two
+# distinct values, not one shared canceled type — so a rule naming only one of
+# them would have left the other's dependents starving. `In Review` settles by
+# NAME on top of this set: its type is `started`, which `In Progress` shares.
+# settled_types = ["completed", "canceled", "duplicate"]
+# The settled types that RETIRE a blocker rather than complete it. A dependent
+# over one still reaches the frontier, with the reason noted: its premise may
+# have gone with the blocker.
+# retired_types = ["canceled", "duplicate"]
+# The receipt a coherent `batten board check` mints, one file per judged key —
+# the `board-move` check the In Review move guard reads (CLOUD-512).
+# move_receipt = "board-move"
+# Where a Ready block's citations resolve (CLOUD-826): tracked sources and tests,
+# MINUS the fixtures, because a fixture quoting a citation is not the thing cited.
+# cites_corpus = ["crates/**", "tests/**"]
+# cites_exclude = ["tests/fixtures/**"]
+# The marker after a backticked path that declares it not written YET (CLOUD-920).
+# cites_prospective = "(new)"
 
 # ACCEPTED INVOCATION-LATENCY REGRESSIONS (CLOUD-1163 unit 10), transcribed
 # verbatim off the `EXEMPT` heredoc of the retired `mise-tasks/perf-compare.sh`.

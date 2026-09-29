@@ -538,6 +538,44 @@ impl Grammar {
     }
 }
 
+/// The grammar's rows, lent to the sibling gates over the same bodies
+/// (CLOUD-1221).
+///
+/// `batten board check` judges a SET of payloads — the columns they sit in, the
+/// graph between them, and the citations each body makes against the tree — and
+/// every one of those questions opens a Ready block, finds a clause label or
+/// names an issue key exactly as this module does. Lending the compiled rows
+/// rather than resolving them a second time is what keeps one definition of each:
+/// the three shell programs that asked these questions before carried their own
+/// copies, and `spec-ref-check` said so in its header as a cost.
+impl Grammar {
+    /// The opener row: where a Ready block begins.
+    #[must_use]
+    pub fn opener(&self) -> &Regex {
+        &self.opener
+    }
+
+    /// The clause-label row: where a clause begins.
+    #[must_use]
+    pub fn clause_label(&self) -> &Regex {
+        &self.clause_label
+    }
+
+    /// The issue-key row, as written, for a caller composing it into a wider
+    /// expression — a status claim is a key followed by a column word.
+    #[must_use]
+    pub fn key_expression(&self) -> &str {
+        self.key.as_str()
+    }
+
+    /// The tracker's mention markup stripped, so the stored and rendered forms of
+    /// a body are one case for a sibling scan too.
+    #[must_use]
+    pub fn without_mentions(&self, text: &str) -> String {
+        self.strip_mentions(text)
+    }
+}
+
 /// Compile an expression this module owns.
 ///
 /// **Only the two that are not consumer vocabulary reach this** — the
