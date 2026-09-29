@@ -344,13 +344,26 @@ fn a_worktree_spawn_is_refused() {
     assert!(text.contains("spawn place wrong"), "{text}");
 }
 
+/// CLOUD-2026: an implementer shares the one checkout and is allowed; only a
+/// second checkout (worktree isolation) is refused.
 #[test]
-fn an_implementer_spawn_is_refused() {
+fn an_implementer_spawn_is_allowed() {
     let repo = repo("spawn-place-implementer");
     let (code, text) = spawn(
         &repo,
         "Agent",
         &serde_json::json!({"subagent_type": "general-purpose", "prompt": "port x"}),
+    );
+    assert_eq!(code, Some(0), "{text}");
+}
+
+#[test]
+fn an_implementer_in_a_worktree_is_refused() {
+    let repo = repo("spawn-place-implementer-worktree");
+    let (code, text) = spawn(
+        &repo,
+        "Agent",
+        &serde_json::json!({"subagent_type": "general-purpose", "isolation": "worktree", "prompt": "port x"}),
     );
     assert_eq!(code, Some(2), "{text}");
     assert!(text.contains("spawn place wrong"), "{text}");

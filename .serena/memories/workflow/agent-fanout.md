@@ -5,25 +5,28 @@ deciding whether to. The gates this protocol leans on are `batten ready lint`
 (never the frozen `mise run ready-lint`, which passes rows it refuses) and `mise run graph-check` (CLOUD-179, CLOUD-175); the board model is
 `mem:workflow/board-states`.
 
-## GOVERNING RULE: one container, one checkout, one branch — implement serially
+## GOVERNING RULE: one container, one checkout, NO WORKTREES (CLOUD-2026)
 
-**A remote session (`CLAUDE_CODE_REMOTE` set) has ONE checkout on ONE designated
-branch. Implementation runs serially in that checkout, by this session. Never
-spawn implementer subagents in it, never pass `isolation: "worktree"`, never call
-`EnterWorktree`.** Subagents are for read-only search (`Explore`) only.
+**A remote session (`CLAUDE_CODE_REMOTE` set) has ONE checkout on ONE
+designated branch. Never pass `isolation: "worktree"`, never call
+`EnterWorktree`.** Those are the two shapes `policy/agent-spawn.rego` refuses.
 
-Measured 2026-09-25 (CLOUD-1717): four implementer subagents in worktrees, each
+**Subagents and workflows run freely in auto mode, implementers included.** That
+is the owner's ruling of 2026-09-29, and the `claude-code-cloud` preset's
+`agent open now` pre-approves `Agent`, `Task` and `Workflow` calls in auto mode.
+An implementer shares the one checkout, and every tool call it makes passes
+through the same hook, so every deny still applies to its work. In plan mode,
+Explore and Plan are granted and other spawns are refused. **Only
+sibling-session dispatch is gated**, by receipt (below).
+
+Measured 2026-09-25 (CLOUD-1717): four implementer subagents in WORKTREES, each
 missing the submodules and `ripsecrets`, each rebuilding `target/` from nothing,
 filled the disk twice, one committed `--no-verify`, and in hours produced zero
-integrable commits — while one serial loop in the main checkout was landing
-ports. The cause was this file: it called in-process subagents "the wrong tool"
-because they share the tree, and priced extra agents as "only tokens"; worktree
-isolation was reached for as the fix to the sharing. The sharing is the point —
-there is one tree, so there is one implementer. `policy/agent-spawn.rego`
-refuses the shapes above.
+integrable commits. The cause was the second checkout per agent, not the
+subagents; that is what stays refused.
 
 Everything below is about sibling SESSIONS, each with its own container and
-clone. None of it licenses subagent implementers inside one container.
+clone.
 
 ## READ FIRST: the session tools work, each call after an approval (measured 2026-09-27)
 
@@ -453,10 +456,9 @@ invisible until they bite:
 
 - **Reasoning effort is not a `create_session` parameter.** Children inherit the
   dispatcher's, so dispatch from a session at the effort you want them to run at.
-- **In-process subagents never implement.** They share the parent's single
-  working tree — so inside one container the answer is serial work by the
-  parent, NOT worktree isolation (see the governing rule at the top). Only
-  sibling sessions, each with its own container and clone, implement in parallel.
+- **In-process subagents may implement** (CLOUD-2026). They share the parent's
+  single working tree, so they coordinate on it; they never get a worktree of
+  their own (see the governing rule at the top).
 
 The partition is by **file domain**, not by topic, and it is only real if it
 reads open PRs' file lists rather than their titles. Two issues that read as

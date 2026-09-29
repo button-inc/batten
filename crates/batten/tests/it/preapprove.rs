@@ -238,6 +238,61 @@ fn an_edited_prompt_or_another_mode_is_not_preapproved() {
     assert_not_granted(&Dispatch::call("default", &fixture.prompt));
 }
 
+/// CLOUD-2026: in auto mode no subagent or workflow call is put to the owner,
+/// implementers included.
+#[test]
+fn an_implementer_subagent_and_a_workflow_are_preapproved_in_auto() {
+    let implementer = envelope(
+        "auto",
+        "Agent",
+        &serde_json::json!({ "subagent_type": "general-purpose", "prompt": "x", "description": "x" }),
+    );
+    assert_granted_by(&implementer, "agent open now");
+    let workflow = envelope(
+        "auto",
+        "Workflow",
+        &serde_json::json!({ "script": "export const meta = {}" }),
+    );
+    assert_granted_by(&workflow, "agent open now");
+}
+
+/// THE CASE `subagent-mode-unchecked` KILLS: outside auto mode the host's own
+/// posture stands, and in default mode nothing refuses the spawn, so only the
+/// mode conjunct keeps it from being granted.
+#[test]
+fn an_implementer_subagent_is_not_preapproved_in_default_mode() {
+    let implementer = envelope(
+        "default",
+        "Agent",
+        &serde_json::json!({ "subagent_type": "general-purpose", "prompt": "x", "description": "x" }),
+    );
+    assert_not_granted(&implementer);
+}
+
+/// Plan mode keeps its posture: an implementer spawn is refused there.
+#[test]
+fn an_implementer_subagent_is_not_preapproved_in_plan_mode() {
+    let implementer = envelope(
+        "plan",
+        "Agent",
+        &serde_json::json!({ "subagent_type": "general-purpose", "prompt": "x", "description": "x" }),
+    );
+    assert_plan_refused(&implementer);
+}
+
+/// A worktree spawn stays refused in auto mode: the deny is composed first.
+#[test]
+fn a_worktree_spawn_is_refused_in_auto() {
+    let worktree = envelope(
+        "auto",
+        "Agent",
+        &serde_json::json!({ "subagent_type": "general-purpose", "isolation": "worktree", "prompt": "x" }),
+    );
+    let (decision, reason) = verdict(&worktree).unwrap_or_default();
+    assert_eq!(decision, "deny", "{reason}");
+    assert!(reason.contains("spawn place wrong"), "{reason}");
+}
+
 #[test]
 fn an_mcp_write_is_not_preapproved() {
     let write = envelope(
