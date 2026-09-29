@@ -5157,49 +5157,11 @@ mod tests {
         assert_eq!(read, packed, "every member must survive the round trip");
     }
 
-    #[test]
-    fn the_base_is_subtracted_rather_than_resent() {
-        // The whole economy of the push. Without the subtraction a lap would
-        // re-send the repository's entire history every time.
-        //
-        // AGAINST `None`, NEVER AGAINST A WIDER BASE (CLOUD-1825). This compared
-        // `HEAD~3` with `HEAD~1` and asserted the wider range enumerated at least
-        // as much — monotonicity in the base, which `objects_to_send` does not
-        // have and never claimed. Its subtraction is against the base's OWN TREE,
-        // so a base whose tree carries MORE subtracts more: one commit that
-        // deletes a path and a later one that restores it makes the WIDER base
-        // strictly smaller, because it still holds the blobs and the narrow one
-        // does not.
-        //
-        // Measured rather than imagined: it fired on this repository's own
-        // history when a commit deleted 105 generated `man/*.1` pages and the
-        // next restored them, and what it reported was a defect in this assertion
-        // rather than in the function. It reds `verify`, which is what mints the
-        // receipt `turn mint ahead` demands before any further write — and that
-        // row declares no override route — so a false failure here locks a
-        // session out of editing the very assertion that is wrong.
-        //
-        // `None` is the honest comparand. It is the state the first comment
-        // describes and the one `objects_to_send` documents as "a ref the remote
-        // does not have yet … nothing is hidden, nothing is subtracted", so no
-        // base can ever enumerate more than it, for any history shape.
-        let repo = std::path::Path::new(".");
-        let Ok(head) = crate::git::head_commit(repo) else {
-            return;
-        };
-        let Ok(narrow) = crate::git::objects_to_send(repo, Some("HEAD~1"), &head) else {
-            return;
-        };
-        let Ok(whole) = crate::git::objects_to_send(repo, None, &head) else {
-            return;
-        };
-        assert!(
-            whole.len() >= narrow.len(),
-            "subtracting a base cannot enumerate more than sending everything: {} vs {}",
-            whole.len(),
-            narrow.len()
-        );
-    }
+    // `the_base_is_subtracted_rather_than_resent` lives in
+    // `tests/it/lease_lifecycle.rs` since CLOUD-2020. Its subject was THIS
+    // checkout's whole history — 22.8 CPU-seconds a run, growing per commit —
+    // where a three-commit fixture carries the same property, and a unit case here
+    // cannot build one without a spawn `policy/spawn-widening.rego` refuses.
 
     #[test]
     fn a_pack_carrying_the_commits_closure_still_yields_the_commit() {

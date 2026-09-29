@@ -785,13 +785,73 @@ fn a_lease_object_is_stamped_in_utc() {
 // CLOUD-1825: what the push actually enumerates, over a history built for it.
 // ---------------------------------------------------------------------------
 
+/// The whole economy of the push: a lap subtracts the base rather than re-sending
+/// the repository's entire history every time.
+///
+/// # Over a history built for it, never over the checkout's own (CLOUD-2020)
+///
+/// This was `lease::tests::the_base_is_subtracted_rather_than_resent`, and its
+/// subject was THIS repository: `objects_to_send(".", None, HEAD)` enumerated
+/// every object in the checkout's whole history. Measured in the full suite on
+/// 2026-09-29: **22.8 CPU-seconds**, the second most expensive case of 6,718, and
+/// growing with every commit this repository lands. Its assertion never needed
+/// that history — it is a property of the function, and a few commits carry it.
+/// It also passed SILENTLY wherever the checkout could not be read, every
+/// `let Ok(..) else { return }` an assertion over nothing.
+///
+/// Here the fixture is always a repository, so every read is an `expect`, and the
+/// economy is asserted EXACTLY: 24 files, then one file changed per commit, so a
+/// push of `HEAD~1..HEAD` is the commit, its root tree and the one changed blob —
+/// three objects. `narrow < whole` could not say this: the rev walk hides the
+/// base's commits whether or not the base's TREE is subtracted, so a push that
+/// re-sent all 24 blobs every lap still enumerated fewer objects than the whole.
+///
+/// AGAINST `None`, NEVER AGAINST A WIDER BASE (CLOUD-1825): `None` is "a ref the
+/// remote does not have yet … nothing is hidden, nothing is subtracted", so no
+/// base can enumerate more than it for any history shape. A wider base can, and
+/// the case below builds the history that shows it.
+#[test]
+fn the_base_is_subtracted_rather_than_resent() {
+    let dir = scratch("objects-base-subtracted");
+    init_repo(&dir);
+    for n in 0..24 {
+        write(&dir, &format!("file-{n}.txt"), &format!("file {n}\n"));
+    }
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-qm", "the files exist"]);
+    for n in 0..2 {
+        write(
+            &dir,
+            &format!("file-{n}.txt"),
+            &format!("file {n}, edited\n"),
+        );
+        git_in(&dir, &["add", "-A"]);
+        git_in(&dir, &["commit", "-qm", &format!("edit file {n}")]);
+    }
+    let head = batten::git::head_commit(&dir).expect("resolve the fixture head");
+    let narrow =
+        batten::git::objects_to_send(&dir, Some("HEAD~1"), &head).expect("the narrow base");
+    let whole = batten::git::objects_to_send(&dir, None, &head).expect("no base at all");
+    assert!(
+        whole.len() >= narrow.len(),
+        "subtracting a base cannot enumerate more than sending everything: {} vs {}",
+        whole.len(),
+        narrow.len()
+    );
+    assert_eq!(
+        narrow.len(),
+        3,
+        "a one-file commit pushes its commit, its root tree and the one changed blob; \
+         anything more is the base's own tree re-sent on every lap"
+    );
+}
+
 /// A wider base may enumerate FEWER objects than a narrower one.
 ///
-/// `lease::tests::the_base_is_subtracted_rather_than_resent` asserts the economy
-/// of the push — that subtracting a base beats sending everything — against THIS
-/// repository, so what it covers is whatever history happens to be checked out.
-/// It used to assert something stronger and false: that a WIDER base enumerates
-/// at least as much, which is monotonicity in the base.
+/// `the_base_is_subtracted_rather_than_resent` above asserts the economy of the
+/// push — that subtracting a base beats sending everything. It used to assert
+/// something stronger and false: that a WIDER base enumerates at least as much,
+/// which is monotonicity in the base.
 ///
 /// `git::objects_to_send` does not have that property and never claimed it. Its
 /// subtraction is against the base's OWN TREE, so a base whose tree carries MORE

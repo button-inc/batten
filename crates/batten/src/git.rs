@@ -1803,6 +1803,9 @@ pub struct RawObject {
     pub body: Vec<u8>,
 }
 
+//MUTANT-SUITE crates/batten/tests/it/lease_lifecycle.rs
+//MUTANT base-subtracts-nothing|s@!carried.contains(object.id.as_str())@!carried.contains(\&object.id[..0])@|the_base_is_subtracted_rather_than_resent
+
 /// Every object a push of `base..head` must carry.
 ///
 /// # What the set is, and why it is not simply "everything reachable from head"
