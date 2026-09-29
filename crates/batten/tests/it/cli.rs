@@ -2777,11 +2777,13 @@ fn shape_scope_parses_independently_of_severity() {
 }
 
 #[test]
-fn hook_refuses_an_invalid_severity_without_denying() {
-    // Acceptance (e), corrected: the ticket said exit 2, but 2 is the deny code,
-    // so a config typo would refuse every mediated call. Every sibling
-    // config error in the tree is exit 1, and non-negotiable rule 5 plus
-    // `no_failure_code_can_deny_a_mediated_call` forbid the alternative.
+fn hook_refuses_the_call_over_an_invalid_severity() {
+    // WAS `hook_refuses_an_invalid_severity_without_denying`, asserting exit 1 —
+    // which a harness reads as a non-blocking hook error and RUNS THE CALL, so a
+    // config typo switched every gate off. CLOUD-1917 measured that fail-open
+    // on a protected write. A config this build cannot load judges nothing, so
+    // the call is refused: `2` where the number is the channel, `3` beside the
+    // decision document where the document is. Never `1`.
     let dir = repo_with_config(
         "shape-bad-severity",
         "version = 1\n\n[[rule]]\nid = \"s\"\nkind = \"shape\"\n\
@@ -2791,9 +2793,10 @@ fn hook_refuses_an_invalid_severity_without_denying() {
     for harness in harnesses() {
         let output = run_hook_in(&dir, harness, &claude_payload("gh pr merge"));
         let code = output.status.code();
-        assert_eq!(code, Some(1), "{harness}: a bad severity is a usage error");
-        assert_ne!(code, Some(2), "{harness}: must never deny");
-        assert!(output.stdout.is_empty(), "{harness}: no decision document");
+        assert!(
+            matches!(code, Some(2 | 3)),
+            "{harness}: an unloadable config refuses rather than failing open, got {code:?}"
+        );
     }
 }
 
@@ -3073,9 +3076,11 @@ fn the_committed_protected_paths_fire_on_a_mutating_verb() {
 }
 
 #[test]
-fn hook_fails_open_and_loud_on_a_malformed_protected_list() {
+fn hook_fails_closed_and_loud_on_a_malformed_protected_list() {
     // `PathSet::includes` refuses a `!` entry — `protected` is an include-only
-    // key. That is a usage error, never a deny.
+    // key. That was a usage error at exit 1, the harness's non-blocking error,
+    // so a malformed protected list switched the protected gate OFF. Since
+    // CLOUD-1917 an unloadable config refuses the call.
     let dir = repo_with_config(
         "protected-malformed",
         "version = 1\nprotected = [\"!nope\"]\n\n[[verb]]\nverb = \"rm\"\n\
@@ -3083,8 +3088,7 @@ fn hook_fails_open_and_loud_on_a_malformed_protected_list() {
     );
     let output = run_hook_in(&dir, "exit-code", &claude_payload("rm anything"));
     let code = output.status.code();
-    assert_eq!(code, Some(1), "a malformed protected list is usage");
-    assert_ne!(code, Some(2), "must never deny");
+    assert_eq!(code, Some(2), "a malformed protected list refuses the call");
     assert!(!output.stderr.is_empty(), "a failure is loud");
 }
 
@@ -9940,15 +9944,21 @@ fn an_actions_output_never_reaches_either_channel() {
 fn an_action_on_the_adjudicated_event_is_a_config_error() {
     // Acceptance (d)'s shape, and the surface's one real restriction: a side
     // effect at pre-tool would run before a deny that may be about to refuse
-    // the very call. Exit 1, the config-error code — never 2, which would read
-    // to a host as a policy verdict about the mediated call.
+    // the very call. The config is refused at load, and since CLOUD-1917 a
+    // config this build cannot load refuses the mediated call rather than
+    // exiting 1 (a harness's non-blocking error, which ran it): the decision
+    // document denies and the number says nothing was judged.
     let dir = action_repo("action-pre-tool", "pre-tool", r#"["true"]"#);
     let output = run_hook_in(&dir, "claude-code", &claude_payload("echo hi"));
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(3));
+    let both = format!("{}{}", common::stdout(&output), common::stderr(&output));
     assert!(
-        common::stderr(&output).contains("before a possible deny"),
-        "the refusal says why: {:?}",
-        common::stderr(&output)
+        both.contains(r#""permissionDecision":"deny""#),
+        "the document refuses the call: {both:?}"
+    );
+    assert!(
+        both.contains("before a possible deny"),
+        "the refusal says why: {both:?}"
     );
 }
 

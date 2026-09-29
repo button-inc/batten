@@ -1740,3 +1740,70 @@ fn a_mint_for_a_policy_predicate_anchors_the_finding_not_the_call() {
         record.binding.anchor
     );
 }
+
+// ─── `--config-from` (CLOUD-1917) ────────────────────────────────────────────
+
+#[test]
+fn an_admission_requested_under_config_from_spends_under_it() {
+    // THE REPAIR ROUTE FOR AN UNLOADABLE WORKING CONFIG. The trusted ref holds
+    // the authority that loads; the working tree's will not parse. `request`
+    // bound the WORKING epoch (it passed `None`) while `spend` presented the
+    // ref's, so this exact round trip refused `unbound` — the measured failure.
+    let root = fixture("config-from");
+    common::git_in(&root, &["branch", "trusted"]);
+    common::write(
+        &root,
+        "batten.toml",
+        &format!("{AUTHORITY}this is not toml\n"),
+    );
+
+    let requested = common::run_with_stdin(
+        &root,
+        &[
+            "override",
+            "request",
+            "--rule",
+            "diff ship early",
+            "--verdict",
+            "diff ship early",
+            "--subject",
+            "batten.toml",
+            "--config-from",
+            "trusted",
+        ],
+        "precondition=the prose IS the deliverable — the repair is the config itself\n\
+         lost=the working config stays unloadable and every gate over it with it\n\
+         rejected-route=task run first needs a config that loads to run at all\n",
+    );
+    assert_eq!(
+        requested.status.code(),
+        Some(0),
+        "the request resolves against the ref: {}",
+        String::from_utf8_lossy(&requested.stderr)
+    );
+    let admission = String::from_utf8_lossy(&requested.stdout).trim().to_owned();
+
+    let spent = common::run(
+        &root,
+        &[
+            "override",
+            "spend",
+            "--admission",
+            &admission,
+            "--rule",
+            "diff ship early",
+            "--verdict",
+            "diff ship early",
+            "--subject",
+            "batten.toml",
+            "--config-from",
+            "trusted",
+        ],
+    );
+    assert_eq!(
+        spent.status.code(),
+        Some(0),
+        "the spend presents the epoch the request bound: {}",
+        String::from_utf8_lossy(&spent.stderr)
+    );
+}

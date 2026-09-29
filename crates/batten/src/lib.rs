@@ -7098,7 +7098,15 @@ fn run_override_request(
 
     // The SAME epoch `config epoch` reports, resolved through the same function,
     // so an admission cannot bind a generation the caller could not look up.
-    let (epoch, _) = epoch::describe(root, None)?;
+    //
+    // UNDER THE SAME `--config-from` AS `spend` (CLOUD-1917). This read `None`
+    // while `run_override_spend` read `overrides.config_from`, so a request
+    // under `--config-from <ref>` bound the working tree's epoch and the spend
+    // presented the ref's: every such admission refused `unbound`, and the one
+    // route to repairing an unloadable working config was closed.
+    //MUTANT-SUITE crates/batten/tests/it/admission.rs
+    //MUTANT request-ignores-config-from|s@^    let (epoch, _) = epoch::describe(root, overrides.config_from.as_deref())?;$@    let (epoch, _) = epoch::describe(root, None)?;@|an_admission_requested_under_config_from_spends_under_it
+    let (epoch, _) = epoch::describe(root, overrides.config_from.as_deref())?;
     // `user.email` rather than a name: it is the accountable identity
     // `[attribution]` already decides over, and it is never a model identity
     // (`rules/commits.md`). An unset one is the empty string rather than
@@ -13976,13 +13984,22 @@ fn run_hook(
     // [`recoverable_without_rules`] carries the argument for which two shapes
     // pass and why every other one still refuses.
     //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
-    //MUTANT unloadable-config-allows|s@            Err(unreadable) if unreadable_declaration(\&unreadable) => {@            Err(unreadable) if false \&\& unreadable_declaration(\&unreadable) => {@|a_config_this_build_cannot_load_denies_rather_than_failing_open
+    //MUTANT unloadable-config-admits-write|s@^                    return deny_unadjudicable(harness, \&envelope, \&unreadable, mode, out, err);$@                    return Err(unreadable);@|a_write_over_a_config_that_fails_validation_is_refused
     //MUTANT floor-swallows-the-refusal|s@                if recoverable_without_rules(\&envelope) {@                if true {@|a_command_is_still_refused_over_a_config_that_will_not_load
     //MUTANT floor-removed|s@                if recoverable_without_rules(\&envelope) {@                if false {@|a_read_still_answers_over_a_config_that_will_not_load
     let (policy, waivers) = if adjudicable {
         match load_policy(overrides, harness) {
             Ok(loaded) => loaded,
-            Err(unreadable) if unreadable_declaration(&unreadable) => {
+            // EVERY LOAD FAULT, NOT ONLY A PARSE FAILURE (CLOUD-1917). This arm
+            // was guarded to a parse failure alone, and every other fault — a
+            // validator refusing a row, a skewed version — fell to
+            // `return Err(other)`, exit `1`, which a harness reads as a
+            // non-blocking hook error and RUNS THE CALL. Measured: a config whose
+            // one verdict carried an over-long `gloss` let a protected write
+            // through with no admission. Whatever the class, the rules this build
+            // is registered to enforce did not load, so nothing judged the call;
+            // the floor below still passes a read and the repair write.
+            Err(unreadable) => {
                 if recoverable_without_rules(&envelope) {
                     // THE SAME EMPTY POLICY THE HATCH HANDS BACK, and for the
                     // same reason: there is no rule to apply, so there is
@@ -13995,11 +14012,6 @@ fn run_hook(
                     return deny_unadjudicable(harness, &envelope, &unreadable, mode, out, err);
                 }
             }
-            // EVERY OTHER FAULT KEEPS ITS OLD BEHAVIOUR, deliberately. Today that
-            // is still a whole-file refusal at exit `1`, which is the outcome the
-            // argument above says is wrong — making these actually preserve the
-            // rows they can read is its own change, over `prune_unresolvable`.
-            Err(other) => return Err(other),
         }
     } else {
         (hook::Policy::declaring_nothing(harness), Vec::new())
@@ -14095,7 +14107,7 @@ fn run_hook(
     // parsing. And after the capability check above, which is what makes "a host
     // lacking the capability fires nothing" structural rather than a second
     // check this call site could get wrong.
-    fire_actions(&envelope, overrides, err)?;
+    fire_actions(&envelope, overrides, err);
     // The end-of-turn facts (CLOUD-85) are NOT resolved, because nothing reads
     // them (CLOUD-906). They used to be, on the stop event only, for `receipts`'
     // reason: `adjudicate` is contractually pure and this reads git and the
@@ -14154,7 +14166,7 @@ fn run_hook(
     // handler can — running the ones that cannot first keeps the ordering a
     // reader would guess. Before, because `decide` owns stdout and a handler's
     // refusal has to reach the same rendering the engine's own does.
-    let handled = dispatch_handlers(&envelope, &raw, overrides, &mut advice)?;
+    let handled = dispatch_handlers(&envelope, &raw, overrides, &mut advice);
     // THE END-OF-TURN NUDGE (CLOUD-1051), and it is a SEPARATE call from
     // `adjudicate` rather than a widening of it. `adjudicate` returns `Allow` at
     // `Stop` before any rule is read — CLOUD-889's runaway removed by
@@ -14295,8 +14307,8 @@ fn is_adjudicable(envelope: &hook::Envelope) -> bool {
 /// that will not read and a payload that will not decode are both "the engine
 /// does not know what this call IS", and neither may block it: a guard must never
 /// be the reason a session cannot proceed. That is the opposite side of
-/// [`unreadable_declaration`], where the engine knows the call perfectly well and
-/// has been told it cannot enforce the rules over it.
+/// a config that will not load, where the engine knows the call perfectly well
+/// and has been told it cannot enforce the rules over it.
 ///
 /// **Loud, never silent** (CLOUD-43). A guard that cannot read its input is a gate
 /// that did not run, and the silent version of that is byte-identical to a clean
@@ -14323,33 +14335,15 @@ fn read_envelope(
     Ok(Some((raw, envelope)))
 }
 
-/// Whether this load failure is a declaration nothing could read at all.
-///
-/// **Positively identified, never inferred from an absence.** The tempting
-/// spelling is "carries no declared class", and it is wrong: the
-/// unsupported-version and `min_batten_version` refusals carry none either, and
-/// both leave every row in the file readable. Keying on absence would refuse
-/// those too — and every future unclassed refusal after them, silently widening
-/// what denies.
-///
-/// So the loader says which one this is. `config_error` already separates a
-/// syntax failure from an unknown key, and since CLOUD-1677 its syntax arm raises
-/// under [`verdict::Native::ConfigUnreadable`].
-fn unreadable_declaration(err: &anyhow::Error) -> bool {
-    err.downcast_ref::<UsageError>()
-        .and_then(|usage| usage.verdict)
-        .is_some_and(|class| class == verdict::Native::ConfigUnreadable)
-}
-
 /// Can this call proceed with no rules at all, because no rule could have had
 /// anything to say about it? (CLOUD-1842)
 ///
 /// The floor under [`deny_unadjudicable`], and the reason a `batten.toml` that
-/// will not parse no longer ends the container. Read ONLY on the
-/// [`verdict::Native::ConfigUnreadable`] arm: everywhere else a policy exists
-/// and this question is not asked.
+/// will not load no longer ends the container. Read ONLY on the load-fault arm
+/// (every fault since CLOUD-1917, a parse failure alone before it): everywhere
+/// else a policy exists and this question is not asked.
 ///
-/// # This is not the fail-open [`unreadable_declaration`] exists to refuse
+/// # This is not the fail-open the load-fault arm exists to refuse
 ///
 /// The distinction that whole boundary turns on is between GUESSING about a call
 /// and having read an authority that says it cannot be enforced — stdin that
@@ -14453,24 +14447,26 @@ fn recoverable_without_rules(envelope: &hook::Envelope) -> bool {
 /// brick surviving one layer along. The early return on `bypass` in both callers
 /// is why the declared hatch never met it and no case caught it.
 ///
-/// **Narrow, and to the same class.** Only [`unreadable_declaration`] is
-/// swallowed. Every other fault still propagates, because those leave the rest
-/// of the file readable and a table this build merely misunderstands is not the
-/// same claim as one that is not TOML at all.
+/// **Every load fault, the same set `run_hook`'s arm now takes** (CLOUD-1917).
+/// It was narrowed to a parse failure alone, and a validator fault then exited
+/// `1` here on the repair write the floor had just exempted.
 ///
 /// **And it is not a fail-open**, for [`recoverable_without_rules`]'s reason: a
 /// handler or action table nobody could read declares no handler and no action
 /// this build can honour. Refusing the whole call over that is the same collapse
 /// `run_hook`'s arm exists to stop, reached through a different function.
-fn hook_table(overrides: &Overrides) -> Result<Option<crate::action::HookConfig>> {
+fn hook_table(overrides: &Overrides) -> Option<crate::action::HookConfig> {
     let here = hook_authority_root();
     if !here.join(config::CONFIG_FILE).exists() {
-        return Ok(None);
+        return None;
     }
     match resolve::resolve(here, overrides) {
-        Ok(resolved) => Ok(resolved.hook),
-        Err(unreadable) if unreadable_declaration(&unreadable) => Ok(None),
-        Err(other) => Err(other),
+        Ok(resolved) => resolved.hook,
+        // EVERY LOAD FAULT, for `run_hook`'s reason (CLOUD-1917): that arm has
+        // already refused every call the floor does not exempt, so what reaches
+        // this read under a fault is a read or the repair write, and a table
+        // nobody could read declares nothing to honour.
+        Err(_) => None,
     }
 }
 
@@ -15323,7 +15319,7 @@ fn dispatch_handlers(
     raw: &str,
     overrides: &Overrides,
     advice: &mut Vec<advisory::Advice>,
-) -> Result<Option<hook::Decision>> {
+) -> Option<hook::Decision> {
     // `fire_actions`' reading, for `fire_actions`' reason: a handler table is a
     // per-repository declaration, so it comes from the REPOSITORY's authority
     // rather than the cwd's (CLOUD-824).
@@ -15334,16 +15330,14 @@ fn dispatch_handlers(
     // the completion rung above it AND skip the seam writes that ride that
     // routine — CLOUD-1372's defect, reached through a different door.
     if envelope.event == hook::Event::Stop {
-        return Ok(None);
+        return None;
     }
-    let Some(hook_config) = hook_table(overrides)? else {
-        return Ok(None);
-    };
+    let hook_config = hook_table(overrides)?;
     // CLOUD-460's narrowing, and the reason `pre-tool` is affordable at all: a
     // repository declaring no handler for this event pays one slice scan and
     // never reaches a spawn.
     if !handler::selects(&hook_config.handlers, envelope.event, &envelope.raw_tool) {
-        return Ok(None);
+        return None;
     }
     // EMPTY IS ABSENT HERE, and the conversion happens once, at the boundary
     // (CLOUD-1650). `Envelope::command` is `String` and spells "this tool has no
@@ -15405,38 +15399,36 @@ fn dispatch_handlers(
         // across the two functions that can each enforce one is what keeps either
         // from being a comment.
         if let Some((id, reason)) = dispatched.preapproval() {
-            return Ok(Some(hook::Decision::Preapproved(format!(
+            return Some(hook::Decision::Preapproved(format!(
                 "hook.handler.{id}: {reason}"
-            ))));
+            )));
         }
-        return Ok(None);
+        return None;
     };
     if !envelope.event.carries_a_verdict() {
         advice.push(advisory::Advice::new(
             severity::AdvisoryTier::Caution,
             format!("hook.handler.{id}: {reason}"),
         ));
-        return Ok(None);
+        return None;
     }
-    Ok(Some(hook::Decision::Deny(
-        crate::refusal::Refusal::declared(
-            format!("hook.handler.{id}"),
-            verdict::Native::HandlerDenied,
-            // THE HANDLER'S OWN WORDS TRAVEL AS A SUBJECT, not as the reason
-            // (CLOUD-1050). The class is Batten's — "a configured hook handler denied
-            // the call" — and the handler's text is what it denied over, which is a
-            // subject of that class rather than a competing statement of it. Keeping
-            // it in the `reason` slot would have made a class Batten declares
-            // indistinguishable from free text a third party wrote.
-            &[verdict::Subject::Artifact {
-                artifact: reason.to_owned(),
-            }],
-            // A handler's reason may or may not name a remedy, so the fix falls back
-            // to the class's declared route rather than being invented here. §5's
-            // "every refusal names something to run" is now the REGISTRY's obligation
-            // and `verdict::validate` refuses a class that fails it.
-            crate::refusal::Fix::None,
-        ),
+    Some(hook::Decision::Deny(crate::refusal::Refusal::declared(
+        format!("hook.handler.{id}"),
+        verdict::Native::HandlerDenied,
+        // THE HANDLER'S OWN WORDS TRAVEL AS A SUBJECT, not as the reason
+        // (CLOUD-1050). The class is Batten's — "a configured hook handler denied
+        // the call" — and the handler's text is what it denied over, which is a
+        // subject of that class rather than a competing statement of it. Keeping
+        // it in the `reason` slot would have made a class Batten declares
+        // indistinguishable from free text a third party wrote.
+        &[verdict::Subject::Artifact {
+            artifact: reason.to_owned(),
+        }],
+        // A handler's reason may or may not name a remedy, so the fix falls back
+        // to the class's declared route rather than being invented here. §5's
+        // "every refusal names something to run" is now the REGISTRY's obligation
+        // and `verdict::validate` refuses a class that fails it.
+        crate::refusal::Fix::None,
     )))
 }
 
@@ -15568,13 +15560,9 @@ fn stop_facts(overrides: &Overrides) -> Result<stop::StopFacts> {
 /// The hot path is preserved all the same, and structurally: `action::validate`
 /// refuses an action on `pre-tool`, so this returns before touching config for
 /// the one event that runs on every mediated tool call.
-fn fire_actions(
-    envelope: &hook::Envelope,
-    overrides: &Overrides,
-    err: &mut dyn Write,
-) -> Result<()> {
+fn fire_actions(envelope: &hook::Envelope, overrides: &Overrides, err: &mut dyn Write) {
     if envelope.event == hook::Event::PreTool {
-        return Ok(());
+        return;
     }
     // The REPOSITORY's authority, not the cwd's (CLOUD-824). Same reading as
     // `load_policy` below and for the same reason: an action table is a
@@ -15582,8 +15570,8 @@ fn fire_actions(
     // checkout would fire a different set depending on which ref that worktree
     // sits on. Resolved after the two refusals above, so a bypassed or pre-tool
     // call still pays nothing.
-    let Some(hook_config) = hook_table(overrides)? else {
-        return Ok(());
+    let Some(hook_config) = hook_table(overrides) else {
+        return;
     };
     action::fire(
         &hook_config.actions,
@@ -15596,7 +15584,6 @@ fn fire_actions(
         },
         err,
     );
-    Ok(())
 }
 
 /// Wake the advisory drain for this batch boundary (CLOUD-79).
@@ -17068,7 +17055,7 @@ enum Suppression {
 fn stop_handler_advice(overrides: &Overrides, raw: &str) -> Option<String> {
     // The same reader dispatch uses, so an unreadable declaration is silence
     // here too rather than a fault on the path that must stay free.
-    let handlers = hook_table(overrides).ok()??.handlers;
+    let handlers = hook_table(overrides)?.handlers;
     let dispatched = handler::dispatch(&handlers, hook::Event::Stop, "", None, raw);
     dispatched.ran.iter().find_map(|ran| match &ran.outcome {
         handler::Outcome::Advise(text)

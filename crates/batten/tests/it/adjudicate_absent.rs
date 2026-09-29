@@ -55,6 +55,21 @@ const DENIES_THE_READ: &str = "version = 1\n\
      tool = \"Read\"\n\
      reason = \"the fixture refuses this read\"\n";
 
+/// A config that PARSES and then fails validation: a `gloss` over its 120-char
+/// bound. The shape CLOUD-1917 measured, and a different arm from
+/// `WILL_NOT_PARSE` — before that row, only a parse failure reached the deny,
+/// and every other load fault exited `1`, which a harness reads as a
+/// non-blocking hook error and runs the call anyway.
+const FAILS_VALIDATION: &str = "version = 1\n\
+[[verdict]]\n\
+id = \"diff ship early\"\n\
+gloss = \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"\n\
+class = \"a class long enough to read as one\"\n\
+[[verdict.route]]\n\
+id = \"task run first\"\n\
+kind = \"command\"\n\
+target = \"run it\"\n";
+
 /// A fixture carrying `body` as its committed authority.
 fn fixture(name: &str, body: &str) -> PathBuf {
     Fixture::new(name)
@@ -593,5 +608,33 @@ fn a_pull_says_which_refusal_it_stood_down() {
     assert!(
         said.contains(batten::ripcord::SENTINEL),
         "the line names the sentinel a reader has to disarm: {said}"
+    );
+}
+
+#[test]
+fn a_write_over_a_config_that_fails_validation_is_refused() {
+    // CLOUD-1917: the config parsed, a validator refused it, and a protected
+    // write went through unadmitted — the hook exited `1`, the harness's
+    // non-blocking error. A fault the loader names is could-not-look whatever
+    // its class, so it takes the same deny a parse failure does.
+    let dir = fixture("adjudicate-invalid-other-write", FAILS_VALIDATION);
+    let target = dir.join("notes.md");
+    assert_eq!(
+        code_for(&dir, &write_envelope(&target)),
+        Some(2),
+        "a config that will not validate judges nothing, so the write is refused"
+    );
+}
+
+#[test]
+fn the_repair_write_reaches_a_config_that_fails_validation() {
+    // THE FLOOR, ON THE NEW ARM TOO: refusing the one write that can end the
+    // fault would make it permanent (CLOUD-1579's lockout).
+    let dir = fixture("adjudicate-invalid-repair", FAILS_VALIDATION);
+    let target = dir.join("batten.toml");
+    assert_eq!(
+        code_for(&dir, &write_envelope(&target)),
+        Some(0),
+        "the write to the faulting authority itself proceeds"
     );
 }
