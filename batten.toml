@@ -6790,8 +6790,10 @@ writer = "mise run evaluator-io-record"
 #
 # THE COLUMNS ARE WHAT THE SIGNING MODULE READS, and without them it ships dead:
 # `commit.gpgsign` per scope is the CONFLICT the retired task body computed in
-# shell, and `origin/main..HEAD` is the range `commit-attribution` and
-# `commit-lint` share, read for each commit's `signed` header bit. The signer's
+# shell, and `origin/main..HEAD` is the range, read for each commit's `signed`
+# header bit. It is STATIC: this gate no longer reads the BASE_SHA/HEAD_SHA env
+# that `commit-attribution` and `commit-check` judge, so the column, not the
+# caller's env, names the commits in scope. The signer's
 # own classification — a readable, non-empty key file — is the one reading no
 # projection can make, so it stays a record the engine writes.
 [[rule]]

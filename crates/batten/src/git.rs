@@ -2014,7 +2014,14 @@ pub fn set_config_local(dir: &Path, key: &str, value: &str) -> Result<()> {
     // Repo-local is now structural rather than a flag: this is the local file, so
     // there is no `--global` for a caller to reach and no wider scope reachable
     // by omission.
-    let path = repo.git_dir().join("config");
+    //
+    // THE COMMON DIR, never `git_dir()`: in a linked worktree `git_dir()` is the
+    // private `.git/worktrees/<name>` directory, and git never reads a `config`
+    // file there. `git config --local` writes `$GIT_COMMON_DIR/config`, so a
+    // write keyed on `git_dir()` reported success from a worktree while git went
+    // on reading the old value — pinned by `git_state_facts.rs`'s
+    // `a_repo_local_config_write_from_a_linked_worktree_lands_where_git_reads_it`.
+    let path = repo.common_dir().join("config");
     let mut file =
         gix::config::File::from_path_no_includes(path.clone(), gix::config::Source::Local)
             .map_err(|_| refusal())?;
@@ -6397,5 +6404,6 @@ row naming a closure or a disjunction mutates the one operand it is about.
 #MUTANT content-divergence-missed|s@^    if hashed != entry.id {$@    if false {@|divergence_and_untracked_paths_are_reported_beneath_the_pathspec_only
 #MUTANT untracked-dropped|s@                fact.untracked.push(path.clone());@@|divergence_and_untracked_paths_are_reported_beneath_the_pathspec_only
 #MUTANT file-mode-ignored|s@^    filemode .. !want_link @    !want_link @|a_flipped_executable_bit_diverges_only_where_file_mode_counts
+#MUTANT config-write-worktree-private|s@    let path = repo.common_dir().join("config");@    let path = repo.git_dir().join("config");@|a_repo_local_config_write_from_a_linked_worktree_lands_where_git_reads_it
 #MUTANT magic-pathspec-accepted|s@    !spec.is_empty() .. !spec.starts_with(':')@    !spec.is_empty()@|a_magic_pathspec_is_refused_at_load_rather_than_read_as_a_literal
 */

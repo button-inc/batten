@@ -582,3 +582,48 @@ fn the_repair_writes_the_override_local_only_and_is_idempotent() {
         "the global scope is never written"
     );
 }
+
+/// The retired body ran `git config --local commit.gpgsign false`, which writes
+/// the COMMON config, so it held from a linked worktree too. A write keyed on
+/// the worktree-private `.git/worktrees/<name>` directory lands in a file git
+/// never reads: the verb reported "signing disabled" while git kept signing
+/// (CLOUD-843 p10 review). The witness is git itself, asked from the worktree.
+#[test]
+fn the_repair_from_a_linked_worktree_lands_where_git_reads_it() {
+    let (dir, global) = repo("repair-linked");
+    signing_key(&dir, "");
+    std::fs::write(&global, "[commit]\n\tgpgsign = true\n").expect("global config");
+
+    // `scratch` wipes and creates; `git worktree add` wants to create the
+    // directory itself, so it is removed again straight away.
+    let linked = common::scratch("signing-posture-repair-linked-worktree");
+    let _ = std::fs::remove_dir_all(&linked);
+    git_in(
+        &dir,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "--detach",
+            linked.to_str().expect("utf8 path"),
+        ],
+    );
+
+    let repaired = batten_in(&linked, &global, &["attribution", "signing"]);
+    assert_eq!(repaired.status.code(), Some(0), "{}", said(&repaired));
+    assert!(
+        stderr(&repaired).contains("signing disabled"),
+        "{}",
+        said(&repaired)
+    );
+    assert_eq!(
+        git_scoped(&linked, &global, &["config", "--get", "commit.gpgsign"]),
+        "false",
+        "git, asked from the worktree, must read the override the verb claims it wrote"
+    );
+    assert_eq!(
+        local_gpgsign(&dir, &global),
+        "false",
+        "the override is the repository's local config, shared by every worktree"
+    );
+}

@@ -723,3 +723,71 @@ fn an_undeclared_config_or_index_family_is_null() {
     );
     assert!(fired(&index_null), "no pathspec declared: null");
 }
+
+// --- the one write primitive -------------------------------------------------
+
+/// `git::set_config_local` from a LINKED worktree (CLOUD-843 p10 review).
+///
+/// A linked worktree's `git_dir` is its private `.git/worktrees/<name>`, and git
+/// never reads a `config` file there: `git config --local` writes the COMMON
+/// config. A write keyed on the private directory reported success while git
+/// kept the old value. `attribution signing` is the verb that reaches the
+/// primitive with nothing else in the way, and git itself is the oracle.
+#[test]
+fn a_repo_local_config_write_from_a_linked_worktree_lands_where_git_reads_it() {
+    let dir = Fixture::new("git-config-write-linked")
+        .file("src/lib.rs", "fn main() {}\n")
+        .git()
+        .base_commit()
+        .build();
+    let global = dir.join(".git").join("case-global.gitconfig");
+    std::fs::write(&global, "[commit]\n\tgpgsign = true\n").expect("global config");
+    let global = global.to_str().expect("utf8 path");
+    let scopes = [("GIT_CONFIG_GLOBAL", global), ("GIT_CONFIG_NOSYSTEM", "1")];
+    // An EMPTY key file is a broken signer, so the verb writes the override.
+    let key = dir.join(".git").join("case-key.pub");
+    std::fs::write(&key, "").expect("write the key");
+    git_in(
+        &dir,
+        &[
+            "config",
+            "user.signingkey",
+            key.to_str().expect("utf8 path"),
+        ],
+    );
+
+    // `scratch` wipes and creates; `git worktree add` wants to create the
+    // directory itself, so it is removed again straight away.
+    let linked = scratch("git-config-write-linked-worktree");
+    let _ = std::fs::remove_dir_all(&linked);
+    let target = linked.to_str().expect("utf8 path");
+    git_in(&dir, &["worktree", "add", "--quiet", "--detach", target]);
+
+    let repaired = batten()
+        .args(["attribution", "signing"])
+        .current_dir(&linked)
+        .envs(scopes)
+        .output()
+        .expect("run batten");
+    assert_eq!(
+        repaired.status.code(),
+        Some(0),
+        "{}{}",
+        stdout(&repaired),
+        stderr(&repaired)
+    );
+    assert_eq!(
+        git_env(&linked, &["config", "--get", "commit.gpgsign"], &scopes),
+        "false",
+        "git, asked from the worktree, reads the value the write claims to have made"
+    );
+    assert_eq!(
+        git_env(
+            &dir,
+            &["config", "--local", "--get", "commit.gpgsign"],
+            &scopes
+        ),
+        "false",
+        "the write is the repository's local config, shared by every worktree"
+    );
+}
