@@ -1512,6 +1512,45 @@ fn no_suite_sets_the_state_dir_variables_itself() {
     );
 }
 
+/// The declared vocabulary is read from the file set the gates see, so an
+/// ignored directory contributes nothing to it (CLOUD-2035).
+///
+/// Three callers pass the checkout root, whose `target/tmp` holds other cases'
+/// fixture modules while the suite runs. A token only such a module raises must
+/// not be declared, or a stale copy there answers "the committed table declares
+/// it" for a module that no longer does. The live half is what makes the absence
+/// discriminating: the same walk must still reach a non-ignored module.
+#[test]
+fn the_declared_vocabulary_never_reads_an_ignored_directory() {
+    let root = common::scratch("vocabulary-ignored-tree");
+    fs::write(root.join(".gitignore"), "/target/\n").expect("write the ignore file");
+    for (dir, token) in [
+        ("target", "stale fixture token"),
+        ("policy", "live module token"),
+    ] {
+        fs::create_dir_all(root.join(dir)).expect("create the module directory");
+        fs::write(
+            root.join(dir).join("module.rego"),
+            format!("package probe\n\ndeny contains \"{token}\" if {{ false }}\n"),
+        )
+        .expect("write the module");
+    }
+    let declared: Vec<String> = common::verdicts_in(&root)
+        .into_iter()
+        .map(|verdict| verdict.id)
+        .collect();
+    assert!(
+        declared.iter().any(|id| id == "live module token"),
+        "a module outside every ignore rule is vocabulary, or the absence below proves \
+         nothing: {declared:?}"
+    );
+    assert!(
+        !declared.iter().any(|id| id == "stale fixture token"),
+        "a module under an ignored directory is not the committed tree's, so its token must \
+         not be declared: {declared:?}"
+    );
+}
+
 /// A state redirect moves batten's store and never mise's installs (CLOUD-2021).
 ///
 /// `state_dir` repoints the XDG data variable, and mise reads that same variable

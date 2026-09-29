@@ -1699,31 +1699,39 @@ fn parse_committed_patterns() -> Vec<batten::pattern::NamedPattern> {
 /// which is the check doing its job. A shared hand-written list therefore fails
 /// every fixture except the one it was written for — measured, eleven of twelve.
 ///
-/// Non-recursive and text-scanned rather than parsed: a fixture module is a
-/// literal in a test file, the tokens are literals in it, and a Rego parser here
-/// would be a second one to keep in step with the engine's.
+/// Text-scanned rather than parsed: a fixture module is a literal in a test
+/// file, the tokens are literals in it, and a Rego parser here would be a second
+/// one to keep in step with the engine's.
+///
+/// **Recursive, over the file set the gates see — `batten::rules::tree_files`,
+/// never a hand-rolled `read_dir` walk** (CLOUD-2035). Three callers pass the
+/// checkout root, and an ignore-blind walk from there descends into `target/`,
+/// where the running suite writes and removes other cases' fixture modules: 270
+/// of the 406 `.rego` files one census found. That made a case's vocabulary a
+/// function of which siblings had run, and let a stale fixture copy satisfy "the
+/// committed table declares `<id>`" after the committed module stopped raising
+/// it. A scratch fixture carries no `.gitignore`, so it is walked in full as
+/// before.
+// MUTANT vocabulary-reads-ignored-tree|s@batten::rules::tree_files(root).expect("the vocabulary root is walkable")@std::fs::read_dir(root).into_iter().flatten().flatten().flat_map(\x7cdir\x7c std::fs::read_dir(dir.path()).into_iter().flatten().flatten().map(move \x7cfile\x7c format!("{}/{}", dir.file_name().to_string_lossy(), file.file_name().to_string_lossy()))).collect::<Vec<_>>()@|the_declared_vocabulary_never_reads_an_ignored_directory
 #[must_use]
 pub(crate) fn verdicts_in(root: &Path) -> Vec<batten::verdict::DeclaredVerdict> {
     let mut found: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    let mut roots = vec![root.to_path_buf()];
-    while let Some(dir) = roots.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
+    // An absent root declares nothing, as the `read_dir` walk it replaces did; an
+    // unreadable PRESENT one is loud, since an empty registry would pass a case
+    // asserting that some token is declared nowhere.
+    let files = if root.exists() {
+        batten::rules::tree_files(root).expect("the vocabulary root is walkable")
+    } else {
+        Vec::new()
+    };
+    for relative in files {
+        if !relative.ends_with(".rego") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(root.join(&relative)) else {
             continue;
         };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                roots.push(path);
-                continue;
-            }
-            if path.extension().is_none_or(|ext| ext != "rego") {
-                continue;
-            }
-            let Ok(text) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            found.extend(tokens_in(&text));
-        }
+        found.extend(tokens_in(&text));
     }
     // A token this BINARY vendors is already in the registry, so declaring it
     // again is the collision `registry_for` refuses — correctly, because a class
