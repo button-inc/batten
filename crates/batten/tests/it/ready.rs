@@ -35,20 +35,14 @@
 //! that as 80 independent behaviour changes would bury the one decision a reader
 //! needs to see in a list nobody reads.
 //!
-//! # THE LEDGER IS WRITTEN AND THE PROGRAM IS NOT YET DELETED, DELIBERATELY
+//! # THE PROGRAM IS DELETED, AND WHY IT TOOK A SECOND ONE WITH IT
 //!
-//! `mise-tasks/ready-lint.sh` and `tests/ready-lint.bats` are still in the tree,
-//! and the rows below are the mapping the deletion will redeem rather than a
-//! claim that it has happened. The blocker is named rather than left to be
-//! rediscovered: `mise-tasks/graph-check.sh` resolves this gate BY PATH and
-//! branches on its exit codes, and both lines have to move for the program to
-//! die — the path because there is no path any more, the codes because a
-//! violation is `2` here where it was `1` there. `shell edit refused` admits an
-//! edit to a caller only where every added line is a truncation of a removed one
-//! or an exact path substitution at a declared successor (both arms are in
-//! `policy/shell-retirement.rego`), and a shell sibling repointed at a compiled
-//! verb is neither. So retiring this one reaches a second program, and that is a
-//! change of its own rather than a line in this one.
+//! The ledger below was written a port ahead of the deletion, because
+//! `mise-tasks/graph-check.sh` resolved this gate BY PATH and branched on its exit
+//! codes, and `shell edit refused` admits no repointing of a shell sibling at a
+//! compiled verb. CLOUD-1221 retired both programs in one delta — `graph-check.sh`
+//! became `batten ready graph`, which calls `ready::lint` in process — so the rows
+//! below now redeem a deletion that has happened.
 //!
 //! The claim gate's half of the same port DID land — its only caller named it by
 //! task name, which is why `mise.toml` could answer for it unchanged.
@@ -57,6 +51,29 @@
 //!
 // carried: mise-tasks/ready-lint.sh crates/batten/src/ready.rs kind:verb crates/batten/tests/it/ready.rs
 // carried: tests/ready-lint.bats crates/batten/src/ready.rs kind:verb crates/batten/tests/it/ready.rs
+// carried: tests/ready-lint-deferral.bats crates/batten/src/ready.rs kind:verb crates/batten/tests/it/ready.rs
+//!
+//! # RETIREMENT LEDGER — `tests/ready-lint-deferral.bats`, 14 cases
+//!
+//! CARRIED — five by `the_deferral_rule_carries_the_same_gap_and_it_reaches_further`,
+//! the rest by the three deferral cases beside it. "Outside the Ready block" is
+//! spelled with an out-of-scope heading rather than an open-questions one, since
+//! the compiled block reader refuses an open-questions marker on its own account.
+//!
+// carried: "a deferral with no relation is reported" crates/batten/tests/it/ready.rs
+// carried: "the same deferral with a relation passes" crates/batten/tests/it/ready.rs
+// carried: "ownership phrasing is a hand-off too" crates/batten/tests/it/ready.rs
+// carried: "a deferral outside the Ready block still counts" crates/batten/tests/it/ready.rs
+// carried: "Linear's stored mention markup is the same case as the rendered form" crates/batten/tests/it/ready.rs
+// carried: "any relation direction satisfies it — a deferral is not always a blocker" crates/batten/tests/it/ready.rs
+// carried: "a comparison is not a hand-off" crates/batten/tests/it/ready.rs
+// carried: "provenance is not a hand-off" crates/batten/tests/it/ready.rs
+// carried: "a bare cross-reference is not a hand-off" crates/batten/tests/it/ready.rs
+// carried: "an id far from the verb is not what was deferred" crates/batten/tests/it/ready.rs
+// carried: "an issue cannot defer to itself" crates/batten/tests/it/ready.rs
+// carried: "output is a pointer — a line number and a rule id, never the prose" crates/batten/tests/it/ready.rs
+// carried: "a payload with no relations key is a gap, not a parse failure and not a verdict" crates/batten/tests/it/ready.rs
+// carried: "the same body with the key present and empty is still held to the board" crates/batten/tests/it/ready.rs
 //!
 //! # RETIREMENT LEDGER — `tests/ready-lint.bats`, 80 cases
 //!
@@ -1695,6 +1712,95 @@ fn the_deferral_rule_carries_the_same_gap_and_it_reaches_further() {
     });
     let passed = lint(&dir, &raw_payload(&related));
     assert_eq!(code(&passed), 0, "{}", stderr(&passed));
+}
+
+/// A body carrying `prose` after a minimal block, and the `relatedTo` ids the
+/// board carries — the builder `tests/ready-lint-deferral.bats` called `issue()`.
+fn deferring(prose: &str, related: &[&str]) -> String {
+    serde_json::json!({
+        "id": "CLOUD-999",
+        "description": format!("{}\n\n{prose}\n", block("")),
+        "relations": {
+            "blockedBy": [],
+            "relatedTo": related
+                .iter()
+                .map(|id| serde_json::json!({ "id": id }))
+                .collect::<Vec<_>>(),
+        },
+    })
+    .to_string()
+}
+
+#[test]
+fn a_hand_off_is_held_to_the_board_in_every_phrasing_and_section() {
+    // CLOUD-197: a hand-off with no relation is an obligation that belongs to
+    // nobody. Ownership phrasing hands off as surely as "deferred", a section
+    // outside the Ready block is where an obligation is most often abandoned, and
+    // the tracker's stored mention markup is the same claim as its rendered form.
+    let dir = pre_release("ready-deferral-phrasing");
+    for (prose, cited) in [
+        ("The wiring is deferred to CLOUD-61.", "CLOUD-61"),
+        ("That transition is owned by CLOUD-174.", "CLOUD-174"),
+        (
+            "## Out of scope\n\nThe general migration belongs to CLOUD-14.",
+            "CLOUD-14",
+        ),
+        (
+            "Deferred to <issue id=\"x\" href=\"y\">CLOUD-61</issue>.",
+            "CLOUD-61",
+        ),
+    ] {
+        let reported = lint(&dir, &deferring(prose, &[]));
+        assert_eq!(code(&reported), 2, "{prose}: {}", stderr(&reported));
+        assert!(
+            stderr(&reported).contains(&format!("deferral-cited-without-relation ({cited})")),
+            "{prose}: {}",
+            stderr(&reported)
+        );
+        let passed = lint(&dir, &deferring(prose, &[cited]));
+        assert_eq!(code(&passed), 0, "{prose}: {}", stderr(&passed));
+    }
+}
+
+#[test]
+fn a_mention_that_hands_nothing_off_is_not_a_deferral() {
+    // THE HARD HALF: a lint punishing comparison, provenance or "see also" would
+    // teach authors to stop cross-referencing, which costs more than it catches.
+    let dir = pre_release("ready-deferral-mentions");
+    for prose in [
+        "This is the same failure shape as CLOUD-195.",
+        "Split out of CLOUD-177, which is Done on its own scope.",
+        "See CLOUD-33 for the most refined example in the corpus.",
+        // An issue cannot defer to itself.
+        "Deferred to CLOUD-999.",
+    ] {
+        let passed = lint(&dir, &deferring(prose, &[]));
+        assert_eq!(code(&passed), 0, "{prose}: {}", stderr(&passed));
+    }
+    // An id far from the verb is not what was handed off: only CLOUD-10 is.
+    let far = lint(
+        &dir,
+        &deferring(
+            "CLOUD-9 describes the shape. Deferred to CLOUD-10.",
+            &["CLOUD-10"],
+        ),
+    );
+    assert_eq!(code(&far), 0, "{}", stderr(&far));
+}
+
+#[test]
+fn a_deferral_report_is_a_pointer_and_never_the_prose() {
+    let dir = pre_release("ready-deferral-pointer");
+    let reported = lint(
+        &dir,
+        &deferring(
+            "The confidential wiring detail is deferred to CLOUD-61.",
+            &[],
+        ),
+    );
+    let text = stderr(&reported);
+    assert!(!text.contains("confidential wiring detail"), "{text}");
+    assert!(text.contains("CLOUD-999:"), "{text}");
 }
 
 #[test]

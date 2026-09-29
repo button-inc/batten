@@ -73,11 +73,36 @@ fn case_names(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// The case names a suite declares — or, once the suite is RETIRED, the names its
+/// retirement ledger carried (CLOUD-1221 retired `tests/ready-lint.bats`).
+///
+/// A retired suite's successor is still a claim about the tree: the ledger that
+/// admitted the deletion names every case it carried, one `// carried: "<name>"`
+/// line each, in the `crates/batten/tests/it/*.rs` file whose path arm names the
+/// suite. Reading that file keeps both halves checkable after the suite is gone,
+/// rather than letting the arms fall silent with it.
+fn declared(suite: &str) -> Vec<String> {
+    if let Ok(text) = fs::read_to_string(at_root(suite)) {
+        return case_names(&text);
+    }
+    let arm = format!("// carried: {suite} ");
+    let ledger = fs::read_dir(at_root("crates/batten/tests/it"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter_map(|entry| fs::read_to_string(entry.path()).ok())
+        .find(|text| text.lines().any(|line| line.trim_start().starts_with(&arm)))
+        .unwrap_or_else(|| panic!("{suite} is gone and no retirement ledger names it"));
+    ledger
+        .lines()
+        .filter_map(|line| line.trim_start().strip_prefix("// carried: \""))
+        .filter_map(|rest| rest.rfind("\" ").map(|end| rest[..end].to_owned()))
+        .collect()
+}
+
 #[test]
 fn every_inverted_case_has_a_successor_in_its_own_suite() {
     for (suite, _, successor) in INVERSIONS {
-        let text = fs::read_to_string(at_root(suite)).unwrap();
-        let names = case_names(&text);
+        let names = declared(suite);
         assert!(
             names.iter().any(|name| name == successor),
             "{suite} must declare the case that replaced an inverted one, or the arm claiming the inversion names a successor the tree does not have: {successor}"
@@ -88,8 +113,7 @@ fn every_inverted_case_has_a_successor_in_its_own_suite() {
 #[test]
 fn no_inverted_case_still_stands_under_its_old_name() {
     for (suite, retired, _) in INVERSIONS {
-        let text = fs::read_to_string(at_root(suite)).unwrap();
-        let names = case_names(&text);
+        let names = declared(suite);
         assert!(
             !names.iter().any(|name| name == retired),
             "{suite} still declares a case an arm records as inverted, so either the rewrite was reverted or the arm is wrong: {retired}"

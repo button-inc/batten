@@ -1168,13 +1168,10 @@ fn check_bump(
     // non-releasing TYPE releases nothing and still lands a commit, and says so
     // with its own token.
     //
-    // **The consumer is not touched, and that is the point rather than a
-    // shortcut.** `graph-check.sh` keys its exemption on the literal `none`; it
-    // is a governed shell rule that cannot retire, so `shell edit refused`
-    // refuses any edit to it with one route and no override. Changing which rows
-    // the producer spends that token on fixes the contradiction with the consumer
-    // byte-unchanged — which also makes its unedited suite the evidence that the
-    // repair reached it.
+    // **The consumer keys on the literal `none`.** `ready graph`
+    // (`graph_check::bump_of`, CLOUD-1221, which retired `graph-check.sh`)
+    // exempts a row from `in-review-no-pr` on that token alone, so changing which
+    // rows the producer spends it on is the whole repair.
     let emitted = match (declared.as_str(), commit_type.is_empty()) {
         ("", _) => "-",
         ("no bump", true) => "none",

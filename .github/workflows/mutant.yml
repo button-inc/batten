@@ -41,10 +41,9 @@ name: mutant
 # the FACT a predicate reads rather than the predicate itself, the mutation
 # SURVIVES — a real finding, carried with a `#MUTANT-OWNER` naming the row that
 # owes a predicate tier, rather than hidden behind a renewed exemption.
-# `graph-check/receipt-carries-no-ids names-no-case` is CLOUD-1061's and is
-# unchanged: fixing it means editing either `mise-tasks/graph-check.sh` or
-# `tests/graph-check.bats`, both governed shell rules that cannot retire, so no
-# route exists for it today and none is invented here.
+# `graph-check/receipt-carries-no-ids names-no-case` (CLOUD-1061) went with
+# `mise-tasks/graph-check.sh` when CLOUD-1221 retired it: the compiled
+# `engine-graph-check` row of that slug names a real case and is caught.
 #
 # **This job is therefore red, and that visibility is the point.** A survivor
 # that nothing reports is indistinguishable from coverage. It is deliberately

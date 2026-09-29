@@ -1680,13 +1680,12 @@ body = "{git:HEAD} {now}"
 # inversion is CLOUD-909's trap and the function's own header is where it is
 # written down.
 #
-# `mise-tasks/ready-lint.sh` STAYS IN THE TREE and is not edited. It cannot
-# retire: `mise-tasks/graph-check.sh` and `mise-tasks/pipefail-grep-check.sh`
-# resolve it BY PATH, repointing either at the compiled verb is an ADDED line,
-# and `only_drops_a_retired_reference` admits only a removed line naming a path
-# the same delta retires. So it is dormant behind the compiled authority, which
-# is the honest state rather than a shim. `crates/batten/tests/ready.rs` carries
-# its 82 cases and the single `// carried:` ledger arm.
+# `mise-tasks/ready-lint.sh` IS RETIRED (CLOUD-1221), together with the one
+# program that still resolved it by path: `mise-tasks/graph-check.sh` became
+# `batten ready graph`, which calls `ready::lint` in process, so the board and
+# promotion read one grammar. Retiring the pair in one delta is what made it
+# landable — retiring `ready-lint.sh` alone was measured unlandable (`c64e54a3`).
+# `crates/batten/tests/it/ready.rs` and `graph_check.rs` carry the ledgers.
 #
 # `board-diff-overlap.sh` IS NOW THE CRATE'S TOO (CLOUD-1716). The paragraph
 # here said it owned "basename resolution and the tracked-only bound, neither of
