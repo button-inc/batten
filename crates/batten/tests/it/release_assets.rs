@@ -727,12 +727,14 @@ fn basename(path: &str) -> String {
 #[test]
 fn the_names_the_module_demands_are_the_names_the_producers_write() {
     // THE MODULE'S NAME CONSTANTS AGAINST THEIR PRODUCERS. `release-assets.rego`
-    // spells the repository SBOM's two documents and the binary stem itself; the
-    // producers that write them are `[tasks.sbom]` (`--names`) and
-    // `mise-tasks/dist.sh --stem`. A release carrying EXACTLY the names those
-    // producers print, plus the workflow's literal uploads and the reference, is
-    // clean — so a constant that drifts from its producer turns this red as a
-    // `release ship missing` for a name no producer writes.
+    // spells the repository SBOM's two documents and each composed leg's binary
+    // SBOM name, stem and suffix both; the producers that write them are
+    // `[tasks.sbom]` (`--names`), `[tasks.sbom-binary-record]` (`--names <target>`)
+    // and `mise-tasks/dist.sh --stem` for the archive. A release carrying EXACTLY
+    // the names those producers print, plus the workflow's literal uploads and the
+    // reference, is clean — so a constant that drifts from its producer, or a
+    // producer that drifts from the constant, turns this red as a `release ship
+    // missing` for a name the other side does not spell.
     let legs = committed_legs();
     let names = common::task_bash(&common::at_root("."), &common::task_body("sbom"))
         .env("usage_names", "true")
@@ -767,7 +769,31 @@ fn the_names_the_module_demands_are_the_names_the_producers_write() {
         assert!(stem.contains(target.as_str()), "{stem}");
         assets.push(format!("{stem}.tar.gz"));
         if tool != "cross" {
-            assets.push(format!("{stem}.spdx.json"));
+            // THE UPLOADED DOCUMENT'S NAME FROM THE TASK THAT WRITES IT, never a
+            // suffix spelled here: the retired body asked `sbom-binary -- --names`,
+            // and a suffix restated in this tier would agree with the module while
+            // both drifted from the producer.
+            let named = common::task_bash(
+                &common::at_root("."),
+                &common::task_body("sbom-binary-record"),
+            )
+            .env("usage_binary", "--names")
+            .env("usage_target", target)
+            .env("SBOM_BINARY_ROOT", &crate_dir)
+            .env("SBOM_BINARY_OUT_DIR", "out")
+            .output()
+            .expect("the binary sbom producer runs");
+            assert!(named.status.success(), "{}", said(&named));
+            let sbom: Vec<String> = String::from_utf8_lossy(&named.stdout)
+                .lines()
+                .filter_map(|line| line.strip_prefix("sbom=").map(basename))
+                .collect();
+            assert_eq!(sbom.len(), 1, "{target}: {sbom:?}");
+            assert!(
+                sbom.iter().all(|name| name.starts_with(stem.as_str())),
+                "{stem}: {sbom:?}"
+            );
+            assets.extend(sbom);
         }
     }
     assets.extend(committed_upload_literals());

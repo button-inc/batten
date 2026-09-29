@@ -48,6 +48,7 @@
 #MUTANT cross-leg-sbom-demanded|s@^\tleg\["build-tool"\] != "cross"$@\ttrue@|the_real_matrix_is_readable_by_the_module
 #MUTANT sbom-document-name-drifts|s@^sbom_documents := {"batten.spdx.json", @sbom_documents := {"batten.sbom.json", @|the_names_the_module_demands_are_the_names_the_producers_write
 #MUTANT stem-binary-drifts|s@^binary := "batten"$@binary := "batten-cli"@|the_names_the_module_demands_are_the_names_the_producers_write
+#MUTANT sbom-suffix-drifts|s@sprintf("%s-%s-%s.spdx.json", @sprintf("%s-%s-%s.sbom.json", @|the_names_the_module_demands_are_the_names_the_producers_write
 
 # METADATA
 # description: |
@@ -69,12 +70,16 @@ rules contains "release grade other"
 workflow_path := ".github/workflows/release-artifacts.yml"
 
 # The repository SBOM's two documents, as the sbom producer names them, and the
-# binary name every per-target asset stem begins with (`dist`'s stem rule).
+# binary name every per-target asset stem begins with (`dist`'s stem rule); the
+# binary SBOM's `.spdx.json` suffix is spelled in `extras` below.
 # SPELLED HERE AND TIED TO THEIR PRODUCERS BY A GATE, not by agreement: the
 # compiled tier `the_names_the_module_demands_are_the_names_the_producers_write`
-# (crates/batten/tests/it/release_assets.rs) asks `[tasks.sbom]`'s `--names` and
-# `mise-tasks/dist.sh --stem` for every name and requires a release carrying
-# exactly those to be clean, so a constant that drifts reds that tier.
+# (crates/batten/tests/it/release_assets.rs) asks `[tasks.sbom]`'s `--names`,
+# `[tasks.sbom-binary-record]`'s `--names <target>` and `mise-tasks/dist.sh
+# --stem` for every name and requires a release carrying exactly those to be
+# clean, so a constant that drifts from its producer, or a producer that drifts
+# from the constant, reds that tier. Both directions carry a `#MUTANT` row: the
+# constants' above, the producer's suffix in `[tasks.sbom-binary-record]`.
 sbom_documents := {"batten.spdx.json", "batten.cdx.json"}
 
 binary := "batten"
