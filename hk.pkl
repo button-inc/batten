@@ -381,15 +381,6 @@ local gate = new Mapping<String, Step> {
       )
     check = "mise run release-tracking-check"
   }
-  // An MCP allow rule that matches no tool name grants nothing and says nothing
-  // about it — the only symptom is an approval prompt on every call, which
-  // reads as harness behaviour rather than as a settings bug. This repo shipped
-  // exactly that: `mcp__Linear` allowed, Linear arriving as a claude.ai
-  // connector under `mcp__claude_ai_Linear__*`, no rule matching either way.
-  ["mcp-allow-check"] {
-    glob = List(".claude/settings.json")
-    check = "mise run mcp-allow-check"
-  }
   // Completeness of mise.lock, asked of the committed bytes. The old lock-check
   // asked it by running `mise lock` and diffing, which answers "did upstream
   // change" instead — and never removes or repairs an existing entry, so a

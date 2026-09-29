@@ -1926,6 +1926,14 @@ pub enum DoctorCommand {
         /// The target triple to install, as `rustup target list` spells it.
         target: String,
     },
+    /// Whether the forge credential carries the claims this repository's tasks
+    /// declare (CLOUD-843, retiring `gh-preflight`).
+    ///
+    /// APPENDED LAST, for the reason its neighbours above record: this enum
+    /// carries no `repr`, so a variant placed beside its siblings shifts every
+    /// later discriminant and `mise run semver` reads that as a break the crate
+    /// has to declare.
+    Forge,
 }
 
 /// Subcommands of `generate`.
@@ -2274,6 +2282,7 @@ fn doctor_of(matches: &ArgMatches) -> DoctorCommand {
         Some(("gate", matches)) => DoctorCommand::CommitGate {
             json: flag(matches, "json"),
         },
+        Some(("forge", _)) => DoctorCommand::Forge,
         Some(("toolchain", matches)) => DoctorCommand::Toolchain {
             manifest: matches
                 .get_one::<String>("manifest")

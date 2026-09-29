@@ -49,8 +49,9 @@ use std::path::PathBuf;
 use common::{git_in, scratch, stderr, stdout, write};
 
 /// ONE ROW. No `[[rule]]` at all, so nothing in the engine can produce a verdict
-/// of its own and be mistaken for the handler's.
-const CONFIG: &str = r#"version = 1
+/// of its own and be mistaken for the handler's. This is the STUB shape: a
+/// program the case writes, answering on the handler contract.
+const STUB_CONFIG: &str = r#"version = 1
 
 [[hook.handler]]
 id = "connector-allow-guard"
@@ -62,6 +63,39 @@ preapproves = true
 owner = "CLOUD-312"
 expires = "2027-02-28"
 "#;
+
+/// The COMMITTED shape (CLOUD-843): the same one row, dispatching the engine's
+/// own `mcp grant --guard` — this suite's compiled binary, named by path so no
+/// installed release can stand in — over the `[mcp]` table `batten.toml`
+/// declares. Still no `[[rule]]`.
+fn verb_config() -> String {
+    let bin = env!("CARGO_BIN_EXE_batten");
+    format!(
+        r#"version = 1
+
+[mcp]
+permission_aliases = ["Claude_Code_Remote"]
+
+[[mcp.source]]
+id = "session"
+path = "mcp-config.json"
+node = "mcpServers"
+
+[mcp.source.endpoint_contains]
+Claude_Code_Remote = "api.anthropic.com/v1/code/mcp/meta"
+
+[[hook.handler]]
+id = "connector-allow-guard"
+on = "pre-tool"
+run = [{bin:?}, "mcp", "grant", "--guard"]
+matcher = "^mcp__"
+timeout_ms = 5000
+preapproves = true
+owner = "CLOUD-312"
+expires = "2027-02-28"
+"#
+    )
+}
 
 /// THE DENIED VERB IS ONE NO ENGINE ROW COVERS. `send_later` would have been the
 /// natural fixture and is the wrong one: this repository's own
@@ -82,8 +116,6 @@ const RESOLVABLE: &str = "mcp__bbbbbbbb-5555-6666-7777-888888888888";
 
 struct Bench {
     repo: PathBuf,
-    settings: PathBuf,
-    mcp_config: PathBuf,
 }
 
 /// What the door said to the host, and what it said about the handler.
@@ -109,8 +141,6 @@ impl Bench {
         let mut child = common::batten()
             .current_dir(&self.repo)
             .args(["adjudicate", "--harness", "claude-code"])
-            .env("BATTEN_MCP_SETTINGS", &self.settings)
-            .env("BATTEN_MCP_CONFIG", &self.mcp_config)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -130,42 +160,28 @@ impl Bench {
     }
 }
 
+/// A repository whose one handler row dispatches the engine's own guard, with
+/// the committed permission table where the harness keeps it and the session's
+/// injected wiring where the declared source reads it.
 fn bench(name: &str) -> Bench {
     let dir = scratch(name);
     let repo = dir.join("repo");
     std::fs::create_dir_all(&repo).expect("the fixture repo");
-    // The committed task body, read from this tree's manifest, so a mutated
-    // manifest is the one that runs here too. The row runs it with `bash`, so
-    // mise's own startup is not what this tier measures.
-    write(
-        &repo,
-        "connector-allow.sh",
-        &common::task_body("connector-allow-resolve"),
-    );
-    write(&repo, "batten.toml", CONFIG);
+    write(&repo, "batten.toml", &verb_config());
+    write(&repo, ".claude/settings.json", SETTINGS);
+    write(&repo, "mcp-config.json", MCP_CONFIG);
     git_in(&repo, &["init", "-q", "-b", "main", "."]);
-
-    let settings = dir.join("settings.json");
-    std::fs::write(&settings, SETTINGS).expect("the committed permission table");
-    let mcp_config = dir.join("mcp-config.json");
-    std::fs::write(&mcp_config, MCP_CONFIG).expect("the session's injected config");
-
-    Bench {
-        repo,
-        settings,
-        mcp_config,
-    }
+    Bench { repo }
 }
 
-/// Replace the copied guard with a stub that answers on the handler contract.
+/// Replace the engine's guard with a stub that answers on the handler contract.
 ///
 /// **The door's own channels are asserted through this rather than through the
 /// committed guard**, and that separation is the point rather than convenience:
-/// the guard cannot use those channels today (see
-/// `the_committed_guard_writes_a_host_document_so_its_verdict_is_dropped`), so a
-/// case driving it would assert the door's capability and fail for the guard's
-/// reason. Stubbed, each case fails only when the thing it names breaks.
+/// a case driving the guard would assert the door's capability and fail for the
+/// guard's reason. Stubbed, each case fails only when the thing it names breaks.
 fn stub_guard(bench: &Bench, body: &str) {
+    write(&bench.repo, "batten.toml", STUB_CONFIG);
     write(&bench.repo, "connector-allow.sh", &format!("{body}\n"));
 }
 
@@ -174,8 +190,9 @@ fn the_committed_guards_deny_reaches_the_host_as_the_engines_own_refusal() {
     // THE MEASURED DEFECT, FLIPPED (CLOUD-1717). The retired guard wrote a
     // `hookSpecificOutput` document, which the door reads as impersonation and
     // drops, so its verdict never reached the host. Retired into
-    // `[tasks.connector-allow-resolve] --guard`, it answers on the door's own
-    // contract, and the committed body's deny now travels.
+    // `[tasks.connector-allow-resolve] --guard` and then into the engine's own
+    // `batten mcp grant --guard` (CLOUD-843), it answers on the door's contract,
+    // and the committed file's deny travels.
     let bench = bench("cad-committed-deny");
     let answer = bench.door(&format!("{RESOLVABLE}__archive_session"));
     let reported = format!("{}{}", answer.out, answer.err);
@@ -296,7 +313,7 @@ fn an_engine_deny_beats_a_handler_grant_on_the_same_call() {
         "printf 'the committed table already allows create_session\\n'\nexit 0",
     );
     let config = format!(
-        "{CONFIG}\n[[rule]]\nid = \"refuse-the-granted-tool\"\nkind = \"shape\"\n\
+        "{STUB_CONFIG}\n[[rule]]\nid = \"refuse-the-granted-tool\"\nkind = \"shape\"\n\
          scope = \"mediated_call\"\nseverity = \"deny\"\ntool = \"create_session\"\n\
          reason = \"the engine refuses this regardless of any grant\"\n"
     );

@@ -784,8 +784,6 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     "step run",
     "sbom",
     "dist",
-    "mcp grant",
-    "mcp posture",
     "board check",
     "record divergence",
     "record census note",
@@ -1340,6 +1338,16 @@ const CENSUS: &[Verb] = &[
     },
     Verb {
         path: "doctor egress",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // CLOUD-843, retiring `gh-preflight`. The corpus declares no
+    // `[[forge.probe]]` row, so this exercises the refusal that names the
+    // missing table — a usage answer, never a probe, and the forge fixture the
+    // sweep points every run at could not answer one anyway.
+    Verb {
+        path: "doctor forge",
         args: &[],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,

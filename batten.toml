@@ -5024,6 +5024,24 @@ continue_on_error = false
 # durable, cross-session credential is a genuinely new surface and is CLOUD-1261's;
 # this dispatches from inside the session that minted the auth and needs none.
 
+# THE SERVERS THIS REPOSITORY'S PERMISSION FILE GOVERNS UNDER ANY NAME (CLOUD-191,
+# CLOUD-843). `batten mcp grant --guard` applies `.claude/settings.json`'s rules
+# for these names to whatever key the host exposes the server under this
+# session, matched by the endpoint its `endpoint_contains` row declares; `batten
+# mcp posture` reports the committed grants on them a connector would still
+# prompt for (CLOUD-765).
+#
+# ONE NAME, AND THE LIST IS THE DECISION. The retired resolver translated exactly
+# one server — the session toolbox — and left every other endpoint silent,
+# because a connector the host authorises at its own layer must not have its name
+# translated into a grant the host did not give. `Linear` below is declared for
+# DISPATCH (`mcp call`), not for this.
+# P5-SCHEMA-PENDING (CLOUD-843): uncomment once `schema/config.schema.json` is
+# regenerated from the merged binary; the committed schema predates the key, so
+# `taplo lint` refuses it until then.
+# [mcp]
+# permission_aliases = ["Claude_Code_Remote"]
+
 # Claude Code's own local wiring.
 [[mcp.source]]
 id = "claude-code-local"
@@ -5154,6 +5172,13 @@ node = "mcpServers"
 # parameter, and the wrapper carries a per-session id.
 [mcp.source.endpoint_contains]
 Linear = "mcp.linear.app"
+# THE SESSION TOOLBOX, by the upstream address its wrapper URL carries ENCODED
+# in a query parameter (CLOUD-843). The address was a constant in the retired
+# `connector-allow-resolve` body; it is the consumer's fact, so it lives here,
+# and `mcp::endpoint_carries` decodes the wrapper before comparing. The path
+# segment is what keeps it from also matching every other server behind the
+# same proxy host, which would be `Ambiguous`.
+Claude_Code_Remote = "api.anthropic.com/v1/code/mcp/meta"
 
 [mcp.source.credential]
 header = "Authorization"
@@ -9020,6 +9045,26 @@ module = "policy/connector-not-granted.rego"
 severity = "deny"
 reason = "a `[[mcp.result]]` reduction decides nothing while the raw tool is granted beside it: the two routes return the same payload and the cheaper-looking one wins every time. Measured 2026-08-31 — the raw tools were registered, so one session called them 973 times for 13.2 MB, 73% of all its tool output. Drop the grant; `batten mcp call` is the route that stores the response whole and hands back a pointer, a delta and a declared projection."
 
+# No MCP permission rule is silently skipped by the host — the commit-scoped half
+# of the retired `[tasks.mcp-allow-check]` (CLOUD-843). Three predicates are pure
+# functions of committed files, so they are a tree module and run wherever
+# `batten check` runs; the hk step that spawned the task is gone with it, and the
+# world-scoped half is `batten mcp posture` at session start.
+#
+# THREE DOCUMENTS, each for one predicate. The settings file carries the rules;
+# `.mcp.json` declares the project's own servers, whose names the host cannot
+# rename away; and the authority itself carries the `mediated_call` rows whose
+# `tool` covers a deny under any server spelling — the set `batten policy tools`
+# listed for the retired body, read here as the committed rows it rests on.
+[[rule]]
+id = "grant check other"
+kind = "policy"
+scope = "tree"
+documents = [".claude/settings.json", ".mcp.json", "batten.toml"]
+module = "policy/mcp-allow.rego"
+severity = "deny"
+reason = "an MCP permission rule the host skips grants or refuses nothing, and its only symptom is a prompt that reads as harness behaviour: a glob in the server segment or a bare `*` is skipped with a warning, an enabled server no allow rule names prompts on every call, and a deny spelled with one host-supplied server name enforces nothing once the host renames it (CLOUD-178). Fix the rule in `.claude/settings.json`, or cover the denied tool with a `mediated_call` row keyed on its `tool`."
+
 # Module layering, over the resolved `use` graph (CLOUD-359).
 #
 # THE LAYERINGS WERE DOCUMENTED AND GATED BY NOTHING. `module-map-check` asserts
@@ -10862,6 +10907,63 @@ names = ["GITHUB_PERSONAL_ACCESS_TOKEN", "BATTEN_GITHUB_TOKEN"]
 [forge]
 credential_names = ["BATTEN_GITHUB_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN"]
 
+# THE CLAIMS THIS REPOSITORY'S TASKS NEED, each with the endpoint that proves it
+# (CLOUD-843, retiring `[tasks.gh-preflight]`'s bash table into rows
+# `batten doctor forge` walks). An under-scoped or proxy-substituted token
+# otherwise surfaces as an unrelated 403 at whichever task runs first, each
+# looking like its own denial rather than one missing claim. A 403 names the
+# claim it wanted, so this table is checked against the forge: a named claim a
+# row does not declare marks the TABLE stale.
+#
+# READ-ONLY BY CONSTRUCTION. `probe = false` declares a claim and never calls its
+# endpoint — a write cannot be probed without performing one, and the jobs read
+# needs a run that exists. The rows are the retired table's, byte for byte in
+# endpoint and claim, in its order.
+# P5-SCHEMA-PENDING (CLOUD-843): uncomment once `schema/config.schema.json` is
+# regenerated from the merged binary; `taplo lint` refuses `forge.probe` until then.
+# [[forge.probe]]
+# endpoint = "repos/{owner}/{repo}"
+# claim = "metadata=read"
+# used_by = "every task that resolves the repo"
+#
+# [[forge.probe]]
+# endpoint = "repos/{owner}/{repo}/commits/HEAD/check-runs"
+# claim = "checks=read"
+# used_by = "ci-wait (the whole poll)"
+#
+# [[forge.probe]]
+# endpoint = "repos/{owner}/{repo}/pulls?per_page=1"
+# claim = "pull_requests=read"
+# used_by = "land (PR state, merged/closed)"
+#
+# [[forge.probe]]
+# endpoint = "repos/{owner}/{repo}/actions/runs?per_page=1"
+# claim = "actions=read"
+# used_by = "land (the bot's refusal, read as a workflow-run conclusion — NOT a check-run on the PR head, which is where it never appears; CLOUD-235), and reading a failing job's logs after a red ci-wait"
+#
+# [[forge.probe]]
+# endpoint = "repos/{owner}/{repo}/actions/runs/1/jobs"
+# claim = "actions=read"
+# used_by = "nonverdict-scan (per-STEP conclusions, to tell a job that died in provisioning from one that rendered a verdict — the only reader of jobs[].steps[]; timeout-drift reads the same endpoint for durations)"
+# probe = false
+#
+# [[forge.probe]]
+# endpoint = "repos/{owner}/{repo}/actions/workflows/ci.yml/runs?per_page=1"
+# claim = "actions=read"
+# used_by = "land-divergence (a window of runs PER WORKFLOW — the global run list is not stably paginable at this repo's insertion rate, and this endpoint reports a total_count the walk checks itself against, because pagination hard-caps at 1000 items)"
+#
+# [[forge.probe]]
+# endpoint = "repos/{owner}/{repo}/issues/1/comments"
+# claim = "pull_requests=write"
+# used_by = "land (posting /fast-forward)"
+# probe = false
+#
+# [[forge.probe]]
+# endpoint = "repos/{owner}/{repo}/pulls/1"
+# claim = "pull_requests=write"
+# used_by = "gh pr ready — marking a draft ready is what starts CI here"
+# probe = false
+
 # --- the scripts the launcher re-arms every spawn (CLOUD-1704) -----------------
 #
 # THE FOURTH REPAIR OF LAUNCHER-PROVISIONED STATE, and the first whose subject is
@@ -11516,10 +11618,18 @@ wiring = [".claude/settings.json"]
 # THE COST MOVED, AND IS MEASURED: `mise run` in this checkout is ~750ms against
 # the retired script's 31ms, because mise parses this manifest before any task
 # runs. `matcher` still keeps every non-MCP call off it; the bound is 5000.
+#
+# AND THE DECISION MOVED INTO THE ENGINE (CLOUD-843). The task body is gone:
+# `[tasks."mcp:guard"]` is the verb `batten mcp grant --guard` and nothing else,
+# spawned through `mise` for `doctor:mediator`'s reason (a CI runner builds
+# `batten` rather than installing it, so a row naming it fails `doctor`). The
+# toolbox address is `[mcp.source.endpoint_contains] Claude_Code_Remote`, the
+# governed name is `[mcp] permission_aliases`, and the bare `mcp__<server>` allow
+# rule is honoured on the owner's recorded answer.
 [[hook.handler]]
 id = "connector-allow-guard"
 on = "pre-tool"
-run = ["mise", "run", "-q", "connector-allow-resolve", "--", "--guard"]
+run = ["mise", "run", "-q", "mcp:guard"]
 matcher = "^mcp__"
 timeout_ms = 5000
 preapproves = true
@@ -11902,12 +12012,11 @@ expires = "2027-02-28"
 id = "session-credential"
 on = "session-start"
 run = ["mise", "run", "gh-preflight"]
-# THE SECOND ROW, and it is a straight invocation of a program this campaign is
-# NOT retiring. `gh-preflight` walks the read endpoints the lifecycle tasks call
+# THE SECOND ROW. `gh-preflight` walks the read endpoints the lifecycle tasks call
 # and reports the claim GitHub itself names in each 403; it is the diagnosis and
-# it already exits non-zero. What the retired script added was running it, and a
-# handler runs it with nothing in between — which is the adopt-prior-art reading
-# rather than rebuilding a probe set inside the engine.
+# it already exits non-zero. Since CLOUD-843 its body is `batten doctor forge`
+# over the `[[forge.probe]]` rows above, on the engine's one REST client — the
+# task keeps its name so this row, and every reader who types it, is unchanged.
 #
 # AFTER THE EGRESS ROW, because a container that cannot reach the API at all
 # fails both, and the reader wants the cause before the symptom. Both answers
@@ -11924,47 +12033,23 @@ expires = "2027-02-28"
 # reads which configured servers this session attached, a fact the launcher fixes
 # when the session starts, and on `user-prompt-submit` its report reached nobody,
 # because Claude Code delivers no advisory there.
+#
+# AND IT CARRIES THE CONNECTOR-ASK CHECK NOW (CLOUD-843). `mcp-allow-check
+# --session` ran as its own row beside this one; both halves read the session's
+# world, so both are `batten mcp posture` and one row dispatches it. The id stays
+# this row's, and the sibling row is removed rather than kept to run the same verb
+# twice. The commit-scoped half is `policy/mcp-allow.rego` under `batten check`.
+#
+# IT SPOKE TO NOBODY ON `user-prompt-submit` (CLOUD-1946), measured 2026-09-28:
+# the connector-ask finding reached the advisory buffer on every prompt and
+# `batten adjudicate` wrote nothing, because Claude Code delivers no advisory
+# there. `session-start` is a measured channel and the right cadence besides: the
+# per-tool posture is written into the injected wiring when the session starts.
 [[hook.handler]]
 id = "mcp-attach-check"
 on = "session-start"
-run = ["mise", "run", "-q", "mcp-attach-check"]
+run = ["mise", "run", "-q", "mcp:posture"]
 # `mise run` costs ~750ms in this checkout before the task starts.
-timeout_ms = 5000
-owner = "CLOUD-312"
-expires = "2027-02-28"
-
-# CLOUD-312 row 8: `mcp-allow-check --session`, THROUGH THE DOOR, AT SESSION START
-# (CLOUD-1946).
-#
-# IT SPOKE TO NOBODY FOR ITS WHOLE LIFE ON `user-prompt-submit`, and that is the
-# reason it is here. Measured 2026-09-28: the row reported `Claude_Code_Remote — 2
-# allow rule(s) name a tool the connector sets to always_ask` on every prompt,
-# the door appended it to the advisory buffer, and `batten adjudicate` wrote
-# NOTHING to stdout, because `UserPromptSubmit` is not in Claude Code's
-# `advisory.delivered_on` (`crates/batten/src/hook.rs`, `ADVISORY_GAPS` names it
-# unprobed). So the one gate that says "this committed grant cannot take effect"
-# was dropped every turn.
-#
-# `session-start` IS A MEASURED CHANNEL and the right cadence besides: the
-# connector's per-tool posture is written into the injected wiring when the
-# launcher starts the session and read from nowhere else, so a per-prompt check
-# re-derives a fact that cannot change within the session.
-#
-# THE ARGUMENT IS THE WHOLE POINT OF THE ROW. This file's own scope split lives on
-# `--session`: three predicates are pure functions of the committed settings, so they
-# belong to the commit and run in the hk gate and CI; the fourth reads which servers
-# THIS session attached, which is a property of the world. Only this registration
-# passes the flag, and moving it here keeps that split declared in the one authority
-# rather than spelled in a settings file the gate cannot read.
-#
-# AFTER THE PROVISIONING ROWS, because its could-not-look arm is "no `jq` on the
-# PATH", which `session-install` is what provides. A deny at `session-start` is
-# demoted to advice (`lib.rs`), so exit 2 reports and never costs the session.
-[[hook.handler]]
-id = "mcp-allow-check"
-on = "session-start"
-run = ["mise", "run", "-q", "mcp-allow-check", "--", "--session"]
-# Two `mise run`s with the resolver nested, ~750ms each in this checkout.
 timeout_ms = 5000
 owner = "CLOUD-312"
 expires = "2027-02-28"
@@ -13564,6 +13649,69 @@ prose with no gate, and the measurement is what falsified it.
 id = "task run first"
 kind = "command"
 target = "remove the raw connector entry from `permissions.allow` in .claude/settings.json and reach the row through `batten mcp call`"
+
+# --- MCP permission rules the host skips (CLOUD-843, `policy/mcp-allow.rego`) --
+
+[[verdict]]
+id = "grant spelling wrong"
+gloss = "an MCP allow rule the host skips, so it grants nothing"
+class = """
+The host matches an MCP permission rule by server name, and a glob in the \
+server segment, or a bare `*`, is not a name: the rule is skipped with a warning \
+and grants nothing. Its only symptom is an approval prompt on every call, which \
+reads as harness behaviour rather than as a settings bug.
+"""
+
+[[verdict.route]]
+id = "rule fix first"
+kind = "command"
+target = "name the server literally in `.claude/settings.json` (`mcp__<server>` or `mcp__<server>__<tool>`); a tool-segment glob after a literal server is fine"
+
+[[verdict]]
+id = "grant name missing"
+gloss = "an enabled MCP server no allow rule names, so every call to it prompts"
+class = """
+`enabledMcpjsonServers` turns a project server on, and turning it on grants \
+none of its tools. A server enabled with no allow rule naming it is attached and \
+unusable unattended: every call stops for a human. Serena shipped that way.
+"""
+
+[[verdict.route]]
+id = "grant add first"
+kind = "command"
+target = "add an allow rule naming the server in `.claude/settings.json`, or stop enabling it"
+
+[[verdict]]
+id = "connector deny loose"
+gloss = "a deny spelled with one host-supplied server name, which the host renames away"
+class = """
+A host-supplied connector's exposed name is chosen per registration episode — \
+the same connector was measured under three prefixes (CLOUD-178). A deny rule \
+naming one of those spellings reads as a prohibition and enforces nothing the \
+moment the connector comes back under another. What survives the rename is a \
+`mediated_call` row keyed on the tool's own name, which matches the tool \
+segment whatever the server is called.
+"""
+
+[[verdict.route]]
+id = "rule cover first"
+kind = "command"
+target = "add a `mediated_call` `[[rule]]` whose `tool` is the denied tool's suffix, so the refusal holds under any server spelling"
+
+[[verdict]]
+id = "grant read unread"
+gloss = "a permission or project file was declared and would not parse, so nothing in it was judged"
+class = """
+Could-not-look, and never a clean tree. An absent settings or project file is a \
+repository with nothing to check; one that exists and will not parse is a file \
+the gate tried to read and could not, and reading that as "no defects" is the \
+vacuous pass every could-not-look arm exists to refuse.
+"""
+
+[[verdict.route]]
+id = "path fix first"
+kind = "command"
+target = "make the named file parse as JSON again, then re-run `batten check`"
 
 # --- the committed half of the same grant (CLOUD-1247, inverted by CLOUD-1379) -
 

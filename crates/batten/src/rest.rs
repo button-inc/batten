@@ -108,6 +108,51 @@ pub struct Forge {
     /// has a monotone reading a raise-only clamp could order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub query: Vec<Query>,
+    /// The claims this consumer's tasks need from the credential, each with the
+    /// read endpoint that proves it, which `batten doctor forge` probes
+    /// (CLOUD-843, retiring `gh-preflight`).
+    ///
+    /// **Declared HERE, interpreted in [`crate::preflight`]**, for `query`'s
+    /// reason directly above: which endpoints a consumer calls and which claim
+    /// each needs are the consumer's facts, and walking them is mechanism.
+    ///
+    /// **No weakening comparison in `trust.rs`, and the absence is argued.** A
+    /// probe row is a DIAGNOSIS, not a gate: dropping one makes the report
+    /// shorter and refuses nothing it refused before, because no verdict any rule
+    /// renders reads it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub probe: Vec<Probe>,
+}
+
+/// One `[[forge.probe]]` row: a claim the credential must carry, and the
+/// endpoint that proves it (CLOUD-843).
+///
+/// **Read-only by construction.** A row whose `probe` is `false` is DECLARED and
+/// reported as never probed — a write cannot be tested without performing it,
+/// and an endpoint that needs an existing object may answer 404 for want of one.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct Probe {
+    /// The API-relative endpoint, no leading slash, with `{owner}` and `{repo}`
+    /// resolved from the checkout's forge remote. A query string is allowed:
+    /// a probe asks for one row, not a collection.
+    pub endpoint: String,
+    /// The claim the endpoint needs, as the forge names it in a refusal —
+    /// `checks=read`, `pull_requests=write`.
+    pub claim: String,
+    /// Which of the consumer's tasks need the claim, for the report.
+    pub used_by: String,
+    /// Whether the endpoint is probed. `false` declares the claim and never
+    /// calls the endpoint.
+    #[serde(default = "probed")]
+    pub probe: bool,
+}
+
+/// A probe row is probed unless it says otherwise.
+const fn probed() -> bool {
+    true
 }
 
 /// One `[[forge.query]]` row: a declared, paginated REST read and the reduction
@@ -883,6 +928,7 @@ mod tests {
                 &Forge {
                     credential_names: Vec::new(),
                     query: Vec::new(),
+                    probe: Vec::new(),
                 },
                 env
             ),
@@ -894,6 +940,7 @@ mod tests {
                 &Forge {
                     credential_names: vec![String::from("TOKEN")],
                     query: Vec::new(),
+                    probe: Vec::new(),
                 },
                 env
             ),
@@ -908,6 +955,7 @@ mod tests {
                 &Forge {
                     credential_names: vec![String::from("TOKEN")],
                     query: Vec::new(),
+                    probe: Vec::new(),
                 },
                 |name| if name == "GH_TOKEN" {
                     Some(String::from("leaked"))
@@ -928,6 +976,7 @@ mod tests {
                 &Forge {
                     credential_names: vec![String::from("EMPTY"), String::from("TOKEN")],
                     query: Vec::new(),
+                    probe: Vec::new(),
                 },
                 env
             ),

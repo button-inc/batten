@@ -175,9 +175,23 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   exempt list is asserted equal to the ban's `stays_bash`. Not layered (§8): a
   local file able to add an exempt glob could make a wave read as progress. The
   other CLOUD-843 foundation verbs (`step check|record|run`, `sbom`, `dist`,
-  `mcp grant|posture`, `board check`, `record divergence`, `record census …`)
+  `board check`, `record divergence`, `record census …`)
   carry final arguments and answer `unimplemented` at exit 3 until their package
   lands; the serena launcher's home is the existing `mcp spawn`.
+- `mcp_grant.rs` / `mcp_posture.rs` — `batten mcp grant` and `mcp posture`
+  (CLOUD-843 P5, retiring `connector-allow-resolve`, `mcp-attach-check` and
+  `mcp-allow-check --session`). `grant` maps a renamed server key to a governed
+  name by endpoint (`[mcp] permission_aliases` + `endpoint_contains`, matched
+  raw or percent-decoded by `mcp::endpoint_carries`), then applies the committed
+  deny before allow; every degradation is silence. The bare `mcp__<server>`
+  rule is honoured on the owner's answer, isolated in `mcp::is_bare_server_rule`.
+  `posture` is `mcp::bound_in`'s first production caller (CLOUD-765 count) plus
+  the attach check over the host log tree (`hook::Harness::mcp_logs`) and the
+  spawn ledger (`mcp::spawn_ledger`). The commit half is `policy/mcp-allow.rego`.
+- `preflight.rs` — `batten doctor forge` (CLOUD-843, retiring `gh-preflight`):
+  GETs each committed `[[forge.probe]]` row through `rest::get`, names the claim
+  a 403's `X-Accepted-GitHub-Permissions` asks for, marks the table stale when it
+  differs; `probe = false` rows are declared and never called. Doctor exits.
 - `claim.rs` — whether an issue is pullable, and the receipt that records the
   pull (CLOUD-272, CLOUD-431; ported off `mise-tasks/claim-check.sh` by
   CLOUD-1121). The tracker's automation fires on the PR event — the END of the

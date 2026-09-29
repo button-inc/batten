@@ -1904,6 +1904,31 @@ impl Harness {
             Harness::ExitCode => &[],
         }
     }
+
+    /// The **home-relative** tree this host keeps its per-project MCP connection
+    /// logs under, or `None` where nobody has surveyed one (CLOUD-843).
+    ///
+    /// A harness fact for [`Harness::merge_surfaces`]' reason: where a host
+    /// writes its own logs is a fact about the host, and `mcp posture` reads the
+    /// last connection outcome there. The host keys the project directory
+    /// beneath it; that joining is the caller's.
+    ///
+    /// **`None` is unsurveyed, not "keeps none"** — the same reading
+    /// `project_dir_var` takes — so a posture run on such a host says it could
+    /// not look rather than reporting a clean attach.
+    #[must_use]
+    pub const fn mcp_logs(self) -> Option<&'static str> {
+        match self {
+            // Measured on the retired `mcp-attach-check` (CLOUD-316): the CLI
+            // writes `mcp-logs-<server>/<attempt>.jsonl` beneath this tree.
+            Harness::ClaudeCode => Some(".cache/claude-cli-nodejs"),
+            Harness::Cursor
+            | Harness::CopilotCli
+            | Harness::CodexCli
+            | Harness::GeminiCli
+            | Harness::ExitCode => None,
+        }
+    }
 }
 
 /// The lifecycle events the core normalizes, whatever a host spells them.
