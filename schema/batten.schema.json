@@ -4188,6 +4188,7 @@
             "mise",
             "pinned-toolchain",
             "shell-hygiene",
+            "tracker-hygiene",
             "trunk-based"
           ]
         },

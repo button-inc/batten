@@ -295,7 +295,7 @@ expression: stdout_of(&output)
           "path": "board check",
           "id": "board.check",
           "about": "Refuse a board whose columns, graph or citations lie, and print the ready frontier",
-          "effect": "read",
+          "effect": "write",
           "data_channel": false,
           "flags": [
             {
@@ -305,6 +305,22 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": false,
               "help": "Read this issue's payload from the capture store rather than stdin (repeatable)"
+            },
+            {
+              "name": "cites",
+              "short": null,
+              "long": "cites",
+              "takes_value": false,
+              "positional": false,
+              "help": "Judge each payload's Ready-block citations against the tree instead of the graph"
+            },
+            {
+              "name": "refs",
+              "short": null,
+              "long": "refs",
+              "takes_value": false,
+              "positional": false,
+              "help": "Judge the tree's clause citations against the payloads instead of the graph"
             }
           ],
           "subcommands": []
@@ -3962,10 +3978,6 @@ expression: stdout_of(&output)
     {
       "id": "attribution.tagger",
       "path": "attribution tagger"
-    },
-    {
-      "id": "board.check",
-      "path": "board check"
     },
     {
       "id": "capture.find",

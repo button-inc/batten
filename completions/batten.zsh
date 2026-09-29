@@ -7591,6 +7591,8 @@ normal\:"The default"
 verbose\:"Explain what is being checked"
 debug\:"Add resolution detail"
 trace\:"Add everything"))' \
+'--cites[Judge each payload'\''s Ready-block citations against the tree instead of the graph]' \
+'--refs[Judge the tree'\''s clause citations against the payloads instead of the graph]' \
 '--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
 '*--silent[Say nothing but a verdict or a usage error]' \
 '*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
