@@ -19,58 +19,52 @@
 //! quoted in an error: a build log is the likeliest place in a producer for a
 //! module body or a secret to appear.
 
-use std::process::Stdio;
-
 use crate::Result;
 use crate::error::UsageError;
+use crate::exec::{Diagnostics, piped_argv};
 
 /// What a probe command answered: its exit status and its combined output.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ran {
-    /// The exit status, or `-1` for a command a signal ended.
+    /// The command's own exit status.
     pub status: i32,
     /// Its stdout then its stderr, as text.
     pub log: String,
 }
 
-/// Run `command` to completion, capturing both streams.
+/// Run `command` to completion in the working directory, capturing both
+/// streams.
+///
+/// # Through the placed adapter, never a spawn of its own
+///
+/// `policy/spawn-adapters.rego` places every spawn in the crate, and its table
+/// refuses a new row: this module is not an adapter, so the command goes
+/// through [`piped_argv`], the one argv spawn `exec` owns. The first word is a
+/// NAME the resolution ladder resolves, which is what a caller's `--` argv is.
+/// [`Diagnostics::Keep`] folds stderr in after stdout, because the harness line
+/// that decides the reading may be on either stream.
 ///
 /// # Errors
 ///
 /// A [`UsageError`] for an empty command, and an internal error (exit `3`,
-/// could-not-look) for a program that will not start.
+/// could-not-look) for a program that will not start or that ended without an
+/// exit code, since a signal is no reading of the probe.
 pub fn run(command: &[String]) -> Result<Ran> {
-    let Some((program, arguments)) = command.split_first() else {
+    let Some(program) = command.first() else {
         return Err(UsageError::raise(
             "record probe: the command to run follows `--`",
         ));
     };
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays: running the caller's probe command IS this verb's effect, declared `unclassified` on its surface row (CLOUD-843)"
-    )]
-    let spawned = std::process::Command::new(program)
-        .args(arguments)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output();
-    let output = spawned.map_err(|_| {
-        anyhow::anyhow!("record probe: `{program}` would not start, so there is no reading")
+    let root = std::env::current_dir()
+        .map_err(|_| anyhow::anyhow!("record probe: the working directory is unreadable"))?;
+    let (status, log) = piped_argv(&root, command, "", Diagnostics::Keep, &[]).ok_or_else(|| {
+        anyhow::anyhow!(
+            "record probe: `{program}` would not start or ended without an exit code, so there is no reading"
+        )
     })?;
-    let mut log = String::from_utf8_lossy(&output.stdout).into_owned();
-    // A stream that ends mid-line must not fuse its last line with the other's
-    // first: the harness summary is read anchored at column 0.
-    if !log.is_empty() && !log.ends_with('\n') {
-        log.push('\n');
-    }
-    log.push_str(&String::from_utf8_lossy(&output.stderr));
-    Ok(Ran {
-        status: output.status.code().unwrap_or(-1),
-        log,
-    })
+    Ok(Ran { status, log })
 }
 
 //MUTANT-SUITE crates/batten/tests/it/evaluator_io_probe.rs
-//MUTANT status-not-carried|s@^        status: output.status.code().unwrap_or(-1),$@        status: 0,@|the_probe_verb_derives_a_real_failure_into_the_pass
-//MUTANT stderr-not-read|s@^    log.push_str(&String::from_utf8_lossy(&output.stderr));$@@|the_probe_verb_reads_the_harness_line_on_either_stream
+//MUTANT status-not-carried|s@^    Ok(Ran { status, log })$@    Ok(Ran { status: 0, log })@|the_probe_verb_derives_a_real_failure_into_the_pass
+//MUTANT stderr-not-read|s@Diagnostics::Keep, &\[\]@Diagnostics::Drop, \&[]@|the_probe_verb_reads_the_harness_line_on_either_stream

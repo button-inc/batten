@@ -42,6 +42,7 @@
 // carried: "the probe's exit status and output reach the reading, never the record" crates/batten/src/probe.rs kind:verb crates/batten/tests/it/evaluator_io_probe.rs
 // carried: "a derivation that could not run is not a probe that said nothing" crates/batten/src/probe.rs kind:verb crates/batten/tests/it/evaluator_io_probe.rs
 // changed: "EVALUATOR_IO_PROBE_CMD overrides the probe invocation" crates/batten/src/probe.rs the command IS the argv after `record probe ... --`, so a caller or tier names its own probe without an environment seam
+// changed: "a probe a signal ended is derived as non-zero with no harness line" crates/batten/src/probe.rs the spawn is `exec::piped_argv`'s, which answers could-not-look for a child with no exit code, so `record probe` exits 3 and the task fails rather than recording `probe unread`
 // changed: "a step-receipt hit writes probe failed without building" mise.toml the task no longer consults the step cache: `batten step run` is another package's body, and a hit there must still leave this record
 // changed: "the refusal names the test to fix" batten.toml the retired program printed `<file> <test-name>`; the engine renders `<file> <rule-id>`, because `rules/policy-modules.md` makes the first path-bearing subject the finding's pointer whatever order the subjects are declared in. That is non-negotiable rule 5 — one output contract, no per-verb exception — so the test name moved to the `[[verdict]]` row's gloss and to the JSON channel, where a reader still meets it
 
