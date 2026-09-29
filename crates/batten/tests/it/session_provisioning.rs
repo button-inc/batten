@@ -125,7 +125,7 @@ use common::{at_root, git_in, scratch, stderr, stdout, write};
 ///
 /// A LIST RATHER THAN A COUNT, because a count cannot tell an added row from a
 /// renamed one, and the ordering claim below needs the names anyway.
-const DECLARED: [&str; 14] = [
+const DECLARED: [&str; 13] = [
     "session-stamp",
     "session-install",
     "session-submodules",
