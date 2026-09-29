@@ -1172,6 +1172,9 @@ mod tests {
             // expensive.
             "record suites".to_owned(),
             "record tool".to_owned(),
+            // CLOUD-843's validator door: it RUNS the row's declared argv, so it
+            // is unclassified and off the read-only allowlist, `exec`'s way.
+            "record validate".to_owned(),
             // The release-install contract (CLOUD-65), retired out of
             // `mise-tasks/install-check.sh` under CLOUD-1716. It asks the three
             // authorities that name a release asset and compares them; it is

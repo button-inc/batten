@@ -578,14 +578,16 @@ fn version(root: &Path) -> Look<String> {
     }
 }
 
-/// Ask the pinned binary for one surface's plan.
-fn plan(root: &Path, surface: &[&str]) -> Look<serde_json::Value> {
+/// Ask the pinned binary for one surface's plan, with any extra words the
+/// declared query adds (its `--profile` pairs).
+fn plan(root: &Path, surface: &[&str], extra: &[String]) -> Look<serde_json::Value> {
     #[expect(
         clippy::disallowed_types,
         reason = "stays: the contract IS the pinned binary's own answer, so acquiring it runs that binary — the classification, not an accident of it (CLOUD-947)"
     )]
     let spawned = std::process::Command::new(TOOL)
         .args(surface)
+        .args(extra)
         .args(PLAN_FLAGS)
         .current_dir(root)
         // See [`CALLER_SKIP`]: the contract is the config's plan, and this
@@ -625,7 +627,7 @@ pub fn resolve(root: &Path) -> Look<Contract> {
     };
     let mut surfaces = Vec::with_capacity(SURFACES.len());
     for argv in SURFACES {
-        let Look::Is(value) = plan(root, argv) else {
+        let Look::Is(value) = plan(root, argv, &[]) else {
             return Look::CouldNotLook;
         };
         let Look::Is(surface) = project(&value) else {
@@ -684,6 +686,16 @@ pub struct PlanQuery {
     /// Profiles whose presence makes the plan unusable for this consumer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prohibited_profiles: Vec<String>,
+    /// Profiles to ask the runner about, each passed as `--profile <p>`
+    /// (CLOUD-843).
+    ///
+    /// **The runner's own grammar, including its negation** (`!slow`), so a
+    /// consumer can ask what the gate plans with a tier switched OFF — the only
+    /// reading that shows which steps declare that tier, since a step excluded
+    /// for a missing profile is by construction a step that declared it. The
+    /// answer stays hk's: this passes the words and parses nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profile: Vec<String>,
 }
 
 impl PlanQuery {
@@ -873,7 +885,12 @@ pub fn acquire(root: &Path, query: &PlanQuery) -> Look<Planned> {
     let Look::Is(fingerprint) = fingerprint(root) else {
         return Look::CouldNotLook;
     };
-    let Look::Is(value) = plan(root, argv) else {
+    let extra: Vec<String> = query
+        .profile
+        .iter()
+        .flat_map(|profile| [String::from("--profile"), profile.clone()])
+        .collect();
+    let Look::Is(value) = plan(root, argv, &extra) else {
         return Look::CouldNotLook;
     };
     let (Some(hook), Some(run_type)) = (
@@ -894,8 +911,9 @@ pub fn acquire(root: &Path, query: &PlanQuery) -> Look<Planned> {
         profiles,
         invocation: argv
             .iter()
-            .chain(PLAN_FLAGS.iter())
             .map(|word| (*word).to_owned())
+            .chain(extra.iter().cloned())
+            .chain(PLAN_FLAGS.iter().map(|word| (*word).to_owned()))
             .collect(),
         tool_version,
         // ABSENT rather than could-not-look: a repository that has not committed

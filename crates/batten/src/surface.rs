@@ -1255,6 +1255,48 @@ const DERIVE_INPUT: FlagDecl = FlagDecl {
 /// key MEANS here is a placeholder in the row's endpoint or parameters, and a key
 /// the row names no placeholder for is a usage error rather than an ignored
 /// value. `owner`, `repo` and `since` are the engine's to bind and are refused.
+const FORGE_FETCH: FlagDecl = FlagDecl {
+    id: "fetch",
+    long: Some("fetch"),
+    short: None,
+    help: "Read the commit's check-runs from the forge instead of `<check> <conclusion>` lines on stdin",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
+const FORGE_FANIN: FlagDecl = FlagDecl {
+    id: "fanin",
+    long: Some("fanin"),
+    short: None,
+    help: "With --fetch: record nothing until this check has an answered conclusion",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+const FORGE_ANSWERED: FlagDecl = FlagDecl {
+    id: "answered",
+    long: Some("answered"),
+    short: None,
+    help: "With --fetch: comma-separated conclusions that constitute an answer; anything else is not recorded",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const QUERY_INPUT: FlagDecl = FlagDecl {
     id: "input",
     long: Some("input"),
@@ -5704,9 +5746,32 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Write,
+        flags: &[
+            FlagDecl::positional("ref", "The ref or sha the verdict was taken against"),
+            FORGE_FETCH,
+            FORGE_FANIN,
+            FORGE_ANSWERED,
+        ],
+    },
+    // CLOUD-843's validator door, retiring `[tasks.record-verdicts]`' two
+    // validator arms. `record tool` records a verdict some OTHER program reduced;
+    // this runs the row's own declared argv and records the exit code, so the
+    // reduction is one integer and the reading of it is the consumer's module.
+    //
+    // `Effect::Unclassified`, stated rather than guessed (see `effect.rs`): it
+    // runs a program the CONSUMER names, so what it does cannot be known from
+    // this row — `exec`'s disposition, one leaf over. The spawn is `exec`'s own,
+    // so this adds no site to the inventory.
+    CommandDecl {
+        path: "record validate",
+        id: "record.validate",
+        about: "Run a declared tool row's `run` argv and record its exit code under the row's key",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Unclassified,
         flags: &[FlagDecl::positional(
-            "ref",
-            "The ref or sha the verdict was taken against",
+            "id",
+            "The `[[rule.tools]]` id whose argv runs and whose verdict is recorded",
         )],
     },
     // CLOUD-472. A VERB rather than a `[[recorder]]` on the harness's own todo

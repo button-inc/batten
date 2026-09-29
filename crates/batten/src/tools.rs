@@ -146,6 +146,7 @@ mod tests {
             tool: String::from("validator"),
             version: String::from(version),
             input: String::from(input),
+            run: Vec::new(),
         }
     }
 

@@ -4059,6 +4059,16 @@ pub struct ToolQuery {
     /// Unreadable, or outside the tree, is [`Look::CouldNotLook`]: the id is
     /// absent from the map, never present with an empty verdict.
     pub input: String,
+    /// The argv that takes this verdict, run by `batten record validate <id>`
+    /// from the repository root (CLOUD-843).
+    ///
+    /// **Optional, and a row without one is still read**: a producer outside the
+    /// engine may still pipe its verdict to `record tool`. Declared, the argv is
+    /// the consumer's and never the engine's — which validator, with which
+    /// flags, over which file is this repository's fact (non-negotiable rule 1),
+    /// and what reaches the record is the EXIT CODE and nothing the tool printed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub run: Vec<String>,
 }
 
 impl ToolQuery {

@@ -1600,10 +1600,22 @@ pub enum RecordCommand {
         /// caller can hand over a digest at all.
         id: String,
     },
+    /// Run a declared tool row's `run` argv and record its exit code
+    /// (CLOUD-843).
+    Validate {
+        /// The `[[rule.tools]]` id whose argv runs and whose key is written.
+        id: String,
+    },
     /// Record the forge's check verdicts for one commit.
     Forge {
         /// The ref or sha the verdict was taken against.
         reference: String,
+        /// Read the check-runs from the forge instead of stdin (CLOUD-843).
+        fetch: bool,
+        /// The fan-in check whose answer gates writing at all.
+        fanin: Option<String>,
+        /// The conclusions that constitute an answer, comma-separated.
+        answered: Option<String>,
     },
     /// Record one named family under this branch, for a module to read.
     ///
@@ -3018,8 +3030,14 @@ fn record_of(matches: &ArgMatches) -> Option<RecordCommand> {
         ("tool", matches) => Some(RecordCommand::Tool {
             id: matches.get_one::<String>("id")?.clone(),
         }),
+        ("validate", matches) => Some(RecordCommand::Validate {
+            id: matches.get_one::<String>("id")?.clone(),
+        }),
         ("forge", matches) => Some(RecordCommand::Forge {
             reference: matches.get_one::<String>("ref")?.clone(),
+            fetch: flag(matches, "fetch"),
+            fanin: matches.get_one::<String>("fanin").cloned(),
+            answered: matches.get_one::<String>("answered").cloned(),
         }),
         ("named", matches) => Some(RecordCommand::Named {
             family: matches.get_one::<String>("family")?.clone(),

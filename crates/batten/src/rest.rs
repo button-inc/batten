@@ -182,6 +182,81 @@ pub struct Query {
     /// here, at the declaration, rather than hoped for at every reader. A path
     /// that resolves to nothing records `null`, so every row has every key.
     pub select: Vec<String>,
+    /// Walk this row once per value another row's record holds (CLOUD-843).
+    ///
+    /// **The fan-out a single endpoint cannot express**: a run's jobs, a
+    /// branch's tip commit. The shell bodies this absorbs looped `gh api` over the
+    /// ids an earlier `gh api` printed; declaring the loop names which family the
+    /// members come from, so the walk is the engine's and the members are a
+    /// record a module can also read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub each: Option<Each>,
+    /// Durations derived from the instants a row carries (CLOUD-843).
+    ///
+    /// Arithmetic over instants is the one reduction a module cannot make — no
+    /// clock and no date parser reach the policy surface — so it is declared
+    /// here and computed by the producer, beside the fields it reads.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub span: Vec<Span>,
+}
+
+/// A `[[forge.query]]` row's fan-out: one walk per distinct value at `field`
+/// in the rows of the family `query` recorded, bound to the placeholder
+/// `input` (CLOUD-843).
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct Each {
+    /// The `[[forge.query]]` id whose recorded rows supply the members.
+    pub query: String,
+    /// The dot-separated path, within one of those rows, of a member's value.
+    pub field: String,
+    /// The placeholder each member binds, and the key it is recorded under on
+    /// every row its walk kept.
+    pub input: String,
+}
+
+/// One duration a `[[forge.query]]` row derives from its instants (CLOUD-843).
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct Span {
+    /// The key the duration is recorded under. A placeholder-shaped name, so it
+    /// can never be mistaken for a dotted `select` path.
+    pub name: String,
+    /// The dot-separated path of the RFC 3339 instant the span starts at.
+    pub from: String,
+    /// The dot-separated path of the instant it ends at; absent is the
+    /// producer's clock, which is how an AGE is declared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    /// What the duration counts.
+    #[serde(default)]
+    pub unit: SpanUnit,
+}
+
+/// What a [`Span`] counts.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum SpanUnit {
+    /// Whole seconds between the two instants.
+    #[default]
+    Seconds,
+    /// UTC calendar days between the two instants' dates — a civil-day count,
+    /// so an instant at 23:59 and one at 00:01 the next day are one day apart.
+    Days,
 }
 
 /// A `[[forge.query]]` row's time window: keep the rows whose `field` is an
