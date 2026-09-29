@@ -156,6 +156,10 @@ declared_modules := {
 	# no decider, since an edge upward would make whether a repair preserves the
 	# file depend on that decider's layer.
 	"config_edit",
+	# `codemod` arrived with CLOUD-1580, and it is `config_edit`'s class for Rust:
+	# a pure, lossless rewrite that a `fix` calls. It reaches nothing in this
+	# crate, only `ra_ap_syntax`, so it is a LEAF.
+	"codemod",
 	# `secret` arrived with CLOUD-1569 and this rule named it once more, on the
 	# gate before landing. It is the PUREST LEAF in the table: it reaches nothing
 	# in this crate at all — not even `error` — because its whole surface is one

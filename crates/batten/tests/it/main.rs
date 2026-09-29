@@ -118,6 +118,7 @@ mod claimed_keys;
 mod cli;
 #[cfg(unix)]
 mod closing_key;
+mod codemod;
 mod coderabbit_config;
 mod commit;
 mod commit_admission;

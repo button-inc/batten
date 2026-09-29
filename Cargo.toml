@@ -718,6 +718,17 @@ toml = "1.1"
 # `toml_parser` / `toml_datetime` / `toml_writer` the reader already locks, so it
 # adds the one crate and no second copy of anything beneath it.
 toml_edit = "0.25"
+# Lossless Rust rewrites (CLOUD-1580): the codemod substrate a `fix` needs for a
+# class-2 remedy (`.gen()` -> `.random()`, `#[allow]` -> `#[expect]`). A rowan CST
+# that prints back byte-identical outside the edit, and `errors()`, so a codemod
+# can abstain on input it did not understand instead of rewriting a wrong tree.
+# Every byte-splicing or pattern-only alternative was measured and rejected on the
+# row, because none can write back without destroying comments.
+#
+# PINNED EXACTLY because it tracks rust-analyzer's weekly cadence under a 0.0.x
+# version, where cargo treats every bump as breaking and a caret range would still
+# admit none. `=` makes a bump a deliberate edit that `cargo-deny` and `verify` see.
+ra_ap_syntax = "=0.0.331"
 # A TRANSITIVE crate this workspace does not call, pinned EXACTLY because
 # `cargo-semver-checks` re-resolves rather than reading `Cargo.lock` — so the lock
 # pinning 1.12.0 constrains our builds and not the tool's. Measured 2026-09-03:

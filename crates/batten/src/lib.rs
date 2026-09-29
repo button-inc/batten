@@ -31,6 +31,7 @@ pub mod checks_green;
 pub mod ci;
 pub mod claim;
 pub mod cli;
+pub mod codemod;
 pub mod commit;
 pub mod completion;
 pub mod config;

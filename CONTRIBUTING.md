@@ -88,11 +88,12 @@ Batten adopts rather than rebuilds where strong prior art exists. Track the
 license of each adopted or vendored tool here so the project stays
 open-sourceable:
 
-| Tool       | Role                      | License           | Compatible with Apache-2.0 |
-| ---------- | ------------------------- | ----------------- | -------------------------- |
-| cargo-deny | dependency severity model | Apache-2.0 OR MIT | ✅                         |
-| ripsecrets | secret pointer adapter    | MIT               | ✅                         |
-| toml_edit  | format-preserving edits   | MIT OR Apache-2.0 | ✅                         |
+| Tool         | Role                      | License           | Compatible with Apache-2.0 |
+| ------------ | ------------------------- | ----------------- | -------------------------- |
+| cargo-deny   | dependency severity model | Apache-2.0 OR MIT | ✅                         |
+| ripsecrets   | secret pointer adapter    | MIT               | ✅                         |
+| toml_edit    | format-preserving edits   | MIT OR Apache-2.0 | ✅                         |
+| ra_ap_syntax | lossless Rust rewrites    | MIT OR Apache-2.0 | ✅                         |
 
 Confirm each _to confirm_ entry before that tool is adopted in a shipped
 release. `mise run license-table-check` is that confirmation as a predicate: it
