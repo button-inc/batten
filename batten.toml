@@ -3870,9 +3870,29 @@ severity = "deny"
 # a shell interpreter, so selecting 145 more files would buy 145 reads and zero
 # findings. Whether shellcheck should read them is CLOUD-382's question, not this
 # row's.
-line_sources = ["mise-tasks/**", ".claude/hooks/**", "*.sh"]
 #
-# ONE ROW, TWO RULES, and the finding says which — `attribute()` reads the
+# THE SHELL BAN RIDES THIS ROW (CLOUD-1994), because one row enables a preset at
+# one scope. Its reads are the three columns below the globs: `documents` hands
+# it `[census.shell]` (found by shape, never by name), and `base` with
+# `delta_sources` gives it the diff it judges growth over. The manifests and the
+# workflow glob are in `line_sources` because the census declares them: a
+# declared home the row does not read is one the ban cannot see, and
+# `shell_banned.rs` asserts every one is covered. None of the added files carries
+# a shebang or a constructed sibling, so the two older rules read them and find
+# nothing.
+line_sources = [
+  "mise-tasks/**",
+  ".claude/hooks/**",
+  "*.sh",
+  "mise.toml",
+  "hk.pkl",
+  ".github/workflows/*.yml",
+]
+documents = ["batten.toml"]
+base = "origin/main"
+delta_sources = ["**"]
+#
+# ONE ROW, THREE RULES, and the finding says which — `attribute()` reads the
 # violation's own `rule` and falls back to this id only when a module raises none.
 # The pair is not a bundle of convenience: the second rule is the FIRST one's
 # aftermath. Renaming 138 programs broke 16 constructed sibling paths that no
@@ -3887,7 +3907,9 @@ Two properties of a shell program's NAME. It says its language — `.sh` or \
 first line honour, and one that does not covers the file silently and exits 0. \
 And a sibling it builds at run time (`"$(dirname -- "${BASH_SOURCE[0]}")/x"`) \
 names a file the tree carries, because every caller of that shape guards it and \
-exits 0, so a stale reference goes quiet rather than failing."""
+exits 0, so a stale reference goes quiet rather than failing. And no change \
+writes MORE shell than its base: the `[census.shell]` homes may lose shell lines \
+and never gain them, and a new shell file lands only inside its exempt set."""
 
 # The substitution family of the same kind (CLOUD-864). Measured over one
 # session's transcript: 34 of 38 Bash calls had a first-class tool that does the
@@ -5912,40 +5934,30 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "migrate the predicate onto a rule kind, or waive the increase deliberately with a reason and an expiry; which of the two is the whole question"
 
-# CLOUD-1925. This repository's rule is no bash unless there is no other choice,
-# measured in LINES: `policy/shell-banned.rego` refuses any rise in inline shell
-# lines, a task gaining shell, workflow shell growth and new shell files. It
-# lands BESIDE the two body-count rows above rather than replacing them in one
-# step, because removing a rule is a weakening and a weakening is admitted only
-# by a recorded answer (CLOUD-1078) — which a released binary must record. The
-# rows and their waivers are deleted in the change after CLOUD-1078 ships.
+# CLOUD-1925, CLOUD-1994. This repository's rule is no bash unless there is no
+# other choice, measured in LINES. The ban is `shell-hygiene`'s `no-new-shell`
+# module, enabled by the `shell spelling wrong` row, which publishes it as
+# `shell write other`: it refuses any rise in a declared manifest's shell lines,
+# a unit gaining shell, workflow shell growth and new shell files.
 #
-# `line_sources` is where a SHEBANG can be read on an added path; the extension
-# arm reads `delta.added` over `**` and needs no lines.
-[[rule]]
-id = "shell write other"
-kind = "policy"
-scope = "tree"
-base = "origin/main"
-delta_sources = ["**"]
-line_sources = [
-  "mise.toml",
-  ".github/workflows/*.yml",
-  "mise-tasks/**",
-  ".claude/hooks/**",
-]
-module = "policy/shell-banned.rego"
-severity = "deny"
-
-# CLOUD-843. THE MEASUREMENT BESIDE THE BAN IT MEASURES FOR. `batten census shell`
-# counts every home shell lives in, with the ban's own detection: the manifest's
-# `run` bodies grouped per task, the workflows' `run:` steps, and every tracked
-# shell file — plus hk's command strings, which the ban does not read. Each wave's
-# before and after are two runs of it rather than two hand counts.
+# CLOUD-843. THE MEASUREMENT AND THE BAN READ ONE DECLARATION. `batten census
+# shell` counts every home shell lives in, and the ban refuses growth in exactly
+# those homes: this table is the only place either learns which manifests, keys,
+# unit headers, workflows and exempt files this repository has. So "the census
+# reads 0" and "the ban passes" cannot disagree about a file, because there is no
+# second list for them to disagree over.
 #
-# `exempt` IS THE BAN'S `stays_bash`, EXACTLY, and `census_shell.rs` asserts the
-# two lists are one: a file exempt from the count and refused by the gate (or the
-# reverse) would make "the census reads 0" and "the ban passes" disagree.
+# `exempt` IS THE FIXED SET OF FILES THAT MUST BE SHELL, and `shell_banned.rs`
+# asserts it exactly, so growing it is a failing change a reviewer reads — and
+# between two refs it is a `shell-census-narrowed` weakening, admitted only by a
+# recorded answer (CLOUD-1078):
+#   * `install.sh` runs before batten exists on the host: it is how the binary
+#     arrives.
+#   * `setup.sh` is the pre-toolchain bootstrap, for the same reason.
+#   * `.claude/hooks/git-hook.sh` is the git hook launcher: mise's shims are off
+#     PATH where git runs it.
+#   * `completions/batten.bash` is generated by clap from the command surface;
+#     nobody authors it.
 [census.shell]
 workflows = [".github/workflows/*.yml"]
 exempt = [
@@ -14229,75 +14241,11 @@ target = "rules/policy-modules.md"
 
 # --- this repository's shell ban (CLOUD-1925) --------------------------------
 #
-# Four classes, one module (`policy/shell-banned.rego`). None declares an
-# override: relaxing the ban is a weakening, and a weakening is admitted only by
-# a human's recorded answer (CLOUD-1078), never by a route an author walks alone.
-
-[[verdict]]
-id = "task write refused"
-gloss = "mise.toml's shell code lines rose against the base"
-class = """
-This repository runs no bash unless there is no other choice. A task body's \
-shell lines — a `run = '''`/`\"\"\"` string, or a `run` one-liner or array entry \
-carrying shell syntax — may fall and may never rise. #962 moved 2,720 lines of \
-bash into these strings while the old body-count rows read one per body. Put the \
-decision in a `policy/*.rego` module, the fetch in a declared recorder, and the \
-glue in an argv `run = [...]` or `depends`; what is left over is a verb.
-"""
-
-[[verdict.route]]
-id = "rule read first"
-kind = "document"
-target = "policy/shell-banned.rego"
-
-[[verdict]]
-id = "task add refused"
-gloss = "a mise task that carried no shell at the base carries some now"
-class = """
-The arm relocation cannot offset: moving a body into a task while deleting a \
-bigger one elsewhere keeps the line count level and still gives a task shell it \
-did not have. The pointer is the task's header. Deleting shell is always free, \
-and an edit inside a body that does not grow it is admitted, so a fix to an \
-existing body lands; a new one does not.
-"""
-
-[[verdict.route]]
-id = "rule read first"
-kind = "document"
-target = "policy/shell-banned.rego"
-
-[[verdict]]
-id = "step write refused"
-gloss = "a workflow's run: shell lines rose against the base"
-class = """
-A workflow step is where a shell line is the native spelling, which is why the \
-step itself stays allowed and a single-command `run: mise run <task>` is not \
-counted. What is counted is the shell around it: every code line of a \
-`run: |`/`run: >` block and every one-liner carrying shell syntax. Move the \
-logic into a declared task or the engine and call it from the step.
-"""
-
-[[verdict.route]]
-id = "rule read first"
-kind = "document"
-target = "policy/shell-banned.rego"
-
-[[verdict]]
-id = "shell place refused"
-gloss = "a shell script was added outside the fixed set of files that must be shell"
-class = """
-A `.sh`, `.bash` or `.bats` path, or a file whose shebang names a shell, was \
-added. The only files that must be shell are the ones that run where the engine \
-cannot: the installer and bootstrap that bring it to a host, the git hook \
-launcher mise's shims cannot reach, and clap's generated completions. They are \
-`stays_bash` in the module, asserted exactly by its tier, so the set cannot widen \
-quietly. Anything else is a verb, a module or a recorder.
-"""
-
-[[verdict.route]]
-id = "rule read first"
-kind = "document"
-target = "policy/shell-banned.rego"
+# Its four classes (`task write refused`, `task add refused`, `step write
+# refused`, `shell place refused`) are vendored by the `shell-hygiene` preset
+# since CLOUD-1994, so they are declared in the binary and not here: a class with
+# two definitions is refused at load. None carries an override — relaxing the ban
+# is a weakening, admitted only by a recorded answer (CLOUD-1078).
 
 # --- the same rule, said before the work instead of after it (CLOUD-1131) -----
 

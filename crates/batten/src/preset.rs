@@ -845,9 +845,14 @@ declares, and a probe inside the pin's environment is already correct",
         ],
         patterns: &[],
     },
+    // Version 2 (CLOUD-1994) adds the line-unit ban, lifted out of the consumer
+    // module it was written as. Its facts — which manifests, keys, unit headers,
+    // workflow globs and exempt files — are the consumer's `[census.shell]`
+    // table, found by shape in the documents the row declares, so the preset
+    // names none and abstains for a consumer that declares none.
     Manifest {
         name: "shell-hygiene",
-        version: 1,
+        version: 2,
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
@@ -862,6 +867,17 @@ declares, and a probe inside the pin's environment is already correct",
                 provider: None,
                 pointer: "<preset:shell-hygiene>/sibling-resolves.rego",
                 source: include_str!("policy/presets/shell-hygiene/sibling-resolves.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                // Reads a workflow's `run:` steps, but only in the files the
+                // consumer's own `[census.shell] workflows` globs name — the
+                // declaration is what says "these files carry `run:` steps", the
+                // same contract `batten census shell` reads them under. Its
+                // manifest and file arms read no provider at all.
+                provider: None,
+                pointer: "<preset:shell-hygiene>/no-new-shell.rego",
+                source: include_str!("policy/presets/shell-hygiene/no-new-shell.rego"),
             },
         ],
         verdicts: &[
@@ -883,6 +899,55 @@ with a test that exits 0, so the reference does not fail — it goes silent, and
 behaviour it was reaching for simply never happens. A path that must exist should be \
 asserted rather than tested.",
                 routes: &[read("source read first", "the computed path")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "task write refused",
+                gloss: "a declared manifest's shell code lines rose against the base",
+                class: "This repository has declared where its shell lives and that it writes no \
+more. A command key's shell lines — every code line of a triple-quoted body, and each one-line \
+value or array entry carrying shell syntax — may fall and may never rise. Counted in lines rather \
+than bodies because a body count reads a 245-line body as one, and relocating whole programs into \
+command strings then reads as the surface shrinking. Put the decision in a policy module, the \
+fetch in a declared recorder, and the glue in an argv command; what is left over is a verb.",
+                routes: &[read(
+                    "source read first",
+                    "the manifest's grown unit and the census declaration",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "task add refused",
+                gloss: "a manifest unit that carried no shell at the base carries some now",
+                class: "The arm relocation cannot offset: moving a body into a new unit while deleting \
+a bigger one elsewhere keeps the line count level and still gives a unit shell it did not have. \
+The pointer is the unit's header. Deleting shell is always free, and an edit inside a body that \
+does not grow it is admitted, so a fix to an existing body lands; a new one does not.",
+                routes: &[read("source read first", "the unit's header")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "step write refused",
+                gloss: "a declared workflow's run: shell lines rose against the base",
+                class: "A workflow step is where a shell line is the native spelling, which is why the \
+step itself stays allowed and a single-command step is not counted. What is counted is the shell \
+around it: every code line of a `run: |` or `run: >` block and every one-liner carrying shell \
+syntax. Move the logic into a declared task or the engine and call it from the step.",
+                routes: &[read("source read first", "the workflow's grown step")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "shell place refused",
+                gloss: "a shell file was added outside the declared set of files that must be shell",
+                class: "A `.sh`, `.bash` or `.bats` path, or a file whose first line names a shell, \
+was added. The only files that must be shell are the ones that run where nothing else can — an \
+installer or bootstrap that brings the toolchain to a host, a hook launcher the toolchain cannot \
+reach — and the consumer names them in its census declaration, where widening the set is a \
+reviewed change to the committed config. Anything else is a verb, a module or a recorder.",
+                routes: &[read(
+                    "source read first",
+                    "the census declaration's exempt set",
+                )],
                 applicability: crate::verdict::Applicability::Advice,
             },
         ],
