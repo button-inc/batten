@@ -1550,7 +1550,16 @@ description = "Gate: the API delta on this branch is compatible with the bump re
 # tree's crates (the specs), the baseline's crate tree ids and the branch's
 # commit messages (a commit may declare the break) as `--arg`s, and the tool
 # versions. `step-receipt` answers "run" under CI, so CI still confirms.
-run = "export BATTEN_STEP_SPECS='crates Cargo.toml Cargo.lock batten.toml' BATTEN_STEP_TOOLS='cargo semver-checks --version && rustc --version'; b=$(printf '%s-%s-%s' \"$(git rev-parse -q --verify origin/main:crates)\" \"$(git rev-parse -q --verify origin/main:Cargo.toml)\" \"$(git rev-parse -q --verify origin/main:Cargo.lock)\"); m=$(git log --format=%B origin/main..HEAD | sha256sum | cut -c1-64); if [ \"$(mise run -q step-receipt check semver --arg \"$b\" --arg \"$m\" | cut -c1-3)\" = hit ]; then exit 0; fi; cargo run --quiet -p batten -- semver check || exit $?; mise run -q step-receipt record semver --arg \"$b\" --arg \"$m\" || true"
+#
+# THE BASELINE HALF OF THE KEY IS THE STEP ROW'S NOW, NOT A SHELL LINE'S
+# (CLOUD-1991). The retired body computed the three baseline tree ids and a digest
+# of the branch's commit messages in shell and passed them as `--arg`s. They are
+# answers to argvs — `git rev-parse -q --verify origin/main:<path>` for each of
+# `crates`, `Cargo.toml` and `Cargo.lock`, and `git log --format=%B
+# origin/main..HEAD` — which is exactly what a `[[step]]` row's `tools` column
+# keys a receipt on, so they belong on the `semver` row beside the crates it
+# already names as inputs. The task is the step and nothing else.
+run = "cargo run --quiet -p batten -- step run semver -- cargo run --quiet -p batten -- semver check"
 
 [tasks."claim-check"]
 description = "Gate: the issue you are about to pull is actually unclaimed (reads get_issue payloads on stdin)"
@@ -8541,7 +8550,26 @@ run = "cargo run --quiet -p batten -- doctor target"
 
 [tasks."darwin-link"]
 description = "Gate: the macOS targets actually LINK from Linux, which is what proves no dependency needs an Apple SDK"
-run = "darwin_link() { t=\"${1:-${DARWIN_TARGET:-aarch64-apple-darwin}}\"; case \"$t\" in *-apple-darwin) ;; *) echo \"::error:: darwin-link: expected an *-apple-darwin target, got '$t'\" >&2; exit 2 ;; esac; if [ \"$(mise run -q step-receipt check darwin-link --arg \"$t\" | cut -c1-3)\" = hit ]; then exit 0; fi; mise run target-ensure \"$t\" || exit 1; cargo zigbuild --workspace --profile darwin-link --target \"$t\" || exit 1; mise run -q step-receipt record darwin-link --arg \"$t\" || true; echo \"darwin-link: $t links with no macOS SDK\"; }; darwin_link"
+# AN ARGV SEQUENCE AND A `usage` SPEC, NOT A FUNCTION BODY (CLOUD-1991). The
+# function-called-last shape existed so mise's appended triple became `$1`; the
+# spec binds it by name instead, with the default the body spelled. The triple
+# guard is the spec's `choices`: mise refuses any other value before the body
+# runs, which is stricter than the `*-apple-darwin` glob it replaces — it admits
+# the two Darwin triples `release-artifacts.yml` ships and nothing else.
+#
+# The receipt is `batten step run`'s, keyed on the triple as an `--arg`, so a
+# receipt for one triple never answers for the other (CLOUD-1916). A hit now
+# skips the link and not the target install, which `target-ensure` makes
+# idempotent behind its lock.
+usage = '''
+arg "[target]" default="aarch64-apple-darwin" help="the Darwin triple to link" {
+  choices "aarch64-apple-darwin" "x86_64-apple-darwin"
+}
+'''
+run = [
+  "mise run target-ensure {{usage.target}}",
+  "cargo run --quiet -p batten -- step run darwin-link --arg {{usage.target}} -- cargo zigbuild --workspace --profile darwin-link --target {{usage.target}}",
+]
 
 [tasks."cross-turn"]
 description = "One turn's cross-triple type-check, detached — reports the previous run's failure and never blocks the turn"
@@ -8584,67 +8612,36 @@ description = "Type-check for other targets from Linux (no macOS runner needed)"
 # solved this and the verification path never inherited the solution. Pinning one
 # is its own change (CLOUD-364); what must not happen is this list quietly
 # claiming a coverage it does not have.
-run = '''
-# Receipt-gated (CLOUD-424): a hit skips the target install too — the verdict
-# is about the sources, and the toolchain half lives in the key.
-if [ "$(mise run -q step-receipt check cross-check | cut -c1-3)" = hit ]; then exit 0; fi
-for t in x86_64-pc-windows-gnu x86_64-unknown-linux-musl; do
-  # Guarded because task bodies do not run under `set -e`: with more than one
-  # triple in the list, a failed target install would otherwise be masked by a
-  # later iteration's exit status and this gate would pass having checked less
-  # than it claims. Routed through target-ensure so a concurrent toolchain
-  # mutator queues on the lock instead of colliding inside rustup (CLOUD-220).
-  # THROUGH THE TASK, never a bare `batten` and never `cargo run` (CLOUD-1753).
-  # Not `cargo run`, because this gate asserts about its own body that it stays a
-  # type-check and names no `cargo build|test|run` (tests/cross-check.bats), and
-  # building batten to install a target would put one there.
-  #
-  # AND NOT THE BARE NAME EITHER, which is what this line used to be and what
-  # `verify` caught. `batten` on PATH is a RELEASE, and `doctor target` is a verb
-  # this branch adds — so the bare name resolved a binary that answers
-  # `unrecognized subcommand 'target'`. A caller that resolves PATH may not name a
-  # verb the released binary does not carry; `target-ensure` is the task every
-  # other call site already routes through, and it resolves the TREE.
-  if ! mise run target-ensure "$t"; then
-    echo "::error:: could not install target $t, so its type-check did not run." >&2
-    exit 1
-  fi
-  # `check` does codegen-to-metadata without linking, so it needs no target
-  # linker or SDK — cross-platform compile coverage at Linux-runner cost.
-  #
-  # `--all-targets` because the default target set is lib and bins ONLY: no
-  # `#[cfg(test)]` module, nothing under `tests/`. So this gate carried the
-  # repository's cross-platform claim while never once type-checking the ~440
-  # integration tests against a foreign triple — and the test code is the half
-  # most likely to break, since a suite reaches for `PermissionsExt`, `#!/bin/sh`
-  # fixtures and Unix paths as a matter of course while the library's
-  # platform-specific code is deliberate and already `#[cfg(unix)]`-gated. A test
-  # using a Unix-only API without that gate compiled fine here forever
-  # (CLOUD-395). It passes today, which is the point of adding the flag now: the
-  # property held by luck, and a mechanism is what makes it hold on purpose.
-  # `-D warnings`, and it is the SWEEP rather than a tightening for its own sake
-  # (CLOUD-397). `--all-targets` made the test code visible to this gate for the
-  # first time; tolerating warnings meant the one thing it found — a helper whose
-  # every caller is `#[cfg(unix)]` but which is not, so it is dead on the other
-  # target — printed a line nobody read on every run. The class is invisible on
-  # Linux by construction, so a hand audit of it is feedforward only; this makes
-  # the compiler the sweep, once and for every future instance.
-  #
-  # It cannot red on a third-party warning: cargo compiles registry dependencies
-  # with `--cap-lints allow`, so only workspace code is held to this.
-  # `--message-format=short` is the compiler doing the reduction instead of a
-  # grep guessing at it: one `path:line:col: error: …` per diagnostic, no span
-  # art and no `-->` lines belonging to notes and helps. Nothing parses this
-  # task's stdout — the loop reads the exit status — so the format is free to be
-  # the useful one, and `cross-turn` extracts pointers from it without having to
-  # tell an error's span from a note's (CLOUD-1731).
-  if ! RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --target "$t" --message-format=short; then
-    echo "::error:: cross-check: $t does not type-check cleanly (warnings are denied here — see CLOUD-397)." >&2
-    exit 1
-  fi
-done
-mise run -q step-receipt record cross-check || true
-'''
+# AN ARGV SEQUENCE, NOT A LOOP (CLOUD-1991). The loop's two properties survive as
+# its shape: each triple's install runs first and a failed one stops the task
+# before any check (mise stops an array at its first failing entry), and both
+# triples are type-checked by ONE `cargo check` naming both `--target`s, which
+# cargo supports and which fails if either does. `RUSTFLAGS` rides `env(1)` on
+# the checked command alone, so the engine build the step runs through is not
+# rebuilt under `-D warnings`. The receipt is `batten step run`'s; a hit skips
+# the check, and the installs stay idempotent behind `target-ensure`'s lock.
+#
+# THROUGH `mise run batten`, never a bare `batten` and never `cargo run` spelled
+# here, for the reason the comment above records: this gate asserts about its own
+# body that it names no `cargo build|test|run`.
+#
+# THE FLAGS, whose reasons lived inside the retired body and move here with it:
+#   * `check` does codegen-to-metadata without linking, so it needs no target
+#     linker or SDK — cross-platform compile coverage at Linux-runner cost.
+#   * `--all-targets`, because the default set is lib and bins only, so the ~440
+#     integration tests — the half most likely to reach for a Unix-only API —
+#     were never type-checked against a foreign triple (CLOUD-395).
+#   * `-D warnings` is the sweep for the class invisible on Linux by
+#     construction, such as a helper whose every caller is `#[cfg(unix)]`
+#     (CLOUD-397). Registry dependencies build with `--cap-lints allow`, so only
+#     workspace code is held to it.
+#   * `--message-format=short` is one `path:line:col: error: …` per diagnostic,
+#     which is the shape `cross-turn` reads pointers from (CLOUD-1731).
+run = [
+  "mise run target-ensure x86_64-pc-windows-gnu",
+  "mise run target-ensure x86_64-unknown-linux-musl",
+  "mise run -q batten -- step run cross-check -- env 'RUSTFLAGS=-D warnings' cargo check --workspace --all-targets --target x86_64-pc-windows-gnu --target x86_64-unknown-linux-musl --message-format=short",
+]
 
 [tasks."test:musl"]
 description = "Run the workspace suite against x86_64-unknown-linux-musl — the triple install.sh resolves for every Linux consumer (CLOUD-1821)"
