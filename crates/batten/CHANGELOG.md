@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.189](https://github.com/button-inc/batten/compare/v0.0.188...v0.0.189) - 2026-09-29
+
+### Added
+
+- *(land)* [**breaking**] propose candidate resolutions on a conflicted replay, never apply them
+- *(hook)* [**breaking**] pre-approve an owner-approved dispatch in auto mode, by receipt
+- *(config_edit)* a format-preserving config edit seam with a toml_edit backend
+
+### Fixed
+
+- *(verdict)* declare the stale-receipt route on receipt read missing
+- *(land)* keep gix in gitwrite and regenerate replay's pages
+- *(land)* clear propose's clippy, durable-write, and layering refusals
+- *(nextest)* keep the collector's mutation row out of doc comments
+- *(nextest)* collect every target triple's scratch parent, not only target/tmp
+- *(config_edit)* write through durable::replace and drop the format_collect
+- *(prune)* supersede by cargo unit identity, not by stem
+- *(finding-sink)* name the read that records a row's column
+
+### Other
+
+- *(verdict)* one stale-receipt route const, with its declared mutation
+- *(hook)* sample the missing-receipt refusal for the route binding case
+- *(closure)* report the distribution on stderr
+- *(closure)* record the four modules #962 added to the plumbing
+- *(closure)* name the plumbing set, because a count cannot see a swap
+- *(closure)* gate the real distribution, and delete the vacuous one
+- *(closure)* the cliff premise is refuted by the resolved graph
+- *(closure)* ratchet the module dependency distribution
+- *(shell-retirement)* bound the six-deletion arm at 30x the floor
+
 ## [0.0.188](https://github.com/button-inc/batten/compare/v0.0.187...v0.0.188) - 2026-09-28
 
 ### Added
