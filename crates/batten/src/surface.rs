@@ -1248,13 +1248,9 @@ const DERIVE_INPUT: FlagDecl = FlagDecl {
     value: ValueDecl::StrMany,
 };
 
-/// A `<name>=<value>` binding for one of a `[[forge.query]]` row's own
-/// placeholders (CLOUD-843).
-///
-/// `DERIVE_INPUT`'s spelling and its `StrMany` reason, with its own help: what a
-/// key MEANS here is a placeholder in the row's endpoint or parameters, and a key
-/// the row names no placeholder for is a usage error rather than an ignored
-/// value. `owner`, `repo` and `since` are the engine's to bind and are refused.
+/// `record forge --fetch`: read the commit's check-runs in process rather than
+/// take reduced lines on stdin (CLOUD-843, retiring the forge arm of
+/// `[tasks.record-verdicts]`).
 const FORGE_FETCH: FlagDecl = FlagDecl {
     id: "fetch",
     long: Some("fetch"),
@@ -1269,6 +1265,8 @@ const FORGE_FETCH: FlagDecl = FlagDecl {
     value: ValueDecl::Bool,
 };
 
+/// `record forge --fetch --fanin <check>`: the check whose answered conclusion
+/// gates writing any record at all.
 const FORGE_FANIN: FlagDecl = FlagDecl {
     id: "fanin",
     long: Some("fanin"),
@@ -1283,6 +1281,8 @@ const FORGE_FANIN: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `record forge --fetch --answered <list>`: the conclusions that constitute an
+/// answer, the consumer's own set and never a list spelled in this crate.
 const FORGE_ANSWERED: FlagDecl = FlagDecl {
     id: "answered",
     long: Some("answered"),
@@ -1297,6 +1297,13 @@ const FORGE_ANSWERED: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// A `<name>=<value>` binding for one of a `[[forge.query]]` row's own
+/// placeholders (CLOUD-843).
+///
+/// `DERIVE_INPUT`'s spelling and its `StrMany` reason, with its own help: what a
+/// key MEANS here is a placeholder in the row's endpoint or parameters, and a key
+/// the row names no placeholder for is a usage error rather than an ignored
+/// value. `owner`, `repo` and `since` are the engine's to bind and are refused.
 const QUERY_INPUT: FlagDecl = FlagDecl {
     id: "input",
     long: Some("input"),

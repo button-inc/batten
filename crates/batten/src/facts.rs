@@ -2114,7 +2114,7 @@ impl Fact {
     fn plan_schema_fragment() -> serde_json::Value {
         serde_json::json!({
             "type": ["object", "null"],
-            "description": "Fact::Plan (CLOUD-949). Declared id -> the adopted gate runner's EFFECTIVE plan for that surface, acquired from the runner rather than re-derived. Bound to the invocation, the tool version and an `inputFingerprint` over HEAD and every differing path's current bytes -- HEAD alone is insufficient, because dirty and index state change the selection without moving HEAD. `required` and `prohibitedProfiles` are the consumer's own row, carried alongside so a module compares two halves of one document. Pointer-only: a step's identity, its status, the reason KIND, its order, its group and a file COUNT -- never a command, a matched path, or a reason's prose. An id absent from the map could not be acquired, which is a reacquire and never a clean plan.",
+            "description": "Fact::Plan (CLOUD-949). Declared id -> the adopted gate runner's EFFECTIVE plan for that surface, acquired from the runner rather than re-derived. Bound to the invocation, the tool version and an `inputFingerprint` over HEAD and every differing path's current bytes -- HEAD alone is insufficient, because dirty and index state change the selection without moving HEAD. `required` and `prohibitedProfiles` are the consumer's own row, carried alongside so a module compares two halves of one document. Pointer-only: a step's identity, its status, the reason KIND (the first reason's, and every reason's in `reasonKinds`), its order, its group and a file COUNT -- never a command, a matched path, or a reason's prose. An id absent from the map could not be acquired, which is a reacquire and never a clean plan.",
             "additionalProperties": {
                 "type": ["object", "null"],
                 "properties": {
@@ -2135,6 +2135,7 @@ impl Fact {
                                 "name": {"type": "string"},
                                 "status": {"type": "string"},
                                 "reasonKind": {"type": ["string", "null"]},
+                                "reasonKinds": {"type": "array", "items": {"type": "string"}},
                                 "orderIndex": {"type": "integer"},
                                 "parallelGroupId": {"type": "string"},
                                 "fileCount": {"type": "integer"},

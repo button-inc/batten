@@ -17,6 +17,15 @@
 //! skipped, pending — is not recorded as a grading, and an answered one of either
 //! colour still is.
 //!
+//! # The step receipt, carried into the verb
+//!
+//! The body also held CLOUD-1891's receipt: validators whose inputs had not
+//! moved were not re-run, and a receipt was written only over a clean store. The
+//! successor keeps both rules inside `record validate` — a question already
+//! answered `0` over the same bytes, tool, version AND argv is not asked again,
+//! and a non-zero answer never is held — and the last three cases here are that
+//! receipt's discrimination.
+//!
 // carried: "[tasks.record-verdicts]" crates/batten/src/record.rs kind:mechanism crates/batten/tests/it/record_verdicts.rs
 // carried: "an unanswered conclusion is not recorded as a grading" crates/batten/src/record.rs kind:mechanism
 // carried: "an answered conclusion is still recorded" crates/batten/src/record.rs kind:mechanism
@@ -47,17 +56,29 @@ fn consumer(name: &str) -> (PathBuf, PathBuf) {
     (dir, scratch(&format!("record-verdicts-{name}-forge")))
 }
 
-/// One check-run as the endpoint returns it.
+/// One check-run as the endpoint returns it, concluding the instant it started.
 fn run(name: &str, conclusion: Option<&str>, started: &str, id: u64) -> String {
+    run_until(name, conclusion, started, started, id)
+}
+
+/// One check-run as the endpoint returns it, with its own conclusion stamp —
+/// `null` while it has not concluded.
+fn run_until(
+    name: &str,
+    conclusion: Option<&str>,
+    started: &str,
+    completed: &str,
+    id: u64,
+) -> String {
     let conclusion =
         conclusion.map_or_else(|| String::from("null"), |value| format!("\"{value}\""));
-    let status = if conclusion == "null" {
-        "in_progress"
+    let (status, completed) = if conclusion == "null" {
+        ("in_progress", String::from("null"))
     } else {
-        "completed"
+        ("completed", format!("\"{completed}\""))
     };
     format!(
-        r#"{{"name": "{name}", "status": "{status}", "conclusion": {conclusion}, "started_at": "{started}", "id": {id}, "output": {{"summary": "a log nobody declared"}}}}"#
+        r#"{{"name": "{name}", "status": "{status}", "conclusion": {conclusion}, "started_at": "{started}", "completed_at": {completed}, "id": {id}, "output": {{"summary": "a log nobody declared"}}}}"#
     )
 }
 
@@ -141,22 +162,133 @@ fn an_answered_conclusion_is_still_recorded() {
 }
 
 #[test]
-fn the_latest_run_per_name_wins_by_start_then_id() {
+fn the_latest_run_per_name_wins_by_completion_then_start() {
     // A re-run adds a second run under the same name, and the reader folds a
     // record into a map — so the producer must choose by recency, never by
-    // listing order. The older success is listed FIRST here, and a higher id
-    // does not make it newer.
+    // listing order, and by `checks green`'s recency (CLOUD-1662). The two runs
+    // OVERLAP: the failure started first and concluded last, so a key led by
+    // `started_at` would pick the success, and the last-listed row is the
+    // success too. A higher id does not make a run newer either.
     let (dir, forge) = consumer("latest");
     forge_answers(
         &forge,
         &[
-            run("final", Some("success"), "2026-09-28T01:00:00Z", 9),
-            run("final", Some("failure"), "2026-09-28T02:00:00Z", 2),
+            run_until(
+                "final",
+                Some("failure"),
+                "2026-09-28T01:00:00Z",
+                "2026-09-28T03:00:00Z",
+                2,
+            ),
+            run_until(
+                "final",
+                Some("success"),
+                "2026-09-28T02:00:00Z",
+                "2026-09-28T02:30:00Z",
+                9,
+            ),
         ],
     );
     let written = fetch(&dir, &forge, Some("final"));
     assert_eq!(written.status.code(), Some(0), "{}", said(&written));
     assert_eq!(recorded(&dir).as_deref(), Some("final failure\n"));
+}
+
+/// A repository declaring one validator row whose argv is `run`.
+///
+/// `mkdir` is the validator because its answer MOVES with the tree it runs in:
+/// the first run creates the directory and answers `0`, and any second run over
+/// the same tree answers non-zero. So whether the verb asked again is readable
+/// off the record alone.
+fn validating(name: &str, run: &str) -> PathBuf {
+    let dir = scratch(&format!("record-verdicts-{name}"));
+    init_repo(&dir);
+    write(&dir, "subject.toml", "key = \"value\"\n");
+    write(
+        &dir,
+        "batten.toml",
+        &format!(
+            "version = 1\n\n[[rule]]\nid = \"tool judge dirty\"\nkind = \"policy\"\nscope = \"tree\"\nmodule = \"validator-verdict-clean.rego\"\nseverity = \"deny\"\n\n[[rule.tools]]\nid = \"config-validator\"\ntool = \"checker\"\nversion = \"1.1.0\"\ninput = \"subject.toml\"\nrun = {run}\n"
+        ),
+    );
+    write(
+        &dir,
+        "validator-verdict-clean.rego",
+        &std::fs::read_to_string(common::at_root("policy/validator-verdict-clean.rego"))
+            .expect("the shipped module"),
+    );
+    dir
+}
+
+/// `record validate config-validator`, and the one record it keeps.
+fn validated(dir: &Path) -> (Output, Option<String>) {
+    let mut command = common::batten();
+    command
+        .args(["record", "validate", "config-validator"])
+        .current_dir(dir);
+    let out = command.output().expect("the compiled binary runs");
+    let store = dir.join(".git").join("batten-tools");
+    let body = std::fs::read_dir(&store).ok().and_then(|entries| {
+        entries
+            .filter_map(Result::ok)
+            .find(|entry| entry.path().is_file())
+            .and_then(|entry| std::fs::read_to_string(entry.path()).ok())
+    });
+    (out, body)
+}
+
+/// THE RECEIPT, CARRIED (CLOUD-1891). The retired body skipped its validators
+/// when the bytes they read had not moved, so `verify` did not re-run what the
+/// hk steps had just run. A second ask over the same bytes and the same argv is
+/// answered from the clean record — had `mkdir` run again, it would have
+/// answered non-zero.
+#[test]
+fn a_clean_answer_over_the_same_bytes_and_argv_is_not_asked_again() {
+    let dir = validating("receipt", r#"["mkdir", "asked"]"#);
+    let (first, body) = validated(&dir);
+    assert_eq!(first.status.code(), Some(0), "{}", said(&first));
+    assert_eq!(body.as_deref(), Some("exit 0\n"));
+    let (second, body) = validated(&dir);
+    assert_eq!(second.status.code(), Some(0), "{}", said(&second));
+    assert_eq!(body.as_deref(), Some("exit 0\n"), "{}", said(&second));
+}
+
+/// THE RECEIPT IS KEYED ON THE ARGV TOO, which the record key is not: a
+/// consumer who changes the validator's flags has asked a different question
+/// of the same bytes, and a clean answer to the old one is not its answer.
+#[test]
+fn a_moved_argv_is_asked_again_over_the_same_bytes() {
+    let dir = validating("receipt-argv", r#"["mkdir", "asked"]"#);
+    let (first, _) = validated(&dir);
+    assert_eq!(first.status.code(), Some(0), "{}", said(&first));
+    let config = std::fs::read_to_string(dir.join("batten.toml")).expect("the config");
+    write(
+        &dir,
+        "batten.toml",
+        &config.replace(r#"["mkdir", "asked"]"#, r#"["mkdir", "asked", "again"]"#),
+    );
+    let (second, body) = validated(&dir);
+    assert_eq!(second.status.code(), Some(0), "{}", said(&second));
+    assert_ne!(
+        body.as_deref(),
+        Some("exit 0\n"),
+        "the moved argv ran, and `asked` already existed"
+    );
+}
+
+/// AND A NON-ZERO ANSWER IS NEVER HELD: a flake reads the same as a finding, so
+/// the next ask runs again rather than replaying it until an input moves.
+#[test]
+fn a_non_zero_answer_is_asked_again() {
+    let dir = validating("receipt-dirty", r#"["mkdir", "asked"]"#);
+    std::fs::create_dir(dir.join("asked")).expect("pre-create, so the first ask fails");
+    let (first, body) = validated(&dir);
+    assert_eq!(first.status.code(), Some(0), "{}", said(&first));
+    assert_ne!(body.as_deref(), Some("exit 0\n"));
+    std::fs::remove_dir(dir.join("asked")).expect("clear the cause");
+    let (second, body) = validated(&dir);
+    assert_eq!(second.status.code(), Some(0), "{}", said(&second));
+    assert_eq!(body.as_deref(), Some("exit 0\n"), "{}", said(&second));
 }
 
 #[test]

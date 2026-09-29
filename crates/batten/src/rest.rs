@@ -210,7 +210,13 @@ pub struct Query {
 pub struct Each {
     /// The `[[forge.query]]` id whose recorded rows supply the members.
     pub query: String,
-    /// The dot-separated path, within one of those rows, of a member's value.
+    /// Which of the source row's `select` paths holds a member's value, spelled
+    /// exactly as that row declares it.
+    ///
+    /// A recorded row carries each selected path as ONE flat key — `commit.sha`
+    /// is a key, not an object — so this is looked up whole rather than walked,
+    /// and a path the source never selected is refused at load, where it can be
+    /// fixed, rather than read as could-not-look on every run.
     pub field: String,
     /// The placeholder each member binds, and the key it is recorded under on
     /// every row its walk kept.

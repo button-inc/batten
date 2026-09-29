@@ -299,6 +299,27 @@ fn the_flag_in_a_comment_alone_does_not_satisfy_it() {
     );
 }
 
+/// THE TIER IS A MEMBERSHIP QUESTION, so every reason answers it. The retired
+/// `jq` join selected a step when ANY of its reasons was `profile_exclude`; the
+/// acquisition carries every reason's kind so the module can ask the same, and a
+/// step whose runner lists another reason first stays in the tier.
+#[test]
+fn a_step_whose_profile_is_not_its_first_reason_is_still_in_the_tier() {
+    let plan = serde_json::json!({"steps": [{
+        "name": "slow-and-unmatched",
+        "status": "skipped",
+        "orderIndex": 0,
+        "parallelGroupId": "0",
+        "reasons": [{"kind": "no_files"}, {"kind": "profile_exclude"}],
+    }]});
+    let Look::Is(steps) = hk::planned_steps(&plan) else {
+        panic!("a well-formed plan projects")
+    };
+    let step = steps.first().expect("one step");
+    assert_eq!(step.reason_kind.as_deref(), Some("no_files"));
+    assert_eq!(step.reason_kinds, vec!["no_files", "profile_exclude"]);
+}
+
 #[test]
 fn this_repositorys_two_tier_gate_is_wired_today() {
     // THE ACQUISITION OVER THIS CHECKOUT, and the profile words reaching hk: the
@@ -331,7 +352,10 @@ fn this_repositorys_two_tier_gate_is_wired_today() {
         assert!(
             fast.steps.iter().any(|step| step.name == name
                 && step.status == "skipped"
-                && step.reason_kind.as_deref() == Some("profile_exclude")),
+                && step
+                    .reason_kinds
+                    .iter()
+                    .any(|kind| kind == "profile_exclude")),
             "`{name}` is in the slow tier"
         );
         assert!(

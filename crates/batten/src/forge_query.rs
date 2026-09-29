@@ -277,15 +277,20 @@ fn validate_derived(
                 "`each.query` names this row itself, whose record the walk is about to replace",
             ));
         }
-        if !queries.iter().any(|other| other.id == each.query) {
+        let Some(source) = queries.iter().find(|other| other.id == each.query) else {
             return Err(format!(
                 "`each.query` names `{}`, which no `[[forge.query]]` row declares",
                 each.query
             ));
-        }
-        if segments(&each.field).is_none() {
-            return Err(String::from(
-                "`each.field` is not a dot-separated field path",
+        };
+        // THE MEMBER IS READ OFF THE RECORDED ROW, which carries the source's
+        // `select` paths as its keys, spelled as declared — so a field the source
+        // never selected is a member no walk could ever find, refused here rather
+        // than read at run time as could-not-look.
+        if !source.select.iter().any(|path| path == &each.field) {
+            return Err(format!(
+                "`each.field` `{}` is not one of `{}`'s `select` paths, which are the only keys its recorded rows carry",
+                each.field, each.query
             ));
         }
         if !is_name(&each.input) || RESERVED.contains(&each.input.as_str()) {
@@ -420,6 +425,7 @@ enum Encoding {
 //MUTANT fan-out-member-untagged|s@^            map.insert(key.to_owned(), value.clone());$@@|a_fan_out_walks_each_recorded_member_and_tags_its_rows
 //MUTANT span-never-measured|s@^            map.insert(span.name.clone(), measured(row, span, now));$@@|a_fan_out_walks_each_recorded_member_and_tags_its_rows
 //MUTANT members-repeat|s@^        if seen.insert(value.to_string()) {$@        if true {@|a_torn_or_memberless_source_is_could_not_look_and_members_are_distinct
+//MUTANT member-field-unselected|s@^        if !source.select.iter().any(.path. path == .each.field) {$@        if false {@|a_fan_out_or_span_that_could_never_run_is_refused_at_load
 /// Render one template with its placeholders bound, encoded as `encoding` says.
 fn render(
     template: &str,
@@ -909,6 +915,10 @@ pub fn produce_each(
 /// The distinct values at `field_path` across a recorded family's rows, in the
 /// order the family recorded them.
 ///
+/// `field_path` is a KEY of the recorded row — one of the source's `select`
+/// paths, which the reduction writes flat — so it is a single lookup and never a
+/// walk; [`validate`] has already refused a path the source did not select.
+///
 /// # Errors
 ///
 /// A could-not-look pointer when the body is torn — not exactly one closing
@@ -1177,6 +1187,14 @@ mod tests {
         let mut row = jobs();
         row.each = row.each.map(|each| crate::rest::Each {
             input: String::from("unread"),
+            ..each
+        });
+        refused(row);
+        // A member field the source never selected, so no row it records carries
+        // the key — refused at load rather than read as could-not-look per run.
+        let mut row = jobs();
+        row.each = row.each.map(|each| crate::rest::Each {
+            field: String::from("run_id"),
             ..each
         });
         refused(row);

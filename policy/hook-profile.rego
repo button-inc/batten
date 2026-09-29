@@ -70,11 +70,18 @@ acquired if {
 }
 
 # The slow tier: every step the fast plan skips because its profile is off.
+#
+# ANY REASON, NOT THE FIRST. `reasonKind` is the reason the runner acted on;
+# whether a step DECLARED the tier is a membership question every reason answers,
+# which is how the retired `jq` join asked it
+# (`any(.reasons[]?; .kind == "profile_exclude")`). Reading the first alone would
+# drop a step whose runner listed another reason ahead of the profile out of the
+# tier, and nothing would say so.
 tier contains step.name if {
 	acquired
 	some step in plan("gate-fast").steps
 	step.status == skipped
-	step.reasonKind == profile_exclude
+	profile_exclude in step.reasonKinds
 }
 
 selected contains step.name if {
@@ -148,12 +155,16 @@ violation contains {
 # --- the load-time tier ------------------------------------------------------
 #
 # These pin the PREDICATE. They cannot pin that the ENGINE builds
-# `input.tree["tool-verdict"]["hk-plan"]` at all — a `with input as` case
-# fabricates the very shape the engine may be unable to produce (CLOUD-845), and
-# here it would fabricate the keying the record turns on.
-# `crates/batten/tests/hook_profile.rs` is that tier.
+# `input.tree.plan` at all — a `with input as` case fabricates the very shape the
+# engine may be unable to produce (CLOUD-845), and here it would fabricate the
+# acquisition the tier turns on. `crates/batten/tests/it/hook_profile.rs` is that
+# tier.
 
-step(name, status, kind) := {"name": name, "status": status, "reasonKind": kind, "orderIndex": 0, "parallelGroupId": "0", "fileCount": 0}
+kinds_of(kind) := [] if kind == null
+
+kinds_of(kind) := [kind] if kind != null
+
+step(name, status, kind) := {"name": name, "status": status, "reasonKind": kind, "reasonKinds": kinds_of(kind), "orderIndex": 0, "parallelGroupId": "0", "fileCount": 0}
 
 # `slow` maps each slow-tier step to its status under `check`; `fast` is one
 # ordinary step both plans include.
@@ -191,6 +202,20 @@ test_a_step_skipped_for_a_glob_miss_is_not_in_the_tier if {
 		"lines": {".claude/hooks/git-hook.sh": ["hk run pre-commit --profile '!slow'"]},
 	}}
 	violation == {{"rule": "hook declare other", "verdict": "step declare missing", "subjects": [{"count": 1}]}} with input as glob
+}
+
+# A STEP WHOSE PROFILE IS NOT ITS FIRST REASON is still in the tier, and still a
+# stray when `check` does not select it.
+test_a_step_whose_profile_is_not_its_first_reason_is_in_the_tier if {
+	late := object.union(step("late", "skipped", "no_files"), {"reasonKinds": ["no_files", "profile_exclude"]})
+	listed := {"tree": {
+		"plan": {
+			"gate": {"steps": [step("late", "skipped", "no_files")]},
+			"gate-fast": {"steps": [late]},
+		},
+		"lines": {".claude/hooks/git-hook.sh": ["hk run pre-commit --profile '!slow'"]},
+	}}
+	violation == {{"rule": "hook declare other", "verdict": "step declare missing", "subjects": [{"count": 1}]}} with input as listed
 }
 
 # An evaporated tier is a FINDING, not a clean read — the anti-vacuity arm.

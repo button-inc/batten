@@ -183,6 +183,10 @@ pub fn run_tool(id: &str, overrides: &Overrides) -> Result<ExitCode> {
 /// the tool was started, with the same two functions [`run_tool`] and the reader
 /// use.
 ///
+/// **A question already answered `0` is not asked again** — see
+/// [`already_clean`] — which is the step receipt the retired body kept, so a
+/// `verify` that follows the hk steps over the same bytes pays nothing twice.
+///
 /// # Errors
 ///
 /// A [`UsageError`] when no row declares `id`, when it declares no `run`, or when
@@ -210,6 +214,17 @@ pub fn run_validate(id: &str, overrides: &Overrides, err: &mut dyn Write) -> Res
         )));
     };
     let key = tools::record_key(&row, &tools::digest(&bytes));
+    let git_dir = git::git_dir(Path::new("."))?;
+    let record = tools::record_path(&git_dir, &key);
+    let receipt = git_dir.join(RECEIPTS).join(&key);
+    let asked = tools::digest(row.run.join("\0").as_bytes());
+    if already_clean(&record, &receipt, &asked) {
+        writeln!(
+            err,
+            "record validate {id}: these bytes already answered 0 to this argv; not asked again"
+        )?;
+        return Ok(ExitCode::Success);
+    }
     let code = match crate::exec::run_in(&root, &row.run) {
         Ok(ExitCode::Success) => Some(0),
         Ok(_) => None,
@@ -224,45 +239,92 @@ pub fn run_validate(id: &str, overrides: &Overrides, err: &mut dyn Write) -> Res
         )?;
         return Ok(ExitCode::Internal);
     };
-    let git_dir = git::git_dir(Path::new("."))?;
-    store(
-        &tools::record_path(&git_dir, &key),
-        &format!("exit {code}\n"),
-    )?;
+    // THE RECEIPT GOES FIRST AND COMES BACK LAST, `forge::conditional_get`'s
+    // commit-point order: an interruption between the two writes leaves no
+    // receipt, which costs one re-run and never replays a stale answer.
+    if let Err(error) = std::fs::remove_file(&receipt)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(error).context("remove a stale validate receipt");
+    }
+    store(&record, &format!("exit {code}\n"))?;
+    if code == 0 {
+        store(&receipt, &asked)?;
+    }
     Ok(ExitCode::Success)
+}
+
+/// Where `record validate` keeps the argv each clean record was answered to,
+/// under the git directory and beside — never inside — the tool store, so the
+/// reader's keyed lookup can never mistake one for a verdict.
+const RECEIPTS: &str = "batten-tools-asked";
+
+/// Whether this exact question — these bytes, this tool at this version, this
+/// argv — was already answered `0` (CLOUD-843, carrying CLOUD-1891's step
+/// receipt out of `[tasks.record-verdicts]`).
+///
+/// **The retired receipt's two rules, kept.** It skipped a validator only when
+/// the inputs it read were unchanged, and it wrote a receipt only over a CLEAN
+/// store, because "a network flake reads the same as a bad config" and an error
+/// held under a receipt "replays forever until an input moves". So a record
+/// that is anything but `exit 0` is always asked again, and so is one whose
+/// argv moved: the key carries the tool, its pinned version and the input's
+/// digest, and the receipt carries the argv the key does not.
+///
+/// `0` here is not a verdict. What a code MEANS is the consumer's module; this
+/// only declines to re-ask a question whose last answer was the process
+/// convention for success, which is the one answer a flake cannot forge.
+//
+// THE RECEIPT'S DISCRIMINATION, over the compiled binary: skipping the check
+// re-runs a validator whose inputs did not move, and an unkeyed argv replays an
+// answer to a question nobody is asking.
+//MUTANT receipt-never-read|s@^    if already_clean(.record, .receipt, .asked) {$@    if false {@|a_clean_answer_over_the_same_bytes_and_argv_is_not_asked_again
+//MUTANT receipt-ignores-argv|s@^    let same_argv = .*$@    let same_argv = std::fs::metadata(receipt).is_ok();@|a_moved_argv_is_asked_again_over_the_same_bytes
+fn already_clean(record: &Path, receipt: &Path, asked: &str) -> bool {
+    let answered_zero = std::fs::read_to_string(record).is_ok_and(|body| body == "exit 0\n");
+    let same_argv = std::fs::read_to_string(receipt).is_ok_and(|held| held == asked);
+    answered_zero && same_argv
 }
 
 /// The forge's latest ANSWERED conclusion per check name, as `forge-verdict`
 /// records spell them (CLOUD-1707, CLOUD-1965).
 ///
-/// **Latest per name, by `started_at` then `id`**: a re-run adds a second run
-/// under the same name, and the reader folds a record into a map, so the line
-/// that wins must be chosen here by recency rather than by listing order.
+/// **Latest per name, by `checks green`'s own choice of it**: a re-run adds a
+/// second run under the same name, and the reader folds a record into a map, so
+/// the line that wins must be chosen here by recency rather than by listing
+/// order. The choice is [`crate::checks_green::winner`] itself — `completed_at`
+/// first, then `started_at`, then `id`, with a completed-but-unanswered twin
+/// never burying a verdict it raced — rather than a second ordering beside it: a
+/// key led by `started_at` picks the other run of an overlapping pair
+/// (CLOUD-1662), and the record and `checks green` would then speak for one name
+/// with two conclusions.
 ///
 /// **Answered only, and membership is the caller's declared set**: a `skipped`
 /// draft-era check, a `cancelled` fan-in and a pending run all judged nothing,
 /// and recording any of them as a conclusion is how this producer twice wrote a
 /// could-not-look as a verdict. The set is the one `checks green` reads, so the
-/// two cannot disagree about what counts as an answer.
+/// two agree on what counts as an answer AND on which run is the latest.
 //
 // THE FORGE ARM'S DISCRIMINATION (CLOUD-843), each over the compiled binary and
 // the fixture forge: an unanswered conclusion recorded as a grading
-// (CLOUD-1965), the first-listed run winning over the latest, a record written
-// before the fan-in answers, and a spaced name mangled into the record.
+// (CLOUD-1965), a run other than `checks green`'s latest winning, a record
+// written before the fan-in answers, and a spaced name mangled into the record.
 //MUTANT-SUITE crates/batten/tests/it/record_verdicts.rs
 //MUTANT unanswered-recorded|s@^    answered.contains(.conclusion)$@    true@|an_unanswered_conclusion_is_not_recorded_as_a_grading
-//MUTANT listing-order-wins|s@^            (run.started_at.as_str(), run.id) > (held.started_at.as_str(), held.id)$@            false@|the_latest_run_per_name_wins_by_start_then_id
+//MUTANT listing-order-wins|s@^        if let Some(run) = crate::checks_green::winner(.group, .owned) {$@        if let Some(run) = group.last().copied() {@|the_latest_run_per_name_wins_by_completion_then_start
 //MUTANT fanin-ungated|s@^        && !graded.contains_key(fanin)$@        \&\& false@|nothing_is_written_until_the_fan_in_has_answered
 //MUTANT spaced-name-kept|s@^        if name.chars().any(char::is_whitespace) {$@        if false {@|a_name_with_whitespace_is_dropped_and_counted_never_mangled
 #[must_use]
 pub fn graded(runs: &[crate::checks_green::Run], answered: &[&str]) -> BTreeMap<String, String> {
-    let mut latest: BTreeMap<&str, &crate::checks_green::Run> = BTreeMap::new();
+    let owned: Vec<String> = answered.iter().map(|word| (*word).to_owned()).collect();
+    let mut grouped: BTreeMap<&str, Vec<&crate::checks_green::Run>> = BTreeMap::new();
     for run in runs {
-        let newer = latest.get(run.name.as_str()).is_none_or(|held| {
-            (run.started_at.as_str(), run.id) > (held.started_at.as_str(), held.id)
-        });
-        if newer {
-            latest.insert(run.name.as_str(), run);
+        grouped.entry(run.name.as_str()).or_default().push(run);
+    }
+    let mut latest: BTreeMap<&str, &crate::checks_green::Run> = BTreeMap::new();
+    for (name, group) in grouped {
+        if let Some(run) = crate::checks_green::winner(&group, &owned) {
+            latest.insert(name, run);
         }
     }
     latest

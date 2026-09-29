@@ -49,13 +49,20 @@
 //! native-image's network behaviour from a test that cannot deny egress, which is
 //! the "assert your own premise" shape `rules/rust.md` refuses.
 //!
-//! What DOES survive is the mechanism they were written to protect: `run_pkl`'s
-//! `--ca-certificates` selection is carried verbatim into
-//! `[tasks.record-verdicts]`, so the proxy CA the sandbox needs is still supplied
-//! at the one place pkl is invoked.
+//! The mechanism they were written to protect — `run_pkl`'s `--ca-certificates`
+//! selection, which handed pkl a proxy CA for a TLS-intercepting sandbox — was
+//! carried into `[tasks.record-verdicts]` and then RETIRED with that body under
+//! CLOUD-843, not carried again. The `config-validator` row's `run` argv passes
+//! no CA: pkl reads extra roots from `~/.pkl/cacerts` itself, so supplying one
+//! is the host's provisioning, and a warm package cache needs no fetch at all.
+//! Both are CLOUD-406's, which is the row these cases are withdrawn to. On a
+//! host that intercepts TLS with neither in place, a cold `pkl eval` now fails
+//! and the recorded non-zero exit refuses `tool judge dirty` — a could-not-fetch
+//! read as a finding, disclosed as the retirement's behaviour change rather than
+//! hidden behind a selection nothing tests.
 
-// withdrawn: "the coupling is real: a cold cache with egress denied cannot evaluate hk.pkl" CLOUD-406 owns pkl's package cache; the case measures pkl and the network rather than this repository's verdict, and the CA selection it protects is carried into `[tasks.record-verdicts]`
-// withdrawn: "a warm cache breaks it: the same command with egress denied evaluates cleanly" CLOUD-406 owns pkl's package cache; the case skips outright on any host with no warm cache to copy, and the CA selection it protects is carried into `[tasks.record-verdicts]`
+// withdrawn: "the coupling is real: a cold cache with egress denied cannot evaluate hk.pkl" CLOUD-406 owns pkl's package cache and the CA pkl is provisioned with; the case measures pkl and the network rather than this repository's verdict
+// withdrawn: "a warm cache breaks it: the same command with egress denied evaluates cleanly" CLOUD-406 owns pkl's package cache and the CA pkl is provisioned with; the case skips outright on any host with no warm cache to copy
 
 //! # RETIREMENT LEDGER, PER PATH — `renovate-config-validator` (CLOUD-1262)
 //!
@@ -65,7 +72,8 @@
 //! as INLINE JSON5 config — so the validator was handed a PATH and died parsing
 //! it as content. Renaming the seam meant editing authored shell frozen by
 //! `shell edit refused`, whose sole route is `rule read first`. This is that
-//! route: the path is now an argument in `[tasks.record-verdicts]` and the input
+//! route: the path is now an argument in the `renovate-config` row's `run` argv
+//! (it was one in `[tasks.record-verdicts]` until CLOUD-843) and the input
 //! is `batten.toml`'s `renovate-config` row, so there is no variable left to
 //! collide.
 
@@ -579,9 +587,10 @@ fn shipped_fixture(name: &str) -> PathBuf {
 #[test]
 fn the_shipped_module_refuses_a_recorded_error() {
     // THE POSITIVE FOR THE SHIPPED PREDICATE, and the case its declared mutation
-    // reddens. `status error` is the exact token `[tasks.record-verdicts]` pipes
-    // in when `pkl eval` exits non-zero, so this is the production path and not a
-    // vocabulary the suite invented.
+    // reddens. `status error` is the token `[tasks.record-verdicts]` piped in when
+    // `pkl eval` exited non-zero until CLOUD-843, and it is still what a producer
+    // piping to `record tool` spells; `record validate`'s `exit <n>` is the other
+    // production path, driven by the cases at the end of this file.
     let dir = shipped_fixture("error");
     let minted = record_tool(&dir, "config-validator", "status error\n");
     assert!(

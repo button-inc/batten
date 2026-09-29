@@ -749,6 +749,16 @@ pub struct PlannedStep {
     /// for a missing profile and one excluded by a glob miss are different
     /// findings, and the kind is the only field that separates them.
     pub reason_kind: Option<String>,
+    /// EVERY reason's kind, in the runner's order (CLOUD-843).
+    ///
+    /// `reason_kind` answers "why this status", which is the first reason's.
+    /// A question about MEMBERSHIP — did this step declare the tier the plan
+    /// switched off — is answered by any reason, and the retired `jq` join asked
+    /// it that way (`any(.reasons[]?; .kind == "profile_exclude")`). Reading
+    /// only the first would drop a step whose runner listed another reason
+    /// ahead of the profile out of the tier, silently.
+    #[serde(default)]
+    pub reason_kinds: Vec<String>,
     /// Position in the plan.
     pub order_index: u64,
     /// The parallel group it belongs to.
@@ -831,6 +841,7 @@ pub fn planned_steps(value: &serde_json::Value) -> Look<Vec<PlannedStep>> {
                 .and_then(|reason| reason.get("kind"))
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned),
+            reason_kinds: reason_kinds(entry),
             order_index,
             parallel_group_id: parallel_group_id.to_owned(),
             // Absent is zero here rather than could-not-look: the runner omits
@@ -845,6 +856,23 @@ pub fn planned_steps(value: &serde_json::Value) -> Look<Vec<PlannedStep>> {
         return Look::CouldNotLook;
     }
     Look::Is(steps)
+}
+
+/// Every reason's KIND token on one plan entry, in the runner's order; a reason
+/// carrying no kind contributes nothing, since a kind is the only field a
+/// decision may read (rule 4).
+//MUTANT later-reasons-dropped|s@^    for reason in reasons {$@    for reason in reasons.iter().take(1) {@|a_step_whose_profile_is_not_its_first_reason_is_still_in_the_tier
+fn reason_kinds(entry: &serde_json::Value) -> Vec<String> {
+    let Some(reasons) = entry.get("reasons").and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+    let mut kinds = Vec::with_capacity(reasons.len());
+    for reason in reasons {
+        if let Some(kind) = reason.get("kind").and_then(serde_json::Value::as_str) {
+            kinds.push(kind.to_owned());
+        }
+    }
+    kinds
 }
 
 /// The digest binding a plan to the tree it was taken over.
