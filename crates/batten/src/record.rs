@@ -244,6 +244,16 @@ pub fn run_validate(id: &str, overrides: &Overrides, err: &mut dyn Write) -> Res
 /// and recording any of them as a conclusion is how this producer twice wrote a
 /// could-not-look as a verdict. The set is the one `checks green` reads, so the
 /// two cannot disagree about what counts as an answer.
+//
+// THE FORGE ARM'S DISCRIMINATION (CLOUD-843), each over the compiled binary and
+// the fixture forge: an unanswered conclusion recorded as a grading
+// (CLOUD-1965), the first-listed run winning over the latest, a record written
+// before the fan-in answers, and a spaced name mangled into the record.
+//MUTANT-SUITE crates/batten/tests/it/record_verdicts.rs
+//MUTANT unanswered-recorded|s@^    answered.contains(.conclusion)$@    true@|an_unanswered_conclusion_is_not_recorded_as_a_grading
+//MUTANT listing-order-wins|s@^            (run.started_at.as_str(), run.id) > (held.started_at.as_str(), held.id)$@            false@|the_latest_run_per_name_wins_by_start_then_id
+//MUTANT fanin-ungated|s@^        && !graded.contains_key(fanin)$@        \&\& false@|nothing_is_written_until_the_fan_in_has_answered
+//MUTANT spaced-name-kept|s@^        if name.chars().any(char::is_whitespace) {$@        if false {@|a_name_with_whitespace_is_dropped_and_counted_never_mangled
 #[must_use]
 pub fn graded(runs: &[crate::checks_green::Run], answered: &[&str]) -> BTreeMap<String, String> {
     let mut latest: BTreeMap<&str, &crate::checks_green::Run> = BTreeMap::new();
@@ -257,9 +267,14 @@ pub fn graded(runs: &[crate::checks_green::Run], answered: &[&str]) -> BTreeMap<
     }
     latest
         .into_iter()
-        .filter(|(_, run)| answered.contains(&run.conclusion.as_str()))
+        .filter(|(_, run)| answers(answered, &run.conclusion))
         .map(|(name, run)| (name.to_owned(), run.conclusion.clone()))
         .collect()
+}
+
+/// Whether `conclusion` is one of the declared answers.
+fn answers(answered: &[&str], conclusion: &str) -> bool {
+    answered.contains(&conclusion)
 }
 
 /// The record body [`graded`] conclusions spell, or `None` while the fan-in has
@@ -358,7 +373,7 @@ pub struct Fetch {
 fn forge_fetch(
     fetch: bool,
     fanin: Option<String>,
-    answered: Option<String>,
+    answered: Option<&str>,
 ) -> Result<Option<Fetch>> {
     if !fetch {
         if fanin.is_some() || answered.is_some() {
@@ -369,7 +384,6 @@ fn forge_fetch(
         return Ok(None);
     }
     let answered: Vec<String> = answered
-        .as_deref()
         .unwrap_or_default()
         .split(',')
         .map(str::trim)
@@ -521,7 +535,7 @@ pub fn run(
             fanin,
             answered,
         } => {
-            let fetch = forge_fetch(fetch, fanin, answered)?;
+            let fetch = forge_fetch(fetch, fanin, answered.as_deref())?;
             run_forge(&reference, fetch.as_ref(), overrides, err)
         }
         crate::cli::RecordCommand::Plan => run_plan(),

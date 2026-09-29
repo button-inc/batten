@@ -578,6 +578,21 @@ fn version(root: &Path) -> Look<String> {
     }
 }
 
+/// A query's profiles as the runner's own words, `--profile <p>` each.
+// THE PROFILE WORDS REACH THE RUNNER (CLOUD-843): dropped, the fast plan is the
+// full plan, the slow tier reads empty, and `tier list empty` refuses a
+// correctly wired gate.
+//MUTANT-SUITE crates/batten/tests/it/hook_profile.rs
+//MUTANT profile-words-dropped|s@^    for profile in profiles {$@    for profile in profiles.iter().take(0) {@|this_repositorys_two_tier_gate_is_wired_today
+fn profile_words(profiles: &[String]) -> Vec<String> {
+    let mut words = Vec::with_capacity(profiles.len() * 2);
+    for profile in profiles {
+        words.push(String::from("--profile"));
+        words.push(profile.clone());
+    }
+    words
+}
+
 /// Ask the pinned binary for one surface's plan, with any extra words the
 /// declared query adds (its `--profile` pairs).
 fn plan(root: &Path, surface: &[&str], extra: &[String]) -> Look<serde_json::Value> {
@@ -885,11 +900,7 @@ pub fn acquire(root: &Path, query: &PlanQuery) -> Look<Planned> {
     let Look::Is(fingerprint) = fingerprint(root) else {
         return Look::CouldNotLook;
     };
-    let extra: Vec<String> = query
-        .profile
-        .iter()
-        .flat_map(|profile| [String::from("--profile"), profile.clone()])
-        .collect();
+    let extra = profile_words(&query.profile);
     let Look::Is(value) = plan(root, argv, &extra) else {
         return Look::CouldNotLook;
     };

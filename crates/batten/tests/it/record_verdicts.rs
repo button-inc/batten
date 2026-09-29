@@ -144,13 +144,14 @@ fn an_answered_conclusion_is_still_recorded() {
 fn the_latest_run_per_name_wins_by_start_then_id() {
     // A re-run adds a second run under the same name, and the reader folds a
     // record into a map — so the producer must choose by recency, never by
-    // listing order. The older success is listed LAST here.
+    // listing order. The older success is listed FIRST here, and a higher id
+    // does not make it newer.
     let (dir, forge) = consumer("latest");
     forge_answers(
         &forge,
         &[
-            run("final", Some("failure"), "2026-09-28T02:00:00Z", 2),
             run("final", Some("success"), "2026-09-28T01:00:00Z", 9),
+            run("final", Some("failure"), "2026-09-28T02:00:00Z", 2),
         ],
     );
     let written = fetch(&dir, &forge, Some("final"));
