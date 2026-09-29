@@ -872,3 +872,75 @@ mod tests {
         assert_eq!(AtLoad::default().siblings(), 0);
     }
 }
+
+/// Link this clone's two commit hooks to `body`, a hook body the repository
+/// checks in (CLOUD-476), returning how many were linked.
+///
+/// The `mkdir -p` and two `ln -sfn` that were `[tasks."session:git-hooks"]`
+/// (CLOUD-1991), resolved the way `doctor gate` resolves them so the repair
+/// and the diagnosis cannot disagree about WHERE: `core.hooksPath` first, else
+/// the common directory's `hooks/` — git's own reading, and the one
+/// `git rev-parse --git-path hooks` gave the task.
+///
+/// A SYMLINK, NEVER A COPY: a copy is a second authority that goes stale the
+/// moment the checked-in body changes, and the diagnosis follows links, so it
+/// would keep passing over it. An existing hook of either name is replaced,
+/// which is what `-f` did — a clone carrying a generated hook is repaired rather
+/// than skipped. On a platform with no symlink the body's bytes are written
+/// instead, git's own `core.symlinks=false` shape.
+///
+/// # Errors
+///
+/// A [`crate::error::UsageError`] when `dir` is not in a repository or `body`
+/// names no file in it, so a dangling link is never written; an internal error
+/// when the hooks directory cannot be created or a hook cannot be replaced.
+pub fn link_commit_gate(dir: &Path, body: &str) -> Result<usize> {
+    let root = git::repo_root(dir)?;
+    let source = root.join(body);
+    if !source.is_file() {
+        return Err(crate::error::UsageError::raise(format!(
+            "wiring gate: `{body}` is no file in this repository, so there is no hook body to link"
+        )));
+    }
+    let Some(hooks) = crate::doctor::hooks_dir(dir) else {
+        return Err(crate::error::UsageError::raise(
+            "wiring gate: this checkout's hooks directory does not resolve".to_owned(),
+        ));
+    };
+    std::fs::create_dir_all(&hooks)
+        .map_err(|error| anyhow::anyhow!("wiring gate: the hooks directory: {error}"))?;
+    for name in crate::doctor::COMMIT_HOOKS {
+        let link = hooks.join(name);
+        match std::fs::remove_file(&link) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(anyhow::anyhow!(
+                    "wiring gate: the `{name}` hook will not be replaced: {error}"
+                ));
+            }
+        }
+        link_hook(&source, &link).map_err(|error| {
+            anyhow::anyhow!("wiring gate: the `{name}` hook will not link: {error}")
+        })?;
+    }
+    Ok(crate::doctor::COMMIT_HOOKS.len())
+}
+
+// The linker's mutation rows, each caught by the compiled case it names, which
+// asks `doctor gate` over the clone the linker just repaired.
+//MUTANT-SUITE crates/batten/tests/it/startup.rs
+//MUTANT gate-links-one-hook|s@^    for name in crate::doctor::COMMIT_HOOKS {$@    for name in crate::doctor::COMMIT_HOOKS.iter().take(1) {@|wiring_gate_links_both_commit_hooks_to_the_checked_in_body
+//MUTANT gate-links-a-missing-body|s@^    if !source.is_file() {$@    if false {@|wiring_gate_refuses_a_body_the_repository_does_not_carry
+
+/// A symbolic link from `link` to `source`.
+#[cfg(unix)]
+fn link_hook(source: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(source, link)
+}
+
+/// The `core.symlinks=false` shape: the body's bytes, where no symlink exists.
+#[cfg(not(unix))]
+fn link_hook(source: &Path, link: &Path) -> std::io::Result<()> {
+    crate::durable::replace(link, std::fs::read(source)?)
+}

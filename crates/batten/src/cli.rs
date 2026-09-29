@@ -1351,6 +1351,12 @@ pub enum WiringCommand {
         /// Decide whether a repair is owed, and remove nothing.
         check: bool,
     },
+    /// Link this clone's two commit hooks to a hook body the repository checks
+    /// in (CLOUD-1991, retiring `[tasks."session:git-hooks"]`).
+    Gate {
+        /// The hook body, relative to the repository root.
+        body: String,
+    },
 }
 
 /// Subcommands of `worktree`.
@@ -2303,6 +2309,9 @@ fn wiring_of(matches: &ArgMatches) -> Option<WiringCommand> {
             yes: flag(matches, "yes"),
             dry_run: flag(matches, "dry_run"),
             check: flag(matches, "check"),
+        }),
+        ("gate", matches) => Some(WiringCommand::Gate {
+            body: matches.get_one::<String>("body")?.clone(),
         }),
         _ => None,
     }

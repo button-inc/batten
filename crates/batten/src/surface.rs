@@ -5987,6 +5987,29 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Destructive,
         flags: &[DRY_RUN, CHECK],
     },
+    // THE CLONE'S OWN COMMIT HOOKS (CLOUD-476), retiring the `mkdir -p` and two
+    // `ln -sfn` that were `[tasks."session:git-hooks"]` (CLOUD-1991). Under
+    // `wiring` because it is the same act one surface over — pointing a runner's
+    // hook registration at what should run — and `doctor gate` is its diagnosis,
+    // as `doctor hooks` is `reclaim`'s.
+    //
+    // `write`, not `destructive`: the subject is this clone's hooks directory,
+    // not a file shared by every checkout on the box, and what it replaces is
+    // the link it would write — a committed `[[startup]]` row names it as that
+    // directory's repair, which is the authorisation `reclaim` has to ask `-y`
+    // for. The body is an OPERAND: which file is the gate is the consumer's fact.
+    CommandDecl {
+        path: "wiring gate",
+        id: "wiring.gate",
+        about: "Link this clone's two commit hooks to a hook body the repository checks in",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[FlagDecl::positional(
+            "body",
+            "The hook body to link, relative to the repository root",
+        )],
+    },
     // CLOUD-1274. THE LANDING LEASE, and the noun is `unclassified` for
     // `provision`'s reason rather than `policy`'s: the subtree writes — a
     // compare-and-swap over a remote ref is a write to somebody else's server —

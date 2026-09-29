@@ -443,3 +443,96 @@ fn json(value: &str) -> String {
 fn out_code(output: &Output) -> i32 {
     output.status.code().unwrap_or(-1)
 }
+
+/// `batten wiring gate` — the repair the committed row runs, through
+/// `session:git-hooks` — linking both hooks, answered by the diagnosis it
+/// repairs (CLOUD-1991).
+///
+/// The task body it retires was `mkdir -p` and two `ln -sfn` against
+/// `git rev-parse --git-path hooks`; the verb resolves the same directory the
+/// way `doctor gate` does, so the case asks `doctor gate` before and after
+/// rather than restating where the hooks live. A second run is the `-f` arm: a
+/// clone already carrying hooks is repaired, not refused.
+#[test]
+fn wiring_gate_links_both_commit_hooks_to_the_checked_in_body() {
+    let dir = scratch("wiring-gate-links");
+    write(&dir, "batten.toml", "version = 1\n\n");
+    write(&dir, "hooks/gate.sh", "#!/bin/sh\nexit 0\n");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(
+            dir.join("hooks/gate.sh"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    common::init_repo(&dir);
+
+    let gate = |dir: &Path| {
+        batten()
+            .current_dir(dir)
+            .args(["doctor", "gate"])
+            .output()
+            .expect("the binary runs")
+    };
+    assert_eq!(out_code(&gate(&dir)), 1, "a fresh clone bypasses the gate");
+
+    for pass in ["first", "again"] {
+        let linked = batten()
+            .current_dir(&dir)
+            .args(["wiring", "gate", "hooks/gate.sh"])
+            .output()
+            .expect("the binary runs");
+        assert_eq!(
+            out_code(&linked),
+            0,
+            "{pass}: {}",
+            String::from_utf8_lossy(&linked.stderr)
+        );
+        assert_eq!(
+            stdout(&gate(&dir)),
+            "commit-gate ok\n",
+            "{pass}: both hooks run the body"
+        );
+    }
+
+    #[cfg(unix)]
+    for name in ["pre-commit", "commit-msg"] {
+        let target = std::fs::read_link(dir.join(".git").join("hooks").join(name))
+            .expect("a symlink, never a copy");
+        assert_eq!(
+            target.canonicalize().unwrap(),
+            dir.join("hooks/gate.sh").canonicalize().unwrap(),
+            "`{name}` points at the checked-in body"
+        );
+    }
+}
+
+/// A body the repository does not carry is refused, and nothing is linked: a
+/// dangling hook reads to `doctor gate` as missing and to git as absent, so a
+/// repair that wrote one would report success over a bypassed gate.
+#[test]
+fn wiring_gate_refuses_a_body_the_repository_does_not_carry() {
+    let dir = scratch("wiring-gate-absent");
+    write(&dir, "batten.toml", "version = 1\n\n");
+    common::init_repo(&dir);
+
+    let refused = batten()
+        .current_dir(&dir)
+        .args(["wiring", "gate", "hooks/absent.sh"])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(
+        out_code(&refused),
+        1,
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    for name in ["pre-commit", "commit-msg"] {
+        assert!(
+            std::fs::symlink_metadata(dir.join(".git").join("hooks").join(name)).is_err(),
+            "`{name}` was not written"
+        );
+    }
+}

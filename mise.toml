@@ -7601,7 +7601,14 @@ description = "Session start: install the repo-owned git hooks, the per-clone st
 # defines, through one body that dispatches on the name it is invoked as —
 # commit-msg carries the Conventional Commits check release-plz's semver depends
 # on, so leaving it out would gate the expensive half and not the deciding one.
-run = "mkdir -p \"$(git rev-parse --git-path hooks)\" && ln -sfn \"$(git rev-parse --show-toplevel)/.claude/hooks/git-hook.sh\" \"$(git rev-parse --git-path hooks)/pre-commit\" && ln -sfn \"$(git rev-parse --show-toplevel)/.claude/hooks/git-hook.sh\" \"$(git rev-parse --git-path hooks)/commit-msg\""
+#
+# THE LINKS ARE THE ENGINE'S SINCE CLOUD-1991. `batten wiring gate` resolves the
+# hooks directory the way `doctor gate` diagnoses it — `core.hooksPath`, else the
+# common directory's `hooks/`, which is what `git rev-parse --git-path hooks`
+# answered — creates it, and replaces both hooks with symlinks to the body named
+# here, refusing a body the repository does not carry rather than writing a
+# dangling link. Bare `batten`, the session steps' rule: nothing here compiles.
+run = "batten wiring gate .claude/hooks/git-hook.sh"
 
 [tasks."session:identity"]
 description = "Session start: set this clone's repo-local git identity, quietly — the `step`-wrapped call from the retired hook"

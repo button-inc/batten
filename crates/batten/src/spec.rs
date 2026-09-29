@@ -1275,6 +1275,11 @@ mod tests {
             // `Destructive` because its subject is a file shared by every
             // checkout on the box.
             "wiring".to_owned(),
+            // The clone's own commit hooks, linked to a checked-in body
+            // (CLOUD-1991, retiring `[tasks."session:git-hooks"]`). `write`, not
+            // `destructive`: its subject is this clone's hooks directory, which
+            // the repository's `[[startup]]` row already authorises it to repair.
+            "wiring gate".to_owned(),
             "wiring reclaim".to_owned(),
             "worktree".to_owned(),
             "worktree status".to_owned(),

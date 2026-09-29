@@ -5719,6 +5719,16 @@ fn run_wiring(
             dry_run,
             check,
         } => run_wiring_reclaim(*yes, *dry_run, *check, mode, overrides, err),
+        cli::WiringCommand::Gate { body } => {
+            let linked = wiring::link_commit_gate(Path::new("."), body)?;
+            output::message(
+                mode,
+                output::Verbosity::Normal,
+                err,
+                &format!("wiring gate: {linked} commit hook(s) linked to {body}"),
+            )?;
+            Ok(ExitCode::Success)
+        }
     }
 }
 
