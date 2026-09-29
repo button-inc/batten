@@ -622,6 +622,13 @@ touch one and the subject needs `!` before the commit exists. Recorded rather
 than mechanised: a commit-time semver check would need a baseline rustdoc build
 per commit, which is the cost `verify` exists to amortise.
 
+## Refusal shapes, each with its route
+
+The refusal tokens measured 2026-09-26/28 (CLOUD-1916…1960) and the route each
+takes live in `mem:engineering/refusal-shapes`, split out to keep this memory
+under the per-file read ceiling. Read it on the first refusal whose route you
+do not already know.
+
 ## Shell constructs that fail green
 
 Handing awk a regex through `-v`, and piping a producer into `grep -q` under
