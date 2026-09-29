@@ -71,18 +71,34 @@ const PLUMBING_CEILING: usize = 8;
 /// [`the_gap_between_the_two_populations_stays_empty`] holds open.
 const CORE_FLOOR: usize = 24;
 
-/// Modules at or below [`PLUMBING_CEILING`] must not fall below this.
+/// Every module that is plumbing today. None of them may stop being plumbing.
 ///
-/// A floor rather than an equality: decoupling a core module down into the
-/// plumbing is the goal and must not redden.
-const PLUMBING_FLOOR: usize = 64;
-
-/// Modules at or above [`CORE_FLOOR`] must not exceed this.
+/// # Why a set, and why a subset rather than an equality
 ///
-/// The other half of the same claim, and the one that makes the pair
-/// non-vacuous: a new leaf module raises the plumbing count without lowering
-/// this, so only actual untangling moves both.
-const CORE_CEILING: usize = 55;
+/// This replaced a pair of population COUNTS — a plumbing floor and a core
+/// ceiling — which had an escape: one module decoupling while another couples
+/// nets to zero, so both counts hold and a real regression lands green. Counting
+/// cannot see a swap; naming can.
+///
+/// The assertion is `⊆`, not `==`. A module ARRIVING in the plumbing is progress
+/// (five did between two measurements: `arm`, `install`, `ripcord`, `suites`,
+/// `tokens`) and must not redden, and an equality would also churn this list on
+/// every new leaf module in the crate. A module LEAVING is the regression, and
+/// that is what a subset check catches — including the leaving half of a swap.
+///
+/// Recorded by running [`print_the_distribution`], never by hand.
+const PLUMBING: &[&str] = &[
+    "admission", "advisory", "arm", "board", "bot", "brief", "capture", "carry",
+    "checks_green", "ci", "claim", "commit", "deferral", "effect", "environment",
+    "error", "exec", "exit", "fast_forward", "fetch", "forge", "git", "gitwrite",
+    "graph", "identity", "install", "land", "landed", "lease", "lib", "main",
+    "main_watch", "mint", "mutate", "outcome", "output", "outputs", "patch",
+    "pattern", "pipeline", "pr_watch", "provision", "prune", "race", "ready",
+    "recorder", "refusal", "render", "repair", "rest", "ripcord", "scratch",
+    "secret", "semver", "severity", "source", "spec", "speculation", "startup",
+    "state", "store", "suites", "surface", "task", "tokens", "traversal",
+    "verbs", "verdict", "worktree",
+];
 
 /// No module's closure may exceed this.
 ///
@@ -186,33 +202,33 @@ fn distribution(graph: &BTreeMap<String, BTreeSet<String>>) -> Vec<(usize, Strin
 }
 
 #[test]
-fn the_plumbing_does_not_shrink_and_the_core_does_not_grow() {
-    let sizes = distribution(&module_graph());
-
-    let plumbing: Vec<&str> = sizes
-        .iter()
+fn no_module_leaves_the_plumbing() {
+    let plumbing: BTreeSet<String> = distribution(&module_graph())
+        .into_iter()
         .filter(|(size, _)| *size <= PLUMBING_CEILING)
-        .map(|(_, module)| module.as_str())
-        .collect();
-    let core: Vec<&str> = sizes
-        .iter()
-        .filter(|(size, _)| *size >= CORE_FLOOR)
-        .map(|(_, module)| module.as_str())
+        .map(|(_, module)| module)
         .collect();
 
+    let recorded: BTreeSet<String> = PLUMBING.iter().map(|name| (*name).to_owned()).collect();
+    let left: Vec<&String> = recorded.difference(&plumbing).collect();
+
     assert!(
-        plumbing.len() >= PLUMBING_FLOOR,
-        "plumbing fell to {} modules, below the floor of {PLUMBING_FLOOR}: a \
-         module that was extractable no longer is",
-        plumbing.len(),
+        left.is_empty(),
+        "these modules were plumbing and are not any more: {left:?}. Each grew an \
+         edge that pulled its closure past {PLUMBING_CEILING}, so a crate \
+         boundary that could be drawn around it no longer can. This is the half \
+         a population count could not see — a swap holds the count and moves \
+         these names.",
     );
-    assert!(
-        core.len() <= CORE_CEILING,
-        "the decision core grew to {} modules, above the ceiling of \
-         {CORE_CEILING}: a new edge pulled a module in. Decoupling lowers this; \
-         adding a leaf module does not.",
-        core.len(),
-    );
+
+    // Arrivals are progress, not a finding, so they are reported and never
+    // asserted on. Recording them is a separate, deliberate edit to `PLUMBING`
+    // — which is what keeps the list a measurement rather than a mirror of
+    // whatever the tree happens to say today.
+    let arrived: Vec<&String> = plumbing.difference(&recorded).collect();
+    if !arrived.is_empty() {
+        println!("arrived in the plumbing since PLUMBING was recorded: {arrived:?}");
+    }
 }
 
 #[test]
