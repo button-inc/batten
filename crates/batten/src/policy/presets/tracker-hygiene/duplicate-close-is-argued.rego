@@ -34,7 +34,7 @@ import rego.v1
 #MUTANT-SUITE crates/batten/tests/it/tracker_hygiene.rs
 #MUTANT window-never-compares|s@^\tentry.closed == entry.target_at$@\tfalse@|a_duplicate_close_in_its_targets_operation_is_refused
 #MUTANT different-seconds-refused|s@^\tentry.closed == entry.target_at$@\ttrue@|closes_in_different_seconds_pass
-#MUTANT torn-record-passes|s@^\tcount(duplicate_census) != 1$@\tfalse@|a_duplicate_close_record_without_its_census_is_torn
+#MUTANT duplicate-close-torn-record-passes|s@^\tcount(duplicate_census) != 1$@\tfalse@|a_duplicate_close_record_without_its_census_is_torn
 
 rules contains "issue answer other"
 

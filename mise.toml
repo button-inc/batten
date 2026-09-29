@@ -655,7 +655,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,task-connector-allow-resolve,task-mcp-attach-check,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,land-divergence,task-linear-check,macos-link,task-mcp-allow-check,nonverdict,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,tracker-hygiene,engine-tracker-reading"
+MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,attestation,run-arg-shape,timeout-drift,engine-cargo-graph,task-board-payloads,task-board-sweep,branch-age,task-connector-allow-resolve,task-mcp-attach-check,task-released,evaluator-closure,evaluator-io-probe,task-finding-sink-check,agent-spawn,land-divergence,task-linear-check,macos-link,task-mcp-allow-check,nonverdict,ntia,task-pr-unsubscribed,task-test:cargo,task-reclaim-census,release-tracking,task-sbom,sbom-actions,sbom-binary,task-sonar-gate,task-callable,transcript-corpus,engine-rules,release-assets,task-gh-preflight,task-in-progress-drain,task-step-receipt,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,tracker-hygiene,engine-tracker-reading,task-duplicate-close-check"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -721,6 +721,20 @@ GH_TOKEN = "{{ get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default=get_env(name
 GITHUB_TOKEN = "{% set ours = get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default=get_env(name='BATTEN_GITHUB_TOKEN', default=get_env(name='MISE_GITHUB_TOKEN', default=''))) %}{% set ambient = get_env(name='GITHUB_TOKEN', default='') %}{% if ambient and ambient | truncate(length=6, end='') != 'proxy-' %}{{ ambient }}{% elif ours %}{{ ours }}{% endif %}"
 NO_PROXY = "{% set cur = get_env(name='NO_PROXY', default='') %}{% if 'api.github.com' in cur %}{{ cur }}{% else %}api.github.com,objects.githubusercontent.com,codeload.github.com,uploads.github.com{% if cur %},{{ cur }}{% endif %}{% endif %}"
 no_proxy = "{% set cur = get_env(name='no_proxy', default=get_env(name='NO_PROXY', default='')) %}{% if 'api.github.com' in cur %}{{ cur }}{% else %}api.github.com,objects.githubusercontent.com,codeload.github.com,uploads.github.com{% if cur %},{{ cur }}{% endif %}{% endif %}"
+
+# THE BINARY AN ARGV TASK RUNS, spelled once. A retired bash gate chose its batten
+# with `if [[ -n "${BATTEN_BIN:-}" ]]; then batten=("$BATTEN_BIN"); else batten=(cargo
+# run --quiet -p batten --); fi`, and an argv `run = [...]` has no shell to say it
+# in — so it is a var every argv entry opens with, and `BATTEN_BIN` still names the
+# binary under test (the tiers set it; `test:bats` exports it). Without it a task
+# composed from a fixture — `board-sweep`'s gates, under a `CARGO_TARGET_DIR` that
+# puts the fixture beneath another checkout — builds whatever workspace cargo finds
+# by walking up, which is not the engine being tested (CLOUD-843).
+[vars]
+batten = "{{ get_env(name='BATTEN_BIN', default='cargo run --quiet -p batten --') }}"
+# The duplicate-close window, in characters of an ISO-8601 stamp: 19 is the
+# second, and `DUPLICATE_CLOSE_WINDOW` widens it, as the retired body let it.
+duplicate_close_window = "{{ get_env(name='DUPLICATE_CLOSE_WINDOW', default='19') }}"
 
 [tasks.fmt]
 description = "Run every fixer over the tree (rustfmt, shfmt, taplo, deno fmt) — hk owns the step list"
@@ -4328,8 +4342,8 @@ exit 1
 description = "Gate: an issue may become Done only if none of its own pull requests is still open (reads get_issue payloads on stdin)"
 dir = "{{cwd}}"
 run = [
-  "cargo run --quiet -p batten -- record derive done-pr",
-  "cargo run --quiet -p batten -- check --rule 'issue state other'",
+  "{{vars.batten}} record derive done-pr",
+  "{{vars.batten}} check --rule 'issue state other'",
 ]
 
 # Apply the committed `.claude/settings.json` permissions to whichever server
@@ -5676,18 +5690,27 @@ echo "board-sweep: every gate ran and none names dissonance ($count issue(s))"
 
 # A duplicate close decided in the same operation as its target's own close
 # (CLOUD-829). CLOUD-843 retired both bash bodies: the reading is `batten record
-# derive duplicate-close`, which truncates both stamps to 19 characters (the
-# second) and refuses — recording nothing — on a set with no `duplicateOf` key
-# anywhere, a close with no stamp, or a target nobody piped; the decision is the
-# `tracker-hygiene` preset's `duplicate-close-is-argued` module.
+# derive duplicate-close`, which truncates both stamps to `vars.duplicate_close_window`
+# characters (19, the second, unless `DUPLICATE_CLOSE_WINDOW` widens it) and
+# refuses — recording nothing — on a set with no `duplicateOf` key anywhere, a
+# close with no stamp, a target nobody piped, or a window that is not a whole
+# number; the decision is the `tracker-hygiene` preset's `duplicate-close-is-argued`
+# module.
 #
-# Exit 0 clean / 2 refused / 1 could not look — the engine's table.
+# Exit 0 clean / 2 refused / 1 could not look — the engine's table. Every gate
+# below declares `dir = "{{cwd}}"` so a caller composing it from another tree
+# (`board-sweep`, or a tier's fixture through `MISE_CONFIG_FILE`) judges THAT
+# tree; from the repository root, where `land` and the workflows call them, the
+# directory is the one it always was.
 [tasks.duplicate-close-check]
+#MUTANT-SUITE crates/batten/tests/it/tracker_hygiene.rs
+#MUTANT window-dropped|s@ --input window={{vars.duplicate_close_window}}",$@",@|the_committed_duplicate_close_check_honours_the_window_override
+#MUTANT batten-bin-ignored|s@^  "{{vars.batten}} record derive duplicate-close@  "cargo run --quiet -p batten -- record derive duplicate-close@|the_committed_gates_record_then_check_the_one_row
 description = "Gate: a duplicate close decided in the same operation as its target's close (reads get_issue payloads on stdin) — CLOUD-829"
 dir = "{{cwd}}"
 run = [
-  "cargo run --quiet -p batten -- record derive duplicate-close",
-  "cargo run --quiet -p batten -- check --rule 'issue state other'",
+  "{{vars.batten}} record derive duplicate-close --input window={{vars.duplicate_close_window}}",
+  "{{vars.batten}} check --rule 'issue state other'",
 ]
 
 # THE NAME STAYS CALLABLE: `AGENTS.md` and the release workflow's summary tell a
@@ -5698,9 +5721,10 @@ description = "Gate: no issue sits Done while no release tag contains its commit
 # CLOUD-843: the reading is `batten record derive done`, over this repository's
 # release tags, its trunk and its Done column; the decision is the
 # `tracker-hygiene` preset's `done-is-released` module.
+dir = "{{cwd}}"
 run = [
-  "cargo run --quiet -p batten -- record derive done --input 'released=v[0-9]*' --input landed=origin/main --input done=Done",
-  "cargo run --quiet -p batten -- check --rule 'issue state other'",
+  "{{vars.batten}} record derive done --input 'released=v[0-9]*' --input landed=origin/main --input done=Done",
+  "{{vars.batten}} check --rule 'issue state other'",
 ]
 
 # CLOUD-323's gate. CLOUD-843 retired the bash reading into `batten record derive
@@ -5709,9 +5733,10 @@ run = [
 # and the decision is the `tracker-hygiene` preset's `deferral-has-an-owner`.
 [tasks.deferral-check]
 description = "Gate: a PR body that defers a decision without naming the issue that owns it (reads the body on stdin; pointer-only)"
+dir = "{{cwd}}"
 run = [
-  "cargo run --quiet -p batten -- record derive deferral --input shape=deferral-shape --input base=origin/main",
-  "cargo run --quiet -p batten -- check --rule 'issue state other'",
+  "{{vars.batten}} record derive deferral --input shape=deferral-shape --input base=origin/main",
+  "{{vars.batten}} check --rule 'issue state other'",
 ]
 
 # CLOUD-192's and CLOUD-674's gate. CLOUD-843 retired the bash reading into
@@ -5722,9 +5747,10 @@ run = [
 # is could-not-look.
 [tasks.closing-key-check]
 description = "Gate: a PR body that names its issue but never in closing form, so the merge will not move the board (reads the body on stdin; pointer-only)"
+dir = "{{cwd}}"
 run = [
-  "cargo run --quiet -p batten -- record derive closing-key --input hold=closing-hold-marker --input base=origin/main",
-  "cargo run --quiet -p batten -- check --rule 'issue state other'",
+  "{{vars.batten}} record derive closing-key --input hold=closing-hold-marker --input base=origin/main",
+  "{{vars.batten}} check --rule 'issue state other'",
 ]
 
 [tasks.nonverdict-record]

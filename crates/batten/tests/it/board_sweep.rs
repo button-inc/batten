@@ -117,6 +117,11 @@ impl Board {
         let mut command = common::task_command(&self.repo, "board-sweep");
         command
             .env("MISE_CONFIG_FILE", common::at_root("mise.toml"))
+            // The named manifest is the ONLY one: without the ceiling, a
+            // manifest above the fixture — another checkout's, under a shared
+            // `CARGO_TARGET_DIR` — outranks it for every gate the sweep composes
+            // (see `common::mise_task`).
+            .env("MISE_CEILING_PATHS", &self.root)
             .env("usage_payloads", "-")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")

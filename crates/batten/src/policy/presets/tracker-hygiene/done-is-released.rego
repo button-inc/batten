@@ -37,7 +37,7 @@ import rego.v1
 #MUTANT-SUITE crates/batten/tests/it/tracker_hygiene.rs
 #MUTANT landed-done-passes|s@^\tentry.shipped == "landed"$@\tfalse@|a_done_issue_landed_past_the_last_tag_is_refused
 #MUTANT other-columns-judged|s@^\tentry.status == "done"$@\ttrue@|an_issue_in_another_column_is_not_judged
-#MUTANT torn-record-passes|s@^\tcount(done_census) != 1$@\tfalse@|a_record_without_its_census_is_torn_rather_than_clean
+#MUTANT done-torn-record-passes|s@^\tcount(done_census) != 1$@\tfalse@|a_record_without_its_census_is_torn_rather_than_clean
 
 rules contains "issue grade other"
 

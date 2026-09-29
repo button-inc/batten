@@ -33,7 +33,7 @@ import rego.v1
 #MUTANT-SUITE crates/batten/tests/it/tracker_hygiene.rs
 #MUTANT ownerless-deferral-passes|s@^\tcount(deferral_owners(entry)) == 0$@\tfalse@|a_deferral_with_no_owner_in_its_paragraph_is_refused
 #MUTANT claimed-key-owns|s@^\tnot key in deferral_claimed$@\ttrue@|a_deferral_owned_only_by_the_claimed_issue_is_refused
-#MUTANT torn-record-passes|s@^\tcount(deferral_census) != 1$@\tfalse@|a_deferral_record_without_its_census_is_torn
+#MUTANT deferral-torn-record-passes|s@^\tcount(deferral_census) != 1$@\tfalse@|a_deferral_record_without_its_census_is_torn
 
 rules contains "prose own other"
 

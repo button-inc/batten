@@ -35,7 +35,7 @@ import rego.v1
 #MUTANT open-state-ignored|s@^\tpull.state == "open"$@\tfalse@|an_open_pull_request_refuses_naming_its_number
 #MUTANT draft-not-open|s@^\tpull.state == "draft"$@\tfalse@|the_defect_a_draft_pull_request_refuses_named_as_a_draft
 #MUTANT no-pr-licensed|s@^\tentry.attached == "0"$@\tfalse@|no_pull_request_at_all_is_refused
-#MUTANT torn-record-passes|s@^\tcount(done_pr_census) != 1$@\tfalse@|a_done_pr_record_without_its_census_is_torn
+#MUTANT done-pr-torn-record-passes|s@^\tcount(done_pr_census) != 1$@\tfalse@|a_done_pr_record_without_its_census_is_torn
 
 rules contains "issue ship other"
 

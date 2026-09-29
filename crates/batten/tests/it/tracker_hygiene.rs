@@ -1177,6 +1177,24 @@ fn the_committed_gates_record_then_check_the_one_row() {
             argv.contains(&format!("record derive {family}")),
             "{task}: {argv}"
         );
+        // THE BINARY UNDER TEST, never whatever workspace cargo finds: every
+        // entry opens with the manifest's one `vars.batten`, which reads
+        // `BATTEN_BIN` as the retired bodies did.
+        assert!(
+            !argv.contains("cargo run"),
+            "{task} runs the batten BATTEN_BIN names: {argv}"
+        );
+        assert_eq!(
+            argv.matches("{{vars.batten}} ").count(),
+            2,
+            "{task}: both entries open with vars.batten: {argv}"
+        );
+        // Composed from another tree, it judges THAT tree.
+        assert_eq!(
+            common::task_value(&block, "dir"),
+            "{{cwd}}",
+            "{task} runs in its caller's directory"
+        );
         assert!(
             argv.contains(&format!("check --rule '{ROW}'")),
             "{task}: {argv}"
@@ -1193,4 +1211,111 @@ fn the_committed_gates_record_then_check_the_one_row() {
             "[tasks.{retired}] is retired"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// The committed tasks, end to end.
+// ---------------------------------------------------------------------------
+
+/// `mise run -q <name>` over the committed manifest, in `dir`, with `stdin`
+/// piped — so what answers is the task's OWN wiring rather than [`gate`]'s copy
+/// of it: the `'released=v[0-9]*'` quoting, the check entry running only when the
+/// reading succeeded, the exit code the task runner reports, and `vars.batten`
+/// resolving to the binary under test through `BATTEN_BIN`. `land` reaches the
+/// two body gates the same way (`LAND_BODY_GATES`).
+fn task(dir: &Path, name: &str, env: &[(&str, &str)], stdin: &str) -> (Option<i32>, String) {
+    let output = common::mise_task(dir, name, env, stdin);
+    (output.status.code(), said(&output))
+}
+
+#[test]
+fn the_committed_done_check_refuses_until_a_release_contains_the_issue() {
+    let dir = done_repo("task");
+    land(&dir, "feat: work\n\nRefs: CLOUD-499");
+    let (code, text) = task(&dir, "done-check", &[], &done_board("CLOUD-499"));
+    assert_eq!(code, Some(2), "{text}");
+    assert!(text.contains("CLOUD-499"), "{text}");
+    release(&dir, "v0.0.2");
+    let (code, text) = task(&dir, "done-check", &[], &done_board("CLOUD-499"));
+    assert_eq!(code, Some(0), "{text}");
+}
+
+#[test]
+fn the_committed_done_pr_check_refuses_a_draft_and_licenses_a_merge() {
+    let dir = duplicate_repo("task-done-pr");
+    let draft = set(&[issue(
+        "CLOUD-420",
+        &[url(7)],
+        &[pull(7, "open", false, true)],
+    )]);
+    let (code, text) = task(&dir, "done-pr-check", &[], &draft);
+    assert_eq!(code, Some(2), "{text}");
+    assert!(text.contains("CLOUD-420"), "{text}");
+    let landed = set(&[issue("CLOUD-420", &[url(7)], &[merged(7)])]);
+    let (code, text) = task(&dir, "done-pr-check", &[], &landed);
+    assert_eq!(code, Some(0), "{text}");
+}
+
+#[test]
+fn the_committed_deferral_check_refuses_an_ownerless_deferral_only() {
+    let dir = deferral_repo("task");
+    let (code, text) = task(
+        &dir,
+        "deferral-check",
+        &[],
+        "Intro.\n\nThis was a judgement call.\n",
+    );
+    assert_eq!(code, Some(2), "{text}");
+    assert!(text.contains("paragraph:2"), "{text}");
+    let (code, text) = task(
+        &dir,
+        "deferral-check",
+        &[],
+        "This was a judgement call, owned by CLOUD-9.\n",
+    );
+    assert_eq!(code, Some(0), "{text}");
+}
+
+#[test]
+fn the_committed_closing_key_check_refuses_a_named_key_and_cannot_look_at_nothing() {
+    let dir = closing_repo("task", &[]);
+    let (code, text) = task(&dir, "closing-key-check", &[], "Refs: CLOUD-192\n");
+    assert_eq!(code, Some(2), "{text}");
+    assert!(text.contains("CLOUD-192"), "{text}");
+    let (code, text) = task(&dir, "closing-key-check", &[], "Closes CLOUD-192\n");
+    assert_eq!(code, Some(0), "{text}");
+    // The reading refuses, so the check entry never runs: could-not-look.
+    let (code, text) = task(&dir, "closing-key-check", &[], "");
+    assert_eq!(code, Some(1), "{text}");
+}
+
+/// `DUPLICATE_CLOSE_WINDOW` still widens the window, as the retired body let it:
+/// two closes a second apart pass at the default (the second) and are refused at
+/// 16 characters (the minute), and a window that is not a whole number is
+/// could-not-look rather than the default.
+#[test]
+fn the_committed_duplicate_close_check_honours_the_window_override() {
+    let dir = duplicate_repo("task-window");
+    let rows = [
+        row("CLOUD-777", None, Some("2026-08-21T02:37:52.000Z"), None),
+        row("CLOUD-817", Some(OP), None, Some("CLOUD-777")),
+    ]
+    .join("\n");
+    let (code, text) = task(&dir, "duplicate-close-check", &[], &rows);
+    assert_eq!(code, Some(0), "the default is the second: {text}");
+    let (code, text) = task(
+        &dir,
+        "duplicate-close-check",
+        &[("DUPLICATE_CLOSE_WINDOW", "16")],
+        &rows,
+    );
+    assert_eq!(code, Some(2), "the minute: {text}");
+    assert!(text.contains("CLOUD-817>CLOUD-777"), "{text}");
+    let (code, text) = task(
+        &dir,
+        "duplicate-close-check",
+        &[("DUPLICATE_CLOSE_WINDOW", "sixty")],
+        &rows,
+    );
+    assert_eq!(code, Some(1), "not a whole number: {text}");
 }

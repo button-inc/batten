@@ -455,6 +455,7 @@ fn truncated(stamp: &str, window: usize) -> String {
 /// answer.
 //MUTANT absent-key-reads-as-clean|s@^    if !issues.iter().any(keys_duplicate_of) {$@    if false {@|a_set_with_no_duplicateof_key_anywhere_is_could_not_look
 //MUTANT target-outside-the-set-passes|s@^        if !ids.contains(target.as_str()) {$@        if false {@|a_duplicate_whose_target_was_not_piped_is_unjudgeable
+//MUTANT window-input-ignored|s@^    let window = match inputs.get("window") {$@    let window = match None::<String> {@|a_duplicate_close_window_input_narrows_the_stamps_and_refuses_a_non_number
 //MUTANT unstamped-close-passes|s@^        let Some(closed) = closed else {$@        let Some(closed) = closed.or(Some(String::new())) else {@|a_duplicate_close_with_no_stamp_is_unjudgeable
 fn duplicate_close(inputs: &BTreeMap<String, String>, stdin: &str) -> Result<String> {
     const FAMILY: &str = "duplicate-close";
@@ -818,5 +819,20 @@ mod tests {
         assert_eq!(DEFAULT_WINDOW, "2026-08-21T02:37:51".len());
         let unkeyed = r#"[{"id":"A-1","relations":{"blockedBy":[]}}]"#;
         assert!(duplicate_close(&no_inputs(), unkeyed).is_err());
+    }
+
+    #[test]
+    fn a_duplicate_close_window_input_narrows_the_stamps_and_refuses_a_non_number() {
+        let set = r#"[
+            {"id":"A-777","canceledAt":null,"completedAt":"2026-08-21T02:37:52.000Z","relations":{"duplicateOf":null}},
+            {"id":"A-817","canceledAt":"2026-08-21T02:37:51.492Z","completedAt":null,"relations":{"duplicateOf":{"id":"A-777"}}}
+        ]"#;
+        let minute = BTreeMap::from([("window".to_owned(), "16".to_owned())]);
+        assert_eq!(
+            duplicate_close(&minute, set).unwrap(),
+            "dup\tA-817\t2026-08-21T02:37\tA-777\t2026-08-21T02:37\ncensus\tduplicates=1\n"
+        );
+        let word = BTreeMap::from([("window".to_owned(), "sixty".to_owned())]);
+        assert!(duplicate_close(&word, set).is_err());
     }
 }

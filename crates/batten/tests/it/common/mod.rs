@@ -374,7 +374,44 @@ pub(crate) fn task_bash(dir: &Path, body: &str) -> std::process::Command {
     reason = "stays: returns the one shared task-body spawn for the caller to finish configuring"
 )]
 pub(crate) fn task_command(dir: &Path, task: &str) -> std::process::Command {
-    let mut command = task_bash(dir, &task_body(task));
+    scrubbed_bash(dir, &task_body(task))
+}
+
+/// `mise run -q <task>` in `dir` against THIS repository's manifest, with
+/// `input` on stdin, under [`task_command`]'s environment — for a task whose
+/// `run` is an argv array, which has no single body for [`task_body`] to read.
+///
+/// `MISE_CONFIG_FILE` names the committed manifest so the task resolved is the
+/// one under test, and a task declaring `dir = "{{cwd}}"` then runs in `dir`,
+/// the fixture — the same seam `board-sweep` composes its gates through. The
+/// manifest's `vars.batten` reads `BATTEN_BIN`, which [`batten`] sets to the
+/// binary under test, so the task never builds whatever workspace cargo finds.
+/// `env` is set last, for the variables a task's own vars read.
+///
+/// # `MISE_CEILING_PATHS` is what makes `MISE_CONFIG_FILE` the ONLY manifest
+///
+/// mise still walks up from the working directory and a manifest it finds there
+/// OUTRANKS the named one for a task of the same name. A fixture lives under
+/// `CARGO_TARGET_TMPDIR`, and with a shared `CARGO_TARGET_DIR` that is inside
+/// ANOTHER checkout, whose tasks then answer. Measured 2026-09-29: from
+/// `<checkout>/target/tmp/<x>`, `mise run -n done-check` with
+/// `MISE_CONFIG_FILE` naming a worktree's manifest printed the parent checkout's
+/// `done-check`; with the ceiling at the fixture it printed the worktree's.
+#[must_use]
+pub(crate) fn mise_task(dir: &Path, task: &str, env: &[(&str, &str)], input: &str) -> Output {
+    let mut command = scrubbed_bash(dir, &format!("mise run -q {task}"));
+    command.env("MISE_CONFIG_FILE", at_root("mise.toml"));
+    command.env("MISE_CEILING_PATHS", dir);
+    command.envs(env.iter().copied());
+    stdin_run(command, dir, &[], input)
+}
+
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: the one shared task-body spawn, which task_command and mise_task each finish configuring"
+)]
+fn scrubbed_bash(dir: &Path, body: &str) -> std::process::Command {
+    let mut command = task_bash(dir, body);
     let template = batten();
     for (name, value) in template.get_envs() {
         match value {

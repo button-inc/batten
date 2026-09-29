@@ -40,7 +40,7 @@ import rego.v1
 #MUTANT named-but-unclosed-passes|s@^\tcount(closing_closing) == 0$@\tfalse@|a_body_naming_its_issue_but_never_closing_it_is_refused
 #MUTANT strand-never-fires|s@^\tsome key in closing_stranded$@\tsome key in set()@|a_body_closing_a_strict_subset_of_the_served_keys_is_refused
 #MUTANT held-goes-global|s@^closing_hold_global if closing_field("hold") == "global"$@closing_hold_global if closing_hold_any@|a_keyed_marker_does_not_excuse_a_key_it_never_named
-#MUTANT torn-record-passes|s@^\tcount(closing_present) != count(closing_readings)$@\tfalse@|a_closing_key_record_missing_a_reading_is_torn
+#MUTANT closing-key-torn-record-passes|s@^\tcount(closing_present) != count(closing_readings)$@\tfalse@|a_closing_key_record_missing_a_reading_is_torn
 
 rules contains "diff key other"
 
