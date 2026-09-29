@@ -303,6 +303,13 @@ fn a_filing_through_the_mediated_route_clears_it() {
         .say("Broken at crates/batten/src/record.rs:943.")
         .bash("batten mcp call Linear get_issue '{\"id\":\"CLOUD-1\"}'");
     fired(&turns.check(), 1);
+    // A mediated MEMORY write is not a home: the retired body credited the
+    // mediated route for `save_(issue|comment)` alone.
+    let turns = Turns::new("mediated-memory")
+        .prompt()
+        .say("Broken at crates/batten/src/record.rs:943.")
+        .bash("batten mcp call serena write_memory '{\"memory_name\":\"x\"}'");
+    fired(&turns.check(), 1);
     // A mediated amendment names its row, and reaches the column.
     let turns = Turns::new("mediated-amend")
         .receipt("CLOUD-410", "in-progress")

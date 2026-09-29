@@ -12,7 +12,12 @@
 # RECORDED IS NOT SCHEDULED (CLOUD-475, CLOUD-775). A home is:
 #   * a row that OPENS — an opening tool called with no row key;
 #   * an amendment to a row whose recorded column is OPEN;
-#   * a memory or document write.
+#   * a memory or document write, called DIRECTLY.
+#
+# A mediated call is recorded as `mcp call <server> <method>`, and only its
+# filing arms are a home: the retired body credited `batten mcp call` for
+# `save_(issue|comment)` alone, so a mediated memory write is not one
+# (`[[pattern]] finding-mediated-call`).
 # A comment on a Done row, or on a row this clone has no read receipt for, is
 # not: could-not-look must not be the cheapest way to buy silence.
 #
@@ -24,6 +29,7 @@
 #MUTANT terminal-row-is-a-home|s@^	regex.match(data.batten.patterns\["finding-open-column"\], call\[2\])$@	true@|an_annotation_on_a_terminal_row_still_reports
 #MUTANT citation-never-fires|s@^	field("cited") == "true"$@	false@|a_cited_finding_with_no_durable_write_fires
 #MUTANT durable-write-unseen|s@^	regex.match(data.batten.patterns\["finding-home-durable"\], call\[0\])$@	false@|a_durable_write_clears_it_under_any_server_alias
+#MUTANT mediated-memory-credited|s@^	not regex.match(data.batten.patterns\["finding-mediated-call"\], call\[0\])$@	true@|a_filing_through_the_mediated_route_clears_it
 
 # METADATA
 # description: |
@@ -76,10 +82,11 @@ home if {
 	regex.match(data.batten.patterns["finding-open-column"], call[2])
 }
 
-# A memory or document write.
+# A memory or document write, called directly: a mediated one is not a home.
 home if {
 	some call in calls
 	regex.match(data.batten.patterns["finding-home-durable"], call[0])
+	not regex.match(data.batten.patterns["finding-mediated-call"], call[0])
 }
 
 violation contains {
@@ -102,6 +109,7 @@ vocabulary := {
 	"finding-home-amends": `save_(issue|comment)$`,
 	"finding-home-durable": `(save_document|write_memory|edit_memory|rename_memory)$`,
 	"finding-open-column": `^(backlog|todo|in-progress|in-review)$`,
+	"finding-mediated-call": `^mcp call `,
 }
 
 turn(cited, calls_lines) := {"tree": {"records": {"turn-writes": array.concat(
@@ -142,6 +150,17 @@ test_an_amendment_to_a_terminal_row_is_not if {
 
 test_a_memory_write_is_a_home if {
 	count(violation) == 0 with input as turn("true", ["call\tmcp__serena__write_memory\t-\t-"])
+		with data.batten.patterns as vocabulary
+}
+
+test_a_mediated_memory_write_is_not_a_home if {
+	found := violation with input as turn("true", ["call\tmcp call serena write_memory\t-\t-"])
+		with data.batten.patterns as vocabulary
+	count(found) == 1
+}
+
+test_a_mediated_filing_is_a_home if {
+	count(violation) == 0 with input as turn("true", ["call\tmcp call Linear save_issue\t-\t-"])
 		with data.batten.patterns as vocabulary
 }
 

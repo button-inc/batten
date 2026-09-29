@@ -17594,6 +17594,13 @@ regex = 'save_(issue|comment)$'
 id = "finding-home-durable"
 regex = '(save_document|write_memory|edit_memory|rename_memory)$'
 
+# A call the engine read off its own mediated route, which `record decide
+# turn-writes` names `mcp call <server> <method>`. Only its filing arms are a
+# home; a mediated memory write is not, as the retired body never credited one.
+[[pattern]]
+id = "finding-mediated-call"
+regex = '^mcp call '
+
 # The OPEN set is enumerated; an unknown column is not a home.
 [[pattern]]
 id = "finding-open-column"

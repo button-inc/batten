@@ -59,7 +59,8 @@ pub fn transcript_of(stdin: &str) -> Option<PathBuf> {
 /// One tool call the judged turn made: its name, and the row it named if any.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Call {
-    /// The tool's name, or the method a mediated `mcp call` dispatched.
+    /// The tool's name, or `mcp call <server> <method>` for a mediated call, so
+    /// a module can tell the route apart from a direct call of the same method.
     pub name: String,
     /// The row key the call named, or empty for a call naming none.
     pub key: String,
@@ -137,21 +138,31 @@ fn orchestrator_blocks(line: &Value) -> &[Value] {
         .unwrap_or_default()
 }
 
-/// The engine's own mediated route, read off a `Bash` call's command: the
-/// method `batten mcp call <server> <method>` dispatched. The verb is this
-/// crate's, so naming it here names no consumer.
-fn mediated_method(command: &str) -> Option<String> {
+/// The engine's own mediated route, read off a `Bash` call's command, as the
+/// call's name: `mcp call <server> <method>`. The verb is this crate's, so
+/// naming it here names no consumer.
+///
+/// **THE ROUTE STAYS IN THE NAME, and dropping it widened the gate.** Recorded
+/// as the bare method, a mediated `write_memory` read exactly like a direct one,
+/// so the module's durable-write arm credited a route the retired body never
+/// did. Which mediated methods are a home is the module's decision, and it can
+/// only make it if the record says which route a call took.
+fn mediated_call(command: &str) -> Option<String> {
     let words: Vec<&str> = command.split_whitespace().collect();
     let at = words
         .windows(2)
         .position(|pair| pair.first() == Some(&"mcp") && pair.get(1) == Some(&"call"))?;
-    // `mcp call <server> <method>`: the method is the fourth word from `mcp`.
-    let method: String = words
-        .get(at + 3)?
-        .chars()
-        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-        .collect();
-    (!method.is_empty()).then_some(method)
+    // `mcp call <server> <method>`: the server and method follow `mcp call`.
+    let word = |offset: usize| -> Option<String> {
+        let found: String = words
+            .get(at + offset)?
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+            .collect();
+        (!found.is_empty()).then_some(found)
+    };
+    let (server, method) = (word(2)?, word(3)?);
+    Some(format!("mcp call {server} {method}"))
 }
 
 /// A scalar input field as the row key, `jq`'s `tostring` for a number.
@@ -179,7 +190,7 @@ fn call_of(block: &Value, vocabulary: &Vocabulary<'_>) -> Call {
         && let Some(command) = input
             .and_then(|input| input.get("command"))
             .and_then(Value::as_str)
-        && let Some(method) = mediated_method(command)
+        && let Some(method) = mediated_call(command)
     {
         let key = vocabulary
             .key
@@ -341,6 +352,7 @@ pub fn render(turn: &Turn, columns: &dyn Fn(&str) -> String) -> String {
 //MUTANT tool-result-opens-a-turn|s@^    block.get("type").and_then(Value::as_str) == Some("text")$@    true@|a_tool_result_does_not_open_a_turn
 //MUTANT whole-transcript-judged|s@^    let Some(&start) = boundaries.last() else {$@    let Some(\&start) = boundaries.first() else {@|only_the_last_turn_is_judged
 //MUTANT mediated-route-unseen|s@^    if name == "Bash"$@    if name == "never"@|a_mediated_call_names_its_method_and_row
+//MUTANT mediated-route-dropped|s@^    Some(format!("mcp call {server} {method}"))$@    Some(format!("{server} {method}").split_off(server.len() + 1))@|a_mediated_call_names_its_method_and_row
 //MUTANT citation-ignored|s@^                        cited = true;$@                        cited = false;@|a_citation_in_the_last_turn_is_read
 //MUTANT receipt-field-ignored|s@^    let value = first.split_whitespace().nth(field.checked_sub(1)?)?;$@    let value = first.split_whitespace().next()?;@|a_receipt_column_is_its_declared_field
 
@@ -421,13 +433,19 @@ mod tests {
         assert_eq!(
             read.calls,
             vec![Call {
-                name: "save_comment".to_owned(),
+                name: "mcp call Linear save_comment".to_owned(),
                 key: "ABC-7".to_owned()
             }]
         );
         // A direct call names its row by a declared field, a number included.
         let direct = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"t","input":{"id":12}}]}}"#;
         assert_eq!(turn(&format!("{PROMPT}\n{direct}\n")).calls[0].key, "12");
+        // A mediated memory write keeps its route, so a module need not credit it.
+        let memory = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"batten mcp call serena write_memory x"}}]}}"#;
+        assert_eq!(
+            turn(&format!("{PROMPT}\n{memory}\n")).calls[0].name,
+            "mcp call serena write_memory"
+        );
         // A Bash call that is not the mediated route is just `Bash`.
         let plain = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}"#;
         assert_eq!(turn(&format!("{PROMPT}\n{plain}\n")).calls[0].name, "Bash");
