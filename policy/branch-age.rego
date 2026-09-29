@@ -42,6 +42,8 @@
 #MUTANT reuse-needs-no-survivor|s@^\treused in on_remote$@\ttrue@|a_reused_name_still_on_the_remote_is_reported_and_one_already_deleted_is_not
 #MUTANT empty-remote-passes|s@^\tcount(heads) == 0$@\tfalse@|a_present_record_naming_no_branch_is_refused_rather_than_read_as_clean
 #MUTANT trunk-counted|s@^\tname != trunk$@\ttrue@|the_trunk_is_never_counted_however_old
+#MUTANT merged-window-uncapped|s@^merged_window := 200$@merged_window := 100000@|only_the_two_hundred_most_recent_merged_pull_requests_are_counted
+#MUTANT unmerged-takes-a-slot|s@^\tis_string(row.merged_at)$@\ttrue@|an_unmerged_pull_request_takes_no_slot_in_the_merged_window
 
 # METADATA
 # description: |
@@ -119,12 +121,25 @@ on_remote contains entry.name if {
 	some entry in refs
 }
 
-# One entry per MERGED pull request, so a name heading several appears several
-# times and the cardinality is the reading.
-merged_heads contains [index, row["head.ref"]] if {
+# The population the retired body read: the 200 most recent MERGED pull
+# requests (`gh pr list --state merged --limit 200`). The forge's pulls endpoint
+# has no merged-only state, so `branch-merged` reads a wider window of closed
+# ones, newest-created first, and the cap is taken HERE, after the unmerged rows
+# are dropped — capping the closed rows instead would let every closed-unmerged
+# pull request push a merge out of the window (CLOUD-843).
+merged_window := 200
+
+# The merged rows, in the order the forge listed them.
+merged_rows := [row |
 	recorded
-	some index, row in rows("branch-merged")
+	some row in rows("branch-merged")
 	is_string(row.merged_at)
+]
+
+# One entry per MERGED pull request inside the window, so a name heading several
+# appears several times and the cardinality is the reading.
+merged_heads contains [index, row["head.ref"]] if {
+	some index, row in array.slice(merged_rows, 0, merged_window)
 	row["head.ref"] != trunk
 }
 
@@ -249,6 +264,28 @@ test_a_closed_unmerged_pull_request_is_not_a_merge if {
 		[tip("t0", 0), tip("c", 1)],
 		[merged("claude/once"), unmerged("claude/once")],
 	)
+}
+
+# THE RETIRED BODY'S 200: a reuse whose merges both fall past the 200 most recent
+# merged pull requests is outside the population, exactly as `--limit 200` left it.
+test_a_reuse_past_the_two_hundredth_merge_is_outside_the_window if {
+	older := [merged(sprintf("claude/f%d", [i])) | some i in numbers.range(1, 200)]
+	count(violation) == 0 with input as tree(
+		[head("main", "t0"), head("claude/reused", "r")],
+		[tip("t0", 0), tip("r", 1)],
+		array.concat(older, [merged("claude/reused"), merged("claude/reused")]),
+	)
+}
+
+# AND AN UNMERGED ONE TAKES NO SLOT: the cap counts merges, not closed rows.
+test_unmerged_pull_requests_do_not_push_a_merge_out_of_the_window if {
+	closed_only := [unmerged(sprintf("claude/u%d", [i])) | some i in numbers.range(1, 200)]
+	some v in violation with input as tree(
+		[head("main", "t0"), head("claude/reused", "r")],
+		[tip("t0", 0), tip("r", 1)],
+		array.concat(closed_only, [merged("claude/reused"), merged("claude/reused")]),
+	)
+	v.verdict == "branch name duplicate"
 }
 
 test_a_present_listing_naming_no_branch_is_refused if {

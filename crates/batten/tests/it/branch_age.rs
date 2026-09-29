@@ -135,9 +135,9 @@ unit = "days"
 [[forge.query]]
 id = "branch-merged"
 endpoint = "repos/{owner}/{repo}/pulls"
-params = { state = "closed" }
+params = { state = "closed", sort = "created", direction = "desc" }
 per_page = 100
-max_pages = 2
+max_pages = 10
 select = ["head.ref", "merged_at"]
 "#;
 
@@ -166,7 +166,9 @@ fn respond(forge: &Path, n: u32, body: &str) {
 }
 
 /// The forge's answers: `heads` as `(name, sha)`, one tip per DISTINCT sha in
-/// first-seen order as `(sha, date)`, and the closed pulls as `(head, merged)`.
+/// first-seen order as `(sha, date)`, and the closed pulls as `(head, merged)`,
+/// served a hundred to a page — a full last page is followed by an empty one,
+/// because a page as long as `per_page` is how the walk knows to ask again.
 fn forge_answers(
     forge: &Path,
     heads: &[(&str, &str)],
@@ -191,18 +193,25 @@ fn forge_answers(
         );
         n += 1;
     }
-    let pulls: Vec<String> = pulls
-        .iter()
-        .map(|(head, merged)| {
-            let at = if *merged {
-                "\"2026-08-01T00:00:00Z\""
-            } else {
-                "null"
-            };
-            format!(r#"{{"head": {{"ref": "{head}"}}, "merged_at": {at}, "title": "t"}}"#)
-        })
-        .collect();
-    respond(forge, n, &format!("[{}]", pulls.join(", ")));
+    let mut pages: Vec<&[(&str, bool)]> = pulls.chunks(100).collect();
+    if pulls.len().is_multiple_of(100) {
+        pages.push(&[]);
+    }
+    for page in pages {
+        let rows: Vec<String> = page
+            .iter()
+            .map(|(head, merged)| {
+                let at = if *merged {
+                    "\"2026-08-01T00:00:00Z\""
+                } else {
+                    "null"
+                };
+                format!(r#"{{"head": {{"ref": "{head}"}}, "merged_at": {at}, "title": "t"}}"#)
+            })
+            .collect();
+        respond(forge, n, &format!("[{}]", rows.join(", ")));
+        n += 1;
+    }
 }
 
 fn against(dir: &Path, forge: &Path, args: &[&str]) -> Output {
@@ -389,5 +398,57 @@ fn a_reused_name_still_on_the_remote_is_reported_and_one_already_deleted_is_not(
         Some(0),
         "the same history with the branch deleted is clean — the remedy worked\n{}",
         said(&quiet)
+    );
+}
+
+/// `count` distinct heads for pull requests closed before the ones a case is
+/// about.
+fn earlier(prefix: &str, count: usize) -> Vec<String> {
+    (1..=count).map(|i| format!("claude/{prefix}{i}")).collect()
+}
+
+#[test]
+fn only_the_two_hundred_most_recent_merged_pull_requests_are_counted() {
+    // THE RETIRED BODY'S POPULATION: `gh pr list --state merged --limit 200`.
+    // A name whose two merges both fall past the 200th most recent merge was
+    // never in that list, so it is not reported. The window reads more than
+    // 200 CLOSED rows only so that unmerged ones cannot shrink it.
+    let (dir, forge) = consumer("merged-window");
+    let older = earlier("f", 200);
+    let mut pulls: Vec<(&str, bool)> = older.iter().map(|head| (head.as_str(), true)).collect();
+    pulls.extend([("claude/reused", true), ("claude/reused", true)]);
+    forge_answers(
+        &forge,
+        &[("main", "t0"), ("claude/reused", "r")],
+        &[("t0", FRESH), ("r", FRESH)],
+        &pulls,
+    );
+    produce(&dir, &forge);
+    let quiet = against(&dir, &forge, &["check"]);
+    assert_eq!(quiet.status.code(), Some(0), "{}", said(&quiet));
+}
+
+#[test]
+fn an_unmerged_pull_request_takes_no_slot_in_the_merged_window() {
+    // THE GAP A CLOSED-SET READ OPENS: 200 closed rows are not 200 merges, and
+    // every unmerged one among them would push a merge out of what the retired
+    // body saw. The cap counts merges, after the unmerged rows are dropped.
+    let (dir, forge) = consumer("merged-window-unmerged");
+    let closed = earlier("u", 200);
+    let mut pulls: Vec<(&str, bool)> = closed.iter().map(|head| (head.as_str(), false)).collect();
+    pulls.extend([("claude/reused", true), ("claude/reused", true)]);
+    forge_answers(
+        &forge,
+        &[("main", "t0"), ("claude/reused", "r")],
+        &[("t0", FRESH), ("r", FRESH)],
+        &pulls,
+    );
+    produce(&dir, &forge);
+    let reported = against(&dir, &forge, &["check"]);
+    assert_eq!(reported.status.code(), Some(2), "{}", said(&reported));
+    assert!(
+        said(&reported).contains("claude/reused"),
+        "{}",
+        said(&reported)
     );
 }

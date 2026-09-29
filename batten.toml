@@ -2386,8 +2386,21 @@ regex = '^[0-9]+$'
 # already does. What it buys is that a declared family always says who fills it,
 # because a store with no producer is a row that can only ever read
 # could-not-look.
+# CLOUD-349's three forge reads (CLOUD-843, retiring the body of
+# `[tasks.branch-age-record]`): the remote's branches, each branch tip's commit
+# with its age in UTC days measured by the producer's clock, and the heads of
+# recently closed pull requests. Each is a `[[forge.query]]` row in `[forge]`
+# below; `policy/branch-age.rego` joins them.
 [[record]]
-record = "branch-age"
+record = "branch-heads"
+writer = "mise run branch-age-record"
+
+[[record]]
+record = "branch-tips"
+writer = "mise run branch-age-record"
+
+[[record]]
+record = "branch-merged"
 writer = "mise run branch-age-record"
 
 # CLOUD-583's probe and verifier, ported off `attestation-check.sh` under
@@ -2398,12 +2411,20 @@ writer = "mise run branch-age-record"
 record = "attestation"
 writer = "mise run attestation-record"
 
-# CLOUD-266's other half, ported off `timeout-drift.sh` under CLOUD-1717. The
-# producer reads successful runs from the Actions API, subtracts their instants
-# and computes a p95 per job; the engine calls no clock, so the arithmetic cannot
-# move in and only the classification does.
+# CLOUD-266's three forge reads (CLOUD-843, retiring the body of
+# `[tasks.timeout-drift-record]`): every workflow, each one's last successful
+# runs, and each run's jobs with their durations measured by the producer. The
+# p95 and the classification are the `ci-signal` preset's.
 [[record]]
-record = "timeout-drift"
+record = "drift-workflows"
+writer = "mise run timeout-drift-record"
+
+[[record]]
+record = "drift-runs"
+writer = "mise run timeout-drift-record"
+
+[[record]]
+record = "drift-jobs"
 writer = "mise run timeout-drift-record"
 
 # CLOUD-484's measuring half, ported off `nonverdict-scan.sh` under CLOUD-1717.
@@ -7351,11 +7372,11 @@ severity = "deny"
 
 # CLOUD-349, ported off `mise-tasks/branch-age-check.sh` under CLOUD-1717.
 #
-# A MEASUREMENT, SO THE SPAWN STAYS OUTSIDE (house-style §5). `mise run
-# branch-age-record` makes the two forge reads and computes each branch's age in
-# days — the engine calls no clock on any evaluation path, so the arithmetic
-# cannot live in the module — and writes `branch-age` through `batten record
-# named`. This row adjudicates what was recorded.
+# A MEASUREMENT, SO THE READS STAY IN THE PRODUCER (house-style §5). `mise run
+# branch-age-record` walks three `[[forge.query]]` rows — the branches, each
+# tip's age in days against the producer's clock (the engine calls no clock on
+# any evaluation path), and the closed pull requests — and this row joins and
+# adjudicates what they recorded (CLOUD-843).
 #
 # `severity = "warn"` FOR NOW, and the reason is the population rather than
 # caution: the retired program ran on a schedule against every remote branch,
@@ -7390,11 +7411,20 @@ severity = "deny"
 # no comment, because a budget that no longer matches reality means nothing is
 # broken and no branch is at fault. A warn finding is reported without failing the
 # run, which is that posture on the engine's contract.
+#
+# THE DECISION IS THE `ci-signal` PRESET'S (CLOUD-843). Nothing in it was this
+# repository's once the reads became `[[forge.query]]` rows: the multiplier, the
+# minimum sample, the slack, the p95 and the job-key walk are the practice's, and
+# the job and timeout grammar is GitHub Actions'. What stays here is this
+# consumer's: which workflows hold budgets (`line_sources`) and which forge reads
+# feed the two families (`drift-runs`, `drift-jobs`, in `[forge]` below).
 [[rule]]
 id = "bound grade other"
 kind = "policy"
 scope = "tree"
-module = "policy/timeout-drift.rego"
+preset = "ci-signal"
+provider = "github-actions"
+line_sources = [".github/workflows/*.yml"]
 severity = "warn"
 
 # CLOUD-484, ported off `mise-tasks/nonverdict-assert.sh` under CLOUD-1717.
@@ -15440,66 +15470,6 @@ looked and found a tag with no archives.
 id = "task run first"
 kind = "command"
 target = "mise run attestation-record"
-
-# CLOUD-266's four readings, ported off `timeout-drift.sh` under CLOUD-1717.
-[[verdict]]
-id = "bound pin loose"
-gloss = "a job's declared timeout sits well above what its measurement justifies"
-class = """
-A budget is a ceiling rather than a target, so headroom is correct and a slack \
-allowance keeps this off a job that merely got a little faster. Past that \
-allowance the number has gone slack, which is the direction a report that only \
-complained about tightness would let rot upward forever. Nothing is broken and no \
-branch is at fault: re-derive the number and commit the new comment.
-"""
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run timeout-drift-record"
-
-[[verdict]]
-id = "bound pin wrong"
-gloss = "a job's measurement has outgrown its declared timeout"
-class = """
-The p95 of recent successful runs, times the repo-wide headroom multiplier, is \
-already above the committed budget. Raise it before it starts failing healthy \
-runs — this is the direction that turns into a red job nobody caused.
-"""
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run timeout-drift-record"
-
-[[verdict]]
-id = "bound pin stale"
-gloss = "a dated debt entry now has a usable sample and can become a measured budget"
-class = """
-The prompt, never the conversion. A bot re-baselining the number it is supposed \
-to defend is the move section 4 forbids outright, so this reports that the debt \
-is now convertible and a deliberate commit does the converting.
-"""
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run timeout-drift-record"
-
-[[verdict]]
-id = "bound measure partial"
-gloss = "too few successful runs to characterise a job, so no budget is proposed"
-class = """
-Below the declared minimum a job is uncharacterised rather than fast, and saying \
-so is itself the useful signal. Most jobs here run weekly or on release, so a \
-naive percentile over a short window would compute a confident value from two \
-samples and propose tightening a release job on it.
-"""
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run timeout-drift-record"
 
 # CLOUD-319's readings, ported off `release-due.sh` under CLOUD-1717.
 [[verdict]]

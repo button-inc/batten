@@ -461,7 +461,11 @@ allowance keeps this off a job that merely got a little faster. Past that allowa
 gone slack, which is the direction a report that only complained about tightness would let rot \
 upward forever. Nothing is broken and no branch is at fault: re-derive the number and commit the \
 new comment.",
-                routes: &[run("task run first", "batten record query drift-jobs")],
+                routes: &[run(
+                    "task run first",
+                    "run the writer the `drift-runs` and `drift-jobs` `[[record]]` rows name, \
+                     which re-takes the run window before it re-walks the jobs",
+                )],
                 applicability: crate::verdict::Applicability::Advice,
             },
             VendoredVerdict {
@@ -470,7 +474,11 @@ new comment.",
                 class: "The p95 of recent successful runs, times the headroom multiplier, is already \
 above the committed budget. Raise it before it starts failing healthy runs — this is the direction \
 that turns into a red job nobody caused.",
-                routes: &[run("task run first", "batten record query drift-jobs")],
+                routes: &[run(
+                    "task run first",
+                    "run the writer the `drift-runs` and `drift-jobs` `[[record]]` rows name, \
+                     which re-takes the run window before it re-walks the jobs",
+                )],
                 applicability: crate::verdict::Applicability::Advice,
             },
             VendoredVerdict {
@@ -479,7 +487,11 @@ that turns into a red job nobody caused.",
                 class: "The prompt, never the conversion. A bot re-baselining the number it is supposed \
 to defend is the one move a budget exists to forbid, so this reports that the debt is now \
 convertible and a deliberate commit does the converting.",
-                routes: &[run("task run first", "batten record query drift-jobs")],
+                routes: &[run(
+                    "task run first",
+                    "run the writer the `drift-runs` and `drift-jobs` `[[record]]` rows name, \
+                     which re-takes the run window before it re-walks the jobs",
+                )],
                 applicability: crate::verdict::Applicability::Advice,
             },
             VendoredVerdict {
@@ -491,7 +503,11 @@ itself the useful signal: jobs that run weekly or on release have a handful of r
 so a naive percentile would compute a confident value from two samples and propose tightening a \
 release job on it. A family present without exactly one closing line was torn by something other \
 than its producer, which writes whole or removes, and reads the same way.",
-                routes: &[run("task run first", "batten record query drift-jobs")],
+                routes: &[run(
+                    "task run first",
+                    "run the writer the `drift-runs` and `drift-jobs` `[[record]]` rows name, \
+                     which re-takes the run window before it re-walks the jobs",
+                )],
                 applicability: crate::verdict::Applicability::Advice,
             },
         ],

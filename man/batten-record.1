@@ -20,7 +20,10 @@ batten\-record\-tool(1)
 Record a declared tool row\*(Aqs verdict, read as `<name> <token>` lines on stdin
 .TP
 batten\-record\-forge(1)
-Record the forge\*(Aqs check verdicts for one commit, read as `<check> <conclusion>` lines on stdin
+Record the forge\*(Aqs check verdicts for one commit, read as `<check> <conclusion>` lines on stdin or with \-\-fetch from the forge
+.TP
+batten\-record\-validate(1)
+Run a declared tool row\*(Aqs `run` argv and record its exit code under the row\*(Aqs key
 .TP
 batten\-record\-named(1)
 Record one named family under this branch, read from stdin

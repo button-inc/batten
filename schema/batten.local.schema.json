@@ -543,6 +543,13 @@
           "description": "The key this plan is projected under in `input.tree.plan`.",
           "type": "string"
         },
+        "profile": {
+          "description": "Profiles to ask the runner about, each passed as `--profile <p>`\n(CLOUD-843).\n\n**The runner's own grammar, including its negation** (`!slow`), so a\nconsumer can ask what the gate plans with a tier switched OFF — the only\nreading that shows which steps declare that tier, since a step excluded\nfor a missing profile is by construction a step that declared it. The\nanswer stays hk's: this passes the words and parses nothing.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "prohibited_profiles": {
           "description": "Profiles whose presence makes the plan unusable for this consumer.",
           "type": "array",
@@ -1232,6 +1239,7 @@
           ],
           "enum": [
             "ci-hygiene",
+            "ci-signal",
             "claude-code-cloud",
             "commit-hygiene",
             "landing-loop",
@@ -1745,6 +1753,13 @@
         "input": {
           "description": "The repository-relative path whose bytes the verdict was taken over.\n\nIts digest is the third component of the key, so a verdict goes stale by\nconstruction the moment the file changes — the anti-staleness half, and\nthe one a `status: clean` marker alone could never provide.\n\nUnreadable, or outside the tree, is [`Look::CouldNotLook`]: the id is\nabsent from the map, never present with an empty verdict.",
           "type": "string"
+        },
+        "run": {
+          "description": "The argv that takes this verdict, run by `batten record validate <id>`\nfrom the repository root (CLOUD-843).\n\n**Optional, and a row without one is still read**: a producer outside the\nengine may still pipe its verdict to `record tool`. Declared, the argv is\nthe consumer's and never the engine's — which validator, with which\nflags, over which file is this repository's fact (non-negotiable rule 1),\nand what reaches the record is the EXIT CODE and nothing the tool printed.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "tool": {
           "description": "The tool's name, as the producer wrote it into the record's key.",

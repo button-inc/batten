@@ -5749,7 +5749,7 @@ pub const SURFACE: &[CommandDecl] = &[
     CommandDecl {
         path: "record forge",
         id: "record.forge",
-        about: "Record the forge's check verdicts for one commit, read as `<check> <conclusion>` lines on stdin",
+        about: "Record the forge's check verdicts for one commit, read as `<check> <conclusion>` lines on stdin or with --fetch from the forge",
         data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Write,

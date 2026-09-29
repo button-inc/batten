@@ -3034,10 +3034,34 @@ expression: stdout_of(&output)
         {
           "path": "record forge",
           "id": "record.forge",
-          "about": "Record the forge's check verdicts for one commit, read as `<check> <conclusion>` lines on stdin",
+          "about": "Record the forge's check verdicts for one commit, read as `<check> <conclusion>` lines on stdin or with --fetch from the forge",
           "effect": "write",
           "data_channel": false,
           "flags": [
+            {
+              "name": "answered",
+              "short": null,
+              "long": "answered",
+              "takes_value": true,
+              "positional": false,
+              "help": "With --fetch: comma-separated conclusions that constitute an answer; anything else is not recorded"
+            },
+            {
+              "name": "fanin",
+              "short": null,
+              "long": "fanin",
+              "takes_value": true,
+              "positional": false,
+              "help": "With --fetch: record nothing until this check has an answered conclusion"
+            },
+            {
+              "name": "fetch",
+              "short": null,
+              "long": "fetch",
+              "takes_value": false,
+              "positional": false,
+              "help": "Read the commit's check-runs from the forge instead of `<check> <conclusion>` lines on stdin"
+            },
             {
               "name": "ref",
               "short": null,
@@ -3204,6 +3228,24 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": true,
               "help": "The `[[rule.tools]]` id whose verdict is being recorded"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "record validate",
+          "id": "record.validate",
+          "about": "Run a declared tool row's `run` argv and record its exit code under the row's key",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "id",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The `[[rule.tools]]` id whose argv runs and whose verdict is recorded"
             }
           ],
           "subcommands": []

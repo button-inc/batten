@@ -54,14 +54,17 @@ jobs:
           # digest above pins the ACTION; this pins the MISE it installs, which
           # is a separate resolution the digest does not reach.
           version: 2026.9.1
-          # `gh` for both readings, `jq` for the GraphQL projection, and `rust`
-          # because both steps below reach the engine through `cargo run`: the
-          # record family and the rule are this tree's, which a release may not
-          # carry yet. Without it the steps failed before reading anything.
+          # `rust` because the first step reaches the engine through `cargo
+          # run`: the forge queries, the record families and the rule are this
+          # tree's, which a release may not carry yet. `gh` and `jq` are
+          # `./install.sh`'s, for the lease step below; the branch reads no
+          # longer use either (CLOUD-843).
           install_args: rust aqua:cli/cli aqua:jqlang/jq
-      # THE SPLIT THE PORT FORCED (CLOUD-1717). The producer makes the two
-      # `gh` reads and the calendar subtraction; the engine adjudicates what
-      # it recorded. Neither half can hold the other: section 5 makes `check`
+      # THE SPLIT THE PORT FORCED (CLOUD-1717, CLOUD-843). The producer walks
+      # three `[[forge.query]]` rows through `batten record query` — the
+      # branches, each tip's age in UTC days against the producer's clock, and
+      # the recently closed pull requests — and the engine adjudicates what
+      # they recorded. Neither half can hold the other: section 5 makes `check`
       # `read` and incapable of spawning, and the engine calls no clock on any
       # evaluation path.
       # One step, so the workflow's step count stays flat: `&&` stops at the
