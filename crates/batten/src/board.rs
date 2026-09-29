@@ -108,6 +108,55 @@ pub struct Board {
     /// `DO-NOT-CLOSE` working, and refusing it would make the marker unwritable.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub started: Vec<String>,
+    /// The gates `batten board sweep` runs over ONE payload set, in order
+    /// (CLOUD-825, retiring `[tasks.board-sweep]` under CLOUD-843).
+    ///
+    /// **Declared here rather than known to the engine** (non-negotiable rule 1):
+    /// which gates a board has, and which argv reaches each, are this consumer's
+    /// facts. Read from the committed authority alone, like every other key in
+    /// this table — an uncommitted layer that could drop a gate from the sweep
+    /// would narrow what "the board is coherent" means without a trace.
+    ///
+    /// Empty is undeclared, and the verb refuses rather than reporting a clean
+    /// board over zero gates.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sweep: Vec<SweepGate>,
+}
+
+/// One gate the board sweep runs (CLOUD-843).
+///
+/// **Each row carries its own exit table**, because the gates a consumer
+/// composes do not share one. The engine's verbs answer `2` for a refusal; the
+/// corpus a retirement campaign is still draining answers `1`. A composer that
+/// assumed either would read the other's refusal as could-not-look, or its
+/// could-not-look as a refusal — the two answers a board sweep most needs apart.
+///
+/// Every exit a row does not classify — and a gate that could not be run at all
+/// — is COULD NOT LOOK. That is the safe direction: an unclassified answer never
+/// reads as a clean board.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SweepGate {
+    /// The name the report prints for this gate.
+    pub name: String,
+    /// The argv the gate runs with the payload set on stdin. The first word
+    /// resolves on `PATH`; nothing here is a shell string.
+    pub run: Vec<String>,
+    /// The exits meaning the gate REFUSED the board. The engine's violation,
+    /// `2`, when the row names none.
+    #[serde(default = "default_refuses")]
+    pub refuses: Vec<i32>,
+    /// The exits meaning the gate cannot answer on THIS CLONE — a property of the
+    /// checkout rather than of the board, so a refusal elsewhere still outranks
+    /// it (CLOUD-921).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub abstains: Vec<i32>,
+}
+
+/// The engine's own violation exit, which is what a row naming no refusal
+/// table is read against.
+fn default_refuses() -> Vec<i32> {
+    vec![2]
 }
 
 /// The columns a landing or claim decision reads, each already proven present.
@@ -240,6 +289,7 @@ mod tests {
                 "In Review".to_owned(),
                 "Done".to_owned(),
             ],
+            sweep: Vec::new(),
         }
     }
 
@@ -275,6 +325,7 @@ mod tests {
             in_progress: Some("In Development".to_owned()),
             review: Some("Under Review".to_owned()),
             started: vec!["In Development".to_owned(), "Shipped".to_owned()],
+            sweep: Vec::new(),
         };
         let columns = Columns::resolve(Some(&board));
         assert_eq!(columns.ready().unwrap(), "To Do");
@@ -287,6 +338,24 @@ mod tests {
             ["In Development".to_owned(), "Shipped".to_owned()],
             "resolution must not smuggle this repository's vocabulary into another board's set"
         );
+    }
+
+    /// A sweep row that names no refusal table is read against the ENGINE's
+    /// violation exit, and one that names its own keeps exactly what it named —
+    /// the corpus's `1` must not be widened back to `[1, 2]`.
+    #[test]
+    fn a_sweep_row_reads_its_own_exit_table_or_the_engines() {
+        let board: Board = toml::from_str(
+            "[[sweep]]\nname = \"engine\"\nrun = [\"x\"]\n\n\
+             [[sweep]]\nname = \"corpus\"\nrun = [\"y\"]\nrefuses = [1]\nabstains = [3]\n",
+        )
+        .unwrap();
+        let engine = board.sweep.first().unwrap();
+        assert_eq!(engine.refuses, vec![2]);
+        assert!(engine.abstains.is_empty());
+        let corpus = board.sweep.get(1).unwrap();
+        assert_eq!(corpus.refuses, vec![1]);
+        assert_eq!(corpus.abstains, vec![3]);
     }
 
     /// An empty set is could-not-look, never "nothing counts as started" — the

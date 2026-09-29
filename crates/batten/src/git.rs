@@ -1513,6 +1513,32 @@ pub fn log_messages(dir: &Path, base: &str) -> Result<Option<String>> {
     Ok(Some(messages))
 }
 
+/// Every commit message reachable from `tip`, as one blob (CLOUD-843, retiring
+/// `[tasks.in-progress-drain]`'s `git log --format=%B origin/main`).
+///
+/// [`log_messages`]' sibling over a whole history rather than a range: the
+/// abandonment drain asks which keys the TRUNK closes, and a range hidden behind
+/// some base would silently drop every landing older than it — a landed row then
+/// reads as live and, idle, as abandoned. Content, never output (rule 4).
+///
+/// `None` is could-not-look — no checkout, or a `tip` that does not resolve —
+/// and never an empty history, which the caller would read as "nothing closes".
+#[must_use]
+pub fn messages_reachable(dir: &Path, tip: &str) -> Option<String> {
+    let repo = open(dir).ok()?;
+    let tip_id = repo.rev_parse_single(tip).ok()?;
+    let walk = repo.rev_walk([tip_id.detach()]).all().ok()?;
+    let mut messages = String::new();
+    for info in walk.flatten() {
+        let Ok(commit) = repo.find_commit(info.id) else {
+            continue;
+        };
+        messages.push_str(&commit.message_raw_sloppy().to_string());
+        messages.push('\n');
+    }
+    Some(messages)
+}
+
 /// One commit's attribution record: who wrote it, who committed it, what it
 /// trails, and what it says.
 ///

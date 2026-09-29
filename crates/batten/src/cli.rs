@@ -543,6 +543,12 @@ pub enum BoardCommand {
         /// Issue keys to read out of the capture store; empty reads stdin.
         issues: Vec<String>,
     },
+    /// Run every declared board gate over one payload set and report the set
+    /// (CLOUD-825), retiring `[tasks.board-sweep]` (CLOUD-843).
+    Sweep {
+        /// Issue keys to read out of the capture store; empty reads stdin.
+        issues: Vec<String>,
+    },
 }
 
 /// Subcommands of `census` (CLOUD-843).
@@ -912,6 +918,11 @@ pub enum LandedCommand {
         instant: Option<String>,
         /// Days a claim may be idle before it reads as abandoned.
         max_idle_days: Option<String>,
+        /// Acquire every evidence arm no file was named for: the keys the
+        /// trunk's history closes, the keys merged pull requests close, and the
+        /// branches the remote carries (CLOUD-843, retiring
+        /// `[tasks.in-progress-drain]`'s gather).
+        gather: bool,
     },
 }
 
@@ -2555,6 +2566,7 @@ fn landed_of(matches: &ArgMatches) -> Option<LandedCommand> {
             refs: matches.get_one::<String>("refs").cloned(),
             instant: matches.get_one::<String>("instant").cloned(),
             max_idle_days: matches.get_one::<String>("max_idle_days").cloned(),
+            gather: flag(matches, "gather"),
         }),
         _ => None,
     }
@@ -2941,6 +2953,12 @@ fn dist_of(matches: &ArgMatches) -> Option<DistRequest> {
 fn board_of(matches: &ArgMatches) -> Option<BoardCommand> {
     match matches.subcommand()? {
         ("check", matches) => Some(BoardCommand::Check {
+            issues: matches
+                .get_many::<String>("issue")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
+        }),
+        ("sweep", matches) => Some(BoardCommand::Sweep {
             issues: matches
                 .get_many::<String>("issue")
                 .map(|values| values.cloned().collect())

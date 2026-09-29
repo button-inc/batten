@@ -2144,6 +2144,21 @@ const REFS: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--gather` on `landed abandoned` (CLOUD-843, retiring
+/// `[tasks.in-progress-drain]`).
+///
+/// A SWITCH over the arms rather than a replacement for them: an arm the caller
+/// names a file for is read from that file, and only an arm left unnamed is
+/// acquired — the trunk's closing keys from its history in process, the merged
+/// pull requests and the remote's branches from the forge through the vendored
+/// client. Off, every arm keeps its caller-supplied contract unchanged. A gather
+/// that cannot finish is could-not-look, never a thinner evidence set.
+const GATHER: FlagDecl = FlagDecl::switch(
+    "gather",
+    "gather",
+    "Acquire each evidence arm no file was named for: the trunk's closing keys, merged pull requests, and the remote's branches",
+);
+
 /// `--instant <ISO-8601>` on `landed abandoned` (CLOUD-1513).
 ///
 /// The instant the idle bound is measured against. **Supplied rather than read**,
@@ -4504,7 +4519,15 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_VERDICT,
         effect: Effect::Read,
-        flags: &[CLAIMED, MERGED_PRS, LANDED_BY, REFS, INSTANT, MAX_IDLE_DAYS],
+        flags: &[
+            CLAIMED,
+            MERGED_PRS,
+            LANDED_BY,
+            REFS,
+            INSTANT,
+            MAX_IDLE_DAYS,
+            GATHER,
+        ],
     },
     CommandDecl {
         path: "ready lint",
@@ -6423,6 +6446,21 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_VERDICT,
         effect: Effect::Read,
+        flags: &[BOARD_ISSUE],
+    },
+    // Every board gate over ONE payload set, reported as a set (CLOUD-825),
+    // retiring `[tasks.board-sweep]` (CLOUD-843). UNCLASSIFIED, not `read`: it
+    // runs the argv the consumer's `[board] sweep` rows declare, and what those
+    // do is theirs. The spawn is `exec`'s placed adapter, so the inventory does
+    // not grow. `EXITS_VERDICT`: a refusal is `Violation`, and a gate that could
+    // not look — or abstained on this clone — is `Internal`.
+    CommandDecl {
+        path: "board sweep",
+        id: "board.sweep",
+        about: "Run every declared board gate over one payload set and report the set of refusals",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Unclassified,
         flags: &[BOARD_ISSUE],
     },
     // How far the landing loop diverged from linear over a window (retiring
