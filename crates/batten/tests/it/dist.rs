@@ -163,6 +163,34 @@ fn the_stem_is_named_from_the_workspace_and_nothing_is_built() {
     );
 }
 
+/// The retired program answered `--stem` before it ever read `DIST_BUILD_TOOL`,
+/// so a builder it would refuse for a build never refuses a stem: the SBOM step
+/// naming its asset must not fail over a leg's builder it does not use.
+#[test]
+fn the_stem_is_answered_whatever_builder_is_named() {
+    if !cfg!(unix) {
+        return;
+    }
+    let bench = bench("stem-bogus", "1.2.3", &["widget"]);
+    let output = dist(
+        &bench,
+        &["x86_64-unknown-linux-gnu", "--stem"],
+        &[("DIST_BUILD_TOOL", "bogus")],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(ExitCode::Success.code()),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(stdout(&output), "widget-v1.2.3-x86_64-unknown-linux-gnu\n");
+    assert_eq!(
+        calls(&bench),
+        vec!["cargo metadata --no-deps --format-version 1".to_owned()],
+        "--stem builds nothing, whatever builder is named"
+    );
+}
+
 #[test]
 fn a_build_stages_a_tar_gz_and_prints_two_pointers_and_nothing_else() {
     if !cfg!(unix) {

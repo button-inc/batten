@@ -71,6 +71,7 @@ pub const OUT_DIR: &str = "dist";
 //MUTANT dist-env-builder-ignored|s@ env\.filter(@ env.and(None::<\&str>).filter(@|the_flag_outranks_the_environment_and_an_empty_one_is_unset
 //MUTANT dist-empty-env-names-a-builder|s@!value\.is_empty()@value.is_ascii()@|the_flag_outranks_the_environment_and_an_empty_one_is_unset
 //MUTANT dist-env-outranks-flag|s@    flag\.or_else(@    env.or(flag).or_else(@|the_flag_outranks_the_environment_and_an_empty_one_is_unset
+//MUTANT dist-stem-resolves-builder|s@^    if stem {$@    if stem \&\& false {@|a_stem_request_resolves_no_builder_and_a_build_refuses_an_unknown_one
 
 /// Whether a target triple builds a Windows binary.
 ///
@@ -316,6 +317,30 @@ pub fn named_build_tool(flag: Option<&str>, env: Option<&str>) -> Option<String>
         .map(str::to_owned)
 }
 
+/// The builder a request builds with, or `None` for a `--stem` request.
+///
+/// `--stem` names the asset and never builds, so it never resolves a builder: the
+/// retired `dist.sh` answered it before it ever read `DIST_BUILD_TOOL`, and an
+/// unknown builder must not refuse it. Otherwise the flag, else a non-empty
+/// environment value, else cargo — and `Err` carries the unknown name.
+///
+/// # Errors
+///
+/// The name, when a build is asked for and it is none of the three builders.
+pub fn builder_for(
+    stem: bool,
+    flag: Option<&str>,
+    env: Option<&str>,
+) -> std::result::Result<Option<BuildTool>, String> {
+    if stem {
+        return Ok(None);
+    }
+    let named = named_build_tool(flag, env);
+    BuildTool::parse(named.as_deref())
+        .map(Some)
+        .ok_or_else(|| named.unwrap_or_default())
+}
+
 /// `batten dist <target> [--stem] [--build-tool cargo|cross|zigbuild]`, the
 /// builder falling back to [`BUILD_TOOL_ENV`] when the flag is absent.
 ///
@@ -323,19 +348,26 @@ pub fn named_build_tool(flag: Option<&str>, env: Option<&str>) -> Option<String>
 ///
 /// A [`UsageError`] (→ exit `1`) for a build tool outside the three, whether the
 /// flag or the environment named it, refused before anything is read or
-/// compiled. Every other failure — a workspace
+/// compiled. A `--stem` request never builds, so it never resolves a builder
+/// and an unknown one does not refuse it. Every other failure — a workspace
 /// `cargo metadata` cannot read, a package no archive can be named for, a build
 /// that fails or writes no binary, an archiver that fails — is `Internal`
 /// (exit `3`) with its pointer on `err`, and never a partial answer on `out`.
 pub fn run(request: &DistRequest, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
     let target = request.target.as_str();
     let from_env = std::env::var(BUILD_TOOL_ENV).ok();
-    let named = named_build_tool(request.build_tool.as_deref(), from_env.as_deref());
-    let Some(tool) = BuildTool::parse(named.as_deref()) else {
-        return Err(UsageError::raise(format!(
-            "dist: --build-tool (or {BUILD_TOOL_ENV}) must be cargo, cross, or zigbuild, got '{}'",
-            named.as_deref().unwrap_or_default()
-        )));
+    // `None` here IS the stem request: it builds nothing, so it resolves no builder.
+    let tool = match builder_for(
+        request.stem,
+        request.build_tool.as_deref(),
+        from_env.as_deref(),
+    ) {
+        Ok(tool) => tool,
+        Err(named) => {
+            return Err(UsageError::raise(format!(
+                "dist: --build-tool (or {BUILD_TOOL_ENV}) must be cargo, cross, or zigbuild, got '{named}'"
+            )));
+        }
     };
 
     let here = std::env::current_dir()?;
@@ -367,10 +399,10 @@ pub fn run(request: &DistRequest, out: &mut dyn Write, err: &mut dyn Write) -> R
     };
 
     let stem = archive_stem(&package.name, &package.version, target);
-    if request.stem {
+    let Some(tool) = tool else {
         writeln!(out, "{stem}")?;
         return Ok(ExitCode::Success);
-    }
+    };
 
     if !ran(&package.root, &tool.argv(target, &package.bin), err)? {
         return Ok(ExitCode::Internal);
@@ -552,6 +584,21 @@ mod tests {
         );
         assert_eq!(named_build_tool(None, Some("")), None);
         assert_eq!(named_build_tool(None, None), None);
+    }
+
+    #[test]
+    fn a_stem_request_resolves_no_builder_and_a_build_refuses_an_unknown_one() {
+        assert_eq!(builder_for(true, None, Some("bogus")), Ok(None));
+        assert_eq!(builder_for(true, Some("bogus"), None), Ok(None));
+        assert_eq!(
+            builder_for(false, None, Some("bogus")),
+            Err("bogus".to_owned())
+        );
+        assert_eq!(
+            builder_for(false, None, Some("cross")),
+            Ok(Some(BuildTool::Cross))
+        );
+        assert_eq!(builder_for(false, None, None), Ok(Some(BuildTool::Cargo)));
     }
 
     #[test]

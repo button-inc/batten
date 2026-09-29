@@ -180,7 +180,9 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   lands; the serena launcher's home is the existing `mcp spawn`, which
   `.mcp.json` now names (`mise-tasks/serena-mcp.sh` retired).
 - `dist.rs` — `batten dist <target> [--stem] [--build-tool cargo|cross|zigbuild]`,
-  the release build and archive, retiring `mise-tasks/dist.sh` (CLOUD-843). The
+  the release build and archive, retiring `mise-tasks/dist.sh` (CLOUD-843). With
+  no flag the builder is a non-empty `DIST_BUILD_TOOL`, else cargo; `--stem` never
+  builds, so it never resolves (or refuses) a builder, as the shell did. The
   package, its ONE binary target, its version, the workspace root and the target
   directory come from `cargo metadata` where the verb stands, so no crate name is
   spelled (rule 1); zero or several binaries is could-not-look, never a guess.
