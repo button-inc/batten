@@ -532,6 +532,9 @@ local gate = new Mapping<String, Step> {
   // malformed hk.pkl surfaces when a hook tries to run — the worst possible
   // moment — rather than at check time.
   ["pkl"] = (Builtins.pkl) {
+    // `slow` tier: its command reaches `record-verdicts`, which runs `cargo run`,
+    // so a commit would pay a compile (CLOUD-1397). It runs at `verify` and in CI.
+    profiles = List("slow")
     // Command overridden to route through `record-verdicts`, which supplies the
     // proxy CA the JVM needs in the web sandbox — carried verbatim out of the
     // retired `mise-tasks/pkl-check.sh` — and then RECORDS what pkl said instead
