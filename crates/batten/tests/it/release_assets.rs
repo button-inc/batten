@@ -724,10 +724,16 @@ fn the_real_matrix_is_readable_by_the_module() {
 /// The basenames of the committed workflow's literal `.json`/`.sh` upload
 /// operands — no `$` expansion — read as text.
 fn committed_upload_literals() -> Vec<String> {
+    // Whole upload STEPS, `env:` included, for the reason
+    // `the_real_workflow_publishes_both_schemas_and_the_manifest` gives.
     committed(WORKFLOW_PATH)
-        .lines()
-        .filter(|line| line.contains("gh release upload"))
-        .flat_map(|line| line.split(' ').map(str::to_owned).collect::<Vec<_>>())
+        .split("\n      - ")
+        .filter(|step| step.contains("gh release upload"))
+        .flat_map(|step| {
+            step.split_whitespace()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
         .map(|token| token.trim_matches('"').to_owned())
         .filter(|token| {
             !token.contains('$') && (token.ends_with(".json") || token.ends_with(".sh"))

@@ -757,6 +757,96 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "ci step",
+          "id": "ci.step",
+          "about": "Run one command and write its step outputs, run summary or mapped verdict to the runner's files",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "arg_env",
+              "short": null,
+              "long": "arg-env",
+              "takes_value": true,
+              "positional": false,
+              "help": "Append this variable's value to the command as one argument, in order; unset or empty is refused (repeatable)"
+            },
+            {
+              "name": "capture",
+              "short": null,
+              "long": "capture",
+              "takes_value": true,
+              "positional": false,
+              "help": "Write the first line of the command's stdout to the runner's step outputs under this key"
+            },
+            {
+              "name": "command",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The command, after `--`: its code is the verb's unless an --on row maps it"
+            },
+            {
+              "name": "on",
+              "short": null,
+              "long": "on",
+              "takes_value": true,
+              "positional": false,
+              "help": "Map an exit code to the verdict's value as <code>=<value>; a mapped code exits 0 (repeatable)"
+            },
+            {
+              "name": "outputs",
+              "short": null,
+              "long": "outputs",
+              "takes_value": false,
+              "positional": false,
+              "help": "Append the command's KEY=VALUE stdout lines to the runner's step-output file"
+            },
+            {
+              "name": "require_env",
+              "short": null,
+              "long": "require-env",
+              "takes_value": true,
+              "positional": false,
+              "help": "Refuse the step before running anything when this variable is unset or empty, naming it and never its value (repeatable)"
+            },
+            {
+              "name": "save",
+              "short": null,
+              "long": "save",
+              "takes_value": true,
+              "positional": false,
+              "help": "Also write the command's stdout to this path, for a later step to read"
+            },
+            {
+              "name": "stdin",
+              "short": null,
+              "long": "stdin",
+              "takes_value": true,
+              "positional": false,
+              "help": "Feed this file to the command's standard input"
+            },
+            {
+              "name": "summary",
+              "short": null,
+              "long": "summary",
+              "takes_value": true,
+              "positional": false,
+              "help": "Fence the tail of the command's output into the runner's run summary under this title"
+            },
+            {
+              "name": "verdict",
+              "short": null,
+              "long": "verdict",
+              "takes_value": true,
+              "positional": false,
+              "help": "The step-output key a mapped exit code is written under"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "ci suites",
           "id": "ci.suites",
           "about": "Name the bats suites a diff can move, or every suite where it cannot prove one inert",
@@ -4002,7 +4092,7 @@ expression: stdout_of(&output)
               "long": "attached",
               "takes_value": false,
               "positional": false,
-              "help": "Run as the background copy: take the lock, run the command, record a failure"
+              "help": "Run as the background copy the announcing invocation starts: take the lock, run the command, record a failure"
             },
             {
               "name": "command",

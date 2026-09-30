@@ -811,6 +811,11 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // and this corpus carries no credential, so its honest answer here is the
     // could-not-look report — asserted pointer-only all the same.
     "record attestation",
+    // CLOUD-843, retiring `[tasks.release-assets-record]`, on `record
+    // attestation`'s terms: it resolves the release's repository from a forge
+    // remote before any request, and this corpus names none, so its honest
+    // answer is the could-not-look report, asserted pointer-only all the same.
+    "record release",
 ];
 
 /// One entry per leaf verb of [`SURFACE`], asserted total by
