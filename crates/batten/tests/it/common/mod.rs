@@ -1725,7 +1725,10 @@ pub(crate) fn verdicts_in(root: &Path) -> Vec<batten::verdict::DeclaredVerdict> 
         Vec::new()
     };
     for relative in files {
-        if !relative.ends_with(".rego") {
+        if Path::new(&relative)
+            .extension()
+            .is_none_or(|ext| ext != "rego")
+        {
             continue;
         }
         let Ok(text) = std::fs::read_to_string(root.join(&relative)) else {
