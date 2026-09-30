@@ -76,6 +76,9 @@ const PIPELINE_PERMITS: &[&str] = &[
     "bypass_env",
     "severity",
     "no_retry_reason",
+    // CLOUD-1576: every row states its remedy, and a mediated call has no `fix`
+    // to run, so the reason is this kind's whole answer.
+    "no_fix_reason",
 ];
 
 /// One reference-to-path rewrite for a [`CeilingUnit::TrackedArtifacts`] ceiling
@@ -174,6 +177,8 @@ const SHAPE_PERMITS: &[&str] = &[
     "bypass_env",
     "severity",
     "no_retry_reason",
+    // CLOUD-1576, for `PIPELINE_PERMITS`' reason.
+    "no_fix_reason",
 ];
 
 /// The columns a [`RuleKind::Receipt`] row may carry.
@@ -215,6 +220,8 @@ const RECEIPT_PERMITS: &[&str] = &[
     "bypass_env",
     "severity",
     "no_retry_reason",
+    // CLOUD-1576, for `PIPELINE_PERMITS`' reason.
+    "no_fix_reason",
 ];
 
 /// The kind of predicate a [`Rule`] applies to its matched files.
@@ -5454,12 +5461,10 @@ impl Rule {
     }
 
     fn validate_remediation(&self) -> anyhow::Result<()> {
-        if self.fix.is_some() && self.no_fix_reason.is_some() {
-            return Err(UsageError::raise(format!(
-                "rule {}: `fix` and `no_fix_reason` are alternatives; a row carries exactly one, \
-                 never both",
-                self.id
-            )));
+        if let Some(why) =
+            crate::remedy::malformed(self.fix.as_deref(), self.no_fix_reason.as_deref())
+        {
+            return Err(UsageError::raise(format!("rule {}: {why}", self.id)));
         }
         // `no_retry_reason` WITHOUT a repair says why something that never runs
         // does not hand back — a sentence about nothing (CLOUD-1639). The

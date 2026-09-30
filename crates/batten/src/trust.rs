@@ -3228,6 +3228,11 @@ const RULE_NON_PREDICATE: &[(&str, &str)] = &[
         "fix",
         "the remediation offered after a finding, never whether one is produced",
     ),
+    (
+        "no_fix_reason",
+        "`fix`'s alternative (CLOUD-1576): prose saying why no repair exists, which \
+         changes what a reader is told, never whether the rule fires",
+    ),
 ];
 
 /// Rule columns and nested keys whose ARRIVAL can only add refusals, each with

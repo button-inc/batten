@@ -115,6 +115,7 @@ pub mod record;
 pub mod recorder;
 pub mod redirect;
 pub mod refusal;
+pub mod remedy;
 pub mod render;
 pub mod repair;
 pub mod resolve;

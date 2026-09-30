@@ -198,6 +198,13 @@ const WAIVER_UNREACHABLE_KIND: &str = "waiver-unreachable-kind";
 /// step along: a gate that reads as present in the file and is not one, except
 /// that here the author did not choose it.
 const ROW_UNRESOLVED: &str = "config-row-unresolved";
+/// A rule that declares neither `fix` nor `no_fix_reason` (CLOUD-1576): a
+/// condemnation shipped without saying whether its repair exists. A load error
+/// would refuse every config predating the column, so it is named here instead.
+const REMEDY_UNDECLARED: &str = "remedy-undeclared";
+/// A `no_fix_reason` that does not name its remedy class and the missing
+/// substrate, `class N (<substrate>): <why>` ([`crate::remedy::classified`]).
+const REASON_UNCLASSED: &str = "fix-reason-unclassed";
 /// Drop the rows at the indices the loader could not resolve.
 ///
 /// The located view and the parsed config must describe the same rows in the
@@ -261,6 +268,10 @@ struct LocatedRule {
     id: Spanned<String>,
     #[serde(default)]
     severity: Option<RuleSeverity>,
+    #[serde(default)]
+    fix: Option<String>,
+    #[serde(default)]
+    no_fix_reason: Option<String>,
 }
 
 /// A waiver's span, located by the one field a smell has to name: the rule it
@@ -467,6 +478,19 @@ pub fn smells(
             found.push(Smell {
                 at: Where::Line(line_of(text, rule.id.span().start)),
                 id: RULE_DISABLED,
+            });
+        }
+        // THE REMEDY HALF OF §9 (CLOUD-1576). Both-keys and blank are load errors
+        // already, so this sees only the two shapes a well-formed row can have.
+        let remedy = match (&rule.fix, &rule.no_fix_reason) {
+            (None, None) => Some(REMEDY_UNDECLARED),
+            (_, Some(reason)) if !crate::remedy::classified(reason) => Some(REASON_UNCLASSED),
+            _ => None,
+        };
+        if let Some(id) = remedy {
+            found.push(Smell {
+                at: Where::Line(line_of(text, rule.id.span().start)),
+                id,
             });
         }
     }

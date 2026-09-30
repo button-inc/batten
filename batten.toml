@@ -611,6 +611,7 @@ sha256 = "b2c822742e8cbf355ba0cb4cc690c3cd8fdc9ec1916c8148f27bd9098cb7aee4"
 # agent read as advice and proposed for a class it could not have suppressed.
 [[rule]]
 id = "commit ship other"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -627,6 +628,7 @@ discarding the exact objects CI tested. Use `mise run land`, which comments \
 # this key exists.
 [[rule]]
 id = "review ship early"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -640,6 +642,7 @@ PR is MERGED or the fast-forward bot refuses."""
 
 [[rule]]
 id = "check watch loose"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -689,6 +692,7 @@ api`, `gh run view` are NOT blocked.)"""
 # the explicit form anyway, which this allows.
 [[rule]]
 id = "branch write unsafe"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/leased-push.rego"
@@ -699,6 +703,7 @@ severity = "deny"
 # not overlap.
 [[rule]]
 id = "hook skip unseen"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/hook-skip-local.rego"
@@ -709,6 +714,7 @@ severity = "deny"
 # twice, zero integrable commits); `mem:workflow/agent-fanout` carries it.
 [[rule]]
 id = "spawn place wrong"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/agent-spawn.rego"
@@ -716,6 +722,7 @@ severity = "deny"
 
 [[rule]]
 id = "job watch loose"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -841,6 +848,7 @@ it rather than holding a foreground poll open."""
 # `--fail-on-warning`, so both a deleted row and a silently lowered one redden.
 [[rule]]
 id = "patch run loose"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -898,6 +906,7 @@ warn row on this surface reaches nobody."""
 # gates disagreeing with a green local run.
 [[rule]]
 id = "cargo run loose"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -954,6 +963,7 @@ mise.toml, so a green local run can mean nothing. Use `mise run <task>` (\
 # `batten enforce`, which is why `mise-tasks/issue-guard.sh` still exists.
 [[rule]]
 id = "review name unnamed"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -972,6 +982,7 @@ the work lands with nothing recording that it did."""
 # pair.
 [[rule]]
 id = "review open unnamed"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -1003,6 +1014,7 @@ own push. A PR that names no issue cannot move the board when it merges."""
 # move without this file restating them.
 [[rule]]
 id = "check read unread"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -1243,6 +1255,7 @@ counts = "."
 # fact about the WORK takes, which is why `claim-needs-receipt` below takes it.
 [[rule]]
 id = "review answer unread"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -1269,6 +1282,7 @@ on 89, so the usual outcome is that there is something to read."""
 # above.
 [[rule]]
 id = "review answer partial"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -1297,6 +1311,7 @@ answer needs another read."""
 # reads and could not tell a reader which one was missing.
 [[rule]]
 id = "review list unread"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -1314,6 +1329,7 @@ that was checked out when you read, so a push needs another read."""
 # the count reformulation, and why the thread ids cannot be in the message.
 [[rule]]
 id = "review judge missing"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/review-answered.rego"
@@ -1351,6 +1367,7 @@ severity = "deny"
 # writes.
 [[rule]]
 id = "claim read unread"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -1464,6 +1481,7 @@ bytes the tracker returned, never a re-typed copy; do NOT re-type one by hand.""
 # red check on a named head is a fact a reader can verify, not a sentence.
 [[rule]]
 id = "turn mint ahead"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -3365,6 +3383,7 @@ zero-is-a-count = true
 # row does not touch — the engine reads the file that task already writes.
 [[rule]]
 id = "issue list unread"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -3433,6 +3452,7 @@ gated."""
 # Unbounded, one adjudication would authorise every later sweep in the clone.
 [[rule]]
 id = "review judge unread"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -3518,6 +3538,7 @@ different owner and is not gated here."""
 # bypassed rather than satisfied.
 [[rule]]
 id = "plan grade unread"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -3587,6 +3608,7 @@ gated here."""
 # returned rather than a field subset.
 [[rule]]
 id = "issue read stale"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -3645,6 +3667,7 @@ is never gated by this row (that is `issue list unread`)."""
 # drop` makes the call from a task, where no permission control applies.
 [[rule]]
 id = "review watch refused"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -3680,6 +3703,7 @@ body = "{now} {url}"
 
 [[rule]]
 id = "review open twice"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -3695,6 +3719,7 @@ the Ready block's `blockers`."""
 
 [[rule]]
 id = "timer mint refused"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -3708,6 +3733,7 @@ and act on its exit."""
 
 [[rule]]
 id = "event mint refused"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -3746,6 +3772,7 @@ clock nothing reads. Background the task and act on its exit."""
 # written into the prompt is not a claim about what the agent does with it.
 [[rule]]
 id = "spawn count wrong"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -3772,6 +3799,7 @@ count is what the spawn can actually be made to read."""
 # not arrive with its own arithmetic.
 [[rule]]
 id = "prompt measure wrong"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -3838,6 +3866,7 @@ always-loaded surface — and let the prompt name the step it is for."""
 # eleven within two days of being written).
 [[rule]]
 id = "shell spelling wrong"
+no_fix_reason = "class 3 (a port onto a batten verb): authored shell is retired rather than edited, and porting a program is a design no codemod writes"
 kind = "policy"
 scope = "tree"
 preset = "shell-hygiene"
@@ -3900,6 +3929,7 @@ exits 0, so a stale reference goes quiet rather than failing."""
 # `>/tmp/x.log` form the row above MANDATES allowed.
 [[rule]]
 id = "tool select other"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "pipeline"
 scope = "mediated_call"
 severity = "deny"
@@ -3932,6 +3962,7 @@ not refused."""
 
 [[rule]]
 id = "verdict guard missing"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "pipeline"
 scope = "mediated_call"
 severity = "deny"
@@ -4085,7 +4116,7 @@ kind = "secrets"
 glob = "**"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "rotate the credential and purge it from history; removing the line leaves it in every clone and every reflog, so no command can make this right"
+no_fix_reason = "class 3 (rotation at the credential's issuer): rotate the credential and purge it from history; removing the line leaves it in every clone and every reflog, so no command can make this right"
 
 [[rule]]
 id = "source carry broken"
@@ -4094,7 +4125,7 @@ glob = "crates/**"
 check = "hk util check-merge-conflict --assume-in-merge {{files}}"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "resolve the conflict by hand: choosing a side is a judgement no command can make"
+no_fix_reason = "class 3 (a person's choice of side): resolve the conflict by hand: choosing a side is a judgement no command can make"
 
 # Appeal-to-authority attribution, retired from `mise-tasks/attribution-check`
 # into the engine (CLOUD-881). The rule lives in
@@ -4131,7 +4162,7 @@ regex = "jdx|semgrep|opengrep|ast-grep"
 exclude = "https?://|package://|aqua:|ubi:|npm:|pipx:|github\\.com|\\.dev|submodule|amends|uses:|@[0-9a-f]{40}|^(regex|exclude) = "
 severity = "deny"
 scope = "tree"
-no_fix_reason = "state the rule and the evidence in this repo's terms; naming who else does it is not evaluable by a reader (mem:prior-art-and-issue-hygiene)"
+no_fix_reason = "class 3 (prose): state the rule and the evidence in this repo's terms; naming who else does it is not evaluable by a reader (mem:prior-art-and-issue-hygiene)"
 
 # Non-negotiable rule 1 as a standing gate, not prose (CLOUD-7). "The core stays
 # repo-agnostic … a grep for a specific consumer's names must return zero hits"
@@ -4202,7 +4233,7 @@ glob = "crates/**"
 pattern = "etaxbc"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "delete the literal; a consumer fact belongs in that consumer's own batten.toml, never in the core"
+no_fix_reason = "class 3 (a consumer's own batten.toml): delete the literal; a consumer fact belongs in that consumer's own batten.toml, never in the core"
 
 [[rule]]
 id = "path name other"
@@ -4211,7 +4242,7 @@ glob = "crates/**"
 pattern = "entities/"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "delete the literal; a consumer fact belongs in that consumer's own batten.toml, never in the core"
+no_fix_reason = "class 3 (a consumer's own batten.toml): delete the literal; a consumer fact belongs in that consumer's own batten.toml, never in the core"
 
 # CLOUD-1919. Every file this crate mutates goes through `durable`: one write
 # plus `fsync` per append, temp + `fsync` + `rename` + directory `fsync` per
@@ -4220,6 +4251,7 @@ no_fix_reason = "delete the literal; a consumer fact belongs in that consumer's 
 # clippy ban nor a `forbid` row can draw the production/test boundary.
 [[rule]]
 id = "path write unsafe"
+no_fix_reason = "class 2 (a fix verb over codemod): the rewrite is mechanical, but codemod carries method renames only and no verb exposes it as a command"
 kind = "policy"
 scope = "tree"
 line_sources = ["crates/batten/src/**/*.rs"]
@@ -4250,6 +4282,7 @@ target = "crates/batten/src/durable.rs"
 # the test crate.
 [[rule]]
 id = "spawn bind loose"
+no_fix_reason = "class 2 (a fix verb over codemod): the rewrite is mechanical, but codemod carries method renames only and no verb exposes it as a command"
 kind = "policy"
 scope = "tree"
 line_sources = ["crates/**/*.rs"]
@@ -4292,7 +4325,7 @@ exclude_paths = [
 ]
 severity = "deny"
 scope = "tree"
-no_fix_reason = "the general hatch is removed; a refusal's ways through are its declared routes, a waiver, or batten override request"
+no_fix_reason = "class 3 (a refusal's declared route): the general hatch is removed; a refusal's ways through are its declared routes, a waiver, or batten override request"
 
 # `regex` rather than `pattern`, which is the whole reason this row can exist:
 # the shape is the stem, so one expression covers every ending the name takes,
@@ -4371,7 +4404,7 @@ direction = "non_increasing"
 base = "origin/main"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "read the key from `[[pattern]] ready-issue-key`, or let the program's retirement carry its derivation away; a twenty-first spelling is how the first twenty arrived"
+no_fix_reason = "class 2 (a codemod reading `[[pattern]]` by id): read the key from `[[pattern]] ready-issue-key`, or let the program's retirement carry its derivation away; a twenty-first spelling is how the first twenty arrived"
 
 # THREE SPELLINGS, NOT ONE (CLOUD-761). This row carried `CLOUD-\[0-9\]` alone,
 # which refuses the ONE way the twenty measured derivations happened to be
@@ -4399,7 +4432,7 @@ glob = "crates/**"
 regex = 'CLOUD-(\[0-9\]|\\d|\[\\d\])'
 severity = "deny"
 scope = "tree"
-no_fix_reason = "declare it as a `[[pattern]]` row and read it by id; a tracker's vocabulary in the core is rule 1's violation, and moving it is the fix rather than rewording it"
+no_fix_reason = "class 3 (a `[[pattern]]` row a person names): declare it as a `[[pattern]]` row and read it by id; a tracker's vocabulary in the core is rule 1's violation, and moving it is the fix rather than rewording it"
 
 # THE SAME CLASS, ONE DIRECTORY OVER, AND IT HAD NO GATE AT ALL (CLOUD-761). A
 # `[[rule]]`'s `glob` is one pattern, so the module tree gets its own row rather
@@ -4427,7 +4460,7 @@ glob = "policy/**"
 regex = 'CLOUD-(\[0-9\]|\\d|\[\\d\])'
 severity = "deny"
 scope = "tree"
-no_fix_reason = "read the key from `[[pattern]] ready-issue-key` by id; a module composing its own key expression is a second authority over one definition, which is what the registry exists to make unwritable"
+no_fix_reason = "class 2 (a codemod reading `[[pattern]]` by id): read the key from `[[pattern]] ready-issue-key` by id; a module composing its own key expression is a second authority over one definition, which is what the registry exists to make unwritable"
 
 # A RETIREMENT LEDGER ARM IS EXEMPT, and this is a structural collision rather
 # than a convenience (CLOUD-1294). `bats-tests-not-deleted` matches an arm by the
@@ -4445,6 +4478,7 @@ no_fix_reason = "read the key from `[[pattern]] ready-issue-key` by id; a module
 # can reach the exemption.
 [[rule]]
 id = "source name other"
+no_fix_reason = "class 3 (review disposition): which rewrite is right is a reading of the code, so the refusal routes the reader to the site rather than editing it"
 kind = "forbid"
 glob = "crates/**"
 regex = "(?i)complian"
@@ -4493,7 +4527,7 @@ glob = "crates/**"
 regex = '(==|!=)\s*"(Todo|Backlog|In Progress|In Review|Done)"|"(Todo|Backlog|In Progress|In Review|Done)"\s*(==|!=)'
 severity = "deny"
 scope = "tree"
-no_fix_reason = "read the column from the `[board]` table through `board::Columns` and compare against that; a board's column name in the core is rule 1's violation, and an undeclared column is could-not-look rather than a default"
+no_fix_reason = "class 2 (a codemod routing through `board::Columns`): read the column from the `[board]` table through `board::Columns` and compare against that; a board's column name in the core is rule 1's violation, and an undeclared column is could-not-look rather than a default"
 
 # The fixture corpus must stay repo-agnostic (CLOUD-63). The corpus exists so
 # coverage stops implicitly depending on *this* repository, which a fixture
@@ -4511,7 +4545,7 @@ glob = "crates/batten/tests/**"
 pattern = "button-inc"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "rewrite the fixture so it does not name where this repository is hosted"
+no_fix_reason = "class 3 (fixture prose): rewrite the fixture so it does not name where this repository is hosted"
 
 # Never compile a third-party tool from source in this repository (CLOUD-86).
 #
@@ -4547,7 +4581,7 @@ glob = "mise.toml"
 pattern = "\"cargo:"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "pin an attested binary in mise.toml instead; what to pin is a supply-chain decision, not a rewrite"
+no_fix_reason = "class 3 (a supply-chain decision): pin an attested binary in mise.toml instead; what to pin is a supply-chain decision, not a rewrite"
 
 # THE COUNTERWEIGHT TO THE ONE EXEMPTION, and it exists because the exemption
 # just widened.
@@ -4582,7 +4616,7 @@ glob = "install.sh"
 regex = '^\s*(mise|cargo|apt|apt-get|npm|pipx|uv|brew|rustup)\s|>>\s*"?\$?\{?HOME\}?/\.(bashrc|profile|zshrc)'
 severity = "deny"
 scope = "tree"
-no_fix_reason = "the installer installs the binary and nothing else; a toolchain, a package manager or a shell profile belongs behind `batten` once it is on PATH — a `[[provision]]` row or a `[[startup]]` row, both of which a gate can read"
+no_fix_reason = "class 3 (a port behind `batten`): the installer installs the binary and nothing else; a toolchain, a package manager or a shell profile belongs behind `batten` once it is on PATH — a `[[provision]]` row or a `[[startup]]` row, both of which a gate can read"
 
 # A GRANT THAT MATCHES NOTHING IS THE DEAD-GATE CLASS, ONE SURFACE OVER, AND ITS
 # ONLY SYMPTOM IS A PERSON BEING ASKED (CLOUD-1455).
@@ -4609,7 +4643,7 @@ glob = ".claude/settings.json"
 regex = '"mcp__[^"]*\*'
 severity = "deny"
 scope = "tree"
-no_fix_reason = "an MCP permission entry names a server (`mcp__serena`) or one tool (`mcp__serena__read_memory`) and takes no wildcard; enumerate the tools, which is also the only spelling a reader can check against the server's own list. Measured twice in one session: the wildcard granted nothing, and the bare server form granted the reads and left every write still prompting"
+no_fix_reason = "class 1 (config_edit's JSON backend): an MCP permission entry names a server (`mcp__serena`) or one tool (`mcp__serena__read_memory`) and takes no wildcard; enumerate the tools, which is also the only spelling a reader can check against the server's own list. Measured twice in one session: the wildcard granted nothing, and the bare server form granted the reads and left every write still prompting"
 
 [[rule]]
 id = "cargo add loose"
@@ -4618,7 +4652,7 @@ glob = ".github/workflows/*.yml"
 pattern = "cargo install"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "pin the tool in mise.toml so CI installs exactly what the lockfile names"
+no_fix_reason = "class 1 (config_edit's YAML backend): pin the tool in mise.toml so CI installs exactly what the lockfile names"
 
 # Portability: the shell layer must run on a machine that is not the CI runner
 # (CLOUD-282).
@@ -4674,6 +4708,7 @@ no_fix_reason = "pin the tool in mise.toml so CI installs exactly what the lockf
 # embed theirs: a substring rule over a directory fires on its own explanation.
 [[rule]]
 id = "shell parse unsafe"
+no_fix_reason = "class 3 (a port onto a batten verb): authored shell is retired rather than edited, and porting a program is a design no codemod writes"
 kind = "forbid"
 glob = "mise-tasks/**"
 pattern = "sed -zE"
@@ -4685,6 +4720,7 @@ scope = "tree"
 # `tests/helpers.bash` uses.
 [[rule]]
 id = "shell edit unsafe"
+no_fix_reason = "class 3 (a port onto a batten verb): authored shell is retired rather than edited, and porting a program is a design no codemod writes"
 kind = "forbid"
 glob = "mise-tasks/**"
 pattern = "sed -i "
@@ -4693,6 +4729,7 @@ scope = "tree"
 
 [[rule]]
 id = "shell read unsafe"
+no_fix_reason = "class 3 (a port onto a batten verb): authored shell is retired rather than edited, and porting a program is a design no codemod writes"
 kind = "forbid"
 glob = "mise-tasks/**"
 pattern = "mapfile "
@@ -4701,6 +4738,7 @@ scope = "tree"
 
 [[rule]]
 id = "shell list unsafe"
+no_fix_reason = "class 3 (a port onto a batten verb): authored shell is retired rather than edited, and porting a program is a design no codemod writes"
 kind = "forbid"
 glob = "mise-tasks/**"
 pattern = "xargs -r"
@@ -4712,6 +4750,7 @@ scope = "tree"
 # correct behaviour over a Linux-only primitive.
 [[rule]]
 id = "shell guard unsafe"
+no_fix_reason = "class 3 (a port onto a batten verb): authored shell is retired rather than edited, and porting a program is a design no codemod writes"
 kind = "forbid"
 glob = "mise-tasks/**"
 pattern = "flock "
@@ -4732,6 +4771,7 @@ scope = "tree"
 # branch out.
 [[rule]]
 id = "branch edit unsafe"
+no_fix_reason = "class 3 (a port onto a batten verb): authored shell is retired rather than edited, and porting a program is a design no codemod writes"
 kind = "forbid"
 glob = "tests/**/*.bats"
 pattern = "branch -f main"
@@ -4767,7 +4807,7 @@ glob = "**/*.md"
 pattern = "user.email noreply@anthropic.com"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "state the precedence instead of the command: `[attribution] identity_deny` is the authority, and a remedy that reproduces the denied identity cannot be corrected by rewording it"
+no_fix_reason = "class 3 (prose): state the precedence instead of the command: `[attribution] identity_deny` is the authority, and a remedy that reproduces the denied identity cannot be corrected by rewording it"
 
 # Which programs change the world, in the one §5 effect vocabulary, each with the
 # sanctioned mutation to point at when it is refused.
@@ -5327,6 +5367,7 @@ fields = [
 # write succeeds through the verb.
 [[rule]]
 id = "issue read loose"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -5592,7 +5633,7 @@ direction = "non_decreasing"
 base = "origin/main"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "restore the tests, or waive the reduction deliberately; which of the two is the whole question"
+no_fix_reason = "class 3 (a person's choice between restore and waive): restore the tests, or waive the reduction deliberately; which of the two is the whole question"
 
 # `tests/**/*.bats`, recursive — and the recursion is safe now rather than by
 # this glob's care. `tests/bats` is a vendored submodule carrying 227 of its own
@@ -5630,7 +5671,7 @@ base = "origin/main"
 retires_with = "# subject:"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "restore the tests, or waive the reduction deliberately; which of the two is the whole question"
+no_fix_reason = "class 3 (a person's choice between restore and waive): restore the tests, or waive the reduction deliberately; which of the two is the whole question"
 
 # CLOUD-908. The column above conserves FILES: it asks whether the subject died
 # and never whether the cases moved, so a migration can delete a 259-line suite
@@ -5723,7 +5764,7 @@ direction = "non_increasing"
 base = "origin/main"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "delete the new ignore, or waive it deliberately; an ignore is a decision, not a defect to rewrite"
+no_fix_reason = "class 3 (a person's choice between delete and waive): delete the new ignore, or waive it deliberately; an ignore is a decision, not a defect to rewrite"
 
 # CLOUD-929. THE CAMPAIGN'S OWN PROGRESS PREDICATE, which until now was four
 # shell one-liners in an issue body that nothing ran. CLOUD-843 measured the
@@ -5765,7 +5806,7 @@ base = "origin/main"
 admits_with = "# stays-bash:"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "migrate the predicate onto a rule kind, or declare `# stays-bash: <issue> <why>` in the new program and own the increase; which of the two is the whole question"
+no_fix_reason = "class 3 (a port onto a rule kind): migrate the predicate onto a rule kind, or declare `# stays-bash: <issue> <why>` in the new program and own the increase; which of the two is the whole question"
 
 # CLOUD-1137. THE ROW ABOVE GLOBS ONE DIRECTORY, and `shell add refused`
 # (CLOUD-1059) covers `mise-tasks/**` and `tests/**/*.bats`. Those globs were the
@@ -5853,7 +5894,7 @@ direction = "non_increasing"
 base = "origin/main"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "migrate the predicate onto a rule kind, or waive the increase deliberately with a reason and an expiry; which of the two is the whole question"
+no_fix_reason = "class 3 (a port onto a rule kind): migrate the predicate onto a rule kind, or waive the increase deliberately with a reason and an expiry; which of the two is the whole question"
 
 # A BAN YOU CAN WAIVE AT WILL IS NOT A BAN (CLOUD-1148, over CLOUD-1177's
 # inventory).
@@ -5902,7 +5943,7 @@ direction = "non_increasing"
 base = "origin/main"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "a waiver is not a fix: either the delay has a bound it can exit on and needs no sleep, or it is a backoff and belongs on the async path where it can be cancelled. Adding a twelfth exemption is the thing this row refuses"
+no_fix_reason = "class 3 (a bounded wait or the async path): a waiver is not a fix: either the delay has a bound it can exit on and needs no sleep, or it is a backoff and belongs on the async path where it can be cancelled. Adding a twelfth exemption is the thing this row refuses"
 
 # The other spelling of the same concept — see the block above for why it is a
 # second row rather than a second pattern on the first. The two names differ only
@@ -5918,7 +5959,7 @@ direction = "non_increasing"
 base = "origin/main"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "migrate the predicate onto a rule kind, or waive the increase deliberately with a reason and an expiry; which of the two is the whole question"
+no_fix_reason = "class 3 (a port onto a rule kind): migrate the predicate onto a rule kind, or waive the increase deliberately with a reason and an expiry; which of the two is the whole question"
 
 # CLOUD-1709. THE THIRD SURFACE, AND THE LARGEST. `bash-surface-not-growing`
 # globs `mise-tasks/**`; CLOUD-1137 closed the `mise.toml` and `.claude/**` holes
@@ -5989,7 +6030,7 @@ base = "origin/main"
 admits_with = "# workflow-shell:"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "move the step's body into a composite action or a batten verb, or declare `# workflow-shell: <issue> <why>` in the workflow and own the increase; which of the two is the whole question"
+no_fix_reason = "class 3 (a port into a composite action or verb): move the step's body into a composite action or a batten verb, or declare `# workflow-shell: <issue> <why>` in the workflow and own the increase; which of the two is the whole question"
 
 # The other spelling of the same concept — see the block above for why it is a
 # second row rather than a second pattern on the first. The two names differ only
@@ -6006,7 +6047,7 @@ base = "origin/main"
 admits_with = "# workflow-shell:"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "move the step's body into a composite action or a batten verb, or declare `# workflow-shell: <issue> <why>` in the workflow and own the increase; which of the two is the whole question"
+no_fix_reason = "class 3 (a port into a composite action or verb): move the step's body into a composite action or a batten verb, or declare `# workflow-shell: <issue> <why>` in the workflow and own the increase; which of the two is the whole question"
 
 # The `.claude/**` half. `#!` rather than a shebang's text, because the programs
 # there do not share a spelling — `#!/usr/bin/env bash` twice today, and the file
@@ -6029,7 +6070,7 @@ base = "origin/main"
 admits_with = "# stays-bash:"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "migrate the predicate onto a rule kind, or declare `# stays-bash: <issue> <why>` in the new program and own the increase; which of the two is the whole question"
+no_fix_reason = "class 3 (a port onto a rule kind): migrate the predicate onto a rule kind, or declare `# stays-bash: <issue> <why>` in the new program and own the increase; which of the two is the whole question"
 
 # CLOUD-1419 HAS NO AGGREGATE RATCHET, AND THAT IS A MEASURED DECISION RATHER
 # THAN AN OMISSION.
@@ -6066,6 +6107,7 @@ no_fix_reason = "migrate the predicate onto a rule kind, or declare `# stays-bas
 # source to answer a question about fixtures.
 [[rule]]
 id = "test fix duplicate"
+no_fix_reason = "class 3 (review disposition): which rewrite is right is a reading of the code, so the refusal routes the reader to the site rather than editing it"
 kind = "policy"
 scope = "tree"
 base = "origin/main"
@@ -6099,6 +6141,7 @@ severity = "deny"
 # Recorded on CLOUD-1320, which owns the general form.
 [[rule]]
 id = "check read never"
+no_fix_reason = "class 1 (config_edit's YAML backend): the repair is an edit to a workflow or YAML file, and config_edit carries only a TOML backend"
 kind = "policy"
 scope = "tree"
 line_sources = [".github/workflows/*.yml"]
@@ -6118,7 +6161,7 @@ direction = "non_decreasing"
 base = "origin/main"
 severity = "warn"
 scope = "tree"
-no_fix_reason = "restore the assertions, or waive the reduction deliberately"
+no_fix_reason = "class 3 (a person's choice between restore and waive): restore the assertions, or waive the reduction deliberately"
 
 # The merge contract, DERIVED from this repository's GitHub ruleset (CLOUD-54).
 #
@@ -6153,6 +6196,7 @@ no_fix_reason = "restore the assertions, or waive the reduction deliberately"
 # forbade the words would delete the explanation along with the construct.
 [[rule]]
 id = "shell run unsafe"
+no_fix_reason = "class 3 (a port onto a batten verb): authored shell is retired rather than edited, and porting a program is a design no codemod writes"
 kind = "forbid"
 glob = "mise-tasks/**"
 regex = "^[ \\t]*wait -n"
@@ -6255,7 +6299,7 @@ kind = "policy"
 scope = "tree"
 module = "policy/ntia.rego"
 severity = "deny"
-no_fix_reason = "the missing fields do not exist in a cargo lockfile, so no command over this tree can add them: the SBOM has to be enriched from `cargo metadata` first"
+no_fix_reason = "class 1 (an SBOM enricher reading `cargo metadata`): the missing fields do not exist in a cargo lockfile, so no command over this tree can add them: the SBOM has to be enriched from `cargo metadata` first"
 
 # Release provenance, adopted as `gh attestation verify` (CLOUD-583, CLOUD-279
 # verdict 1 — `slsa-verifier` is redundant against the same absent provenance and
@@ -6310,7 +6354,7 @@ glob = "mise.toml"
 check = "mise run attestation-record --precondition"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "install the pinned `gh` (`mise install aqua:cli/cli`) or supply GH_TOKEN; neither is a change to this tree's content"
+no_fix_reason = "class 3 (an installed, authenticated `gh`): install the pinned `gh` (`mise install aqua:cli/cli`) or supply GH_TOKEN; neither is a change to this tree's content"
 
 # CLOUD-618. `release-plz.yml` publishes a tag; this row is what keeps the tag
 # reaching Linear's `batten` pipeline rather than only the run summary.
@@ -6352,6 +6396,7 @@ no_fix_reason = "install the pinned `gh` (`mise install aqua:cli/cli`) or supply
 # so a deleted workflow would pass instead of reading as `release wire unread`.
 [[rule]]
 id = "release wire other"
+no_fix_reason = "class 1 (config_edit's YAML backend): the repair is an edit to a workflow or YAML file, and config_edit carries only a TOML backend"
 kind = "policy"
 scope = "tree"
 line_sources = [".github/workflows/*.yml"]
@@ -6405,6 +6450,7 @@ severity = "deny"
 # a configured gate that never fires.
 [[rule]]
 id = "trunk push forced"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "policy"
 scope = "mediated_call"
 preset = "trunk-based"
@@ -6416,6 +6462,7 @@ severity = "deny"
 # is composed first, so a call any other row refuses stays refused.
 [[rule]]
 id = "plan write refused"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "policy"
 scope = "mediated_call"
 preset = "claude-code-cloud"
@@ -6464,6 +6511,7 @@ severity = "deny"
 # that ships to every consumer.
 [[rule]]
 id = "task reach loose"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "policy"
 scope = "mediated_call"
 preset = "mise"
@@ -6496,6 +6544,7 @@ severity = "warn"
 # cannot be placed costs the line rather than the finding.
 [[rule]]
 id = "task table other"
+no_fix_reason = "class 1 (config_edit's YAML backend): the repair is an edit to a workflow or YAML file, and config_edit carries only a TOML backend"
 kind = "policy"
 scope = "tree"
 preset = "mise"
@@ -6517,6 +6566,7 @@ severity = "deny"
 
 [[rule]]
 id = "pin table other"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "policy"
 scope = "mediated_call"
 preset = "pinned-toolchain"
@@ -6541,6 +6591,7 @@ severity = "warn"
 # repository's job names may not travel inside one.
 [[rule]]
 id = "job spelling wrong"
+no_fix_reason = "class 1 (config_edit's YAML backend): the repair is an edit to a workflow or YAML file, and config_edit carries only a TOML backend"
 kind = "policy"
 scope = "tree"
 preset = "ci-hygiene"
@@ -6602,6 +6653,7 @@ severity = "deny"
 # row exists to stop still runs.
 [[rule]]
 id = "lane declare missing"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 preset = "landing-loop"
@@ -6661,7 +6713,7 @@ kind = "policy"
 scope = "tree"
 module = "policy/evaluator-closure.rego"
 severity = "deny"
-no_fix_reason = "an IO crate reaching the evaluator is closed where it was enabled, not here: `cargo tree -i <crate>` names who turned it on, and the `regorus` feature list in Cargo.toml is where the pin is stated rather than where it is decided"
+no_fix_reason = "class 3 (a dependency-graph decision): an IO crate reaching the evaluator is closed where it was enabled, not here: `cargo tree -i <crate>` names who turned it on, and the `regorus` feature list in Cargo.toml is where the pin is stated rather than where it is decided"
 
 [[record]]
 record = "evaluator-closure"
@@ -6678,7 +6730,7 @@ kind = "policy"
 scope = "tree"
 module = "policy/macos-link.rego"
 severity = "deny"
-no_fix_reason = "a dependency needing a macOS SDK is not fixable by a rewrite here: either drop it, feature-gate it off the default build (a rustls-style alternative usually exists), or accept an SDK and revisit how macOS is built"
+no_fix_reason = "class 3 (a dependency-graph decision): a dependency needing a macOS SDK is not fixable by a rewrite here: either drop it, feature-gate it off the default build (a rustls-style alternative usually exists), or accept an SDK and revisit how macOS is built"
 
 [[record]]
 record = "macos-link"
@@ -6699,7 +6751,7 @@ kind = "policy"
 scope = "tree"
 module = "policy/transcript-corpus.rego"
 severity = "warn"
-no_fix_reason = "the number rises when the collector reaches this host, not when a branch changes: nothing in a diff can raise it, so there is nothing here to rewrite"
+no_fix_reason = "class 3 (the collector reaching this host): the number rises when the collector reaches this host, not when a branch changes: nothing in a diff can raise it, so there is nothing here to rewrite"
 
 [[record]]
 record = "transcript-corpus"
@@ -6721,7 +6773,7 @@ kind = "policy"
 scope = "tree"
 module = "policy/evaluator-io-probe.rego"
 severity = "deny"
-no_fix_reason = "a test that no longer discriminates is fixed in the test, not here: either the assertion has been reworded into something the probe cannot falsify, or the fixture no longer reaches `http.send`"
+no_fix_reason = "class 3 (review disposition): a test that no longer discriminates is fixed in the test, not here: either the assertion has been reworded into something the probe cannot falsify, or the fixture no longer reaches `http.send`"
 
 [[record]]
 record = "evaluator-io-probe"
@@ -6738,7 +6790,7 @@ kind = "policy"
 scope = "tree"
 module = "policy/signing-posture.rego"
 severity = "deny"
-no_fix_reason = "a commit already signed cannot be unsigned in place: repair the checkout's config (`mise run signing-posture-repair`) and rewrite the range, or publish the key's public half so the signature becomes verifiable (CLOUD-591)"
+no_fix_reason = "class 3 (a history rewrite a person authorises): a commit already signed cannot be unsigned in place: repair the checkout's config (`mise run signing-posture-repair`) and rewrite the range, or publish the key's public half so the signature becomes verifiable (CLOUD-591)"
 
 [[record]]
 record = "signing-posture"
@@ -6915,7 +6967,7 @@ glob = "crates/batten/tests/it/config_deprecations.rs"
 check = "mise run test:config-deprecations"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "a removal is announced by declaring the window, not by editing the schema: add a row to `config::DEPRECATED_KEYS` naming the replacement and the expiry, and the derived artifact follows from the types"
+no_fix_reason = "class 2 (a codemod adding a `DEPRECATED_KEYS` row): a removal is announced by declaring the window, not by editing the schema: add a row to `config::DEPRECATED_KEYS` naming the replacement and the expiry, and the derived artifact follows from the types"
 
 # The first migrated gate of the bash-retirement campaign (CLOUD-843 track 2):
 # `run-shape-guard`'s no-message-source family, as a consumer-authored module
@@ -6969,6 +7021,7 @@ regex = "^(-[A-Za-z]*F|--file)$"
 # this comment carries the correction; the module file is the honest label.
 [[rule]]
 id = "commit read missing"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/run-shape.rego"
@@ -6976,6 +7029,7 @@ severity = "deny"
 
 [[rule]]
 id = "lane guard other"
+no_fix_reason = "class 1 (config_edit's YAML backend): the repair is an edit to a workflow or YAML file, and config_edit carries only a TOML backend"
 kind = "policy"
 scope = "tree"
 sources = [".github/workflows/*.yml", ".github/workflows/*.yaml"]
@@ -6993,6 +7047,7 @@ severity = "deny"
 # just been refused, has been handed the one thing to run, and runs it.
 [[rule]]
 id = "route resolve missing"
+no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
 kind = "policy"
 scope = "tree"
 sources = ["batten.toml", "mise.toml"]
@@ -7016,6 +7071,7 @@ severity = "deny"
 # the binary rather than trusting the schema.
 [[rule]]
 id = "remedy own other"
+no_fix_reason = "class 3 (a port onto a batten verb): authored shell is retired rather than edited, and porting a program is a design no codemod writes"
 kind = "policy"
 scope = "tree"
 line_sources = ["mise-tasks/*.sh"]
@@ -7047,6 +7103,7 @@ severity = "deny"
 # number is reported on the PR rather than asserted here.
 [[rule]]
 id = "shell retire partial"
+no_fix_reason = "class 3 (a port onto a batten verb): authored shell is retired rather than edited, and porting a program is a design no codemod writes"
 kind = "policy"
 scope = "tree"
 base = "origin/main"
@@ -7113,6 +7170,7 @@ severity = "deny"
 # module files it never judges.
 [[rule]]
 id = "gate run unsafe"
+no_fix_reason = "class 3 (a port onto a batten verb): authored shell is retired rather than edited, and porting a program is a design no codemod writes"
 kind = "policy"
 scope = "tree"
 base = "origin/main"
@@ -7166,6 +7224,7 @@ severity = "deny"
 # bare variable stops working, and this is the row that variable served.
 [[rule]]
 id = "issue file other"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 base = "origin/main"
@@ -7201,6 +7260,7 @@ severity = "deny"
 # A ratchet needs no such arm, which is why it is the shape that landed.
 [[rule]]
 id = "verb reach other"
+no_fix_reason = "class 3 (review disposition): which rewrite is right is a reading of the code, so the refusal routes the reader to the site rather than editing it"
 kind = "policy"
 scope = "tree"
 base = "origin/main"
@@ -7256,6 +7316,7 @@ severity = "deny"
 # obligation set rather than any path this branch happens to touch.
 [[rule]]
 id = "test name undefined"
+no_fix_reason = "class 3 (review disposition): which rewrite is right is a reading of the code, so the refusal routes the reader to the site rather than editing it"
 kind = "policy"
 scope = "tree"
 base = "origin/main"
@@ -7290,6 +7351,7 @@ severity = "deny"
 # carrying the promise.
 [[rule]]
 id = "marker name undefined"
+no_fix_reason = "class 3 (review disposition): which rewrite is right is a reading of the code, so the refusal routes the reader to the site rather than editing it"
 kind = "policy"
 scope = "tree"
 line_sources = [
@@ -7320,6 +7382,7 @@ severity = "deny"
 # measurement rather than with an argument.
 [[rule]]
 id = "branch watch loose"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 module = "policy/branch-age.rego"
@@ -7333,6 +7396,7 @@ severity = "warn"
 # attestation IS available. That is a release to fix, which is what `deny` means.
 [[rule]]
 id = "release grade unsafe"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 module = "policy/attestation.rego"
@@ -7348,6 +7412,7 @@ severity = "deny"
 # run, which is that posture on the engine's contract.
 [[rule]]
 id = "bound grade other"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 module = "policy/timeout-drift.rego"
@@ -7370,6 +7435,7 @@ severity = "warn"
 # landing path.
 [[rule]]
 id = "job grade other"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 module = "policy/nonverdict.rego"
@@ -7382,6 +7448,7 @@ severity = "warn"
 # silent rather than red.
 [[rule]]
 id = "issue grade other"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 module = "policy/done.rego"
@@ -7391,6 +7458,7 @@ severity = "deny"
 # no record, like its siblings: the record is produced by piping the board in.
 [[rule]]
 id = "issue answer other"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 module = "policy/duplicate-close.rego"
@@ -7403,6 +7471,7 @@ severity = "deny"
 # no record they are silent, so an ordinary `check` is unaffected.
 [[rule]]
 id = "prose own other"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 module = "policy/deferral.rego"
@@ -7410,6 +7479,7 @@ severity = "deny"
 
 [[rule]]
 id = "diff key other"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 module = "policy/closing-key.rego"
@@ -7420,6 +7490,7 @@ severity = "deny"
 # with no record, so an ordinary `check` is unaffected.
 [[rule]]
 id = "event watch other"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 module = "policy/pr-unsubscribed.rego"
@@ -7431,6 +7502,7 @@ severity = "deny"
 # property of the world, so with no record it is silent and no branch is judged.
 [[rule]]
 id = "release grade other"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 module = "policy/release-assets.rego"
@@ -7441,6 +7513,7 @@ severity = "deny"
 # then checks this one rule, and reads 2 as "not yet". Silent with no record.
 [[rule]]
 id = "release grade early"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 module = "policy/release-due.rego"
@@ -7458,6 +7531,7 @@ severity = "deny"
 # artifact nobody opens.
 [[rule]]
 id = "lane grade other"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 module = "policy/land-divergence.rego"
@@ -7465,6 +7539,7 @@ severity = "warn"
 
 [[rule]]
 id = "plan cover partial"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 base = "origin/main"
@@ -7474,6 +7549,7 @@ severity = "deny"
 
 [[rule]]
 id = "test place wrong"
+no_fix_reason = "class 3 (review disposition): which rewrite is right is a reading of the code, so the refusal routes the reader to the site rather than editing it"
 kind = "policy"
 scope = "tree"
 base = "origin/main"
@@ -7495,6 +7571,7 @@ severity = "deny"
 # read `batten.toml` looking for Rust attributes.
 [[rule]]
 id = "test cover missing"
+no_fix_reason = "class 3 (review disposition): which rewrite is right is a reading of the code, so the refusal routes the reader to the site rather than editing it"
 kind = "policy"
 scope = "tree"
 base = "origin/main"
@@ -7509,6 +7586,7 @@ severity = "deny"
 # on landing; the module's header carries the measurement and the residue.
 [[rule]]
 id = "task read dropped"
+no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
 kind = "policy"
 scope = "tree"
 line_sources = ["mise.toml"]
@@ -7517,6 +7595,7 @@ severity = "deny"
 
 [[rule]]
 id = "prose report duplicate"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/stop-posture.rego"
@@ -7530,6 +7609,7 @@ severity = "deny"
 # so the two tells judge the same text.
 [[rule]]
 id = "turn ask early"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/turn-ask.rego"
@@ -7554,6 +7634,7 @@ severity = "deny"
 # that issue exists inside.
 [[rule]]
 id = "shell edit early"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/shell-write-advisory.rego"
@@ -7561,6 +7642,7 @@ severity = "warn"
 
 [[rule]]
 id = "diff ship early"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 base = "origin/main"
@@ -7610,6 +7692,7 @@ severity = "deny"
 # could-not-look channel, which the module deliberately stays silent on.
 [[rule]]
 id = "review state other"
+no_fix_reason = "class 3 (prose): the repair is a sentence in a document, which a reader writes; no substrate edits prose to a meaning"
 kind = "policy"
 scope = "tree"
 line_sources = [
@@ -7625,6 +7708,7 @@ reason = "AGENTS.md is the one authority on how work lands: one branch, one comm
 
 [[rule]]
 id = "patch judge wrong"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 invocation_sources = ["crates/batten/src/*.rs"]
@@ -7702,6 +7786,7 @@ severity = "deny"
 # is a reader who learns half the trap.
 [[rule]]
 id = "claim declare dropped"
+no_fix_reason = "class 3 (prose): the repair is a sentence in a document, which a reader writes; no substrate edits prose to a meaning"
 kind = "policy"
 scope = "tree"
 line_sources = ["AGENTS.md", "rules/toolchain.md"]
@@ -7729,6 +7814,7 @@ severity = "deny"
 # directory, which is what keeps `Cost::Read` honest.
 [[rule]]
 id = "registry read missing"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 git = ["worktrees"]
@@ -7737,6 +7823,7 @@ severity = "deny"
 
 [[rule]]
 id = "forge check red"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 forge = ["HEAD"]
@@ -7771,6 +7858,7 @@ severity = "deny"
 # is the false green CLOUD-990 measured costing a session an hour.
 [[rule]]
 id = "turn deny held"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/denials-outlive-the-turn.rego"
@@ -7818,6 +7906,7 @@ count = "hook-denials"
 # zero, so the module refuses only on a real count.
 [[rule]]
 id = "turn run loose"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/repetition-without-progress.rego"
@@ -7837,6 +7926,7 @@ count = "agent-turn-run"
 # Stop, so it forces no continuation and cannot loop.
 [[rule]]
 id = "turn answer missing"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/answer-the-operator.rego"
@@ -7867,6 +7957,7 @@ count = "unanswered-human-calls"
 # this project runs.
 [[rule]]
 id = "task run loose"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/task-substitution.rego"
@@ -7910,6 +8001,7 @@ node = "tasks"
 # matching response.
 [[rule]]
 id = "claim mint absent"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 module = "policy/claim-before-code.rego"
@@ -7941,6 +8033,7 @@ reduce = "present"
 # stops a consumer satisfying the gate by pointing it at an easier one.
 [[rule]]
 id = "prompt run never"
+no_fix_reason = "class 3 (prose): the repair is a sentence in a document, which a reader writes; no substrate edits prose to a meaning"
 kind = "policy"
 scope = "tree"
 base = "origin/main"
@@ -8055,6 +8148,7 @@ subject = "tracker-body"
 # questions genuinely have different answers.
 [[rule]]
 id = "review ask missing"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -8109,6 +8203,7 @@ looked at it."""
 # present, which is the distinction this block was always drawing.
 [[rule]]
 id = "tool judge dirty"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 module = "policy/validator-verdict-clean.rego"
@@ -8149,6 +8244,7 @@ input = "renovate.json5"
 # on a line that actually runs — so it reads `input.tree.lines` and needs no record.
 [[rule]]
 id = "hook declare other"
+no_fix_reason = "class 3 (a port onto a batten verb): authored shell is retired rather than edited, and porting a program is a design no codemod writes"
 kind = "policy"
 scope = "tree"
 module = "policy/hook-profile.rego"
@@ -8185,6 +8281,7 @@ input = "hk.pkl"
 # because every count below would otherwise pass over an absent key.
 [[rule]]
 id = "manifest list wrong"
+no_fix_reason = "class 1 (config_edit's YAML backend): the repair is an edit to a workflow or YAML file, and config_edit carries only a TOML backend"
 kind = "policy"
 scope = "tree"
 module = "policy/sbom-inventory.rego"
@@ -8248,6 +8345,7 @@ input = "Cargo.lock"
 # the same property stated from the tool's side.
 [[rule]]
 id = "path measure wrong"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 lines = ["README.md"]
@@ -8296,6 +8394,7 @@ input = "target/release/batten"
 # as `CORPUS` and this row spells it here.
 [[rule]]
 id = "suite measure stale"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 lines = ["bench/suites/RESULTS.md"]
@@ -8312,6 +8411,7 @@ severity = "deny"
 # exactly one authority, and a self-test becomes a gate over declared data.
 [[rule]]
 id = "path list loose"
+no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
 kind = "policy"
 scope = "tree"
 documents = ["batten.toml"]
@@ -8420,6 +8520,7 @@ target = "batten record suites --write"
 # tree with the file deleted, because that is the only tier that can tell.
 [[rule]]
 id = "suite grade late"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 lines = [".config/nextest.toml"]
@@ -8454,6 +8555,7 @@ severity = "deny"
 # required keys, 78 mutations, 78 fired, 0 false positives.
 [[rule]]
 id = "fact file missing"
+no_fix_reason = "class 3 (an experiment record): the missing fact is a trial a person runs and records, which no command can invent"
 kind = "policy"
 scope = "tree"
 documents = ["bench/agentic/trials.toml", "bench/agentic/method.toml"]
@@ -8470,6 +8572,7 @@ severity = "deny"
 # path would go vacuous on exactly that move — green, and deciding nothing.
 [[rule]]
 id = "release watch late"
+no_fix_reason = "class 1 (config_edit's YAML backend): the repair is an edit to a workflow or YAML file, and config_edit carries only a TOML backend"
 kind = "policy"
 scope = "tree"
 sources = [".github/workflows/*.yml"]
@@ -8513,6 +8616,7 @@ severity = "deny"
 # span-carving and the word-boundary the shell needed.
 [[rule]]
 id = "gate report silent"
+no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
 kind = "policy"
 scope = "tree"
 sources = ["mise.toml", ".github/workflows/*.yml", ".github/workflows/*.yaml"]
@@ -8521,6 +8625,7 @@ severity = "deny"
 
 [[rule]]
 id = "tool grade unclear"
+no_fix_reason = "class 3 (prose): the repair is a sentence in a document, which a reader writes; no substrate edits prose to a meaning"
 kind = "policy"
 scope = "tree"
 line_sources = ["CONTRIBUTING.md"]
@@ -8529,6 +8634,7 @@ severity = "deny"
 
 [[rule]]
 id = "spawn read broken"
+no_fix_reason = "class 3 (a port onto a batten verb): authored shell is retired rather than edited, and porting a program is a design no codemod writes"
 kind = "policy"
 scope = "tree"
 # `mise.toml` IS SHELL TOO, and `awk-regex` already says so by declaring it
@@ -8543,6 +8649,7 @@ severity = "deny"
 
 [[rule]]
 id = "pattern carry unsafe"
+no_fix_reason = "class 3 (a port onto a batten verb): authored shell is retired rather than edited, and porting a program is a design no codemod writes"
 kind = "policy"
 scope = "tree"
 line_sources = ["mise-tasks/**", "*.sh", "mise.toml"]
@@ -8551,6 +8658,7 @@ severity = "deny"
 
 [[rule]]
 id = "test run unseen"
+no_fix_reason = "class 2 (a fix verb over codemod): the rewrite is mechanical, but codemod carries method renames only and no verb exposes it as a command"
 kind = "policy"
 scope = "tree"
 line_sources = ["crates/**/*.rs"]
@@ -8647,6 +8755,7 @@ severity = "deny"
 # off fails CLOSED in CI while passing locally (CLOUD-480, two runs).
 [[rule]]
 id = "tool pin wrong"
+no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
 kind = "policy"
 scope = "tree"
 # BOTH EXTENSIONS, because a workflow committed as `.yaml` is otherwise absent
@@ -8667,6 +8776,7 @@ severity = "deny"
 
 [[rule]]
 id = "job bind missing"
+no_fix_reason = "class 1 (config_edit's YAML backend): the repair is an edit to a workflow or YAML file, and config_edit carries only a TOML backend"
 kind = "policy"
 scope = "tree"
 # BOTH EXTENSIONS, because a workflow committed as `.yaml` is otherwise absent
@@ -8682,6 +8792,7 @@ severity = "deny"
 
 [[rule]]
 id = "release grant missing"
+no_fix_reason = "class 1 (config_edit's YAML backend): the repair is an edit to a workflow or YAML file, and config_edit carries only a TOML backend"
 kind = "policy"
 scope = "tree"
 line_sources = ["release-plz.toml", ".github/workflows/*.yml"]
@@ -8690,6 +8801,7 @@ severity = "deny"
 
 [[rule]]
 id = "review declare wrong"
+no_fix_reason = "class 1 (config_edit's YAML backend): the repair is an edit to a workflow or YAML file, and config_edit carries only a TOML backend"
 kind = "policy"
 scope = "tree"
 line_sources = [".coderabbit.yaml"]
@@ -8698,6 +8810,7 @@ severity = "deny"
 
 [[rule]]
 id = "bound carry missing"
+no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
 kind = "policy"
 scope = "tree"
 line_sources = ["Cargo.toml", "renovate.json5"]
@@ -8706,6 +8819,7 @@ severity = "deny"
 
 [[rule]]
 id = "version read wrong"
+no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
 kind = "policy"
 scope = "tree"
 line_sources = ["Cargo.toml", "Cargo.lock"]
@@ -8714,6 +8828,7 @@ severity = "deny"
 
 [[rule]]
 id = "path list partial"
+no_fix_reason = "class 1 (config_edit's YAML backend): the repair is an edit to a workflow or YAML file, and config_edit carries only a TOML backend"
 kind = "policy"
 scope = "tree"
 line_sources = [".github/workflows/rust.yml"]
@@ -8722,6 +8837,7 @@ severity = "deny"
 
 [[rule]]
 id = "version pin other"
+no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
 kind = "policy"
 scope = "tree"
 line_sources = ["Cargo.toml", "mise.toml", "renovate.json5"]
@@ -8730,6 +8846,7 @@ severity = "deny"
 
 [[rule]]
 id = "hook pin stale"
+no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
 kind = "policy"
 scope = "tree"
 line_sources = [".claude/settings.json", "mise.toml", "mise-tasks/*.sh"]
@@ -8738,6 +8855,7 @@ severity = "deny"
 
 [[rule]]
 id = "provision pin stale"
+no_fix_reason = "class 1 (config_edit's YAML backend): the repair is an edit to a workflow or YAML file, and config_edit carries only a TOML backend"
 kind = "policy"
 scope = "tree"
 # BOTH EXTENSIONS, because a workflow committed as `.yaml` is otherwise absent
@@ -8753,6 +8871,7 @@ severity = "deny"
 
 [[rule]]
 id = "pattern reach other"
+no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
 kind = "policy"
 scope = "tree"
 line_sources = ["batten.toml", "hk.pkl"]
@@ -8761,6 +8880,7 @@ severity = "deny"
 
 [[rule]]
 id = "memory cover partial"
+no_fix_reason = "class 3 (prose): the repair is a sentence in a document, which a reader writes; no substrate edits prose to a meaning"
 kind = "policy"
 scope = "tree"
 line_sources = [".serena/memories/engineering/module-map.md"]
@@ -8769,6 +8889,7 @@ severity = "deny"
 
 [[rule]]
 id = "tag mint wrong"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 module = "policy/release-tag-shape.rego"
@@ -8791,6 +8912,7 @@ tags = "v*"
 # the five files somebody typed.
 [[rule]]
 id = "prose carry missing"
+no_fix_reason = "class 3 (prose): the repair is a sentence in a document, which a reader writes; no substrate edits prose to a meaning"
 kind = "policy"
 scope = "tree"
 module = "policy/rules-paths-trigger.rego"
@@ -8804,6 +8926,7 @@ sources = [".claude/rules/*.md"]
 # demonstrated rather than one asserted.
 [[rule]]
 id = "prompt declare partial"
+no_fix_reason = "class 3 (prose): the repair is a sentence in a document, which a reader writes; no substrate edits prose to a meaning"
 kind = "policy"
 scope = "tree"
 module = "policy/skill-frontmatter-complete.rego"
@@ -8860,6 +8983,7 @@ sources = ["skills/*/SKILL.md", ".claude/skills/*/SKILL.md"]
 # workflow file but a person.
 [[rule]]
 id = "lock cover partial"
+no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
 kind = "policy"
 scope = "tree"
 staged = ["mise.lock", "mise.toml"]
@@ -8889,6 +9013,7 @@ severity = "deny"
 # migrate and keeps its verb, which is the verdict CLOUD-1193 records.
 [[rule]]
 id = "commit declare empty"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 commits = ["origin/main..HEAD"]
@@ -8897,6 +9022,7 @@ severity = "deny"
 
 [[rule]]
 id = "hook wire missing"
+no_fix_reason = "class 1 (config_edit's JSON backend): the repair is an edit to a JSON settings file, and config_edit carries only a TOML backend"
 kind = "policy"
 scope = "tree"
 documents = [
@@ -8954,6 +9080,7 @@ path = ".gemini/settings.json"
 # declared id and no root variable.
 [[rule]]
 id = "grant carry missing"
+no_fix_reason = "class 1 (config_edit's JSON backend): the repair is an edit to a JSON settings file, and config_edit carries only a TOML backend"
 kind = "policy"
 scope = "tree"
 documents = [".claude/settings.json"]
@@ -8969,6 +9096,7 @@ reason = "Claude Code's auto-mode classifier does not read `autoMode` from `.cla
 # are two rules rather than one with two predicates.
 [[rule]]
 id = "connector grant loose"
+no_fix_reason = "class 1 (config_edit's JSON backend): the repair is an edit to a JSON settings file, and config_edit carries only a TOML backend"
 kind = "policy"
 scope = "tree"
 documents = [".claude/settings.json"]
@@ -9015,6 +9143,7 @@ reason = "a `[[mcp.result]]` reduction decides nothing while the raw tool is gra
 # learning this manifest's name (non-negotiable rule 1).
 [[rule]]
 id = "task bind undefined"
+no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
 kind = "policy"
 scope = "tree"
 sources = ["batten.toml", "mise.toml"]
@@ -9058,6 +9187,7 @@ severity = "deny"
 # both jobs, which shows up in the bill and needs no gate.
 [[rule]]
 id = "job select missing"
+no_fix_reason = "class 1 (config_edit's YAML backend): the repair is an edit to a workflow or YAML file, and config_edit carries only a TOML backend"
 kind = "policy"
 scope = "tree"
 sources = [".github/workflows/ci.yml"]
@@ -9084,6 +9214,7 @@ severity = "deny"
 # its own task graph.
 [[rule]]
 id = "job check other"
+no_fix_reason = "class 1 (config_edit's YAML backend): the repair is an edit to a workflow or YAML file, and config_edit carries only a TOML backend"
 kind = "policy"
 scope = "tree"
 sources = [
@@ -9132,6 +9263,7 @@ severity = "deny"
 # no finding carries.
 [[rule]]
 id = "job carry missing"
+no_fix_reason = "class 1 (config_edit's YAML backend): the repair is an edit to a workflow or YAML file, and config_edit carries only a TOML backend"
 kind = "policy"
 scope = "tree"
 sources = [".github/workflows/*.yml", "mise.toml"]
@@ -9160,6 +9292,7 @@ severity = "deny"
 # line in `mise.toml`.
 [[rule]]
 id = "workflow run unknown"
+no_fix_reason = "class 1 (config_edit's YAML backend): the repair is an edit to a workflow or YAML file, and config_edit carries only a TOML backend"
 kind = "policy"
 scope = "tree"
 sources = [".github/workflows/*.yml", "mise.toml"]
@@ -9191,10 +9324,11 @@ scope = "tree"
 sources = [".github/workflows/release-artifacts.yml", "batten.toml"]
 module = "policy/release-provision-parity.rego"
 severity = "deny"
-no_fix_reason = "a platform a provisioned tool cannot reach is not fixable in this tree: either the upstream artifact exists and the row should pin it, or it does not and the gap is declared with its consequence — and which of the two is a supply-chain decision, not a rewrite"
+no_fix_reason = "class 3 (an upstream artifact): a platform a provisioned tool cannot reach is not fixable in this tree: either the upstream artifact exists and the row should pin it, or it does not and the gap is declared with its consequence — and which of the two is a supply-chain decision, not a rewrite"
 
 [[rule]]
 id = "bats run wrong"
+no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
 kind = "policy"
 scope = "tree"
 sources = ["mise.toml", ".github/workflows/ci.yml"]
@@ -9239,6 +9373,7 @@ severity = "deny"
 # them -- `line_sources` is a union of includes with no negation.
 [[rule]]
 id = "memory point missing"
+no_fix_reason = "class 3 (prose): the repair is a sentence in a document, which a reader writes; no substrate edits prose to a meaning"
 kind = "policy"
 scope = "tree"
 line_sources = [
@@ -9263,6 +9398,7 @@ severity = "deny"
 
 [[rule]]
 id = "suite retire unclear"
+no_fix_reason = "class 3 (a port onto a batten verb): authored shell is retired rather than edited, and porting a program is a design no codemod writes"
 kind = "policy"
 scope = "tree"
 line_sources = ["tests/*.bats", "tests/**/*.bats"]
@@ -9305,7 +9441,7 @@ glob = "hk.pkl"
 check = "mise run fix-selection-check"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "add the missing step to `fixers` in hk.pkl, or remove the one that carries no fixer; which of the two a name needs is a reading of the gate that no command can make"
+no_fix_reason = "class 3 (review disposition): add the missing step to `fixers` in hk.pkl, or remove the one that carries no fixer; which of the two a name needs is a reading of the gate that no command can make"
 
 # The adopted runner's surface contract (CLOUD-947). The row is here because
 # house style §1 says the committed authority declares what runs; hk and CI
@@ -9334,6 +9470,7 @@ no_fix_reason = "add the missing step to `fixers` in hk.pkl, or remove the one t
 # list out of the fact it is handed.
 [[rule]]
 id = "plan require missing"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
 kind = "policy"
 scope = "tree"
 module = "policy/hk-plan-required.rego"
@@ -9355,10 +9492,11 @@ glob = "hk.pkl"
 check = "mise run hk-drift"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "regenerate the projection with `mise run hk-contract` and read the diff: which of an added, removed, reordered or regrouped step is intended is a decision, and a gate that applied it would be absorbing the change nobody reviewed"
+no_fix_reason = "class 3 (review disposition): regenerate the projection with `mise run hk-contract` and read the diff: which of an added, removed, reordered or regrouped step is intended is a decision, and a gate that applied it would be absorbing the change nobody reviewed"
 
 [[rule]]
 id = "gate select wrong"
+no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
 kind = "policy"
 scope = "tree"
 sources = ["mise.toml"]
@@ -9368,6 +9506,7 @@ severity = "deny"
 
 [[rule]]
 id = "workspace list unused"
+no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
 kind = "policy"
 scope = "tree"
 sources = ["Cargo.toml", "crates/*/Cargo.toml"]
@@ -9376,6 +9515,7 @@ severity = "deny"
 
 [[rule]]
 id = "layer place wrong"
+no_fix_reason = "class 2 (a Rego CST): the repair is a row in a policy module, and codemod parses Rust only"
 kind = "policy"
 scope = "tree"
 use_sources = ["crates/batten/src/*.rs"]
@@ -9404,6 +9544,7 @@ severity = "deny"
 # two sends a reader to the wrong module for this predicate.
 [[rule]]
 id = "bound guard missing"
+no_fix_reason = "class 1 (config_edit's JSON backend): the repair is an edit to a JSON settings file, and config_edit carries only a TOML backend"
 kind = "policy"
 scope = "tree"
 documents = [".claude/settings.json"]
@@ -9412,6 +9553,7 @@ severity = "deny"
 
 [[rule]]
 id = "adapter place missing"
+no_fix_reason = "class 2 (a Rego CST): the repair is a row in a policy module, and codemod parses Rust only"
 kind = "policy"
 scope = "tree"
 symbols = true
@@ -9444,6 +9586,7 @@ severity = "deny"
 # human, never an annotation an agent writes about its own work.
 [[rule]]
 id = "spawn add other"
+no_fix_reason = "class 3 (review disposition): which rewrite is right is a reading of the code, so the refusal routes the reader to the site rather than editing it"
 kind = "policy"
 scope = "tree"
 module = "policy/spawn-widening.rego"
@@ -9508,6 +9651,7 @@ line_sources = ["crates/batten/src/**/*.rs", "policy/spawn-adapters.rego"]
 # container; this catches the commit.
 [[rule]]
 id = "provision guard missing"
+no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
 kind = "policy"
 scope = "tree"
 documents = ["mise.toml", "batten.toml"]
@@ -9517,6 +9661,7 @@ reason = "Two surfaces fence the resolver host out of the agent proxy, and the t
 
 [[rule]]
 id = "pin declare wrong"
+no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
 kind = "policy"
 scope = "tree"
 documents = [".mcp.json", "mise.toml"]
@@ -9526,6 +9671,7 @@ reason = "mise.toml owns the pin and .mcp.json's copy is a reference to it: move
 
 [[rule]]
 id = "version check stale"
+no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
 kind = "policy"
 scope = "tree"
 sources = ["mise.toml", "Cargo.toml"]
@@ -9570,7 +9716,7 @@ glob = ".regal/config.yaml"
 check = "mise exec -- regal lint policy/"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "add a `# METADATA schemas:` block binding `input` to the schema for the module's surface — `schema[\"policy-input.schema\"]` for a tree-scoped module, `schema[\"policy-call.schema\"]` for a mediated_call one. One block per PACKAGE; OPA refuses a redeclaration"
+no_fix_reason = "class 2 (a Rego CST): add a `# METADATA schemas:` block binding `input` to the schema for the module's surface — `schema[\"policy-input.schema\"]` for a tree-scoped module, `schema[\"policy-call.schema\"]` for a mediated_call one. One block per PACKAGE; OPA refuses a redeclaration"
 
 # CLOUD-876's build-time type check, and the clause the whole row exists for: a
 # module reading a field the engine never emits fails the BUILD rather than
@@ -9596,7 +9742,7 @@ glob = "schema/policy-input.schema.json"
 check = "mise exec -- opa check -s schema/ policy/"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "the module names an input path the engine does not emit; fix the path or add the fact, and read the `want (one of)` list in the error for what this surface actually carries"
+no_fix_reason = "class 3 (review disposition): the module names an input path the engine does not emit; fix the path or add the fact, and read the `want (one of)` list in the error for what this surface actually carries"
 
 # CLOUD-876's second gate, independent of which schema mechanism won. A module
 # reaching for `rego.metadata.*` type checks fine under upstream `opa` and does
@@ -9624,7 +9770,7 @@ glob = ".regal/rules/**/*.rego"
 check = "mise exec -- regal test .regal/rules"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "a custom Regal rule's own tests failed; `mise exec -- regal test .regal/rules` names the failing case. Every arm is paired on purpose — if only the negative arm still passes, the predicate has stopped discriminating"
+no_fix_reason = "class 3 (review disposition): a custom Regal rule's own tests failed; `mise exec -- regal test .regal/rules` names the failing case. Every arm is paired on purpose — if only the negative arm still passes, the predicate has stopped discriminating"
 
 [[rule]]
 id = "module reach undefined"
@@ -9633,7 +9779,7 @@ glob = "policy/**/*.rego"
 pattern = "rego.metadata."
 severity = "deny"
 scope = "tree"
-no_fix_reason = "regorus implements no `rego.metadata.*` builtin, so the rule would pass `opa check` and behave differently under the shipped engine. Carry whatever the annotation held as an explicit fact on the row or in the module itself."
+no_fix_reason = "class 2 (a Rego CST): regorus implements no `rego.metadata.*` builtin, so the rule would pass `opa check` and behave differently under the shipped engine. Carry whatever the annotation held as an explicit fact on the row or in the module itself."
 
 [[rule]]
 id = "claim mint twice"
@@ -9642,7 +9788,7 @@ glob = "crates/batten/src/race.rs"
 check = "mise run claim-race"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "a raced claim is resolved on the board, not in this tree: take the frontier from `mise run graph-check`, and close the competing PR if it is stale rather than racing it"
+no_fix_reason = "class 3 (a board resolution): a raced claim is resolved on the board, not in this tree: take the frontier from `mise run graph-check`, and close the competing PR if it is stale rather than racing it"
 
 # The one legitimate reduction this ratchet has seen, taken through the hatch its
 # own `no_fix_reason` names — "restore the tests, or waive the reduction
@@ -13068,6 +13214,7 @@ regex = '^[^@\s/]+(/[^@\s/]+)+@[0-9a-f]{40}$'
 
 [[rule]]
 id = "pin parse other"
+no_fix_reason = "class 1 (config_edit's TSV backend): the repair is a row in a TSV table, and config_edit carries only a TOML backend"
 kind = "policy"
 scope = "tree"
 module = "policy/sbom-actions.rego"
@@ -13102,6 +13249,7 @@ writer = "mise run sbom-binary-record"
 
 [[rule]]
 id = "cargo list other"
+no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
 kind = "policy"
 scope = "tree"
 module = "policy/sbom-binary.rego"
@@ -17322,6 +17470,7 @@ target = "policy/spawn-adapters.rego"
 # `walk` rather than as a line scan over JSON.
 [[rule]]
 id = "rule watch other"
+no_fix_reason = "class 3 (prose): the repair is a sentence in a document, which a reader writes; no substrate edits prose to a meaning"
 kind = "policy"
 scope = "tree"
 module = "policy/rules-drift.rego"

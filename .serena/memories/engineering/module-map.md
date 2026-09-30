@@ -85,6 +85,7 @@ row here, so a new module lands with its line.
 - `ripcord.rs` — the break-glass a locked-out container can reach (CLOUD-1847).
 - `review.rs` — the vendored-prompt dispatch tier (CLOUD-472): the SECOND occupant of `Cost::Effect` and the third adopter of `secrets.rs`' delegated-analyser shape, after `symbols.rs`.
 - `repair.rs` — running a row's declared `fix` at the mediated boundary (CLOUD-1639), for rows whose raised class declares `applicability = retry|silent`.
+- `remedy.rs` — whether a rule row declares its remedy (CLOUD-1576): `malformed` (both keys, or a blank reason) is a load error, and `classified` checks the `class N (<substrate>): <why>` grammar that `config lint` holds every `no_fix_reason` to. A leaf.
 - `refusal.rs` — the refusal contract (CLOUD-122): ONE `Refusal` value — `{rule, reason, fix}` — constructed at every deny site and projected onto whatever channel a host reads.
 - `hookcost.rs` — what this repository's own hooks cost the session that runs them (CLOUD-417).
 - `markers.rs` — counted suppression markers (CLOUD-36): how many times policy was waved through, and where.

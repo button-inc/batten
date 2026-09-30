@@ -186,6 +186,7 @@ mod fail_on_warning;
 mod filed_here;
 #[cfg(unix)]
 mod finding_sink;
+mod fix_declared;
 mod fixture_forks;
 mod fixture_repos;
 mod forced_push;

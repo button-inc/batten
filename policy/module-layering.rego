@@ -160,6 +160,10 @@ declared_modules := {
 	# a pure, lossless rewrite that a `fix` calls. It reaches nothing in this
 	# crate, only `ra_ap_syntax`, so it is a LEAF.
 	"codemod",
+	# `remedy` arrived with CLOUD-1576: two pure string predicates over a row's
+	# remedy columns, which `rules` and `lint` call. It reaches nothing in this
+	# crate, so it is a LEAF.
+	"remedy",
 	# `secret` arrived with CLOUD-1569 and this rule named it once more, on the
 	# gate before landing. It is the PUREST LEAF in the table: it reaches nothing
 	# in this crate at all — not even `error` — because its whole surface is one
