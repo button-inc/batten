@@ -46,6 +46,7 @@ row here, so a new module lands with its line.
 - `environment.rs` — what KIND of machine this is (CLOUD-1383), read from the environment because it is the one fact a committed file cannot hold.
 - `epoch.rs` — `config_epoch` (CLOUD-32): a SHA-256 over the governing config surface, so two records carrying the same epoch were produced under provably the same rules.
 - `error.rs` — two typed carriers the binary boundary downcasts on: `UsageError` → `ExitCode::Usage` (1), and `Denial` → `ExitCode::Violation` (2).
+- `codemod.rs` — lossless Rust rewrites through `ra_ap_syntax`'s CST, the substrate a Rust `fix` writes through (CLOUD-1580): output differs from input only at the edited tokens, parser errors are could-not-look and never a silent no-op, and the edition is a required input with no default. A leaf.
 - `config.rs` — loads/validates one `batten.toml` (typed, no unknown keys, required `version`).
 - `config_edit.rs` — format-preserving edits to a committed config file, the substrate a rule's `fix` writes through (CLOUD-1575): one backend per `Format` (TOML via `toml_edit`), output differs from input only at the edited key, and it reaches `durable` for the crash-safe write.
 - `contract.rs` — the contract-drift predicate (CLOUD-461, CLOUD-525): hash the `[contract] tracked` surface, compare against this session's snapshot, and report the change-set once on the advisory channel.
