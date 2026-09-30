@@ -2839,6 +2839,59 @@ const RECEIPT_OR: FlagDecl = FlagDecl {
 };
 
 /// `<step>` on the three `step` arms: the name a `[[step]]` row declares.
+/// `--outputs` on `ci step`: append the command's `KEY=VALUE` lines to the
+/// runner's output file.
+const CI_STEP_OUTPUTS: FlagDecl = FlagDecl::switch(
+    "outputs",
+    "outputs",
+    "Append the command's KEY=VALUE stdout lines to the runner's step-output file",
+);
+
+/// `--summary <title>` on `ci step`.
+const CI_STEP_SUMMARY: FlagDecl = FlagDecl::valued(
+    "summary",
+    "summary",
+    "Fence the tail of the command's output into the runner's run summary under this title",
+);
+
+/// `--save <path>` on `ci step`.
+const CI_STEP_SAVE: FlagDecl = FlagDecl::valued(
+    "save",
+    "save",
+    "Also write the command's stdout to this path, for a later step to read",
+);
+
+/// `--stdin <path>` on `ci step`.
+const CI_STEP_STDIN: FlagDecl = FlagDecl::valued(
+    "stdin",
+    "stdin",
+    "Feed this file to the command's standard input",
+);
+
+/// `--verdict <key>` on `ci step`.
+const CI_STEP_VERDICT: FlagDecl = FlagDecl::valued(
+    "verdict",
+    "verdict",
+    "The step-output key a mapped exit code is written under",
+);
+
+/// `--on <code>=<value>` on `ci step`, REPEATABLE AND ORDERED: each row maps
+/// one exit code, and a mapped code exits 0.
+const CI_STEP_ON: FlagDecl = FlagDecl {
+    value: ValueDecl::StrMany,
+    ..FlagDecl::valued(
+        "on",
+        "on",
+        "Map an exit code to the verdict's value as <code>=<value>; a mapped code exits 0 (repeatable)",
+    )
+};
+
+/// The command on `ci step`, after the mandatory `--`.
+const CI_STEP_COMMAND: FlagDecl = FlagDecl::trailing(
+    "command",
+    "The command, after `--`: its code is the verb's unless an --on row maps it",
+);
+
 const STEP_NAME: FlagDecl = FlagDecl::positional(
     "step",
     "The step's name, as the consumer's step table declares it",
@@ -3944,6 +3997,27 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[SLOW_BASE],
+    },
+    // The runner-file glue a workflow step used a shell for (CLOUD-843, Phase
+    // 4): step outputs, the run summary, a verdict mapped to an output, a
+    // capture. `step run`'s reading: it runs the command the caller names, so
+    // it is `Unclassified`, and the child's verdict is the verb's.
+    CommandDecl {
+        path: "ci step",
+        id: "ci.step",
+        about: "Run one command and write its step outputs, run summary or mapped verdict to the runner's files",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Unclassified,
+        flags: &[
+            CI_STEP_OUTPUTS,
+            CI_STEP_SUMMARY,
+            CI_STEP_SAVE,
+            CI_STEP_STDIN,
+            CI_STEP_VERDICT,
+            CI_STEP_ON,
+            CI_STEP_COMMAND,
+        ],
     },
     // CLOUD-65's install contract, ported out of `mise-tasks/install-check.sh`
     // under CLOUD-1716.

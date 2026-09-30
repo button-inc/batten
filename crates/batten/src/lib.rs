@@ -38,6 +38,7 @@ pub mod ci;
 /// The CI-signal producers — landing divergence and non-verdict failures —
 /// walked over the forge and recorded for a module to decide over (CLOUD-843).
 pub mod ci_signal;
+pub mod ci_step;
 pub mod claim;
 pub mod cli;
 pub mod commit;
@@ -22772,6 +22773,9 @@ fn run_ci(
         cli::CiCommand::SlowNeededAt { ref base, ref head } => {
             run_ci_slow_needed_at(base, head, overrides, out, err)
         }
+        // The runner's file glue a step used a shell for (CLOUD-843, Phase 4).
+        // It reads no policy, so the §8 chain supplies nothing.
+        cli::CiCommand::Step(ref request) => ci_step::run(request, out, err),
     }
 }
 

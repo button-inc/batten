@@ -2099,6 +2099,9 @@ pub enum CiCommand {
         /// The revision whose tree must equal the checkout's.
         head: String,
     },
+    /// Run one command and do the runner-file glue a workflow step used a
+    /// shell for (CLOUD-843, Phase 4). APPENDED LAST, for the reason above.
+    Step(crate::ci_step::StepRequest),
 }
 
 /// Diagnoses of `doctor` (house style §2: the verb nests focused
@@ -2645,6 +2648,21 @@ fn ci_of(matches: &ArgMatches) -> Option<CiCommand> {
         ("suites", matches) => Some(CiCommand::Suites {
             base: matches.get_one::<String>("base").cloned()?,
         }),
+        ("step", matches) => {
+            let text = |id: &str| matches.get_one::<String>(id).cloned();
+            let mut request = crate::ci_step::StepRequest::default();
+            request.outputs = flag(matches, "outputs");
+            request.summary = text("summary");
+            request.save = text("save");
+            request.stdin = text("stdin");
+            request.verdict = text("verdict");
+            request.on = matches
+                .get_many::<String>("on")
+                .map(|rows| rows.cloned().collect())
+                .unwrap_or_default();
+            request.command = matches.get_many::<String>("command")?.cloned().collect();
+            Some(CiCommand::Step(request))
+        }
         _ => None,
     }
 }

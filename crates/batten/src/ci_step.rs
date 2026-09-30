@@ -1,0 +1,284 @@
+//! `batten ci step`: the glue a workflow step used a shell for, as one argv.
+//!
+//! # What it retires
+//!
+//! A workflow `run:` step was shell for four reasons, measured over this
+//! repository's workflows (CLOUD-843, Phase 4). None of them is a decision, so
+//! none belongs in rego. Each one is the runner's own file contract:
+//!
+//! * **`>>"$GITHUB_OUTPUT"`** — a command printing `KEY=VALUE` lines whose
+//!   output later steps read. `--outputs` appends those lines to the file the
+//!   runner names.
+//! * **`{ echo '## Title'; cat log; } >>"$GITHUB_STEP_SUMMARY"`** — a report
+//!   fenced into the run's summary, usually by a second step reading a file the
+//!   first one redirected into. `--summary <title>` writes it from the run
+//!   itself, so the file and the second step both go.
+//! * **`set +e; cmd; case $? in 0) echo x=a ;; 2) echo x=b ;; *) exit $? ;; esac`**
+//!   — a verdict mapped to an output. `--verdict <key>` with repeated
+//!   `--on <code>=<value>` rows writes `KEY=VALUE` for a mapped code and exits
+//!   `0`; an unmapped code is the command's own, unchanged.
+//! * **`cmd >file` and `cmd <file`** — a capture a later step reads.
+//!   `--save <path>` and `--stdin <path>` are those two, with the path
+//!   relative to where the step stands.
+//!
+//! # The contract is the runner's, and it is generic
+//!
+//! `GITHUB_OUTPUT` and `GITHUB_STEP_SUMMARY` are the runner's variable names,
+//! not a consumer's; the verb names no workflow, job or repository (rule 1).
+//! Outside a runner, where neither is set, every line still reaches stdout and
+//! the verb writes nothing else. That is the reading a local rehearsal needs:
+//! the same command, the same output, and no file anyone has to clean up.
+//!
+//! # The command's verdict is the verb's
+//!
+//! A child's `2` stays `2` unless `--on 2=…` maps it. The glue never turns a
+//! failure into a pass by accident: a summary or output file that will not take
+//! a write is an error, because a step whose outputs were lost is a step whose
+//! readers will act on nothing.
+
+use std::fs::OpenOptions;
+use std::io::{BufRead as _, BufReader, Read as _, Write};
+use std::process::{Command, Stdio};
+
+use anyhow::{Context as _, Result, anyhow};
+
+use crate::ExitCode;
+use crate::error::UsageError;
+
+/// The runner's file for step outputs.
+pub const OUTPUT_VAR: &str = "GITHUB_OUTPUT";
+
+/// The runner's file for the run summary.
+pub const SUMMARY_VAR: &str = "GITHUB_STEP_SUMMARY";
+
+/// How many trailing lines a summary keeps, so a long log does not bury the
+/// run page. The whole log is still in the step's own output.
+pub const SUMMARY_TAIL: usize = 200;
+
+/// One `batten ci step` invocation, parsed.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct StepRequest {
+    /// Append the command's `KEY=VALUE` stdout lines to the output file.
+    pub outputs: bool,
+    /// Fence the command's output into the run summary under this title.
+    pub summary: Option<String>,
+    /// Write the command's stdout to this path as well.
+    pub save: Option<String>,
+    /// Feed this file to the command's stdin.
+    pub stdin: Option<String>,
+    /// The output key a mapped exit code is written under.
+    pub verdict: Option<String>,
+    /// `code=value` rows mapping an exit code to the verdict's value.
+    pub on: Vec<String>,
+    /// The command, verbatim. Never empty — the surface requires it.
+    pub command: Vec<String>,
+}
+
+/// A step output line: `KEY=VALUE`, with a key the runner accepts.
+#[must_use]
+pub fn output_line(line: &str) -> bool {
+    let Some((key, _)) = line.split_once('=') else {
+        return false;
+    };
+    let mut chars = key.chars();
+    chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// The `--on` rows as `(code, value)`, refusing a malformed row as a usage
+/// error rather than dropping it: a mapping that silently lost a row would
+/// fail a step its author declared a pass.
+///
+/// # Errors
+///
+/// A [`UsageError`] naming the first row that is not `<integer>=<value>`.
+pub fn mapping(rows: &[String]) -> Result<Vec<(i32, String)>> {
+    rows.iter()
+        .map(|row| {
+            row.split_once('=')
+                .and_then(|(code, value)| {
+                    code.trim()
+                        .parse::<i32>()
+                        .ok()
+                        .map(|code| (code, value.to_owned()))
+                })
+                .ok_or_else(|| {
+                    UsageError::raise(format!("ci step: --on {row:?} is not <exit code>=<value>"))
+                })
+        })
+        .collect()
+}
+
+/// The summary section: a title and the fenced tail of the output.
+#[must_use]
+pub fn summary_section(title: &str, output: &str) -> String {
+    let lines: Vec<&str> = output.lines().collect();
+    let tail = lines
+        .get(lines.len().saturating_sub(SUMMARY_TAIL)..)
+        .unwrap_or_default();
+    let mut section = format!("## {title}\n\n```\n");
+    for line in tail {
+        section.push_str(line);
+        section.push('\n');
+    }
+    section.push_str("```\n");
+    section
+}
+
+/// Append `text` to the file the runner variable `var` names, if it names one.
+fn append_to(var: &str, text: &str) -> Result<()> {
+    let Some(path) = std::env::var_os(var).filter(|path| !path.is_empty()) else {
+        return Ok(());
+    };
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("ci step: open ${var}"))?;
+    file.write_all(text.as_bytes())
+        .with_context(|| format!("ci step: write ${var}"))
+}
+
+/// Run the command, tee its output, and do the glue the request names.
+///
+/// # Errors
+///
+/// A [`UsageError`] for an empty command, a malformed `--on` row, or a command
+/// that cannot be started; a [`crate::Passthrough`] carrying an unmapped
+/// non-zero code; an I/O error when an output, summary or save file will not
+/// take its write.
+pub fn run(request: &StepRequest, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+    let map = mapping(&request.on)?;
+    if !map.is_empty() && request.verdict.is_none() {
+        return Err(UsageError::raise(
+            "ci step: --on maps a code to a value, and needs --verdict to name its key",
+        ));
+    }
+    let Some((program, args)) = request.command.split_first() else {
+        return Err(UsageError::raise("ci step: no command after `--`"));
+    };
+    let stdin = match request.stdin {
+        Some(ref path) => Stdio::from(
+            std::fs::File::open(path)
+                .map_err(|e| UsageError::raise(format!("ci step: --stdin {path}: {e}")))?,
+        ),
+        None => Stdio::inherit(),
+    };
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(stdin)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| UsageError::raise(format!("ci step: cannot start {program}: {e}")))?;
+
+    // STDERR ON ITS OWN THREAD, so a child filling one pipe while this reads the
+    // other never deadlocks. It is teed to this process's stderr as it arrives,
+    // so a long step's log still streams.
+    let child_err = child.stderr.take();
+    let reader = std::thread::spawn(move || {
+        let mut captured = Vec::new();
+        if let Some(mut pipe) = child_err {
+            let mut buf = [0_u8; 8192];
+            while let Ok(n) = pipe.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                let chunk = buf.get(..n).unwrap_or_default();
+                let _ = std::io::stderr().write_all(chunk);
+                captured.extend_from_slice(chunk);
+            }
+        }
+        captured
+    });
+
+    let mut stdout = String::new();
+    if let Some(pipe) = child.stdout.take() {
+        for line in BufReader::new(pipe).lines() {
+            let line = line.context("ci step: read the command's stdout")?;
+            writeln!(out, "{line}")?;
+            stdout.push_str(&line);
+            stdout.push('\n');
+        }
+    }
+    let status = child.wait().context("ci step: wait for the command")?;
+    let stderr = String::from_utf8_lossy(&reader.join().unwrap_or_default()).into_owned();
+    // A child killed by a signal has no code; 128 is still non-zero.
+    let code = status.code().unwrap_or(128);
+
+    if let Some(ref path) = request.save {
+        std::fs::write(path, &stdout).with_context(|| format!("ci step: --save {path}"))?;
+    }
+    if request.outputs {
+        let lines: String = stdout
+            .lines()
+            .filter(|line| output_line(line))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        append_to(OUTPUT_VAR, &lines)?;
+    }
+    if let Some(ref title) = request.summary {
+        append_to(
+            SUMMARY_VAR,
+            &summary_section(title, &format!("{stdout}{stderr}")),
+        )?;
+    }
+    if let Some(ref key) = request.verdict {
+        if let Some((_, value)) = map.iter().find(|(mapped, _)| *mapped == code) {
+            writeln!(err, "ci step: exit {code} -> {key}={value}")?;
+            append_to(OUTPUT_VAR, &format!("{key}={value}\n"))?;
+            return Ok(ExitCode::Success);
+        }
+    }
+    if code == 0 {
+        return Ok(ExitCode::Success);
+    }
+    Err(anyhow!(crate::Passthrough(code)))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    //MUTANT-SUITE crates/batten/src/ci_step.rs
+    //MUTANT key-unchecked|s@        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')@        \&\& true@|only_a_key_value_line_is_an_output
+    //MUTANT tail-unbounded|s@lines.len().saturating_sub(SUMMARY_TAIL)@0@|a_summary_keeps_the_tail_of_a_long_log
+    #[test]
+    fn only_a_key_value_line_is_an_output() {
+        assert!(output_line("archive=target/x.tar.gz"));
+        assert!(output_line("_x-y=1"));
+        assert!(output_line("k="));
+        assert!(!output_line("Compiling batten v0.1"));
+        assert!(!output_line("=value"));
+        assert!(!output_line("1key=value"));
+        assert!(!output_line("a key=value"));
+        assert!(!output_line("warning: x=y"));
+    }
+
+    #[test]
+    fn a_mapping_row_is_a_code_and_a_value_or_a_usage_error() {
+        let rows = vec!["0=green".to_owned(), "3=pending=later".to_owned()];
+        assert_eq!(
+            mapping(&rows).unwrap(),
+            vec![(0, "green".to_owned()), (3, "pending=later".to_owned())]
+        );
+        assert!(mapping(&["green".to_owned()]).is_err());
+        assert!(mapping(&["x=green".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn a_summary_keeps_the_tail_of_a_long_log() {
+        let log: String = (0..SUMMARY_TAIL + 5)
+            .map(|i| format!("line {i}\n"))
+            .collect();
+        let section = summary_section("Report", &log);
+        assert!(section.starts_with("## Report\n\n```\n"), "{section}");
+        assert!(section.ends_with("```\n"), "{section}");
+        assert!(!section.contains("line 4\n"), "the head is dropped");
+        assert!(section.contains(&format!("line {}\n", SUMMARY_TAIL + 4)));
+    }
+}
