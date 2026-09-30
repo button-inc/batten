@@ -876,6 +876,45 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(step)
+_arguments "${_arguments_options[@]}" : \
+'--summary=[Fence the tail of the command'\''s output into the runner'\''s run summary under this title]:summary:_default' \
+'--save=[Also write the command'\''s stdout to this path, for a later step to read]:save:_default' \
+'--stdin=[Feed this file to the command'\''s standard input]:stdin:_default' \
+'--verdict=[The step-output key a mapped exit code is written under]:verdict:_default' \
+'*--on=[Map an exit code to the verdict'\''s value as <code>=<value>; a mapped code exits 0 (repeatable)]:on:_default' \
+'*--arg-env=[Append this variable'\''s value to the command as one argument, in order; unset or empty is refused (repeatable)]:arg_env:_default' \
+'--capture=[Write the first line of the command'\''s stdout to the runner'\''s step outputs under this key]:capture:_default' \
+'*--require-env=[Refuse the step before running anything when this variable is unset or empty, naming it and never its value (repeatable)]:require_env:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--outputs[Append the command'\''s KEY=VALUE stdout lines to the runner'\''s step-output file]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'*::command -- The command, after `--`\: its code is the verb'\''s unless an --on row maps it:_default' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__ci__subcmd__help_commands" \
@@ -893,6 +932,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (suites)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(step)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -8532,6 +8575,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(step)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
         esac
     ;;
 esac
@@ -10113,6 +10160,7 @@ _batten__subcmd__ci_commands() {
     local commands; commands=(
 'slow-needed:Decide whether a diff can move the slow tier, so a diff that cannot does not pay for it' \
 'suites:Name the bats suites a diff can move, or every suite where it cannot prove one inert' \
+'step:Run one command and write its step outputs, run summary or mapped verdict to the runner'\''s files' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten ci commands' commands "$@"
@@ -10122,6 +10170,7 @@ _batten__subcmd__ci__subcmd__help_commands() {
     local commands; commands=(
 'slow-needed:Decide whether a diff can move the slow tier, so a diff that cannot does not pay for it' \
 'suites:Name the bats suites a diff can move, or every suite where it cannot prove one inert' \
+'step:Run one command and write its step outputs, run summary or mapped verdict to the runner'\''s files' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten ci help commands' commands "$@"
@@ -10136,6 +10185,11 @@ _batten__subcmd__ci__subcmd__help__subcmd__slow-needed_commands() {
     local commands; commands=()
     _describe -t commands 'batten ci help slow-needed commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__ci__subcmd__help__subcmd__step_commands] )) ||
+_batten__subcmd__ci__subcmd__help__subcmd__step_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten ci help step commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__ci__subcmd__help__subcmd__suites_commands] )) ||
 _batten__subcmd__ci__subcmd__help__subcmd__suites_commands() {
     local commands; commands=()
@@ -10145,6 +10199,11 @@ _batten__subcmd__ci__subcmd__help__subcmd__suites_commands() {
 _batten__subcmd__ci__subcmd__slow-needed_commands() {
     local commands; commands=()
     _describe -t commands 'batten ci slow-needed commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__ci__subcmd__step_commands] )) ||
+_batten__subcmd__ci__subcmd__step_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten ci step commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__ci__subcmd__suites_commands] )) ||
 _batten__subcmd__ci__subcmd__suites_commands() {
@@ -10828,6 +10887,7 @@ _batten__subcmd__help__subcmd__ci_commands() {
     local commands; commands=(
 'slow-needed:Decide whether a diff can move the slow tier, so a diff that cannot does not pay for it' \
 'suites:Name the bats suites a diff can move, or every suite where it cannot prove one inert' \
+'step:Run one command and write its step outputs, run summary or mapped verdict to the runner'\''s files' \
     )
     _describe -t commands 'batten help ci commands' commands "$@"
 }
@@ -10835,6 +10895,11 @@ _batten__subcmd__help__subcmd__ci_commands() {
 _batten__subcmd__help__subcmd__ci__subcmd__slow-needed_commands() {
     local commands; commands=()
     _describe -t commands 'batten help ci slow-needed commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__ci__subcmd__step_commands] )) ||
+_batten__subcmd__help__subcmd__ci__subcmd__step_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help ci step commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__ci__subcmd__suites_commands] )) ||
 _batten__subcmd__help__subcmd__ci__subcmd__suites_commands() {

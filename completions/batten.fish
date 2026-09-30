@@ -534,30 +534,31 @@ complete -c batten -n "__fish_batten_using_subcommand target; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand target; and __fish_seen_subcommand_from prune" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand target; and __fish_seen_subcommand_from help" -f -a "prune" -d 'Reclaim superseded build artifacts, and refuse below the measured disk floor for the build the next lap will run'
 complete -c batten -n "__fish_batten_using_subcommand target; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
+complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites step help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
-complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
-complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites step help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites step help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
+complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites step help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
 normal\t'The default'
 verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
-complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites help" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
-complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites help" -l silent -d 'Say nothing but a verdict or a usage error'
-complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites help" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
-complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites help" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
-complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites help" -l debug -d 'Add resolution detail'
-complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites help" -l trace -d 'Add everything'
-complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites help" -l no-color -d 'Never colour stderr, whatever it is attached to'
-complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites help" -l no-input -d 'Never prompt; treat the run as unattended'
-complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites help" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
-complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites help" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites help" -f -a "slow-needed" -d 'Decide whether a diff can move the slow tier, so a diff that cannot does not pay for it'
-complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites help" -f -a "suites" -d 'Name the bats suites a diff can move, or every suite where it cannot prove one inert'
-complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites step help" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
+complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites step help" -l silent -d 'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites step help" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
+complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites step help" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
+complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites step help" -l debug -d 'Add resolution detail'
+complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites step help" -l trace -d 'Add everything'
+complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites step help" -l no-color -d 'Never colour stderr, whatever it is attached to'
+complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites step help" -l no-input -d 'Never prompt; treat the run as unattended'
+complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites step help" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
+complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites step help" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites step help" -f -a "slow-needed" -d 'Decide whether a diff can move the slow tier, so a diff that cannot does not pay for it'
+complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites step help" -f -a "suites" -d 'Name the bats suites a diff can move, or every suite where it cannot prove one inert'
+complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites step help" -f -a "step" -d 'Run one command and write its step outputs, run summary or mapped verdict to the runner\'s files'
+complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites step help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from slow-needed" -l base -d 'The revision this checkout is diffed against' -r
 complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from slow-needed" -l head -d 'The revision whose tree the checkout must carry; refused when it does not' -r
 complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from slow-needed" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
@@ -603,8 +604,39 @@ complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcom
 complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from suites" -l no-input -d 'Never prompt; treat the run as unattended'
 complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from suites" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from suites" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -l summary -d 'Fence the tail of the command\'s output into the runner\'s run summary under this title' -r
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -l save -d 'Also write the command\'s stdout to this path, for a later step to read' -r
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -l stdin -d 'Feed this file to the command\'s standard input' -r
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -l verdict -d 'The step-output key a mapped exit code is written under' -r
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -l on -d 'Map an exit code to the verdict\'s value as <code>=<value>; a mapped code exits 0 (repeatable)' -r
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -l arg-env -d 'Append this variable\'s value to the command as one argument, in order; unset or empty is refused (repeatable)' -r
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -l capture -d 'Write the first line of the command\'s stdout to the runner\'s step outputs under this key' -r
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -l require-env -d 'Refuse the step before running anything when this variable is unset or empty, naming it and never its value (repeatable)' -r
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
+standard\t'The default: a finding is a violation'
+strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
+quiet\t'Suppress ordinary progress; keep warnings'
+normal\t'The default'
+verbose\t'Explain what is being checked'
+debug\t'Add resolution detail'
+trace\t'Add everything'"
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -l outputs -d 'Append the command\'s KEY=VALUE stdout lines to the runner\'s step-output file'
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -l silent -d 'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -l debug -d 'Add resolution detail'
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -l trace -d 'Add everything'
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -l no-color -d 'Never colour stderr, whatever it is attached to'
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -l no-input -d 'Never prompt; treat the run as unattended'
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from help" -f -a "slow-needed" -d 'Decide whether a diff can move the slow tier, so a diff that cannot does not pay for it'
 complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from help" -f -a "suites" -d 'Name the bats suites a diff can move, or every suite where it cannot prove one inert'
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from help" -f -a "step" -d 'Run one command and write its step outputs, run summary or mapped verdict to the runner\'s files'
 complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums backfill help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
@@ -5043,6 +5075,7 @@ complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from target" -f -a "prune" -d 'Reclaim superseded build artifacts, and refuse below the measured disk floor for the build the next lap will run'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from ci" -f -a "slow-needed" -d 'Decide whether a diff can move the slow tier, so a diff that cannot does not pay for it'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from ci" -f -a "suites" -d 'Name the bats suites a diff can move, or every suite where it cannot prove one inert'
+complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from ci" -f -a "step" -d 'Run one command and write its step outputs, run summary or mapped verdict to the runner\'s files'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from release" -f -a "install" -d 'Decide whether install.sh, the release matrix and the binstall manifest agree on every asset name, and that no binary is committed'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from release" -f -a "sums" -d 'Hash a published release\'s own assets into a checksum manifest, never the manifest itself'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from release" -f -a "backfill" -d 'Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed'

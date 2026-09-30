@@ -1,0 +1,43 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-ci-step 1  batten 
+.SH NAME
+batten\-ci\-step \- Run one command and write its step outputs, run summary or mapped verdict to the runner\*(Aqs files
+.SH SYNOPSIS
+\fBbatten ci step\fR [\fB\-\-outputs\fR] [\fB\-\-summary\fR] [\fB\-\-save\fR] [\fB\-\-stdin\fR] [\fB\-\-verdict\fR] [\fB\-\-on\fR] [\fB\-\-arg\-env\fR] [\fB\-\-capture\fR] [\fB\-\-require\-env\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIcommand\fR> 
+.SH DESCRIPTION
+Run one command and write its step outputs, run summary or mapped verdict to the runner\*(Aqs files
+.SH OPTIONS
+.TP
+\fB\-\-outputs\fR
+Append the command\*(Aqs KEY=VALUE stdout lines to the runner\*(Aqs step\-output file
+.TP
+\fB\-\-summary\fR \fI<summary>\fR
+Fence the tail of the command\*(Aqs output into the runner\*(Aqs run summary under this title
+.TP
+\fB\-\-save\fR \fI<save>\fR
+Also write the command\*(Aqs stdout to this path, for a later step to read
+.TP
+\fB\-\-stdin\fR \fI<stdin>\fR
+Feed this file to the command\*(Aqs standard input
+.TP
+\fB\-\-verdict\fR \fI<verdict>\fR
+The step\-output key a mapped exit code is written under
+.TP
+\fB\-\-on\fR \fI<on>\fR
+Map an exit code to the verdict\*(Aqs value as <code>=<value>; a mapped code exits 0 (repeatable)
+.TP
+\fB\-\-arg\-env\fR \fI<arg_env>\fR
+Append this variable\*(Aqs value to the command as one argument, in order; unset or empty is refused (repeatable)
+.TP
+\fB\-\-capture\fR \fI<capture>\fR
+Write the first line of the command\*(Aqs stdout to the runner\*(Aqs step outputs under this key
+.TP
+\fB\-\-require\-env\fR \fI<require_env>\fR
+Refuse the step before running anything when this variable is unset or empty, naming it and never its value (repeatable)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIcommand\fR>
+The command, after `\-\-`: its code is the verb\*(Aqs unless an \-\-on row maps it
