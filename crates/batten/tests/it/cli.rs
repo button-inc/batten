@@ -9646,8 +9646,11 @@ fn brief_fixture(name: &str) -> PathBuf {
 /// Run outside any config on purpose: the schema is engine structure, not repo
 /// policy, so the verdict must not depend on a config being present — and a
 /// caller linting a brief has no reason to be standing in a configured repo.
-fn run_lint_brief(name: &str, extra: &[&str]) -> Output {
-    let dir = scratch(&format!("lint-brief-{name}"));
+fn run_lint_brief(case: &str, name: &str, extra: &[&str]) -> Output {
+    // THE DIRECTORY IS THE CASE'S, NOT THE BRIEF'S (CLOUD-2053): two cases lint
+    // the same brief, and a scratch named for the brief was one directory both
+    // wiped under the other.
+    let dir = scratch(&format!("lint-brief-{case}"));
     let mut command = batten();
     command.arg("lint").arg("brief");
     command.args(extra);
@@ -9663,7 +9666,7 @@ fn a_complete_brief_exits_zero_and_says_nothing() {
     // CLOUD-84 §7(a). Silence is the contract, not an omission: `lint brief` is
     // meant to sit inline on a dispatch path, where a line per successful handoff
     // is noise a reader learns to skip.
-    let output = run_lint_brief("complete.md", &[]);
+    let output = run_lint_brief("complete", "complete.md", &[]);
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty(), "stdout: {}", stdout(&output));
 }
@@ -9673,7 +9676,7 @@ fn a_brief_missing_the_check_section_is_a_policy_verdict_naming_it() {
     // CLOUD-84 §7(b), with the exit number CLOUD-307 corrected: a missing section
     // is a VIOLATION (2), not a usage error. Shipping 1 here would make every
     // mediating harness read the verdict as "Batten is misconfigured".
-    let output = run_lint_brief("missing-check.md", &[]);
+    let output = run_lint_brief("missing-check", "missing-check.md", &[]);
     assert_eq!(
         output.status.code(),
         Some(2),
@@ -9687,7 +9690,7 @@ fn a_check_section_with_no_runnable_command_is_reported_separately() {
     // CLOUD-84 §7(d): the structural assertion that retires a separate reply
     // scanner. Its own class, not `missing`, because the repair is different —
     // put a command in the section that already exists.
-    let output = run_lint_brief("unrunnable-check.md", &[]);
+    let output = run_lint_brief("unrunnable-check", "unrunnable-check.md", &[]);
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(stdout(&output), "unrunnable: check (1)\n");
 }
@@ -9698,8 +9701,8 @@ fn the_brief_report_is_byte_stable_across_runs() {
     // filesystem, no config, and an order that comes from the schema rather than
     // from how the author arranged the document.
     for name in ["complete.md", "missing-check.md", "unrunnable-check.md"] {
-        let first = run_lint_brief(name, &[]);
-        let second = run_lint_brief(name, &[]);
+        let first = run_lint_brief("repeatable", name, &[]);
+        let second = run_lint_brief("repeatable", name, &[]);
         assert_eq!(first.stdout, second.stdout, "{name} stdout drifted");
         assert_eq!(first.status.code(), second.status.code());
     }
@@ -9748,13 +9751,13 @@ fn a_brief_arrives_on_stdin_when_no_path_is_given() {
 fn the_json_channel_answers_even_on_a_clean_brief() {
     // JSON that is sometimes absent is unparseable — the same reasoning
     // `config lint -J` records. The human channel stays silent; this one does not.
-    let output = run_lint_brief("complete.md", &["-J"]);
+    let output = run_lint_brief("json-complete", "complete.md", &["-J"]);
     assert_eq!(output.status.code(), Some(0));
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).expect("report is JSON");
     assert_eq!(report["missing"].as_array().map(Vec::len), Some(0));
     assert_eq!(report["unrunnable"].as_array().map(Vec::len), Some(0));
 
-    let dirty = run_lint_brief("missing-check.md", &["-J"]);
+    let dirty = run_lint_brief("json-missing-check", "missing-check.md", &["-J"]);
     assert_eq!(dirty.status.code(), Some(2));
     let report: serde_json::Value = serde_json::from_slice(&dirty.stdout).expect("report is JSON");
     assert_eq!(report["missing"][0], "check");

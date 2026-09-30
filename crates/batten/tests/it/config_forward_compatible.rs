@@ -479,7 +479,7 @@ fn the_rest_of_the_section_still_applies() {
 #[test]
 fn a_multi_line_value_is_not_cut_in_half_by_an_equals_inside_it() {
     let dir = repo(
-        "config-forward-multiline",
+        "config-forward-multiline-value",
         &format!(
             "{GOOD}\n[ready]\nfrom_a_newer_schema = [\n  {{ id = \"a\", weight = 1 }},\n  \
              {{ id = \"b\", weight = 2 }},\n]\n\

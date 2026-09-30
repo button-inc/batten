@@ -64,7 +64,131 @@ struct Site {
 struct Sites {
     /// The innermost named function being walked, and whether it is a case.
     within: Vec<(String, bool)>,
+    /// In-file helpers that thread a parameter into a wiping call, each with the
+    /// directory name it builds from that parameter (CLOUD-2053).
+    threading: BTreeMap<String, String>,
     found: Vec<Site>,
+}
+
+/// The directory-name template a callee applies to its first argument: `{}` for
+/// a wiping constructor, the helper's own template for a threading helper.
+fn template_of(func: &syn::Expr, threading: &BTreeMap<String, String>) -> Option<String> {
+    if wipes_a_named_path(func) {
+        return Some("{}".to_owned());
+    }
+    let syn::Expr::Path(path) = func else {
+        return None;
+    };
+    if path.path.segments.len() != 1 {
+        return None;
+    }
+    let name = path.path.segments.first()?.ident.to_string();
+    threading.get(&name).cloned()
+}
+
+/// What an argument makes of the parameter `param`, as a template over it: the
+/// bare name (or a reference to it) is `{}`, and a `format!` whose ONLY content is
+/// one string literal interpolating `{param}` is that literal with the parameter
+/// replaced by `{}`.
+///
+/// ANYTHING ELSE IS UNJUDGED, and that is the no-false-positive half of the arm.
+/// A `format!` carrying a second argument — a pid, a counter, another parameter
+/// — builds a name that is not a function of the caller's literal alone, so two
+/// cases passing one literal need not share a directory (`memory_injection.rs`'s
+/// `stream` appends the pid for exactly that reason). This arm may miss such a
+/// race; it may not invent one.
+fn template_through(arg: &syn::Expr, param: &str) -> Option<String> {
+    let mut arg = arg;
+    while let syn::Expr::Reference(inner) = arg {
+        arg = &inner.expr;
+    }
+    match arg {
+        syn::Expr::Path(path) if path.path.is_ident(param) => Some("{}".to_owned()),
+        syn::Expr::Macro(mac) if mac.mac.path.is_ident("format") => {
+            let only: syn::LitStr = syn::parse2(mac.mac.tokens.clone()).ok()?;
+            let text = only.value();
+            let placeholder = format!("{{{param}}}");
+            let rest = text.replace(&placeholder, "");
+            (text.contains(&placeholder) && !rest.contains('{') && !rest.contains('}'))
+                .then(|| text.replace(&placeholder, "{}"))
+        }
+        _ => None,
+    }
+}
+
+/// Finds the helpers that thread one of their own parameters into a wiping call.
+///
+/// A name a helper builds from its argument is the caller's, which is why the
+/// helper itself is never judged — but then two CASES handing one literal to it
+/// share a directory, and that is the race arm 2 exists for, one call removed
+/// (CLOUD-2053: `config_forward_compatible.rs`'s `repo` did exactly this, and
+/// CI's run caught the two cases wiping each other). Found by fixpoint, so a
+/// helper that threads through another helper counts too. Within one file only:
+/// a call into another module is resolution, which a syntax pass does not do.
+///
+/// Each helper resolves to the TEMPLATE its directory name follows, so two
+/// helpers wrapping one literal in different prefixes (`admits-{}` against
+/// `admission-{}`) are two directories, as they are on disk.
+struct Threading<'a> {
+    known: &'a BTreeMap<String, String>,
+    params: Vec<String>,
+    template: Option<String>,
+}
+
+impl<'ast> Visit<'ast> for Threading<'_> {
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if self.template.is_none()
+            && let Some(outer) = template_of(&call.func, self.known)
+            && let Some(first) = call.args.first()
+            && let Some(inner) = self
+                .params
+                .iter()
+                .find_map(|param| template_through(first, param))
+        {
+            self.template = Some(outer.replace("{}", &inner));
+        }
+        syn::visit::visit_expr_call(self, call);
+    }
+}
+
+fn threading_helpers(file: &syn::File) -> BTreeMap<String, String> {
+    let mut known = BTreeMap::new();
+    loop {
+        let before = known.len();
+        for item in &file.items {
+            let syn::Item::Fn(function) = item else {
+                continue;
+            };
+            let name = function.sig.ident.to_string();
+            if is_case(&function.attrs) || known.contains_key(&name) {
+                continue;
+            }
+            let params = function
+                .sig
+                .inputs
+                .iter()
+                .filter_map(|input| match input {
+                    syn::FnArg::Typed(typed) => match &*typed.pat {
+                        syn::Pat::Ident(ident) => Some(ident.ident.to_string()),
+                        _ => None,
+                    },
+                    syn::FnArg::Receiver(_) => None,
+                })
+                .collect();
+            let mut walk = Threading {
+                known: &known,
+                params,
+                template: None,
+            };
+            walk.visit_block(&function.block);
+            if let Some(template) = walk.template {
+                known.insert(name, template);
+            }
+        }
+        if known.len() == before {
+            return known;
+        }
+    }
 }
 
 /// Whether a callee names one of the two constructors that wipe a fixed path.
@@ -134,14 +258,17 @@ impl<'ast> Visit<'ast> for Sites {
     }
 
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
-        if wipes_a_named_path(&call.func)
-            && let Some(name) = literal_name(&call.args)
+        // MUTANT threading-helper-unjudged|s@threading: threading_helpers(\&file)@threading: BTreeMap::new()@|two_cases_sharing_a_name_through_a_threading_helper_are_refused
+        if let Some(template) = template_of(&call.func, &self.threading)
+            && let Some(literal) = literal_name(&call.args)
             && let Some((function, in_test)) = self.within.last()
         {
             self.found.push(Site {
                 function: function.clone(),
                 in_test: *in_test,
-                name,
+                // THE DIRECTORY, NOT THE LITERAL: two helpers wrapping one literal
+                // differently resolve two paths, and only one path can be shared.
+                name: template.replace("{}", &literal),
             });
         }
         syn::visit::visit_expr_call(self, call);
@@ -151,7 +278,10 @@ impl<'ast> Visit<'ast> for Sites {
 /// Every literal scratch site in one source file.
 fn sites_in(source: &str) -> Vec<Site> {
     let file = syn::parse_file(source).expect("every test source parses");
-    let mut sites = Sites::default();
+    let mut sites = Sites {
+        threading: threading_helpers(&file),
+        ..Sites::default()
+    };
     sites.visit_file(&file);
     sites.found
 }
@@ -263,6 +393,52 @@ fn a_name_threaded_from_the_caller_is_not_judged() {
     let source = "fn shared(case: &str) { scratch(&format!(\"dir-{case}\")); }\n\
                   #[test] fn first() { shared(\"first\"); }\n\
                   #[test] fn second() { shared(\"second\"); }\n";
+    assert!(refusals(&sites_in(source)).is_empty());
+}
+
+#[test]
+fn two_cases_sharing_a_name_through_a_threading_helper_are_refused() {
+    // CLOUD-2053's measured shape: a helper that is rightly not judged, because
+    // it threads its caller's name, and two cases handing it the same literal.
+    // Through one more helper too, since `repo` → `fixture` → `scratch` is the
+    // same race one call further out.
+    let source = "fn repo(name: &str) { scratch(name); }\n\
+                  fn outer(case: &str) { repo(&format!(\"{case}-repo\")); }\n\
+                  #[test] fn first() { repo(\"shared\"); }\n\
+                  #[test] fn second() { repo(\"shared\"); }\n\
+                  #[test] fn third() { outer(\"deep\"); }\n\
+                  #[test] fn fourth() { outer(\"deep\"); }\n\
+                  #[test] fn fifth() { repo(\"own\"); }\n";
+    assert_eq!(
+        refusals(&sites_in(source)),
+        [
+            "cases fourth,third share deep-repo",
+            "cases first,second share shared"
+        ]
+    );
+}
+
+#[test]
+fn one_literal_through_two_differently_named_helpers_is_two_directories() {
+    // The false positive the literal-keyed first cut raised on four files:
+    // `admission.rs`'s `fixture` and `admits_fixture_of` wrap `other-subject` as
+    // `admission-other-subject` and `admits-other-subject`. Different paths, no
+    // race, so no refusal.
+    let source = "fn left(name: &str) { scratch(&format!(\"left-{name}\")); }\n\
+                  fn right(name: &str) { scratch(&format!(\"right-{name}\")); }\n\
+                  #[test] fn first() { left(\"same\"); }\n\
+                  #[test] fn second() { right(\"same\"); }\n";
+    assert!(refusals(&sites_in(source)).is_empty());
+}
+
+#[test]
+fn a_helper_that_makes_its_own_name_unique_is_not_judged() {
+    // `memory_injection.rs`'s `stream` appends the pid, so one literal from two
+    // cases is two directories. A name that is not a function of the literal
+    // alone is unjudged: the arm may miss a race, it may not invent one.
+    let source = "fn seat(name: &str) { scratch(&format!(\"{name}-{}\", std::process::id())); }\n\
+                  #[test] fn first() { seat(\"same\"); }\n\
+                  #[test] fn second() { seat(\"same\"); }\n";
     assert!(refusals(&sites_in(source)).is_empty());
 }
 

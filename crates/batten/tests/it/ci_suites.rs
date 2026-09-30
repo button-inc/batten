@@ -219,7 +219,7 @@ fn a_path_selection_cannot_reason_about_runs_every_suite() {
 /// say which suites it moves, and could-not-look widens."
 #[test]
 fn a_program_no_suite_declares_runs_every_suite() {
-    let dir = repo("suites-undeclared");
+    let dir = repo("suites-undeclared-program");
     change(&dir, "mise-tasks/gamma.sh", "#!/usr/bin/env bash\nexit 0\n");
     let (_, stdout, stderr) = select(&dir, "base");
     assert_eq!(named(&stdout).len(), 2, "every suite runs");

@@ -196,7 +196,7 @@ fn a_moved_contract_file_is_reported_in_band() {
 /// session already does.
 #[test]
 fn an_added_path_is_reported_apart_from_a_moved_one_and_says_something_different() {
-    let dir = fixture("contract-added");
+    let dir = fixture("contract-added-apart");
     drift(&dir, "s1");
     // One of each, so the case cannot pass by rendering everything one way.
     std::fs::write(dir.join("AGENTS.md"), "# the contract\nmore\n").unwrap();
