@@ -4,7 +4,7 @@
 .SH NAME
 batten\-singleton\-detach \- Run a command in the background under a task\*(Aqs lock, and report the previous run\*(Aqs failure
 .SH SYNOPSIS
-\fBbatten singleton detach\fR [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-marker\fR> <\fB\-\-log\fR> <\fB\-\-pattern\fR> <\fItask\fR> <\fIcommand\fR> 
+\fBbatten singleton detach\fR [\fB\-\-attached\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-marker\fR> <\fB\-\-log\fR> <\fB\-\-pattern\fR> <\fItask\fR> <\fIcommand\fR> 
 .SH DESCRIPTION
 Run a command in the background under a task\*(Aqs lock, and report the previous run\*(Aqs failure
 .SH OPTIONS
@@ -17,6 +17,9 @@ Where the background run\*(Aqs whole output is written
 .TP
 \fB\-\-pattern\fR \fI<pattern>\fR
 The `[[pattern]]` row whose matching output lines are the failure\*(Aqs pointers
+.TP
+\fB\-\-attached\fR
+Run as the background copy the announcing invocation starts: take the lock, run the command, record a failure
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
