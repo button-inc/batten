@@ -5771,8 +5771,12 @@ no_fix_reason = "restore the tests, or waive the reduction deliberately; which o
 # halves now stop at a nested repository and select the same files. Widened back
 # because the narrow glob was only correct while every bats suite sat directly in
 # `tests/` — this one covers a nested one the day it is written.
+# RENAMED FROM `bats count dropped` under CLOUD-843, and only the name moved: the
+# shell suite retired, the `bats` subject word lost the last class that spent it,
+# and a rule id is drawn from the vocabulary like a verdict name. The glob, the
+# token and the `[rule.conserves]` ledger below are byte-identical.
 [[rule]]
-id = "bats count dropped"
+id = "suite count dropped"
 kind = "ratchet"
 glob = "tests/**/*.bats"
 pattern = "@test \""
@@ -8518,38 +8522,14 @@ input = "target/release/batten"
 # `error: test run failed`, exit 100.
 #
 # SO THIS ROW GUARDS A DECLARATION RATHER THAN A DURATION, and that division is
-# deliberate. `policy/suite-cost-corpus.rego` records why a duration gate is the
-# wrong instrument — it "would be red on every second run and switched off within
-# a day" — and CLOUD-1419 wrote an aggregate ratchet and withdrew it in the same
-# branch. nextest measures and decides; batten refuses the weakening.
+# deliberate. A duration gate is the wrong instrument — it "would be red on every
+# second run and switched off within a day", in the words of the retired shell
+# suite's cost gate — and CLOUD-1419 wrote an aggregate ratchet and withdrew it in
+# the same branch. nextest measures and decides; batten refuses the weakening.
 #
-# The membership half of that division is the row below, ported off
-# `mise-tasks/suite-bench-check.sh` under CLOUD-1753.
-
-# The per-suite cost corpus covers exactly the tracked suites (CLOUD-352).
-#
-# THE DIVISION THE ROW ABOVE NAMES, from the other side. Wall clock is a CLOCK and
-# belongs in a drift job; MEMBERSHIP is deterministic and belongs in a gate. A
-# suite added and never recorded is invisible to everything that reads the corpus,
-# and a row naming a deleted suite is a figure attached to nothing — both decidable
-# from committed text at no runtime cost.
-#
-# `lines` NAMES ONE LITERAL PATH, on `nextest-slow`'s reading directly above: a
-# tree without the corpus still acquires the declared source, so the could-not-look
-# arm fires on the absent document instead of leaving the rule SKIPPED. That is the
-# arm that matters most here — an absent corpus is precisely the state where
-# nothing records what a suite costs.
-#
-# The producer is `batten record suites`, and the path is a contract between the
-# two halves rather than an implementation detail of either: `suites.rs` spells it
-# as `CORPUS` and this row spells it here.
-[[rule]]
-id = "suite measure stale"
-kind = "policy"
-scope = "tree"
-lines = ["bench/suites/RESULTS.md"]
-module = "policy/suite-cost-corpus.rego"
-severity = "deny"
+# The membership half of that division was `suite measure stale`, over the shell
+# suite's cost corpus. It retired under CLOUD-843 with `test:bats`, the one task
+# whose report the corpus was derived from.
 
 # THE INERT LIST IS THE WHOLE REVIEW SURFACE (CLOUD-398), so it gets a gate.
 # `[ci] slow_inert` inverts the default — the slow tier runs unless EVERY changed
@@ -8612,53 +8592,6 @@ id = "config read first"
 kind = "document"
 target = "batten.toml"
 
-[[verdict]]
-id = "suite count unread"
-gloss = "the per-suite cost corpus is absent or carries no row, so nothing records what a suite costs"
-class = """
-Could-not-look, never a clean corpus — the whole subject of the gate is that a cost is recorded, so an unreadable corpus is the state it exists to report. Run `mise run test:bats`, then `batten record suites --write`.
-"""
-
-[[verdict.route]]
-id = "suite measure now"
-kind = "command"
-target = "batten record suites --write"
-
-[[verdict]]
-id = "suite list empty"
-gloss = "no tracked bats suite exists, so the cost corpus has no subject to cover"
-class = """
-Could-not-look rather than a corpus that covers everything there is. Reporting green over a tree with nothing to measure is the collapse that lets a gate pass on ignorance.
-"""
-
-[[verdict.route]]
-id = "test add first"
-kind = "document"
-target = "tests/"
-
-[[verdict]]
-id = "suite count absent"
-gloss = "a tracked suite has no row in the cost corpus, so an author editing it is told nothing about what it costs"
-class = """
-The corpus is read to answer "is the file I am about to add a case to expensive". A suite it does not name is invisible to that question. Regenerate after a run that covered it.
-"""
-
-[[verdict.route]]
-id = "suite measure now"
-kind = "command"
-target = "batten record suites --write"
-
-[[verdict]]
-id = "suite count dead"
-gloss = "the cost corpus records a suite this tree does not track — a figure attached to nothing"
-class = """
-Either the suite retired and the corpus was not regenerated, or the report it was derived from predates the tree. The producer refuses the second case by name, so regenerating is the whole remedy.
-"""
-
-[[verdict.route]]
-id = "suite measure now"
-kind = "command"
-target = "batten record suites --write"
 #
 # `lines` NAMES ONE FILE AND THAT IS SAFE HERE, unlike `landing-roster-guarded`
 # which had to declare a whole directory. That module's absent-source arm was dead
@@ -9299,31 +9232,13 @@ sources = ["batten.toml", "mise.toml"]
 module = "policy/command-task-defined.rego"
 severity = "deny"
 
-# CLOUD-386, ported off `tests/test-bats-parallel.bats` under CLOUD-1059. That
-# suite was an authored bats file, so `shell-retirement`'s arm B refused
-# maintaining it in place, and the campaign's own route — port the predicate,
-# delete the file, record the successor — is what this row is.
-#
-# TWO SOURCE COLUMNS, AND THE SECOND IS NOT A DUPLICATE. `sources` hands the module
-# the PARSED manifest — `[tasks."test:bats"].run` as the string mise will execute,
-# and the workflow's `jobs.ci.steps[].with.install_args` — so no block-boundary
-# scan can drift from what actually runs; the retired suite awk'd that block out of
-# the manifest, which is the same question asked less reliably. `line_sources`
-# hands over the same two files unparsed for the one thing a parser cannot see: a
-# COMMENT, which is where both measurement dates live — the sweep's hardware and
-# the job's budget.
-#
-# `severity = "deny"` because a silently serial suite is the failure this exists to
-# make loud. Nothing else in the tree fails when `--jobs` is dropped, and
-# `timeout-check`'s 3x headroom over p95 absorbs the regression without a red
-# build. What it does NOT gate is the duration itself: that is a property of the
-# machine, and the body reports it.
-# CLOUD-1140. The `ci` job carves `test:bats` out with `HK_SKIP_STEPS` so the
-# suite runs on its own runner; this refuses that carve-out coming apart in the
-# direction that has no symptom. `hook-profile-check` reads `hk check --all
-# --plan` and cannot see what a workflow job passes, so without this row the
-# suite could be skipped in the `ci` job and run by no job at all, with every
-# gate here green over a suite that never executed.
+# CLOUD-1140. The `ci` job carves a step out with `HK_SKIP_STEPS` so it runs on
+# its own runner (`batten-check` since CLOUD-1413; the shell suite until CLOUD-843
+# retired it); this refuses that carve-out coming apart in the direction that has
+# no symptom. `hook-profile-check` reads `hk check --all --plan` and cannot see
+# what a workflow job passes, so without this row a step could be skipped in the
+# `ci` job and run by no job at all, with every gate here green over a step that
+# never executed.
 #
 # THE PARSED DOCUMENT, NOT LINES, and that is a requirement rather than a
 # preference: the carve-out and the job that answers it are tens of lines apart
@@ -9486,22 +9401,13 @@ module = "policy/release-provision-parity.rego"
 severity = "deny"
 no_fix_reason = "a platform a provisioned tool cannot reach is not fixable in this tree: either the upstream artifact exists and the row should pin it, or it does not and the gap is declared with its consequence — and which of the two is a supply-chain decision, not a rewrite"
 
-[[rule]]
-id = "bats run wrong"
-kind = "policy"
-scope = "tree"
-sources = ["mise.toml", ".github/workflows/ci.yml"]
-line_sources = ["mise.toml", ".github/workflows/ci.yml"]
-module = "policy/bats-invocation.rego"
-severity = "deny"
-
 # ---------------------------------------------------------------------------
 # CLOUD-1156. A suite whose `# subject:` names something no shell retirement
 # deletes is unreachable by the whole campaign, and nothing reported it.
 #
 # `line_sources` RATHER THAN `sources`, and the reason is the header itself: a
 # `# subject:` line is a COMMENT, which no parser this engine carries would
-# hand back. The same reason `bats-invocation` above reads `mise.toml` twice.
+# hand back.
 #
 # THE GLOB IS THE JUDGED SET, so it must reach every path `is_bats` would call
 # governed — `startswith("tests/")` and `endswith(".bats")`, nested included.
@@ -9519,8 +9425,8 @@ severity = "deny"
 #
 # TWO SOURCE COLUMNS' WORTH OF WORK IN ONE, because a `mem:` reference is prose.
 # No parser this engine carries hands back the inside of a Markdown paragraph, so
-# the referrer scan is a LINE reading -- the same reason `bats-invocation` and
-# `suite-subject-retirable` above read their subjects unparsed.
+# the referrer scan is a LINE reading -- the same reason `suite-subject-retirable`
+# above reads its subjects unparsed.
 #
 # THE GLOB IS THE JUDGED SET and it must reach every tracked Markdown file, not
 # only the memories: AGENTS.md and the rule files reference memories too, and an
@@ -10219,8 +10125,8 @@ required_checks = ["final"]
 #
 # The six slow steps and the hk globs that select them, measured 2026-08-21:
 # `token-bench-check` regenerates from COMMITTED fixtures and never reads the live
-# tree; `sbom-check` reads `Cargo.lock` and the workflows; `test:bats` reads
-# `mise-tasks/**` and `tests/*.bats`; `test` reads the Rust tree, the manifests
+# tree; `sbom-check` reads `Cargo.lock` and the workflows; `test:bats` (retired,
+# CLOUD-843) read `mise-tasks/**` and `tests/*.bats`; `test` reads the Rust tree, the manifests
 # and `batten.toml`; `cargo-clippy` declares no glob but is a pure-Rust verdict;
 # and `batten-check` declares `**`, which is why the `ci` job runs it
 # unconditionally rather than behind this list — `no-secrets` is the repository's
@@ -10231,42 +10137,11 @@ required_checks = ["final"]
 # a `.coderabbit.yaml` entry cannot quietly cover `.coderabbit.yaml.bak`.
 slow_inert = [".serena/memories/", ".coderabbit.yaml"]
 
-# THE PATHS EVERY BATS SUITE DEPENDS ON WITHOUT NAMING (CLOUD-1716), ported out
-# of `mise-tasks/suite-select.sh`. A suite declares its subject in a
-# `# subject:` header, and a change to one of these moves suites whose header
-# names none of them — so a diff touching one runs everything.
-#
-# CONSUMER DATA, and it was a constant in `crates/batten/src/suites.rs` until
-# `no_artifact_name_reaches_the_core` refused it (non-negotiable rule 1). The
-# engine knows the relationship; these five paths are this repository's.
-#
-# EACH ENTRY HAS ITS OWN ARGUMENT, and the direction of a mistake here is the
-# opposite of `slow_inert`'s: a path missing from this list makes the selection
-# NARROWER, and a too-narrow selection has no symptom — the suites do not run and
-# a regression lands green.
-#
-#   `mise.toml`               defines the tasks the suites invoke
-#   `mise.lock`               pins the tools those tasks resolve
-#   `hk.pkl`                  defines the gate the suites assert about
-#   `batten.toml`             is the policy authority every gate reads
-#   `.claude/settings.json`   is the harness wiring several suites drive
-#   `tests/helpers.bash`      is sourced by almost every suite
-#
-# Measured on CLOUD-807: subject-intersection alone selected 7 suites for a
-# `mise.toml` edit and skipped `tests/land.bats`, which is worse than running
-# everything.
-#
-# Same spelling as `slow_inert` one key up: a trailing `/` covers a directory,
-# anything else must match exactly — so a `mise.toml` entry cannot quietly cover
-# `mise.toml.bak`.
-suite_shared = [
-  ".claude/settings.json",
-  "batten.toml",
-  "hk.pkl",
-  "mise.lock",
-  "mise.toml",
-  "tests/helpers.bash",
-]
+# NO `suite_shared` (CLOUD-843). It named the paths every bats suite depended on
+# without naming, for `batten ci suites`, whose one caller was `test:bats`. That
+# task retired with the last suite, so the key had no reader and listed a deleted
+# file (`tests/helpers.bash`). A consumer that selects shell suites declares its
+# own; an undeclared set widens, which is the safe direction.
 
 # The workflow whose matrix names the targets a release builds (CLOUD-65),
 # ported out of `mise-tasks/install-check.sh`. `release install` compares three
@@ -12286,16 +12161,6 @@ owner = "CLOUD-312"
 expires = "2027-02-28"
 
 [[hook.handler]]
-id = "session-submodules"
-on = "session-start"
-run = ["mise", "run", "session:submodules"]
-# A shallow network clone of `tests/bats`. Two minutes is generous for one small
-# repository and short enough that a hung transport does not hold the session.
-timeout_ms = 120000
-owner = "CLOUD-312"
-expires = "2027-02-28"
-
-[[hook.handler]]
 id = "session-doctor"
 on = "session-start"
 run = ["mise", "run", "session:doctor"]
@@ -12622,10 +12487,6 @@ tokenizer_retrieved = "2026-09-01"
 [[vocabulary.subject]]
 word = "adapter"
 gloss = "a declared adapter row"
-
-[[vocabulary.subject]]
-word = "bats"
-gloss = "the bats suite runner"
 
 [[vocabulary.subject]]
 word = "bound"
@@ -15461,63 +15322,6 @@ kind = "document"
 target = "mise.toml"
 
 [[verdict]]
-id = "suite run late"
-gloss = "the shell suite's invocation lost the parallelism it was measured with"
-class = """
-A speed-up is the one kind of fix that rots silently: nothing fails when \
-`--jobs` is dropped in a merge — the suite still passes, just slower — and the \
-cost reappears in the lap economics where no gate is looking. `timeout-check` \
-cannot see it either, since 3x headroom over p95 absorbs a return to serial \
-without a red build. This class covers the flag, the backend that makes it work, \
-the pin that makes the backend present, the workflow that installs it, and the \
-spellings that cap the count below the machine.
-"""
-
-[[verdict.route]]
-id = "task read first"
-kind = "document"
-target = "mise.toml"
-
-[[verdict]]
-id = "suite count missing"
-gloss = "the run cannot say how many cases it executed, so a narrower run reads as a pass"
-class = """
-A suite that got faster by running fewer tests is the failure every change to \
-this invocation risks, and a green exit is blind to it: a narrowed glob, a stray \
-filter, or a worker that died mid-file all exit 0. The body counts the `@test` \
-declarations across the suites it SELECTED and compares that against the runner's \
-own report, both over one list — an `expected` derived from a second list is the \
-defect wearing the fix's clothes. The junit report it leaves behind is the only \
-per-case timing this repository produces, so discarding it takes the cost corpus \
-with it.
-"""
-
-[[verdict.route]]
-id = "task read first"
-kind = "document"
-target = "mise.toml"
-
-[[verdict]]
-id = "suite measure missing"
-gloss = "nothing measures what the pole cost, or says which machine the measurement came from"
-class = """
-The pole of the gate is 85.9% of the job that is the CI critical path, and its \
-cost grew 5.8x while every sensor stayed green. Three things keep that visible \
-and each is in this class: the run measures its own wall clock against the \
-recorded serial cost of the suites it selected; the worker sweep recorded beside \
-the invocation names the hardware and date it was taken on, so one machine's \
-optimum cannot read as a live instruction on another; and a measured `# budget:` \
-in the workflow that runs the pole is re-measured whenever the pole moves, rather \
-than sitting stale behind it. What is gated is that the measurement is TAKEN — \
-never the duration, which is a property of the machine and is reported.
-"""
-
-[[verdict.route]]
-id = "rule read first"
-kind = "document"
-target = "rules/toolchain.md"
-
-[[verdict]]
 id = "suite retire never"
 gloss = "a bats suite declares a subject no shell retirement can delete, and no exemption declares why"
 class = """
@@ -15585,25 +15389,6 @@ produces over a file it never opened.
 id = "task run first"
 kind = "command"
 target = "mise run lint:shell"
-
-[[verdict]]
-id = "bats parse unread"
-gloss = "a declared source for the invocation could not be read, so nothing about it was judged"
-class = """
-Could-not-look, and it must not be spelled like either answer. An ABSENT manifest \
-is not-applicable — a tree with no `test:bats` task has no pole and is answering \
-for nothing — while a manifest the boundary tried to acquire and could not means \
-every predicate above is undefined rather than satisfied. Reading the second as \
-clean is the vacuous pass this engine exists to keep inexpressible.
-"""
-
-# The way out is to make the source parse, which is what the linter over the same
-# file answers — never "add the task", since an ABSENT manifest is not this
-# refusal at all.
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run lint:toml"
 
 # --- the formatters-only subset (CLOUD-681) ----------------------------------
 
@@ -18170,33 +17955,9 @@ gloss = "the released batten resolves by the bare name every hook registration i
 check = ["env", "batten", "--version"]
 repair = ["mise", "run", "deps-install"]
 
-# THE BATS SUBMODULE (CLOUD-1753), and this row is where `mise-tasks/doctor.sh`'s
-# first subject lands. The other three land nowhere new: its hook half is
-# `hook-surfaces-are-battens` above, its torn-install half is
-# `toolchain-is-provisioned`, and its rustup half is the `batten doctor target`
-# verb this delta adds. What had no successor was this one, which is why a
-# 241-line program reduces to five lines of declared data.
-#
-# `test -f` RATHER THAN `git submodule status`, and CLOUD-1454's dead-gate report
-# on this very table is the reason. `git submodule status -- tests/bats` prints
-# `-<sha> tests/bats` for a submodule that was never checked out and exits ZERO,
-# so a row asking it would report `ok` over the exact state it exists to catch —
-# the same shape as the `mise ls --current` row two blocks up, which reported
-# green over a container with four tools missing.
-#
-# THE PATH IS THE RUNNER, NOT THE DIRECTORY. `tests/bats` exists as an empty
-# directory the moment git clones the superproject, so a directory test passes on
-# a checkout with nothing in it. `bin/bats` is the file `test:bats` actually
-# invokes, so this asks the question the consumer asks.
-[[startup]]
-id = "bats-submodule-checked-out"
-gloss = "the vendored bats runner is checked out, so `test:bats` has something to run"
-check = ["test", "-f", "tests/bats/bin/bats"]
-repair = ["git", "submodule", "update", "--init", "--recursive", "tests/bats"]
-
 # THE COMMIT PATH IS A PRECONDITION, AND NOTHING DECLARED IT (CLOUD-1398).
 #
-# The five rows above ask whether the ENGINE can run. None of them asks whether
+# The rows above ask whether the ENGINE can run. None of them asks whether
 # the engine is on the path a COMMIT takes, and in the container this repository
 # provisions for itself those came apart: `git commit` ran neither `pre-commit`
 # nor `commit-msg`, so every commit bypassed the gate while `batten startup`
@@ -18383,11 +18144,6 @@ tools = [
 id = "deny"
 inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml", "deny.toml"]
 tools = [["cargo", "deny", "--version"]]
-
-[[step]]
-id = "test:bats"
-inputs = ["."]
-tools = [["bats", "--version"], ["mise", "tasks", "info", "test:bats", "--json"]]
 
 # CLOUD-1891: keyed on BOTH sides of the comparison. This tree's crates are the
 # inputs; the baseline's tree ids and the branch's commit messages arrive as

@@ -125,7 +125,8 @@ pub const PLAN_FLAGS: &[&str] = &["--all", "--plan", "--json"];
 /// comparison from a shell that does not set it reads as drift.
 ///
 /// Measured on this repository's own `ci` job (CLOUD-947), which sets
-/// `HK_SKIP_STEPS: test:bats,batten-check` so those two run in their own lanes:
+/// `HK_SKIP_STEPS: test:bats,batten-check` so those two ran in their own lanes
+/// (the first retired under CLOUD-843):
 /// `hk drift` there reported both steps restatused on two surfaces and refused,
 /// over an artifact and a config that had not moved.
 ///

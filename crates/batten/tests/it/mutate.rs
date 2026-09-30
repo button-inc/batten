@@ -23,11 +23,21 @@
 //! pair is what makes either evidence: a runner that reported `caught` for
 //! everything would pass the first and fail the second.
 //!
-//! # Why `git` and `bats` and `cargo` are real here
+//! # Why `git` and `cargo` are real here
 //!
-//! The repository is local and instant, and stubbing any of the three would test
-//! the stub. The Rust-tier fixture is a single package with no dependencies, so
-//! its `cargo test` compiles in seconds against a target directory of its own.
+//! The repository is local and instant, and stubbing either would test the
+//! stub. Every fixture is a single package with no dependencies, so its `cargo
+//! test` compiles in seconds against a target directory of its own.
+//!
+//! # Why no case reaches the bats arm any more (CLOUD-843)
+//!
+//! The toy suites were bats files run through this repository's vendored
+//! `tests/bats` runner, lent into each scratch tree. CLOUD-843 retired that
+//! runner with the last shell suite, so the decision table now runs over Rust
+//! tiers: it is decided in `judge_row` over a `Selection`, which both arms
+//! produce, so every verdict below is carried. What is NOT carried is the bats
+//! arm's own spawn and TAP reading at this tier — `Suite::Bats` stays in the
+//! engine for a consumer that vendors a runner, covered by its unit cases only.
 
 // THE FILE-GRANULARITY RETIREMENT ARMS (CLOUD-1059). Their grammar is disjoint
 // from CLOUD-908's case arms below by construction: a case arm's first field
@@ -76,7 +86,7 @@
 // these `@test` lines are the SUBJECT a case exercised rather than a case of the
 // suite itself — and the counter cannot tell the two apart, which is right: a
 // fixture case deleted with nothing carrying it is coverage lost either way.
-// They travel into `TOY_SUITE` and `RUST_SUITE` here, exercised by every case
+// They travel into `toy_suite` and `rust_tier_repo` here, exercised by every case
 // that builds a toy repository.
 //
 // carried: "mutant.bats::over the limit is refused" crates/batten/tests/it/mutate.rs
@@ -101,37 +111,54 @@ use common::{stderr, stdout};
 // ---------------------------------------------------------------------------
 
 /// A toy gate with one real decision. `LIMIT` is what a mutation moves.
-// Unix only, with `toy_repo`: these describe the bats fixture, and off unix
-// nothing reaches it (`-D warnings` refuses a const nothing reads).
+///
+/// **IT DECLARES ITS SUITE, AND THE SUITE IS A RUST TIER (CLOUD-843).** A gate
+/// with no `#MUTANT-SUITE` falls back to `tests/<gate>.bats`, run through a
+/// runner the repository vendors at `tests/bats` — and this repository retired
+/// its runner with its last shell suite, so there is nothing left to lend. The
+/// harness is suite-agnostic above `run_suite`: every verdict this file's
+/// decision table asserts is decided by `judge_row` over a `Selection`, which
+/// the Cargo arm produces exactly as the bats arm did.
+// Unix only, with `toy_repo`: the gate is a bash program the tier executes, and
+// off unix nothing reaches it (`-D warnings` refuses a const nothing reads).
 #[cfg(unix)]
 const TOY_GATE: &str = r#"#!/usr/bin/env bash
 #MISE description="Gate: the toy"
+#MUTANT-SUITE tests/toy.rs
 set -uo pipefail
 LIMIT=10
 [ "${1:-0}" -le "$LIMIT" ] || exit 1
 exit 0
 "#;
 
-/// Two cases, so a filter can name one of them and `total > 1` holds.
-// Unix only, with `toy_repo`: these describe the bats fixture, and off unix
-// nothing reaches it (`-D warnings` refuses a const nothing reads).
+/// The helper every toy tier opens with: run the staged gate named `@GATE@`
+/// with one argument and answer its exit code.
+///
+/// `CARGO_MANIFEST_DIR` is the STAGED tree, because the sweep runs `cargo` there
+/// — so the tier executes the mutated gate, never the source tree's.
 #[cfg(unix)]
-const TOY_SUITE: &str = r#"#!/usr/bin/env bats
-@test "over the limit is refused" {
-	run "$BATS_TEST_DIRNAME/../mise-tasks/toy.sh" 99
-	[ "$status" -eq 1 ]
+const GATE_HELPER: &str = r##"fn gate(input: &str) -> Option<i32> {
+    std::process::Command::new(concat!(env!("CARGO_MANIFEST_DIR"), "/mise-tasks/@GATE@"))
+        .arg(input)
+        .status()
+        .expect("run the toy gate")
+        .code()
 }
-@test "under the limit passes" {
-	run "$BATS_TEST_DIRNAME/../mise-tasks/toy.sh" 1
-	[ "$status" -eq 0 ]
-}
-"#;
+"##;
 
 /// The mutation the toy suite catches: the gate stops refusing anything.
-// Unix only, with `toy_repo`: these describe the bats fixture, and off unix
+// Unix only, with `toy_repo`: these describe the toy fixture, and off unix
 // nothing reaches it (`-D warnings` refuses a const nothing reads).
 #[cfg(unix)]
-const CAUGHT: &str = "#MUTANT limit-ignored|s/^LIMIT=10$/LIMIT=999/|over the limit";
+const CAUGHT: &str = "#MUTANT limit-ignored|s/^LIMIT=10$/LIMIT=999/|over_the_limit";
+
+/// The package every toy carries, so `cargo test` has something to build.
+///
+/// `[workspace]` is load-bearing: the scratch root lives under this crate's own
+/// `target/`, so without it cargo resolves the enclosing workspace and refuses
+/// the package as an unlisted member.
+const TOY_MANIFEST: &str = "[package]\nname = \"toy\"\nversion = \"0.0.0\"\nedition = \
+                            \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n\n[workspace]\n";
 
 /// A wiped scratch repository.
 fn toy(name: &str) -> PathBuf {
@@ -142,6 +169,13 @@ fn toy(name: &str) -> PathBuf {
 
 fn write(root: &Path, path: &str, body: &str) {
     common::write(root, path, body);
+}
+
+/// Make `root` a single package with no dependencies, so its tiers compile in
+/// seconds against the sweep's own target directory.
+fn cargo_package(root: &Path) {
+    write(root, "Cargo.toml", TOY_MANIFEST);
+    write(root, "src/lib.rs", "");
 }
 
 /// Write an executable program.
@@ -161,40 +195,41 @@ fn track(root: &Path) {
     common::git_in(root, &["add", "-A"]);
 }
 
-/// Borrow this repository's vendored bats submodule rather than checking out a
-/// second copy: it is the same binary either way.
-///
-/// Unix only, and so is every case that reaches the bats arm. `bats` is a bash
-/// program with no extension, so Windows can neither symlink the vendored copy
-/// nor execute it — the sweep answers `could not run …`, which is exit 3 and a
-/// correct could-not-look about the RUNNER rather than a verdict about the
-/// harness. A case asserting 0 there would be asserting the platform.
-///
-/// The Rust-tier arm and the whole census are NOT gated: they are what
-/// CLOUD-1267 adds, they need no external runner, and gating them would be the
-/// vacuous pass this file exists to refuse.
+/// The helper that runs the staged gate `mise-tasks/<gate>`.
 #[cfg(unix)]
-fn lend_bats(root: &Path) {
-    fs::create_dir_all(root.join("tests")).expect("scratch tests dir");
-    let link = root.join("tests/bats");
-    // A stale lend is a directory on one path and a symlink on the other, and
-    // `remove_dir_all` refuses the second — so clear both spellings.
-    let _ = fs::remove_dir_all(&link);
-    let _ = fs::remove_file(&link);
-    // The resolved source is read only where a symlink can be made, or it is a
-    // binding no arm consumes and `-D warnings` is right to refuse it.
-    #[cfg(unix)]
-    {
-        let real = common::at_root("tests/bats")
-            .canonicalize()
-            .expect("the vendored runner is where the manifest says it is");
-        std::os::unix::fs::symlink(real, link).expect("lend the runner");
-    }
+fn runs(gate: &str) -> String {
+    GATE_HELPER.replace("@GATE@", gate)
+}
+
+/// One libtest case. Its NAME is what a row's filter selects, so a row names a
+/// case by a substring of the function, as libtest matches it.
+#[cfg(unix)]
+fn case(name: &str, body: &str) -> String {
+    format!("\n#[test]\nfn {name}() {{\n    {body}\n}}\n")
+}
+
+/// Two cases, so a filter can name one of them and `total > 1` holds. `prefix`
+/// keeps two suites in one package apart: `cargo test -- <filter>` runs every
+/// test target, so two suites sharing a case name would both be selected.
+#[cfg(unix)]
+fn toy_suite(gate: &str, prefix: &str) -> String {
+    format!(
+        "{}{}{}",
+        runs(gate),
+        case(
+            &format!("{prefix}over_the_limit_is_refused"),
+            "assert_eq!(gate(\"99\"), Some(1));"
+        ),
+        case(
+            &format!("{prefix}under_the_limit_passes"),
+            "assert_eq!(gate(\"1\"), Some(0));"
+        ),
+    )
 }
 
 /// A toy repository carrying one gate, one suite and the declared rows.
 ///
-/// Unix only for `lend_bats`' reason: it lends the bats runner.
+/// Unix only: the gate is a bash program the tier executes.
 #[cfg(unix)]
 fn toy_repo(name: &str, rows: &[&str]) -> PathBuf {
     let root = toy(name);
@@ -204,9 +239,9 @@ fn toy_repo(name: &str, rows: &[&str]) -> PathBuf {
         gate.push('\n');
     }
     write_program(&root, "mise-tasks/toy.sh", &gate);
-    write(&root, "tests/toy.bats", TOY_SUITE);
+    write(&root, "tests/toy.rs", &toy_suite("toy.sh", ""));
+    cargo_package(&root);
     track(&root);
-    lend_bats(&root);
     root
 }
 
@@ -267,24 +302,43 @@ fn a_suite_that_hangs_is_ended_by_the_sweeps_own_bound() {
     // wait has to be one nothing external can satisfy.
     write(
         &root,
-        "tests/toy.bats",
-        "#!/usr/bin/env bats\n@test \"over the limit is refused\" {\n\tsleep 3600\n}\n@test \"under the limit passes\" {\n\ttrue\n}\n",
+        "tests/toy.rs",
+        &format!(
+            "{}{}{}",
+            runs("toy.sh"),
+            case(
+                "over_the_limit_is_refused",
+                "std::thread::sleep(std::time::Duration::from_secs(3600));"
+            ),
+            case("under_the_limit_passes", "assert!(gate(\"1\").is_some());"),
+        ),
     );
+    cargo_package(&root);
     track(&root);
-    lend_bats(&root);
 
     let started = std::time::Instant::now();
     let answer = common::batten()
         .args(["mutate", "sweep"])
         .current_dir(&root)
         .env("MUTANT_GATES", "toy")
-        .env("BATTEN_MUTATE_SUITE_TIMEOUT", "2")
+        // Ten rather than the two a bats run fitted in: the timed run is a warm
+        // `cargo test`, whose freshness check is part of the bound even though
+        // the build itself is paid beforehand under the build bound.
+        .env("BATTEN_MUTATE_SUITE_TIMEOUT", "10")
         .output()
         .expect("run batten mutate");
     let waited = started.elapsed();
 
+    // The window holds the toy's one cold build as well as the bound, so it is
+    // wider than a bats run needed — and still an order of magnitude inside the
+    // hour the case sleeps, which is the discrimination this asserts.
+    //
+    // CHANGED ASSERTION, RECORDED (CLOUD-843): over the bats toy this window was
+    // 60s and the bound 2s; over the Rust toy they are 300s and 10s, here and in
+    // the mirror below. It is a loosening of the assertion's numbers, not of what
+    // it separates: a bound that never fires still waits the full 3600s sleep.
     assert!(
-        waited < std::time::Duration::from_secs(60),
+        waited < std::time::Duration::from_secs(300),
         "the sweep waited {waited:?} on a suite that never returns, so the bound \
          did not fire and a hanging mutant would hold it forever"
     );
@@ -339,7 +393,7 @@ fn a_filter_naming_no_case_is_still_a_filter_fault_and_not_a_timeout() {
         // inside it, so a runner that reported every short bound as a timeout
         // would fail this — which is the over-correction the mirror exists to
         // catch.
-        .env("BATTEN_MUTATE_SUITE_TIMEOUT", "2")
+        .env("BATTEN_MUTATE_SUITE_TIMEOUT", "10")
         .output()
         .expect("run batten mutate");
     let code = answer.status.code().unwrap_or(-1);
@@ -353,12 +407,19 @@ fn a_filter_naming_no_case_is_still_a_filter_fault_and_not_a_timeout() {
 }
 
 /// Two inline tasks in one manifest, each declaring one row over its own body,
-/// and a bats suite per task that reads the staged manifest (CLOUD-1909).
+/// and a Rust tier for task `a` that reads the staged manifest (CLOUD-1909).
 ///
-/// **The suites read the manifest rather than running the task**, and that is what
+/// **The suite reads the manifest rather than running the task**, and that is what
 /// keeps this tier a test of the ROUTE: whether the sweep can find, scope, apply
 /// and judge a row declared in `mise.toml`. Running a task body is a property of
 /// mise, which a toy repository does not have.
+///
+/// **ONLY `a`'s SUITE IS WRITTEN, AND THAT IS THE DISCRIMINATION.** `cargo test --
+/// <filter>` runs every test target in the package, so a `tests/b.rs` beside it
+/// would select `b_keeps_its_limit` wherever it was asked for — and an unscoped
+/// reader running `b-limit` under `a`'s gate would then report it caught, which
+/// is the defect `a_task_gate_sweeps_only_its_own_block` exists to see. With no
+/// `b` tier, that reader's `b-limit` row names no case and the sweep exits 3.
 #[cfg(unix)]
 fn two_task_repo(name: &str) -> PathBuf {
     let root = toy(name);
@@ -366,38 +427,39 @@ fn two_task_repo(name: &str) -> PathBuf {
         &root,
         "mise.toml",
         "[tasks.\"a\"]\n\
-         #MUTANT-SUITE tests/a.bats\n\
-         #MUTANT a-limit|s/^LIMIT_A=10$/LIMIT_A=999/|a keeps its limit\n\
+         #MUTANT-SUITE tests/a.rs\n\
+         #MUTANT a-limit|s/^LIMIT_A=10$/LIMIT_A=999/|a_keeps_its_limit\n\
          run = '''\n\
          LIMIT_A=10\n\
          [ -n \"$LIMIT_A\" ]\n\
          '''\n\
          \n\
          [tasks.b]\n\
-         #MUTANT-SUITE tests/b.bats\n\
-         #MUTANT b-limit|s/^LIMIT_B=10$/LIMIT_B=999/|b keeps its limit\n\
+         #MUTANT-SUITE tests/b.rs\n\
+         #MUTANT b-limit|s/^LIMIT_B=10$/LIMIT_B=999/|b_keeps_its_limit\n\
          run = '''\n\
          LIMIT_B=10\n\
          '''\n",
     );
-    for task in ["a", "b"] {
-        let upper = task.to_uppercase();
-        write(
-            &root,
-            &format!("tests/{task}.bats"),
-            &format!(
-                "#!/usr/bin/env bats\n\
-                 @test \"{task} keeps its limit\" {{\n\
-                 \tgrep -q '^LIMIT_{upper}=10$' \"$BATS_TEST_DIRNAME/../mise.toml\"\n\
-                 }}\n\
-                 @test \"{task} has a body\" {{\n\
-                 \tgrep -q 'LIMIT_{upper}' \"$BATS_TEST_DIRNAME/../mise.toml\"\n\
-                 }}\n"
+    let manifest = "std::fs::read_to_string(concat!(env!(\"CARGO_MANIFEST_DIR\"), \
+                    \"/mise.toml\")).expect(\"read the staged manifest\")";
+    write(
+        &root,
+        "tests/a.rs",
+        &format!(
+            "{}{}",
+            case(
+                "a_keeps_its_limit",
+                &format!("assert!({manifest}.lines().any(|line| line == \"LIMIT_A=10\"));")
             ),
-        );
-    }
+            case(
+                "a_has_a_body",
+                &format!("assert!({manifest}.contains(\"LIMIT_A\"));")
+            ),
+        ),
+    );
+    cargo_package(&root);
     track(&root);
-    lend_bats(&root);
     root
 }
 
@@ -481,7 +543,7 @@ fn a_mutation_its_suite_catches_is_a_pass() {
     // AND AGAIN OVER THE SAME ROOT, which is a second property carried by this
     // case rather than a second case, because `platform-gated-test-added` is a
     // ratchet and every case in this file is `#[cfg(unix)]` — `toy_repo` and
-    // `lend_bats` are themselves gated, so the `cfg!` arm that rule prefers is
+    // its bash gate are themselves gated, so the `cfg!` arm that rule prefers is
     // not reachable here without restructuring the file.
     //
     // THE STAGED TREE PERSISTS BETWEEN RUNS, which is what keeps an unchanged
@@ -506,7 +568,7 @@ fn the_defect_a_mutation_the_suite_does_not_catch_fails() {
     // The mutation moves a line no case exercises, so the suite stays green.
     let root = toy_repo(
         "survivor",
-        &["#MUTANT unwatched|s/^exit 0$/exit 0 # unwatched/|over the limit"],
+        &["#MUTANT unwatched|s/^exit 0$/exit 0 # unwatched/|over_the_limit"],
     );
     let (code, out, _) = sweep(&root, "toy");
     assert_eq!(code, 2, "{out}");
@@ -527,11 +589,11 @@ fn a_row_is_exactly_three_fields_and_a_fourth_is_refused_before_the_split() {
 #[cfg(unix)]
 #[test]
 fn a_filter_that_selects_the_whole_suite_names_no_case_like_one_that_selects_none() {
-    // `the limit` is a substring of BOTH case names, so the row stops naming a
+    // `the_limit` is a substring of BOTH case names, so the row stops naming a
     // case and redness under mutation could come from anywhere in the suite.
     let root = toy_repo(
         "wide-filter",
-        &["#MUTANT limit-ignored|s/^LIMIT=10$/LIMIT=999/|the limit"],
+        &["#MUTANT limit-ignored|s/^LIMIT=10$/LIMIT=999/|the_limit"],
     );
     let (code, out, _) = sweep(&root, "toy");
     assert_eq!(code, 2, "{out}");
@@ -551,12 +613,18 @@ fn a_filter_selecting_one_case_of_a_single_case_suite_is_not_read_as_too_wide() 
     write_program(&root, "mise-tasks/toy.sh", &gate);
     write(
         &root,
-        "tests/toy.bats",
-        "#!/usr/bin/env bats\n@test \"over the limit is refused\" {\n\trun \
-         \"$BATS_TEST_DIRNAME/../mise-tasks/toy.sh\" 99\n\t[ \"$status\" -eq 1 ]\n}\n",
+        "tests/toy.rs",
+        &format!(
+            "{}{}",
+            runs("toy.sh"),
+            case(
+                "over_the_limit_is_refused",
+                "assert_eq!(gate(\"99\"), Some(1));"
+            ),
+        ),
     );
+    cargo_package(&root);
     track(&root);
-    lend_bats(&root);
     let (code, out, err) = sweep(&root, "toy");
     assert_eq!(code, 0, "{out}{err}");
     assert!(out.contains("every one caught"), "{out}");
@@ -569,36 +637,39 @@ fn the_tree_is_restored_between_rows_so_a_gate_is_judged_against_a_pristine_sibl
     // restore the sibling's mutant is still in place when the composer is
     // judged, and the survivor reported changes with the sweep ORDER.
     let root = toy("restore");
-    write_program(&root, "mise-tasks/sibling.sh", TOY_GATE);
+    // Each suite's cases carry its gate's name, because `cargo test --
+    // <filter>` runs every test target: two suites sharing a case name would
+    // both be selected, and the filter would stop naming one gate's case.
     write(
         &root,
-        "tests/sibling.bats",
-        &TOY_SUITE.replace("toy.sh", "sibling.sh"),
+        "tests/sibling.rs",
+        &toy_suite("sibling.sh", "sibling_"),
     );
-    let mut sibling = String::from(TOY_GATE);
-    sibling.push_str("#MUTANT sibling-limit|s/^LIMIT=10$/LIMIT=999/|over the limit\n");
+    let mut sibling = TOY_GATE.replace("tests/toy.rs", "tests/sibling.rs");
+    sibling.push_str("#MUTANT sibling-limit|s/^LIMIT=10$/LIMIT=999/|sibling_over_the_limit\n");
     write_program(&root, "mise-tasks/sibling.sh", &sibling);
 
     // The mutation is `|`-free and anchored on a line carrying no `$`, so the
     // three-field rule and sed's own metacharacters both stay out of the way.
     let composer = r#"#!/usr/bin/env bash
 #MISE description="Gate: the composer"
+#MUTANT-SUITE tests/composer.rs
 set -uo pipefail
 DELEGATE=1
 if [ "${DELEGATE}" = 1 ]; then
 	"$(dirname "$0")/sibling.sh" "${1:-0}" || exit 1
 fi
 exit 0
-#MUTANT composer-delegates|s@^DELEGATE=1$@DELEGATE=0@|over the limit
+#MUTANT composer-delegates|s@^DELEGATE=1$@DELEGATE=0@|composer_over_the_limit
 "#;
     write_program(&root, "mise-tasks/composer.sh", composer);
     write(
         &root,
-        "tests/composer.bats",
-        &TOY_SUITE.replace("toy.sh", "composer.sh"),
+        "tests/composer.rs",
+        &toy_suite("composer.sh", "composer_"),
     );
+    cargo_package(&root);
     track(&root);
-    lend_bats(&root);
 
     let (code, out, err) = sweep(&root, "sibling,composer");
     assert_eq!(code, 0, "{out}{err}");
@@ -613,7 +684,7 @@ fn a_row_that_mutates_its_own_declaration_is_refused_not_reported_as_a_survivor(
     // run while reading as enforced coverage.
     let root = toy_repo(
         "self-mutating",
-        &["#MUTANT self|s/MUTANT self/MUTANT other/|over the limit"],
+        &["#MUTANT self|s/MUTANT self/MUTANT other/|over_the_limit"],
     );
     let (code, out, _) = sweep(&root, "toy");
     assert_eq!(code, 2, "{out}");
@@ -631,15 +702,26 @@ fn the_copy_is_a_repository_so_a_suite_that_resolves_its_own_root_answers_about_
     write_program(&root, "mise-tasks/toy.sh", &gate);
     write(
         &root,
-        "tests/toy.bats",
-        "#!/usr/bin/env bats\n@test \"over the limit is refused\" {\n\trun git rev-parse \
-         --show-toplevel\n\t[ \"$status\" -eq 0 ]\n\trun \
-         \"$BATS_TEST_DIRNAME/../mise-tasks/toy.sh\" 99\n\t[ \"$status\" -eq 1 ]\n}\n@test \"under \
-         the limit passes\" {\n\trun \"$BATS_TEST_DIRNAME/../mise-tasks/toy.sh\" 1\n\t[ \"$status\" \
-         -eq 0 ]\n}\n",
+        "tests/toy.rs",
+        &format!(
+            "{}{}{}",
+            runs("toy.sh"),
+            case(
+                "over_the_limit_is_refused",
+                "assert!(std::process::Command::new(\"git\")\n        \
+                 .args([\"rev-parse\", \"--show-toplevel\"])\n        \
+                 .current_dir(env!(\"CARGO_MANIFEST_DIR\"))\n        \
+                 .status()\n        .expect(\"run git\")\n        .success());\n    \
+                 assert_eq!(gate(\"99\"), Some(1));"
+            ),
+            case(
+                "under_the_limit_passes",
+                "assert_eq!(gate(\"1\"), Some(0));"
+            ),
+        ),
     );
+    cargo_package(&root);
     track(&root);
-    lend_bats(&root);
     let (code, out, err) = sweep(&root, "toy");
     assert!(!out.contains("case-already-red"), "{out}");
     assert_eq!(code, 0, "{out}{err}");
@@ -672,7 +754,7 @@ fn anti_vacuity_a_filter_naming_no_case_is_not_a_pass() {
 fn anti_vacuity_a_mutation_that_changes_nothing_is_not_a_pass() {
     let root = toy_repo(
         "inert",
-        &["#MUTANT inert|s/^NOTHING_MATCHES_THIS$/x/|over the limit"],
+        &["#MUTANT inert|s/^NOTHING_MATCHES_THIS$/x/|over_the_limit"],
     );
     let (code, out, _) = sweep(&root, "toy");
     assert_eq!(code, 2, "{out}");
@@ -699,9 +781,12 @@ fn a_gate_named_with_no_suite_is_reported_and_is_could_not_look() {
     let mut gate = String::from(TOY_GATE);
     gate.push_str(CAUGHT);
     gate.push('\n');
+    // The gate declares `tests/toy.rs` and nothing writes it, so the declared
+    // suite is absent — the predecessor's shape was the defaulted
+    // `tests/toy.bats` absent, and both are one verdict about the same fact.
     write_program(&root, "mise-tasks/toy.sh", &gate);
+    cargo_package(&root);
     track(&root);
-    lend_bats(&root);
     let (code, out, _) = sweep(&root, "toy");
     assert_eq!(code, 3, "{out}");
     assert!(out.contains("no-suite"), "{out}");
@@ -721,7 +806,7 @@ fn a_name_resolving_to_nothing_is_no_such_gate() {
 fn pointer_never_payload_the_report_carries_no_line_of_the_mutated_source() {
     let root = toy_repo(
         "pointer",
-        &["#MUTANT leak|s/^exit 0$/SECRETMARKER=1/|over the limit"],
+        &["#MUTANT leak|s/^exit 0$/SECRETMARKER=1/|over_the_limit"],
     );
     let (_, out, err) = sweep(&root, "toy");
     assert!(!out.contains("SECRETMARKER"), "{out}");
@@ -748,10 +833,14 @@ fn an_uncommitted_case_is_still_covered_because_the_working_tree_is_the_subject(
     // see it, and every mutation naming it would report `names-no-case`.
     write(
         &root,
-        "tests/toy.bats",
+        "tests/toy.rs",
         &format!(
-            "{TOY_SUITE}@test \"a third case, uncommitted\" {{\n\trun \
-             \"$BATS_TEST_DIRNAME/../mise-tasks/toy.sh\" 0\n\t[ \"$status\" -eq 0 ]\n}}\n"
+            "{}{}",
+            toy_suite("toy.sh", ""),
+            case(
+                "a_third_case_uncommitted",
+                "assert_eq!(gate(\"0\"), Some(0));"
+            ),
         ),
     );
     track(&root);
@@ -769,14 +858,22 @@ fn anti_vacuity_a_case_that_is_red_before_the_mutation_is_not_evidence() {
     write_program(&root, "mise-tasks/toy.sh", &gate);
     write(
         &root,
-        "tests/toy.bats",
-        "#!/usr/bin/env bats\n@test \"over the limit is refused\" {\n\trun \
-         \"$BATS_TEST_DIRNAME/../mise-tasks/toy.sh\" 99\n\t[ \"$status\" -eq 99 ]\n}\n@test \"under \
-         the limit passes\" {\n\trun \"$BATS_TEST_DIRNAME/../mise-tasks/toy.sh\" 1\n\t[ \"$status\" \
-         -eq 0 ]\n}\n",
+        "tests/toy.rs",
+        &format!(
+            "{}{}{}",
+            runs("toy.sh"),
+            case(
+                "over_the_limit_is_refused",
+                "assert_eq!(gate(\"99\"), Some(99));"
+            ),
+            case(
+                "under_the_limit_passes",
+                "assert_eq!(gate(\"1\"), Some(0));"
+            ),
+        ),
     );
+    cargo_package(&root);
     track(&root);
-    lend_bats(&root);
     let (code, out, _) = sweep(&root, "toy");
     assert_eq!(code, 3, "{out}");
     assert!(out.contains("case-already-red"), "{out}");
@@ -795,16 +892,7 @@ fn anti_vacuity_a_case_that_is_red_before_the_mutation_is_not_evidence() {
 /// tree: a run against the source tree would read the unmutated module.
 fn rust_tier_repo(name: &str, limit_in_tier: &str) -> PathBuf {
     let root = toy(name);
-    write(
-        &root,
-        "Cargo.toml",
-        // `[workspace]` is load-bearing: the scratch root lives under this
-        // crate's own `target/`, so without it cargo resolves the enclosing
-        // workspace and refuses the package as an unlisted member.
-        "[package]\nname = \"toy\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[lib]\npath = \
-         \"src/lib.rs\"\n\n[workspace]\n",
-    );
-    write(&root, "src/lib.rs", "");
+    cargo_package(&root);
     write(
         &root,
         "policy/toy.rego",

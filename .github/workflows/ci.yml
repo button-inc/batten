@@ -58,8 +58,8 @@ jobs:
     # `runnerOS-runnerArch` at `config.ts:93`, BEFORE the restore prefix is
     # assigned at `:133` — so a reader on arm64 whose family's writer is still on
     # x64 has no warm entry at all and is dramatically worse off than before.
-    # `ci`, `bats`, `commit-lint` and `cache-warm-linux` are the family's arm64
-    # set and move together.
+    # `ci`, `commit-lint` and `cache-warm-linux` are the family's arm64 set and
+    # move together (the `bats` job was the fourth until CLOUD-843 retired it).
     #
     # `batten-check` IS THE ONE READER LEFT BEHIND, and it is left behind by a
     # measurement rather than by preference: it is the only job here that runs
@@ -106,9 +106,9 @@ jobs:
     # RE-MEASURED IN THE SAME PASS AS THE POLE (CLOUD-386). The 2026-08-14 reading
     # declared `p95=701s`; `mise run timeout-drift` over the last 25 successful runs
     # now reports 1730s — stale by 2.4x, with only the x3 multiplier keeping the
-    # ceiling from firing on a healthy run. `bats-invocation` holds this date to the
-    # sweep's, so moving the pole without re-measuring here is a refusal rather than
-    # a number nobody revisits.
+    # ceiling from firing on a healthy run. The pole it was measured over was the
+    # shell suite, which CLOUD-843 retired onto `test:cargo`, so this budget is owed
+    # a re-derivation from `mise run timeout-drift` over the runs that follow.
     timeout-minutes: 87 # budget: p95=1730s x3 measured=2026-08-28
     # `actions: write` is here for one call and one only: cancelling THIS run
     # when the landing lease does not authorise this branch (CLOUD-420). A job
@@ -242,9 +242,6 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # tests/bats — the shell test runner. Without it `mise run test:bats`
-          # has no bats to run.
-          submodules: true
           # CLOUD-789, restated by CLOUD-1078: THE ADMISSION NEEDS THE FORK
           # POINT. `config-lint` admits a weakening only on an asked-ledger line
           # this branch ADDED, read against the merge base with `origin/main`.
@@ -316,12 +313,8 @@ jobs:
           # steps; cargo-deny, shellcheck, shfmt, taplo, actionlint, pkl and
           # prettier (which needs node) are the step commands; rust covers
           # cargo-fmt/clippy/test and the `cargo metadata` in macos-link-check;
-          # jq is used at runtime by the gh-guard program that `test:bats`
-          # exercises; syft backs the sbom-check step, and jq reads its output.
-          # bats itself is the tests/bats submodule, not a tool — but rush is
-          # its parallel backend, and bats aborts rather than falling back when
-          # the named binary is absent, so an omission here is a failed gate
-          # rather than a quietly serial one.
+          # syft backs the sbom-check step, and jq reads its output. rush left
+          # this list with the shell suite it parallelised (CLOUD-843).
           #
           # uv AND the checker it resolves are here for CLOUD-580: the
           # `sbom-ntia-*` rows in batten.toml run `mise run ntia-check`, so
@@ -350,7 +343,7 @@ jobs:
           # see this direction — it holds tools NAMED IN THE WORKFLOW to being
           # declared in mise.toml, not tools a batten.toml row needs to being
           # installed here.
-          install_args: rust hk github:nextest-rs/nextest aqua:EmbarkStudios/cargo-deny aqua:koalaman/shellcheck aqua:mvdan/sh aqua:tamasfe/taplo aqua:rhysd/actionlint aqua:jqlang/jq aqua:anchore/syft aqua:shenwei356/rush aqua:open-policy-agent/opa aqua:open-policy-agent/regal pkl deno node npm:prettier npm:renovate uv pipx:ntia-conformance-checker
+          install_args: rust hk github:nextest-rs/nextest aqua:EmbarkStudios/cargo-deny aqua:koalaman/shellcheck aqua:mvdan/sh aqua:tamasfe/taplo aqua:rhysd/actionlint aqua:jqlang/jq aqua:anchore/syft aqua:open-policy-agent/opa aqua:open-policy-agent/regal pkl deno node npm:prettier npm:renovate uv pipx:ntia-conformance-checker
       # CLOUD-406. `hk.pkl:14` amends a pkl PACKAGE uri, and pkl resolves it over
       # the network on every evaluation — a second dependency beside the `hk`
       # binary `mise.lock` pins, and unpinned at runtime. Measured on run
@@ -469,8 +462,8 @@ jobs:
           # live `refs/pull/N/merge` copies this job used to write were
           # unreadable by every other pull request — pure upload time for a
           # multi-gigabyte entry with no reader. `cache-warm-linux` on `main` is
-          # the family's one writer, which is also what stops this job and
-          # `bats` racing to fill a fresh key with the thinner of two trees.
+          # the family's one writer, which is also what stops two readers
+          # racing to fill a fresh key with the thinner of two trees.
           save-if: false
       # ASK WHETHER THIS DIFF CAN MOVE THE SLOW TIER (CLOUD-398). Measured
       # 2026-08-21: this job is ~13 of the ~14.7 billed minutes a non-Rust pull
@@ -507,28 +500,18 @@ jobs:
       - run: mise run ci
         if: steps.slow.outputs.needed == 'true'
         env:
-          # `test:bats` depends on `doctor`, which by default also installs the
-          # rustup cross targets — two std downloads this job never uses, since
-          # cross-check and darwin-link are their own jobs. Set but empty means
-          # "assert the submodule, no rust targets"; unset would take the
-          # default pair.
+          # The rustup cross targets are two std downloads this job never uses,
+          # since cross-check and darwin-link are their own jobs. Set but empty
+          # means "no rust targets"; unset would take the default pair.
           DOCTOR_TARGETS: ""
-          # THE SUITE RUNS IN THE `bats` JOB BELOW, NOT HERE (CLOUD-1140).
-          #
-          # Measured on run 33244045030: this job was 1983s of a 1992s run — the
-          # whole critical path, with `perf` finishing at 9.2 min and idling for
-          # 24 more — `mise run ci` was 1832s of that, and `test:bats` ~83% of
-          # THAT. CLOUD-386 swept the worker count at the runner's real width and
-          # every direction is worse, because each point redistributes workers
-          # inside one saturated box. A second runner is the experiment
-          # that sweep could not contain, and its own point D already measured the
-          # number: the suite alone with the box to itself is 623s against 829s
-          # contended. So the gate stops being a sum and becomes a max.
+          # `batten-check` RUNS IN ITS OWN JOB BELOW, NOT HERE (CLOUD-1413). The
+          # shell suite used to be carved out beside it for the `bats` job
+          # (CLOUD-1140); that suite and its job retired under CLOUD-843.
           #
           # `HK_SKIP_STEPS` RATHER THAN A PROFILE OR A SECOND TASK, and each
           # alternative fails for its own reason. A profile cannot express it:
           # hk resolves multiple profiles on a step with AND and the CLI value
-          # supplants the config list, so carving the suite out needs the whole
+          # supplants the config list, so carving a step out needs the whole
           # lane partition CLOUD-398 costed at ~160s of duplication and
           # explicitly sequenced after this. A second `mise` task would put a
           # name in this workflow that `verify` does not run, which is
@@ -537,12 +520,12 @@ jobs:
           # nothing — still runs the whole gate.
           #
           # THE DIRECTION A MISTAKE FAILS IN. A misspelled name here skips
-          # nothing, so the suite runs in both jobs: wasteful and loud. The
+          # nothing, so the step runs in both jobs: wasteful and loud. The
           # silent direction — a step skipped here and run by no job at all — is
           # what `ci-suite-lane` in batten.toml refuses, because
           # `hook-profile-check` reads `hk check --all --plan` and cannot see
           # what a workflow job passes.
-          HK_SKIP_STEPS: test:bats,batten-check
+          HK_SKIP_STEPS: batten-check
       # THE GATES LEFT THE CHECKOUT AS THEY FOUND IT (CLOUD-1953). `test:cargo`'s
       # retired shell body compared tracked state before and after the suite, and
       # that comparison fired here, inside `mise run ci`. The body is one argv now
@@ -628,7 +611,7 @@ jobs:
   # unconditional for the reason the `ci` job's quick branch used to state —
   # this is the repository's only secrets scan.
   #
-  # THE `ci` JOB MUST NOT ALSO RUN IT. `HK_SKIP_STEPS: test:bats,batten-check`
+  # THE `ci` JOB MUST NOT ALSO RUN IT. `HK_SKIP_STEPS: batten-check`
   # carves it out there, and `ci-suite-lane` refuses the silent direction of that
   # pairing — a step skipped in `ci` and run by no job in this workflow.
   #
@@ -686,7 +669,7 @@ jobs:
     #
     # So the second writer is what landed. `cache-warm-linux-x64` in
     # `release-plz.yml` writes `ci-` on x64 for this job, exactly as
-    # `cache-warm-linux` writes it on arm64 for `ci`, `bats` and `commit-lint`,
+    # `cache-warm-linux` writes it on arm64 for `ci` and `commit-lint`,
     # and `read-family-has-a-warm-writer` refuses the arrangement where a
     # read-only consumer has no writer on its own architecture — so the orphaning
     # that produced this comment's whole history is now a finding rather than a
@@ -789,15 +772,15 @@ jobs:
           # NTIA checker and `jq`. `MISE_EXEC_AUTO_INSTALL: false` at the top of
           # this file makes a missing tool a "command not found" INSIDE a rule,
           # which reads as a failing gate rather than a provisioning error — so
-          # narrowing here is a trap rather than an economy, the same one the
-          # `bats` job's header records. One line, for `ci-tools-check`'s reason:
+          # narrowing here is a trap rather than an economy. One line, for
+          # `ci-tools-check`'s reason:
           # it parses these as a scalar and several names begin with `aqua:`.
           # `aqua:cli/cli` too: `release check unread` now runs on every change to
           # `mise.toml`, where its subject moved (CLOUD-1717), and its
           # precondition is that the pinned verifier resolves.
-          install_args: rust hk aqua:cli/cli github:nextest-rs/nextest aqua:EmbarkStudios/cargo-deny aqua:koalaman/shellcheck aqua:mvdan/sh aqua:tamasfe/taplo aqua:rhysd/actionlint aqua:jqlang/jq aqua:anchore/syft aqua:shenwei356/rush aqua:open-policy-agent/opa aqua:open-policy-agent/regal pkl deno node npm:prettier npm:renovate uv pipx:ntia-conformance-checker
+          install_args: rust hk aqua:cli/cli github:nextest-rs/nextest aqua:EmbarkStudios/cargo-deny aqua:koalaman/shellcheck aqua:mvdan/sh aqua:tamasfe/taplo aqua:rhysd/actionlint aqua:jqlang/jq aqua:anchore/syft aqua:open-policy-agent/opa aqua:open-policy-agent/regal pkl deno node npm:prettier npm:renovate uv pipx:ntia-conformance-checker
       # `no-conflict-markers` delegates to `hk`, which resolves the pkl package
-      # uri, so this job reaches it for the same reason the `bats` job does.
+      # uri, so this job reaches it for the same reason the `ci` job does.
       # Keyed on `hk.pkl`, no `restore-keys`, for the reasons recorded there.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -807,7 +790,7 @@ jobs:
       # (CLOUD-1477). This step was this workflow's last writer, and the reason it
       # was one has been removed rather than merely overruled.
       #
-      # The rule is the one the `ci`, `bats` and `windows` steps are stated over:
+      # The rule is the one the `ci` and `windows` steps are stated over:
       # `save-if: false` belongs on a reader of a family a trunk-side job WARMS,
       # and is wrong where no warm writer exists, because a pure consumer of an
       # empty family has nothing at all. That exception applied here for as long
@@ -832,186 +815,6 @@ jobs:
           # `batten-check` reaches `doctor` through the same chain the `ci` job
           # does, and this job never cross-compiles. Set but empty means "assert
           # the submodule, no rust targets"; unset would take the default pair.
-          DOCTOR_TARGETS: ""
-
-  # THE SHELL SUITE, ON ITS OWN RUNNER (CLOUD-1140 — CLOUD-398's slice 1).
-  #
-  # It is ~83% of `mise run ci` and `mise run ci` is 92% of the `ci` job, so
-  # until this job existed the gate's wall clock was a sum of two chains sharing
-  # one runner's cores. Now it is a max. The `ci` job carves the step out with
-  # `HK_SKIP_STEPS`, and `ci-suite-lane` refuses the pairing coming apart in the
-  # silent direction — a step skipped there and run by no job here.
-  #
-  # THE SETUP MIRRORS THE `ci` JOB DELIBERATELY, and narrowing it is a trap
-  # rather than an economy. These suites are the tests for `mise-tasks/`, so
-  # between them they invoke very nearly the whole toolchain — `hk` itself
-  # (`hk-selection`, `hook-profile-check`), `jq`, `git`, the `cargo run -p
-  # batten` that a dozen gates shell out to. A tool missing from the list is not
-  # a slower run: `MISE_EXEC_AUTO_INSTALL: false` at the top of this file makes
-  # it a "command not found" inside a test, which reads as a failing gate rather
-  # than a provisioning error. The one thing this job does NOT need is
-  # `DOCTOR_TARGETS`' rustup cross targets, for the reason the `ci` job states.
-  #
-  # NOT A JOB-LEVEL `if:`, for `final`'s reason: a job skipped by its own `if:`
-  # reports success to branch protection and `skipped` to the fan-in, which
-  # `final`'s assertion treats as a failure. So this job always runs and asks
-  # the same in-job question the `ci` job asks.
-  bats:
-    name: bats
-    if: ${{ github.event.pull_request.draft == false }}
-    # ARM64, AS ONE SET WITH THE REST OF THE `ci-` FAMILY (CLOUD-1416). rust-cache
-    # puts `runnerOS-runnerArch` inside the restore prefix (`config.ts:93`,
-    # before `:133`), so a reader that moves while its family's writer stays put
-    # has no warm entry at all. The `ci` job's header carries the reasoning, the
-    # list of jobs that deliberately do NOT move, and the note that every budget
-    # here is still an x64 reading owed a re-derivation.
-    runs-on: ubuntu-24.04-arm
-    # DERIVED FROM THE STEP IT INHERITS, and stated because it is not yet this
-    # job's own p95. `test:bats` is 1435.7s of the `ci` job's 1670.9s hk gate on
-    # a runner (CLOUD-1084), and CLOUD-386's point D measured 623s for the suite
-    # alone with the box to itself on a 2-core mask. Alone on a real runner it
-    # should land between those, so the budget is taken from the larger reading
-    # plus this job's own preamble, times the x3 multiplier every job here
-    # carries. Re-derive it from `mise run timeout-drift` once this job has 25
-    # runs of its own; an over-declared budget is a weaker backstop, which is the
-    # safe direction to be wrong in and still the wrong number.
-    timeout-minutes: 78 # budget: p95=1550s x3 measured=2026-08-29
-    permissions:
-      contents: read
-      actions: write
-    steps:
-      # CLOUD-420: THE LANDING LEASE, FIRST, for the reason the `ci` job states
-      # at length. `ci-local-parity` property 7 asserts this is step one of every
-      # job that can start immediately. `|| exit 0` on both lines.
-      - name: Landing lease precondition
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          LEASE_HEAD_REF: ${{ github.head_ref }}
-          LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          LEASE_RUN_ID: ${{ github.run_id }}
-        run: |
-          installer=$(gh api -H "Accept: application/vnd.github.raw" \
-            "repos/$GH_REPO/contents/install.sh?ref=main") || exit 0
-          printf '%s\n' "$installer" | \
-            BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" \
-            BATTEN_ALLOW_OFF_PATH=1 BATTEN_REQUIRE="lease guard" sh || exit 0
-          # THE POLICY IS TRUNK'S TOO, AND IT HAD TO BE FETCHED. This step runs
-          # BEFORE any checkout, so the directory the guard stands in is empty and
-          # `config::load` found nothing — `[lease] landing_paths` read as *no
-          # paths declared* and the staleness half failed open on every run, which
-          # is the exact silence the row was written to end. Fetched from `main`
-          # for the installer's own reason, one line up: a head must not pin the
-          # policy it is judged by, and the only tree a checkout would offer here
-          # is the pull request's own.
-          mkdir -p "$RUNNER_TEMP/batten-config" || exit 0
-          gh api -H "Accept: application/vnd.github.raw" \
-            "repos/$GH_REPO/contents/batten.toml?ref=main" \
-            >"$RUNNER_TEMP/batten-config/batten.toml" || exit 0
-          "$RUNNER_TEMP/batten-bin/batten" --config-in "$RUNNER_TEMP/batten-config" \
-            lease guard \
-            "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          # tests/bats — the runner itself. Without it there is no bats to run.
-          submodules: true
-          # The suites read history: `land`, `land-lock`, `linear-check` and
-          # `commit-lint` all build fixtures over real ranges, and several assert
-          # against `origin/main`. The `ci` job's own note explains why a partial
-          # depth is worse than none here — a shallow graft reports trunk commits
-          # as the branch's own.
-          fetch-depth: 0
-      - name: Fetch the comparison base refs
-        run: git fetch origin main:refs/remotes/origin/main
-      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
-        with:
-          # PINNED TO `batten.toml`'s `[[provision]]` ROW, NOT LEFT TO RESOLVE
-          # (CLOUD-1672). The action digest above pins the ACTION; this pins the
-          # MISE it installs, which is a separate resolution the digest does not
-          # reach. Unset, it takes whatever is newest when the job starts —
-          # measured 2026-09-08, that was v2026.9.3, whose linux-x64 asset 404s,
-          # and every job in every workflow died at this step inside 11 seconds.
-          # v0.0.152 published with zero binaries as a result.
-          #
-          # The provision row's own comment already names this harm one layer
-          # down: a runner that updates itself under a container makes two
-          # sessions on one commit run different toolchains. The pin existed and
-          # this layer could not see it, so the tree declared one version and CI
-          # ran another. `ci-tools-check` now refuses any drift between the two.
-          version: 2026.9.1
-          # One line, for the reason the `ci` job's list states: `ci-tools-check`
-          # parses these as a scalar and several names begin with `aqua:`, which
-          # a block scalar's continuation lines read as new keys.
-          install_args: rust hk github:nextest-rs/nextest aqua:EmbarkStudios/cargo-deny aqua:koalaman/shellcheck aqua:mvdan/sh aqua:tamasfe/taplo aqua:rhysd/actionlint aqua:jqlang/jq aqua:anchore/syft aqua:shenwei356/rush aqua:open-policy-agent/opa aqua:open-policy-agent/regal pkl deno node npm:prettier npm:renovate uv pipx:ntia-conformance-checker
-      # The suites drive `hk` directly (`hk-selection`, `hook-profile-check`), so
-      # this job reaches the pkl package uri too and needs the same cache the
-      # `ci` job takes for it. Keyed on `hk.pkl`, no `restore-keys`, for the
-      # reasons recorded there.
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.pkl/cache
-          key: pkl-${{ runner.os }}-${{ hashFiles('hk.pkl') }}
-      # THE WARMED `ci-` FAMILY, READ-ONLY — the `bats-` family is retired
-      # (CLOUD-1410, CLOUD-1420).
-      #
-      # WHAT THE RETIRED COMMENT GOT RIGHT AND WHAT IT MISSED. It said a
-      # distinct key avoids racing the `ci` job to save one entry, and that is
-      # true. What it never asked is whether anything WRITES `bats-` on `main`.
-      # Nothing does: `release-plz.yml`'s `cache-warm-linux` writes `ci-` and
-      # `cache-warm-windows` writes `windows-`, and GitHub scopes a cache read
-      # to the run's own ref plus the base branch — so a `bats-` entry written
-      # on `refs/pull/N/merge` is unreadable by every other pull request,
-      # including the next push to the same branch under a new merge ref.
-      # `bats` has therefore been COLD ON EVERY PULL REQUEST since the job
-      # existed, and the manifest hash was never its binding constraint.
-      #
-      # `cache-warm-linux` runs `cargo nextest run --no-run --workspace`, which
-      # builds the workspace and every test target on the linux dev profile —
-      # a strict superset of what `test:bats` needs, since the suites invoke
-      # `cargo run -p batten` and nothing this job runs is outside that build.
-      # So this job is a pure consumer of an entry another job already paid for.
-      #
-      # `save-if: false` IS WHAT MAKES THE SHARING SAFE, and it is the retired
-      # comment's race answered rather than ignored. A pure consumer cannot race
-      # `ci` to save, because it does not enter the race — and a cache entry is
-      # immutable once written, so the first finisher on a fresh key would
-      # otherwise become the entry every later reader inherits. One designated
-      # writer on `main`, every pull-request job read-only.
-      #
-      # THE CONSEQUENCE, stated rather than discovered: a key
-      # `cache-warm-linux` has not yet written stays empty for the whole pull
-      # request. That is the correct direction — a cold PR beats a poisoned
-      # cache — but it makes the warm job's cadence load-bearing.
-      #
-      # NOT DONE FOR `cross-`, `semver-` OR `${{ matrix.target }}`: those build
-      # different things and cannot share this entry. They need warm jobs of
-      # their own, which is a follow-up rather than this change, so they keep
-      # writing.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          shared-key: ci-
-          save-if: false
-      # THE SAME QUESTION THE `ci` JOB ASKS, and it must stay in-job rather than
-      # becoming a `paths:` filter or a job `if:` — see this job's header and
-      # `final`'s. `test:bats` is one of the six `slow`-tagged steps, so a diff
-      # `ci-slow-needed` calls inert cannot move it.
-      - name: Can this diff move the slow tier?
-        id: slow
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          if mise run ci-slow-needed "$BASE_SHA" "$HEAD_SHA"; then
-            echo "needed=true" >>"$GITHUB_OUTPUT"
-          else
-            rc=$?
-            [ "$rc" -eq 2 ] || exit "$rc"
-            echo "needed=false" >>"$GITHUB_OUTPUT"
-          fi
-      - run: mise run test:bats
-        if: steps.slow.outputs.needed == 'true'
-        env:
           DOCTOR_TARGETS: ""
 
   # The latency regression gate on the surface that reaches a person (CLOUD-172).
@@ -1290,7 +1093,7 @@ jobs:
     # `CI_REQUIRED_CHECKS` names all four and `checks-green` decides on that
     # list, which is what `land` reads — in the same shape `commit-lint` and
     # `zizmor` already have.
-    needs: [ci, batten-check, bats, perf]
+    needs: [ci, batten-check, perf]
     runs-on: ubuntu-latest
     # `checks: read` is the whole reason this job now needs a permission at all:
     # the analyzer's verdict is a check-run on the head commit.

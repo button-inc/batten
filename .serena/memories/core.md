@@ -93,10 +93,10 @@ err)` takes **both** channels and the resolved `Mode`, so a verb can write a
   multi-thousand-case suite to measure it would cost more than the waste it
   reports and would be a second authority over a run that already happened, so
   this opens one file and writes one file and reaches
-  `policy/spawn-adapters.rego` not at all. The corpus path is a CONTRACT with
-  `policy/suite-cost-corpus.rego`, which reads the same bytes as a declared
-  `lines` source — the producer decides cost, the gate decides MEMBERSHIP, and
-  neither half can see the other. That division is the design: wall clock is a
+  `policy/spawn-adapters.rego` not at all. Its membership gate,
+  `policy/suite-cost-corpus.rego`, RETIRED under CLOUD-843 with `test:bats`, the
+  one task whose report fed the corpus — the producer stays as mechanism for a
+  consumer that still has a bats lane. That division is the design: wall clock is a
   clock and belongs in a drift job, membership is deterministic and belongs in a
   gate. THREE STATES ARE COULD-NOT-LOOK, never an empty corpus — an absent
   report (the ordinary state after a receipt-gated no-op lap), a report carrying
@@ -3091,7 +3091,8 @@ proof was missing.
 _library_ surface, since they mint no subcommand and the fixture suite is their
 gate (Option A). Carries the hermetic git fixture builder and the keystone: a
 rebased-and-landed branch is merged though `--is-ancestor` says otherwise. Non-Rust tests (`mise-tasks/*` scripts,
-gates) live under `tests/**/*.bats`, run via `mise run test:bats`.
+gates) moved onto compiled tiers under `crates/batten/tests/it` as the shell suite
+retired (CLOUD-843); `test:bats` and the vendored runner are gone.
 
 ## Self-consumption
 

@@ -303,8 +303,13 @@ fn the_reason_stays_off_the_channel_a_caller_parses() {
     );
 }
 
-/// The retired program is gone, and the caller that resolved it by path now
-/// names the successor instead.
+/// The retired program is gone, and no caller resolves it by path.
+///
+/// This used to assert, too, that `mise.toml` named the successor, because
+/// `test:bats` selected its suites with `batten ci suites`. CLOUD-843 retired
+/// that task with the last bats suite, so this repository has no suite to select
+/// and the verb no caller here; it stays in the engine for a consumer that runs
+/// shell suites, and the cases above are what hold it.
 #[test]
 fn the_retired_program_is_not_tracked_and_its_caller_moved() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -321,9 +326,5 @@ fn the_retired_program_is_not_tracked_and_its_caller_moved() {
     assert!(
         !tasks.contains("suite-select.sh"),
         "no caller resolves the retired program by path"
-    );
-    assert!(
-        tasks.contains("ci suites"),
-        "the successor is what `test:bats` selects with"
     );
 }

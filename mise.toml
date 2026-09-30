@@ -122,20 +122,9 @@ hk = "1.56.1"                                                # git-hook runner (
 # treatment Rust gets: shellcheck is their clippy, shfmt their rustfmt.
 "aqua:koalaman/shellcheck" = "0.11.0"
 "aqua:mvdan/sh" = "3.13.1"            # shfmt
-# The parallel backend for `test:bats`. The shell suite was 83% of the `ci`
-# job's hk gate and ran strictly serially: 247.01s of 298.87s on run
-# 31531728503, against a 166s cargo chain beside it (CLOUD-386).
-#
-# bats' `--jobs` needs GNU parallel or this, and GNU parallel is not choosable
-# here: it ships as a source tarball with no aqua/ubi/github-release
-# coordinate, so it cannot be a [tools] key at all — and an `apt-get install`
-# in ci.yml is the drift `ci-tools-check` exists to refuse. rush is a prebuilt
-# Go binary with per-platform release assets, so `lock-complete` can hold every
-# platform this repo installs on.
-"aqua:shenwei356/rush" = "0.9.0"
-"aqua:rhysd/actionlint" = "1.7.12" # workflow mistakes (zizmor covers workflow security)
-"aqua:tamasfe/taplo" = "0.10.0"    # TOML lint + format — mise.toml is edited constantly
-pkl = "0.32.1"                     # evaluates hk.pkl as a check, not only when hk runs it
+"aqua:rhysd/actionlint" = "1.7.12"    # workflow mistakes (zizmor covers workflow security)
+"aqua:tamasfe/taplo" = "0.10.0"       # TOML lint + format — mise.toml is edited constantly
+pkl = "0.32.1"                        # evaluates hk.pkl as a check, not only when hk runs it
 # `deno fmt` is the formatter for every hand-authored format except TOML:
 # Markdown, JSON/JSONC, and the YAML no other tool owns. One statically-linked
 # binary that VENDORS the engines rather than fetching them — dprint's markdown
@@ -352,17 +341,7 @@ BATTEN_CHECKSUM_MANIFEST = "SHA256SUMS"
 # writes it and `release-assets-record` looks for it, and it replaced asking
 # `render/cli.sh --names` by path when that program moved inline (CLOUD-1752).
 BATTEN_CLI_REFERENCE = "batten-cli-reference.md"
-# bats comes from the tests/bats submodule, not a mise tool, and this is what
-# puts it on PATH. A tool pin would be the obvious choice and is the wrong one:
-# the published package is a GitHub *source archive*, and those are not
-# byte-stable, so `mise lock` records a checksum a later download legitimately
-# fails (CI hit exactly that: "Checksum mismatch ...
-# bats-core/archive/refs/tags/v1.14.0.tar.gz"). A submodule pins the commit
-# itself, so there is nothing to re-download or re-hash. The rule generalises:
-# lock a binary artifact, vendor a source tree. Run `git submodule update
-# --init` once per clone.
-#
-# `target/release` IS THE SECOND ENTRY, AND IT IS THIS CHECKOUT'S BINARY WINNING
+# `target/release` IS THE ONE ENTRY, AND IT IS THIS CHECKOUT'S BINARY WINNING
 # OVER AN INSTALLED ONE. Four task bodies invoke `batten` as a bare word —
 # `checks green`, `pr watch`, `task`, `task alive` — and nothing put a build
 # directory on PATH, so they resolved whatever `install:local` last copied to
@@ -393,7 +372,7 @@ BATTEN_CLI_REFERENCE = "batten-cli-reference.md"
 # cannot. So the ordinary session has the tree's own binary before any task runs,
 # and a session that does not has already said so out loud. Making the fallback
 # itself refuse needs a mechanism `_.path` has no spelling for. Found in review.
-_.path = ["tests/bats/bin", "target/release"]
+_.path = ["target/release"]
 # The checks that carry a verdict about THIS repository, named exactly as GitHub
 # names their check-runs (the matrix leg's suffix included). Shared by `ci-wait`
 # ("is this SHA green?") and `land`'s `graded_runs` ("does this SHA carry an
@@ -416,7 +395,7 @@ _.path = ["tests/bats/bin", "target/release"]
 # alone — the fan-in. This roster is what `ci-wait` WAITS ON before landing, and
 # waiting only on `final` would strand every landing on a check that fans in from
 # eighteen. Two sets, two purposes; neither derives the other.
-CI_REQUIRED_CHECKS = "ci,batten-check,bats,cross,musl,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),darwin-link (x86_64-apple-darwin),semver,perf,windows,macos,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
+CI_REQUIRED_CHECKS = "ci,batten-check,cross,musl,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),darwin-link (x86_64-apple-darwin),semver,perf,windows,macos,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
 
 # ─── THE LAP'S READY PHASE (CLOUD-1148) ───────────────────────────────────────
 #
@@ -666,24 +645,9 @@ CI_VERDICT_STEPS = "Run mise run ,Run mise exec -- "
 # exactly when upstream is the thing that moved, and never otherwise. Reading the
 # README from a gate instead would answer "what does upstream claim right now",
 # which is a property of the world and belongs on a clock (`lock-complete`).
-# THE SHELL SUITE'S SLOW-TEST BAN, mirroring the nextest one (CLOUD-1571).
-#
-# `.config/nextest.toml` bans a slow RUST case with `slow-timeout`. bats had no
-# equivalent, so a hung shell case had nothing to stop it — measured on this
-# branch: `land.bats`'s "main moving mid-wait starts the next lap" sat at 0% CPU
-# for 40 MINUTES inside `verify`, holding the landing lease, with no output and
-# no diagnostic. The case is a stubbed race between `ci-wait` and `main-watch`,
-# and under a loaded box the race did not resolve.
-#
-# A hang is the worst shape a test failure takes: it produces no verdict, spends
-# unbounded wall clock, and on the landing path it holds a singleton the whole
-# time. 300s matches the nextest kill, so both suites answer "too slow" with one
-# number, and it is far above the whole suite's per-case cost — bats finishes all
-# of its cases in ~228s together.
-BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,skill-frontmatter-complete,spawn-widening,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,engine-task,run-arg-shape,engine-cargo-graph,branch-age,task-released,evaluator-closure,evaluator-io-probe,agent-spawn,macos-link,ntia,release-tracking,sbom-actions,task-sonar-gate,task-callable,transcript-corpus,engine-rules,release-assets,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,ci-signal,engine-ci-signal,docs-tree-absent,ripcord-untracked,hk-pin-agreement,engine-record,hk-fix-selection.pkl,engine-dist,engine-sbom,supply-chain,engine-reclaim,engine-durable,engine-step,engine-step-table,engine-mcp-grant,engine-mcp-posture,engine-preflight,engine-trust,engine-sweep,sweep-exit-table,tracker-hygiene,engine-tracker-reading,task-duplicate-close-check,engine-release,release-hygiene,task-sbom-binary-record,engine-hk,hook-profile,engine-attestation,engine-turn,engine-unsubscribe,engine-probe,finding-sink,engine-commit,engine-receipt,engine-board-check"
+MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,skill-frontmatter-complete,spawn-widening,stop-posture,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,engine-task,run-arg-shape,engine-cargo-graph,branch-age,task-released,evaluator-closure,evaluator-io-probe,agent-spawn,macos-link,ntia,release-tracking,sbom-actions,task-sonar-gate,task-callable,transcript-corpus,engine-rules,release-assets,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,ci-signal,engine-ci-signal,docs-tree-absent,ripcord-untracked,hk-pin-agreement,engine-record,hk-fix-selection.pkl,engine-dist,engine-sbom,supply-chain,engine-reclaim,engine-durable,engine-step,engine-step-table,engine-mcp-grant,engine-mcp-posture,engine-preflight,engine-trust,engine-sweep,sweep-exit-table,tracker-hygiene,engine-tracker-reading,task-duplicate-close-check,engine-release,release-hygiene,task-sbom-binary-record,engine-hk,hook-profile,engine-attestation,engine-turn,engine-unsubscribe,engine-probe,finding-sink,engine-commit,engine-receipt,engine-board-check"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -1291,8 +1255,8 @@ run = [
 ]
 
 [tasks.test]
-description = "Run every test suite — Rust and shell"
-depends = ["test:cargo", "test:bats"]
+description = "Run every test suite"
+depends = ["test:cargo"]
 
 # A NAMED subset of the suite, for observing one case red under one mutation
 # (CLOUD-418). `test:cargo` used to be unable to serve this: its shell body took
@@ -3151,9 +3115,7 @@ run = "cargo run --quiet -p batten -- check --rule 'rule watch other'"
 #
 # The `|| { …; exit 1; }` is not belt-and-braces: a body declaring no `shell =`
 # runs under `sh -e`, so a bare failing call would abort the task before its own
-# report could run. That is measured — it cost a debugging cycle in #798 — and
-# the three corrected comments in `[tasks."test:bats"]` are the same fact said
-# where the next author reads it.
+# report could run. That is measured — it cost a debugging cycle in #798.
 
 [tasks."session:install"]
 description = "Session start: provision the mise toolchain, purely — the step whose absence was CLOUD-196"
@@ -3221,19 +3183,6 @@ description = "Gate: every tool [tools] declares is actually installed — the q
 # installed") and on a manifest declaring an uninstalled pin (both refuse at 1).
 # `batten doctor toolchain` stays a verb for any consumer that holds a probe.
 run = "mise install --dry-run-code"
-
-[tasks."session:submodules"]
-description = "Session start: check out the vendored submodules — bats lives in tests/bats"
-# QUIET BY DECLARATION, NOT BY A LOG REDIRECT (CLOUD-1991). The shell wrapper
-# sent both streams to a `/tmp` log, and on failure printed an `::error::` line
-# and the log's last five lines. `silent = "stdout"` is the half the handler
-# contract needs — a passing step's stdout would become session advice, which
-# CLOUD-891 removed — and `quiet` drops mise's own command echo. On a failure the
-# step's stderr IS the reason the door forwards, and its exit code is the step's
-# own rather than a flattened `1`.
-quiet = true
-silent = "stdout"
-run = "git submodule update --init --recursive"
 
 [tasks."session:doctor"]
 description = "Session start: provision what mise does not own — the rustup cross targets above all (CLOUD-218)"
@@ -4131,316 +4080,6 @@ description = "Gate: the break-glass sentinel is never committed. An armed ripco
 # it, and selects the one row so it reports nothing else.
 run = "cargo run --quiet -p batten -- check --rule 'path ship refused'"
 
-[tasks.bats-submodule]
-description = "Check out the vendored bats runner if it is missing — `bats-submodule-checked-out`'s check and repair, for `test:bats`"
-# THE REPAIR ALONE, AND UNCONDITIONALLY (CLOUD-1991). The `test -f … ||` guard
-# only skipped a command that is already idempotent: `git submodule update
-# --init` over a checked-out submodule at its recorded commit writes nothing and
-# fetches nothing. Dropping the guard drops the shell line and changes no state.
-run = "git submodule update --init --recursive tests/bats"
-
-[tasks."test:bats"]
-description = "Run the shell test suite (tests/*.bats) — cargo test for the mise-tasks/ programs"
-# bats comes from a submodule, not [tools], so a fresh clone has no bats and this
-# task reports "bats: not found" — which reads as a missing TOOL and sends the
-# reader to mise. `doctor` checks out the submodule instead. Only the submodule
-# half: this dependency re-runs doctor in whatever process invokes test:bats,
-# and when that is hk's test:bats step it is a CHILD mise process — task-node
-# dedup is per-process, so a full doctor here raced the outer DAG's doctor
-# inside `rustup target add` and both rolled back (CLOUD-220). The targets are
-# owned by the tasks that need them (cross-check, darwin-link), each routed
-# through the target-ensure lock.
-# ONLY THE SUBMODULE, NOT THE STARTUP TABLE (CLOUD-1753). This depended on
-# `provision:startup` — every `[[startup]]` row — on the reading that the table
-# had no half to exclude. CI refuted it: three rows cannot run on a runner
-# (`check-unrunnable`), so every `bats` job failed before a case ran, and the
-# `mediator-matches-the-tree` row rebuilt the release binary first (184 s), the
-# same reach into `build:release` that pruned mid-gate under `verify`. What this
-# suite needs is `bats-submodule-checked-out`'s check and repair, and that is
-# what `bats-submodule` runs.
-depends = ["bats-submodule"]
-# `batten startup --repair` rather than `doctor --no-targets` (CLOUD-1753): the
-# submodule half this dependency wanted is now the `bats-submodule-checked-out`
-# row, and the flag existed only to keep a full doctor — and its `rustup target
-# add` — off this path. A declared table has no such half to exclude, because the
-# rows that touch the toolchain are separate rows.
-# A FIXTURE RUN NEVER READS THE HOST'S MCP LOGS. `mcp-timeout-budget.bats`'s
-# "the committed budget passes" runs the real gate over the real settings, and
-# with this unset the gate also reads whatever session logs this machine holds —
-# so the case went red on a container whose client started serena at 30000ms
-# (CLOUD-730), a host fact no diff can move. Pointed at a root that does not
-# exist, the gate checks the declaration alone, which is what the case asserts;
-# the live-log check stays the hk `mcp-timeout-budget` step's job.
-env = { MCP_TIMEOUT_LOGS = "target/mcp-logs-for-fixtures-never-created" }
-# Parallel across files, never within one (CLOUD-386). Serial, this suite was
-# the pole of the `ci` job — 247.01s of 298.87s, with the cargo chain beside it
-# finishing at 166s — and `verify` pays it again on every `land` lap, so it sat
-# in the exponent of the lap economics twice.
-#
-# `$(nproc)` rather than a literal: the number that is right for today's
-# ubuntu-latest is wrong the moment a runner changes size, and a stale literal
-# reads as deliberate.
-#
-# IT IS ALSO THE MEASURED OPTIMUM, AND EACH TABLE BELOW NAMES THE MACHINE IT WAS
-# TAKEN ON. That is not bookkeeping: the first table was read for a year as a live
-# instruction — "4 is the MEASURED optimum", "do not budget this number down" —
-# while the CI runner reports 2, so both sentences were true about hardware CI
-# does not have (CLOUD-386's third measurement).
-#
-# # sweep: measured=2026-08-11 cores=4 cases=1039 host=developer-box
-#
-#   workers      2       4      6      8     12
-#   test:bats  210.7s  100.3s 104.1s 106.0s 105.9s
-#   whole gate 224.9s  111.1s 117.5s 118.0s 120.5s
-#
-# # sweep: measured=2026-08-28 cores=2 cases=2793 host=4-core box under `taskset -c 0,1`
-#
-#   point                       bats workers  hk slots  nextest  gate     test:bats
-#   A (today)                    $(nproc)=2    default  default   998s     829s
-#   B                            1             default  default   —        unmeasurable
-#   C                            4             default  default  1171s     669s
-#   D                            2             1        default  1500s     623s
-#   E                            2             default  1        1194s     860s
-#
-# THE MASK IS THE EMULATION and `nproc` respects it, so both consumers follow: hk's
-# slot count and the worker count this body derives. A 2-core mask on a fast box is
-# not an `ubuntu-latest` runner, and cargo was warm; what carries across is the
-# ORDERING, not the absolute numbers.
-#
-# B IS NOT A MISSING MEASUREMENT, it is an unavailable one: bats refuses `--jobs 1`
-# alongside `--no-parallelize-within-files`, so the count cannot be budgeted below
-# 2 at all while that safety flag stands.
-#
-# EVERY DIRECTION IS WORSE, AND THE THREE THAT REMOVE OVERSUBSCRIPTION MOST OF ALL.
-# C hands the step more workers than cores and buys 160s on the step while costing
-# 173s on the gate, because the cargo chain starves. D gives bats the box to itself
-# (one hk slot) for the fastest step measured and the slowest gate: +50%. E caps
-# nextest's own pool, CLOUD-439's third claimant, and costs 20%. The suites are
-# fork-bound rather than CPU-bound, so contention is cheaper than idle workers —
-# which is why "budget this number down" stays the wrong instinct, now for a
-# measured reason on the runner's own width rather than on a laptop's.
-#
-# CLOUD-439 also retired the premise that sent it looking. The suite was read as
-# running 2.65x slower in-gate than alone (72.73s vs 192.59s), attributed to
-# three steps each claiming `nproc` — hk's own `--jobs`, `cargo test`'s pool and
-# clippy's `-j`, ~12 workers on 4 cores. Those two numbers came from DIFFERENT
-# MACHINES: 72.73s local, 192.59s on `ubuntu-latest` (run 31535645426, job
-# 93926035222). Measured on one box, same commit, same suite, in-gate vs alone
-# is 90.26s -> 100.3s: contention costs ~10s, about 1.11x. Capping hk to one
-# slot per chain was measured too and cost ~19s, because the ~23 sub-second
-# gates stop overlapping the two long chains. The gap CLOUD-398 is sizing is a
-# slower runner, not this repo oversubscribing it.
-#
-# Across-files is already enough — the largest file is 146 of 2790 cases (5.2%,
-# re-counted 2026-08-28; it was 54 of 1039 when this clause was written), ~10% of
-# a worker's share at two workers, so the schedule is not tail-bound — and it is
-# the half that is safe by construction: within-file parallelism would interleave
-# a file's own setup/teardown with its cases, which is exactly what the suites
-# that model lock and race behaviour must not have done to them.
-#
-# THE COUNT IS ASSERTED, NOT THE EXIT CODE. The failure mode every change in
-# this series risks is "faster because it ran fewer", and a green exit is blind
-# to it — a narrowed glob, a stray filter, or a worker that died mid-file all
-# pass. No total is written down: the tracked `@test` declarations are counted
-# and compared against bats' own TAP report, so adding a case needs no edit
-# here. Output stays a pointer (rule 4) — two counts and the worker count, never
-# a case name.
-#
-# This body runs under `/bin/sh` WITH `-e`, so a bare failing command aborts the
-# task where it stands. Every step is guarded explicitly anyway, which is
-# belt-and-braces rather than load-bearing — and the guards are what let a step
-# CHOOSE its exit code instead of inheriting the abort.
-#
-# CORRECTED 2026-09-01, measured. These three comments said "with no `set -e`" and
-# were wrong. The discriminator is a DECLARED SHELL, not the file: a task that
-# declares `shell = "bash -c"` really does run every line regardless — that is the
-# case `rules/toolchain.md` documents. `verify` and `verify:gated` were its two
-# instances until CLOUD-843 made both `run` arrays, which need no guard at all
-# (`crates/batten/tests/it/verify_chain.rs`). This task declares no shell, so it
-# gets the default and `-e` with it. Observed while landing
-# CLOUD-1085: a bare call in a default body aborted the task before the branch
-# reporting which failure it was could run.
-#
-# The error direction was benign, which is why nothing broke: believing "no
-# `set -e`" makes an author ADD guards. An author who believed the opposite would
-# omit them, and that is the direction this correction exists to prevent.
-# Receipt-gated (CLOUD-424). Its `[[step]]` row in `batten.toml` declares `.`:
-# these suites read mise.toml, hk.pkl, workflows and fixture trees all over the
-# repo, so the honest input set is the whole tracked tree — a rebase that
-# changed no bytes still skips, and any content change anywhere re-runs.
-run = '''
-if [ "$(cargo run --quiet -p batten -- step check test:bats | cut -c1-3)" = hit ]; then exit 0; fi
-# BUILD ONCE, THEN FEED THE SEAM THE PROGRAMS ALREADY DECLARE (CLOUD-1198).
-#
-# This task's only build dependency was `doctor --no-targets` — the submodule
-# checkout — so it NEVER built the binary. Every gate it drives that needs
-# `batten` paid `cargo run` process startup per case, and worse, whichever
-# artifact happened to be lying in `target/` decided what the suite tested.
-# `tests/helpers.bash` asserted the opposite in a comment for its whole life:
-# "test:bats builds the DEBUG binary", true only transitively via whatever ran
-# before. That is CLOUD-592's and CLOUD-699's stale-binary class, and closing it
-# is this change's case — the ~23s of avoided startup is the bonus, not the
-# argument. `hooks-wiring-check.sh:212-214` insists the gate judge "the WORKING
-# TREE's engine and config together, which is the pair that ships", so a freshly
-# built binary is the CORRECTNESS precondition for the injection below rather
-# than an optimisation detail.
-#
-# INLINE RATHER THAN A `depends`, for two measured reasons. A `depends` here
-# re-runs in whatever process invokes this task, and when that is hk's step it is
-# a CHILD mise process — the race CLOUD-220 records for `doctor` one clause up.
-# And a build in the DAG would contend with the cargo chain for the target-dir
-# lock `hk.pkl` deliberately serialises. `build:release` is the wrong task
-# besides: it produces the RELEASE binary for the mediated-call hot path, while
-# `helpers.bash:119-134` and `common/mod.rs:154` both resolve a debug one.
-#
-# Guarded explicitly so the failure is NAMED: under the default `-e` an unguarded
-# build would abort the task with mise's own line and nothing about stale
-# artifacts, and the pointer is the whole value of this clause.
-if ! cargo build --quiet -p batten; then
-  echo "::error:: test:bats: the debug binary did not build, so the suite would run against a stale artifact or none. That is CLOUD-592/699's class and the reason this step builds at all." >&2
-  exit 1
-fi
-# BOTH SPELLINGS OF THE ONE SEAM. `$BATTEN_BIN` is honoured by seven
-# `mise-tasks/` programs and by the Rust tier; `hooks-wiring-check.sh:219`
-# declares the same seam under its own name for its `doctor hooks -J` call and
-# only 2 of its 36 cases ever set it. Exported here so every already-honouring
-# program is reached with ZERO governed-file edits — `shell edit refused`
-# refuses touching any of them, which is the whole reason this change lives in
-# the ungoverned task and nowhere else.
-BATTEN_BIN="$PWD/target/debug/batten"
-if [ ! -x "$BATTEN_BIN" ]; then
-  echo "::error:: test:bats: $BATTEN_BIN is missing or not executable after a successful build — the seam would silently fall back to the stale-artifact resolution this change exists to close." >&2
-  exit 1
-fi
-export BATTEN_BIN
-# AND ON `PATH`, because the seam above only reaches a program that READS it
-# (CLOUD-425). The suites drive `mise-tasks/` programs as subprocesses, and those
-# call the engine the way a session does — bare `batten` — so exporting the
-# variable alone leaves every such call resolving against whatever the developer
-# happened to install, and against NOTHING on a CI runner. Measured: with the
-# variable exported and the binary absent from `PATH`, `land-lock`'s heartbeat
-# read exit 127 from `batten task read`, took it for "no verdict" per its own
-# contract, and never fired the stall bail — six `tests/land-lock.bats` cases red
-# in CI and green on any machine with an installed binary. That is the
-# stale-artifact class one step over: not the WRONG binary, but no binary at all,
-# reported as a policy answer.
-PATH="$(dirname "$BATTEN_BIN"):$PATH"
-export PATH
-HOOKS_WIRING_DIAGNOSIS="$BATTEN_BIN doctor hooks -J"
-export HOOKS_WIRING_DIAGNOSIS
-# WHICH SUITES, before how many cases (CLOUD-886). The glob that selects this
-# step is `mise-tasks/**`, so any byte under there ran all 151 suites — measured,
-# correcting one sentence in `land`'s lap-cap message bought a full matrix.
-# `batten ci suites` answers "which suites can this diff move" from the declared
-# `# subject:` headers, and widens to everything on anything it cannot prove
-# inert. Its reason goes to stderr as a pointer.
-#
-# FAIL OPEN TOWARD COST: a selector that cannot answer at all falls back to every
-# suite. The asymmetry is the whole design — a run that is too wide shows up in
-# the bill, and one that is too narrow has no symptom at all.
-# CLEARED ON A NONZERO SELECTOR (CLOUD-480, found on review of #660). The guard is
-# required whichever way the shell is set, which is why it is written as a status
-# read rather than an emptiness test: under the default `-e` a bare assignment from
-# a failed substitution aborts the task, and without it the substitution leaves its
-# PARTIAL output behind. CLOUD-480 measured the second — a selector that died partway
-# left partial output in `suites`,
-# the emptiness check below then saw a non-empty value, and the fallback never
-# fired. A narrow run has no symptom, which is the asymmetry the fallback exists
-# to respect, so the guard has to read the status rather than the output.
-suites=$(cargo run --quiet -p batten -- ci suites --base "${BASE_SHA:-origin/main}") || suites=""
-if [ -z "$suites" ]; then
-  echo "::error:: test:bats: the suite selector produced nothing, so falling back to every suite rather than narrowing on an answer it could not give." >&2
-  suites=$(git ls-files --cached --others --exclude-standard -- 'tests/*.bats')
-fi
-# COMPUTED FROM THE SELECTED SET, BY THE SAME LIST THAT CHOSE IT (CLOUD-886 §2).
-# `ran == expected` exists to catch "a suite that got faster by running fewer
-# tests" (CLOUD-386), which is exactly what selection does on purpose — so an
-# `expected` derived from a second list would be the defect wearing the fix's
-# clothes.
-#
-# `awk` over the working tree rather than `git grep` over the index, and that is
-# a fix rather than a rewrite: git grep counts TRACKED files only, so a suite
-# added but not yet committed ran without being counted and failed the assertion
-# below with `ran` one too many. Measured at `2704 of 2696`. Taken before bats
-# runs, so bats' own preprocessing of a suite file cannot move it either.
-expected=$(awk '/^@test /{n++} END{print n+0}' $suites)
-if [ "$expected" -lt 1 ]; then
-  echo "::error:: test:bats: counted $expected @test declarations across the selected suites — the count this run is judged against could not be computed, so the run cannot be trusted to have covered the suite." >&2
-  exit 1
-fi
-workers=$(nproc)
-# JUNIT RATHER THAN TAP, and the report is KEPT rather than deleted (CLOUD-352).
-# Both halves are one change with one reason: TAP names a case but not the file
-# it came from, so a per-suite cost figure cannot be recovered from it, and the
-# `mktemp -d` + `trap rm` threw away the only per-case timings this repository
-# ever produces. `batten record suites` reads what this leaves behind, so the
-# corpus costs no second execution of a 2,500-case suite.
-#
-# `ran` counts `<testcase` elements, which is the same population TAP's
-# `^(ok|not ok) ` matched — verified equal at 2558 on one tree before the swap.
-# The anti-vacuity assertion below is unchanged in meaning: a suite that got
-# faster by running fewer cases still fails it (CLOUD-386).
-#
-# Under `target/`, which is gitignored, so a run cannot dirty the tree and
-# `tree-clean` stays green.
-report=./target/bats-report
-rm -rf "$report" || exit 1
-mkdir -p "$report" || exit 1
-started=$(date +%s)
-if ! bats --print-output-on-failure --parallel-binary-name rush --jobs "$workers" --no-parallelize-within-files --report-formatter junit --output "$report" $suites; then exit 1; fi
-elapsed=$(($(date +%s) - started))
-ran=$(grep -o '<testcase' "$report/report.xml" | wc -l | tr -d ' ')
-if [ "$ran" != "$expected" ]; then
-  echo "::error:: test:bats: $ran of $expected cases reported by the runner. A suite that got faster by running fewer tests is the failure this asserts against." >&2
-  exit 1
-fi
-# WHAT THIS RUN COST, AGAINST WHAT THE CORPUS RECORDS (CLOUD-386, third
-# measurement). The count assertion above catches a run that got faster by running
-# fewer; this reports the opposite and equally silent failure — workers that make
-# the run SLOWER than running the same suites one at a time.
-#
-# A REPORT, NOT A REFUSAL, and the reason is measured rather than cautious.
-# CLOUD-386 read CI's 1435.7s at 2 workers against a 1249.1s recorded serial total
-# and called parallelism net-negative. But `RESULTS.md` is regenerated LOCALLY, so
-# that comparison sets a slow runner's parallel wall against a fast box's serial
-# cost, and part of what it measures is the runner. On one machine it inverts: the
-# 2026-08-28 sweep above ran this step in 829s at 2 workers against the same
-# corpus's 1367s. `policy/suite-cost-corpus.rego` states the general form — a
-# gate demanding a duration "would be red on every second run and would be
-# bypassed within a day" — and this one would have been red on every CI run with
-# no setting able to clear it, since that sweep found every de-oversubscription
-# slower.
-#
-# So the number is REPORTED and the mechanism is gated one level up: the
-# `bats-invocation` row refuses a body that stops measuring, which is a property of
-# the commit rather than of the machine it ran on.
-#
-# THE COMPARISON IS OVER THE SELECTED SUITES, not the corpus total, for the reason
-# the `expected` count is (CLOUD-886 §2): selection narrows on purpose, so a whole-
-# corpus total would make every narrowed run read as comfortable.
-#
-# `bench/suites/RESULTS.md` is the recorded side. It is a CORPUS, regenerated
-# deliberately by `batten record suites --write`, never by this run — so this
-# compares against a number a person can see change in a diff, rather than against
-# itself.
-#
-# A SELECTED SUITE THE CORPUS DOES NOT RECORD IS COULD-NOT-LOOK, and says so:
-# `suite-cost-corpus` owns membership, and a new suite's first run must not be read
-# against a total that does not include it.
-recorded=$(printf '%s\n' $suites | awk '
-  FNR == NR { want[$1] = 1; next }
-  /^\| *[0-9]/ { gsub(/[`|]/, " "); if ($3 in want) { total += $1; seen[$3] = 1 } }
-  END { for (s in want) if (!(s in seen)) { print "-"; exit } printf "%.0f\n", total }
-' - bench/suites/RESULTS.md)
-if [ -z "$recorded" ] || [ "$recorded" = "-" ]; then
-  echo "::error:: test:bats: bench/suites/RESULTS.md does not record every selected suite, so ${elapsed}s has nothing to be judged against. Regenerate it with \`batten record suites --write\`." >&2
-elif [ "$elapsed" -ge "$recorded" ]; then
-  echo "::error:: test:bats: ${elapsed}s wall at $workers workers against ${recorded}s recorded serial for the same suites — the workers cost more than they bought on this machine. Reported, not refused: the corpus and this run may not come from comparable hardware (CLOUD-386)." >&2
-fi
-echo "test:bats: $ran/$expected cases, $(printf '%s\n' $suites | wc -l | tr -d ' ') suite(s), $workers workers, ${elapsed}s wall vs ${recorded}s recorded serial"
-cargo run --quiet -p batten -- step record test:bats || true
-'''
-
 [tasks.hooks]
 description = "Run the git-hook gate (fmt, lint, test) through hk — the same hk.pkl the pre-commit hook uses, in check-only mode"
 run = "hk check --all"
@@ -5018,8 +4657,6 @@ depends = ["tree-clean", "ci", "cross-check", "darwin-link", "zizmor", "semver"]
 #   receipt is keyed to HEAD, so a dirty tree must fail before anything is decided
 #   about the commit. It is also in `depends`, which fails in seconds; this one
 #   catches a tree dirtied while `depends` ran.
-# * `test:bats` in the body rather than in `depends` (CLOUD-1140), so it answers
-#   from its receipt after the `ci` leg ran the suite instead of racing it.
 # * `commit-lint` over the lap's own range (CLOUD-1702) — `verify:commit-lint`
 #   carries the base, below.
 # * `record-verdicts` before the rows that read them (CLOUD-1265).
@@ -5040,7 +4677,6 @@ depends = ["tree-clean", "ci", "cross-check", "darwin-link", "zizmor", "semver"]
 #   receipt.
 run = [
   "mise run tree-clean",
-  "mise run test:bats",
   "mise run verify:commit-lint",
   "mise run record-verdicts",
   "mise run verify:config-lint",
@@ -5062,8 +4698,8 @@ run = [
 # absent one.
 #
 # A TASK OF ITS OWN, because a task's `env` reaches its `run` steps and the
-# processes they start, and must reach `commit-lint` alone: `test:bats` reads
-# `BASE_SHA` too, and it never used to see this one.
+# processes they start, and must reach `commit-lint` alone: the retired shell
+# suite read `BASE_SHA` too, and never saw this one.
 [tasks."verify:commit-lint"]
 description = "`commit-lint` over the verify lap's own range — invoked through `verify:gated`"
 env = { BASE_SHA = "{{ get_env(name='BATTEN_SPEC_BASE', default='origin/main') }}", HEAD_SHA = "HEAD" }

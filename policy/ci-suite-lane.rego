@@ -7,14 +7,17 @@
 # silently vanish from CI". It reads `.claude/hooks/git-hook.sh`'s invocation
 # line for the economy half, because a plan cannot tell you what a CALLER passes.
 #
-# CLOUD-1140 adds a second caller with exactly that shape. The `ci` job now sets
-# `HK_SKIP_STEPS: test:bats` so the shell suite runs on its own runner instead of
+# CLOUD-1140 added a second caller with exactly that shape. The `ci` job set
+# `HK_SKIP_STEPS: test:bats` so the shell suite ran on its own runner instead of
 # serialising behind the cargo chain — 83% of a step that was 92% of a job that
-# was the whole critical path. The plan `hook-profile-check` reads is unchanged
-# by that env var, so the suite could be carved out of the `ci` job and run
-# nowhere at all, and every gate in this repository would be green over a suite
-# that never executed. That is the `profiled-step-not-in-check` class one layer
-# up, where its own gate cannot reach.
+# was the whole critical path. That suite retired under CLOUD-843; the carve
+# today is `batten-check`, run by its own job (CLOUD-1413), and the shape is the
+# same. The plan `hook-profile-check` reads is unchanged by that env var, so a
+# step could be carved out of the `ci` job and run nowhere at all, and every gate
+# in this repository would be green over a step that never executed. That is the
+# `profiled-step-not-in-check` class one layer up, where its own gate cannot
+# reach. The cases below keep `test:bats` as a name only: the predicate reads
+# names, not which steps exist.
 #
 # THE ASYMMETRY IS THE WHOLE DESIGN, and it is why this is a deny rather than a
 # report. The two ways the pairing comes apart are not equally visible:

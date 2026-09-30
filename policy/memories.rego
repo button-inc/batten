@@ -151,12 +151,11 @@ violation contains {
 # same broken edge.
 #
 # CHANGELOG.md is excluded with the template because `release-plz` owns it — a
-# stale reference there could only be fixed by hand-editing a generated file —
-# and `tests/bats/` is a submodule, whose markdown is upstream's rather than
-# this repository's.
+# stale reference there could only be fixed by hand-editing a generated file.
+# `tests/bats/` was excluded too, as a submodule whose markdown was upstream's;
+# it retired under CLOUD-843, so no path carries that prefix to exclude.
 referrer(path) if {
 	endswith(path, ".md")
-	not startswith(path, "tests/bats/")
 	path != "CHANGELOG.md"
 	path != template
 }
@@ -253,15 +252,14 @@ test_a_dangling_reference_is_reported_with_a_pointer if {
 	finding.subjects[0].line == 2
 }
 
-# The three excluded referrers, each for its own reason. Without this a rename
-# would be reported against a generated file and against a submodule.
+# The two excluded referrers, each for its own reason. Without this a rename
+# would be reported against a generated file and against the template.
 test_the_excluded_referrers_are_not_scanned if {
 	found := violation with input as graph(
 		[".serena/memories/core.md"],
 		{
 			"CHANGELOG.md": ["mem:gone-away"],
 			".serena/memories/memory_maintenance.md": ["mem:gone-away"],
-			"tests/bats/README.md": ["mem:gone-away"],
 		},
 	)
 	count(found) == 0

@@ -195,6 +195,77 @@ pub(crate) fn task_value(block: &str, key: &str) -> String {
     }
 }
 
+/// `[tasks.<name>]`'s COMMANDS from the committed `mise.toml`, whichever way the
+/// task spells its `run`.
+///
+/// A task body is a shell string or a `run = [...]` argv list, and the campaign
+/// that retires the shell (CLOUD-843) moves tasks from the first to the second
+/// one at a time — so a tier that pins a property of a task's invocation reads
+/// what the task RUNS, never how it happened to be quoted. A string yields its
+/// non-blank, non-comment lines; a list yields each entry, with a
+/// `{ task = "x" }` entry read as the `mise run x` it means. Comments are
+/// dropped because these bodies discuss the flags they carry at length, and a
+/// pin that passes on its own documentation is not a pin.
+///
+/// An absent task or an absent `run` is the empty list, which every caller
+/// asserts against rather than reading as a pass.
+#[must_use]
+pub(crate) fn task_commands(name: &str) -> Vec<String> {
+    let manifest = fs::read_to_string(at_root("mise.toml")).expect("the manifest");
+    let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
+    let Some(run) = parsed
+        .get("tasks")
+        .and_then(|tasks| tasks.get(name))
+        .and_then(|task| task.get("run"))
+    else {
+        return Vec::new();
+    };
+    match run {
+        toml::Value::String(body) => body
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .filter(|line| !line.contains("{% raw %}") && !line.contains("{% endraw %}"))
+            .map(str::to_owned)
+            .collect(),
+        toml::Value::Array(entries) => entries
+            .iter()
+            .filter_map(|entry| match entry {
+                toml::Value::String(command) => Some(command.clone()),
+                toml::Value::Table(table) => table
+                    .get("task")
+                    .and_then(toml::Value::as_str)
+                    .map(|task| format!("mise run {task}")),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// `[tasks.<name>].depends` from the committed `mise.toml`, as task names.
+///
+/// A single string and a list are both spellings mise accepts, so both read the
+/// same here; an absent key is the empty list.
+#[must_use]
+pub(crate) fn task_depends(name: &str) -> Vec<String> {
+    let manifest = fs::read_to_string(at_root("mise.toml")).expect("the manifest");
+    let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
+    match parsed
+        .get("tasks")
+        .and_then(|tasks| tasks.get(name))
+        .and_then(|task| task.get("depends"))
+    {
+        Some(toml::Value::String(one)) => vec![one.clone()],
+        Some(toml::Value::Array(many)) => many
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .map(str::to_owned)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// Every `BATTEN_` variable the command surface declares, derived from the
 /// surface itself so the set cannot drift behind a new flag.
 fn declared_env_vars() -> Vec<&'static str> {
