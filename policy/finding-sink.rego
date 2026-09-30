@@ -44,7 +44,7 @@ package batten.finding_sink
 
 import rego.v1
 
-rules contains "turn file other"
+rules contains "turn file missing"
 
 lines := input.tree.records["turn-writes"]
 
@@ -90,7 +90,7 @@ home if {
 }
 
 violation contains {
-	"rule": "turn file other",
+	"rule": "turn file missing",
 	"verdict": "turn file missing",
 	"subjects": [{"artifact": sprintf("turn:%s", [field("turns")])}],
 } if {

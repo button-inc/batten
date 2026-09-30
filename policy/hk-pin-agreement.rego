@@ -98,6 +98,11 @@ violation contains {
 	# `object.get`, never `tools.hk`: the dotted read is hoisted into a binding
 	# that fails on an absent key before the `not` ever sees it, which made this
 	# arm undecidable — measured, by this file's own case below.
+	#
+	# `tools` FIRST, positively: the claim is about a pin table that WAS read.
+	# regorus lets the `not` below succeed over an undefined `tools`, so an unread
+	# manifest read as "no `hk` pin" and fired this arm over nothing.
+	tools
 	not is_string(object.get(tools, "hk", null))
 	some amended in amends
 }

@@ -7645,7 +7645,7 @@ severity = "deny"
 # removes the reading once it has decided, so no record outlives its `stop` and
 # an ordinary `check` or `enforce` (verify, land) finds none to fire on.
 [[rule]]
-id = "turn file other"
+id = "turn file missing"
 kind = "policy"
 scope = "tree"
 module = "policy/finding-sink.rego"

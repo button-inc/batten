@@ -2235,7 +2235,7 @@ run = "cargo run --quiet -p batten -- release backfill --workflow linear-release
 [tasks.finding-sink-check]
 description = "Gate: a turn that cites path:line evidence and makes no durable write stranded a finding (reads a Stop payload or transcript path on stdin; pointer-only)"
 dir = "{{cwd}}"
-run = "cargo run --quiet -p batten -- record decide turn-writes --input citation=finding-citation --input key=finding-mediated-key --input fields=id,issueId --input receipt=issue-read --input field=5 --rule 'turn file other'"
+run = "cargo run --quiet -p batten -- record decide turn-writes --input citation=finding-citation --input key=finding-mediated-key --input fields=id,issueId --input receipt=issue-read --input field=5 --rule 'turn file missing'"
 
 # An issue may become Done only if none of its own pull requests is still open
 # (CLOUD-468). CLOUD-843 retired the bash body: the reading is `batten record

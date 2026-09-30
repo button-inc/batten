@@ -143,6 +143,58 @@ expression: stdout_of(&output)
       "subcommands": []
     },
     {
+      "path": "artifacts",
+      "id": "artifacts",
+      "about": "Write the committed derivations of the command surface",
+      "effect": "unclassified",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "artifacts write",
+          "id": "artifacts.write",
+          "about": "Write completions, man pages, schemas or the CLI reference where the caller names",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "completions",
+              "short": null,
+              "long": "completions",
+              "takes_value": true,
+              "positional": false,
+              "help": "Write the bash, zsh and fish completion scripts into this directory"
+            },
+            {
+              "name": "man",
+              "short": null,
+              "long": "man",
+              "takes_value": true,
+              "positional": false,
+              "help": "Write one man page per command into this directory, removing stale pages"
+            },
+            {
+              "name": "reference",
+              "short": null,
+              "long": "reference",
+              "takes_value": true,
+              "positional": false,
+              "help": "Write the markdown CLI reference to this file"
+            },
+            {
+              "name": "schema",
+              "short": null,
+              "long": "schema",
+              "takes_value": true,
+              "positional": false,
+              "help": "Write the config and policy-input JSON Schemas into this directory"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "attribution",
       "id": "attribution",
       "about": "What produced commits may carry about the tooling that made them",
@@ -196,6 +248,15 @@ expression: stdout_of(&output)
           "path": "attribution identity",
           "id": "attribution.identity",
           "about": "Set this clone's repo-local git identity when it is unset or denied",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "attribution signing",
+          "id": "attribution.signing",
+          "about": "Switch signing off in this clone when its signer cannot be verified or reproduced",
           "effect": "write",
           "data_channel": false,
           "flags": [],
@@ -299,14 +360,6 @@ expression: stdout_of(&output)
           "data_channel": false,
           "flags": [
             {
-              "name": "issue",
-              "short": null,
-              "long": "issue",
-              "takes_value": true,
-              "positional": false,
-              "help": "Read this issue's payload from the capture store rather than stdin (repeatable)"
-            },
-            {
               "name": "cites",
               "short": null,
               "long": "cites",
@@ -315,12 +368,38 @@ expression: stdout_of(&output)
               "help": "Judge each payload's Ready-block citations against the tree instead of the graph"
             },
             {
+              "name": "issue",
+              "short": null,
+              "long": "issue",
+              "takes_value": true,
+              "positional": false,
+              "help": "Read this issue's payload from the capture store rather than stdin (repeatable)"
+            },
+            {
               "name": "refs",
               "short": null,
               "long": "refs",
               "takes_value": false,
               "positional": false,
               "help": "Judge the tree's clause citations against the payloads instead of the graph"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "board sweep",
+          "id": "board.sweep",
+          "about": "Run every declared board gate over one payload set and report the set of refusals",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "issue",
+              "short": null,
+              "long": "issue",
+              "takes_value": true,
+              "positional": false,
+              "help": "Read this issue's payload from the capture store rather than stdin (repeatable)"
             }
           ],
           "subcommands": []
@@ -615,12 +694,28 @@ expression: stdout_of(&output)
               "help": "Emit byte-stable JSON instead of pointer lines"
             },
             {
+              "name": "repo",
+              "short": null,
+              "long": "repo",
+              "takes_value": true,
+              "positional": false,
+              "help": "The repository to read, in the forge client's own spelling"
+            },
+            {
               "name": "required",
               "short": null,
               "long": "required",
               "takes_value": true,
               "positional": false,
               "help": "Comma-separated check names that carry a verdict about this repository"
+            },
+            {
+              "name": "sha",
+              "short": null,
+              "long": "sha",
+              "takes_value": true,
+              "positional": false,
+              "help": "Read this commit's check runs from the forge instead of a reading on stdin"
             }
           ],
           "subcommands": []
@@ -649,6 +744,14 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": false,
               "help": "The revision this checkout is diffed against"
+            },
+            {
+              "name": "head",
+              "short": null,
+              "long": "head",
+              "takes_value": true,
+              "positional": false,
+              "help": "The revision whose tree the checkout must carry; refused when it does not"
             }
           ],
           "subcommands": []
@@ -1106,7 +1209,7 @@ expression: stdout_of(&output)
           "long": "build-tool",
           "takes_value": true,
           "positional": false,
-          "help": "How to build for the target: cargo, cross or zigbuild (default: cargo)"
+          "help": "How to build for the target: cargo, cross or zigbuild (default: $DIST_BUILD_TOOL, else cargo)"
         },
         {
           "name": "stem",
@@ -1160,6 +1263,15 @@ expression: stdout_of(&output)
               "help": "Emit byte-stable JSON instead of pointer lines"
             }
           ],
+          "subcommands": []
+        },
+        {
+          "path": "doctor forge",
+          "id": "doctor.forge",
+          "about": "Diagnose whether the forge credential carries the claims this repository's tasks declare",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [],
           "subcommands": []
         },
         {
@@ -1338,6 +1450,14 @@ expression: stdout_of(&output)
           "help": "Run the rest of a `:::` bundle after a command fails"
         },
         {
+          "name": "except",
+          "short": null,
+          "long": "except",
+          "takes_value": true,
+          "positional": false,
+          "help": "Drop the tracked paths this glob matches from what --tracked selected"
+        },
+        {
           "name": "format",
           "short": null,
           "long": "format",
@@ -1400,6 +1520,14 @@ expression: stdout_of(&output)
           "takes_value": false,
           "positional": false,
           "help": "Copy the child's streams onto Batten's own, as well as capturing them"
+        },
+        {
+          "name": "tracked",
+          "short": null,
+          "long": "tracked",
+          "takes_value": true,
+          "positional": false,
+          "help": "Append the tracked paths this pathspec selects to the command; run nothing if none"
         }
       ],
       "subcommands": []
@@ -1595,6 +1723,24 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "land linear",
+          "id": "land.linear",
+          "about": "Whether this head is built on the reference's current tip, so it can fast-forward",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "reference",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The remote reference to replay onto"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "land push",
           "id": "land.push",
           "about": "Push this branch to its own ref, under receive-pack's compare-and-swap",
@@ -1680,6 +1826,14 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": false,
               "help": "`<CLOUD-id>` lines a commit on origin/main closes, from `claimed-keys --closing-only`"
+            },
+            {
+              "name": "gather",
+              "short": null,
+              "long": "gather",
+              "takes_value": false,
+              "positional": false,
+              "help": "Acquire each evidence arm no file was named for: the trunk's closing keys, merged pull requests, and the remote's branches"
             },
             {
               "name": "instant",
@@ -2627,6 +2781,88 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "pr unsubscribed",
+          "id": "pr.unsubscribed",
+          "about": "Drop this session's webhook subscription to a pull request, attest it, or record and decide the reading",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "arguments",
+              "short": null,
+              "long": "arguments",
+              "takes_value": true,
+              "positional": false,
+              "help": "The tool's arguments `drop` sends: a JSON object whose strings may name {owner}, {repo}, {pr} and {session}"
+            },
+            {
+              "name": "endpoint",
+              "short": null,
+              "long": "endpoint",
+              "takes_value": true,
+              "positional": false,
+              "help": "The endpoint `drop` calls, with `{session}` where the session id goes"
+            },
+            {
+              "name": "family",
+              "short": null,
+              "long": "family",
+              "takes_value": true,
+              "positional": false,
+              "help": "The record family `check` writes, and the prefix of this session's receipts"
+            },
+            {
+              "name": "pr",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The pull request number this verb is about"
+            },
+            {
+              "name": "rule",
+              "short": null,
+              "long": "rule",
+              "takes_value": true,
+              "positional": false,
+              "help": "The declared rule `check` decides with over the record it writes"
+            },
+            {
+              "name": "session_env",
+              "short": null,
+              "long": "session-env",
+              "takes_value": true,
+              "positional": false,
+              "help": "The name of the environment variable holding this host's session id; unset is no session"
+            },
+            {
+              "name": "token_env",
+              "short": null,
+              "long": "token-env",
+              "takes_value": true,
+              "positional": false,
+              "help": "The name of the environment variable holding the path of the credential file `drop` sends"
+            },
+            {
+              "name": "tool",
+              "short": null,
+              "long": "tool",
+              "takes_value": true,
+              "positional": false,
+              "help": "The tool `drop` asks the endpoint to call"
+            },
+            {
+              "name": "verb",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "drop | record | check"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "pr watch",
           "id": "pr.watch",
           "about": "Poll a head's check runs until the required set answers, then report the verdict",
@@ -2703,7 +2939,7 @@ expression: stdout_of(&output)
               "long": "sha",
               "takes_value": true,
               "positional": false,
-              "help": "The commit whose check runs to read"
+              "help": "The commit whose check runs to read — a sha, or a ref this checkout resolves"
             }
           ],
           "subcommands": []
@@ -2857,6 +3093,14 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": false,
               "help": "Which git fact the receipt is judged against: the exact commit, or the branch"
+            },
+            {
+              "name": "or",
+              "short": null,
+              "long": "or",
+              "takes_value": true,
+              "positional": false,
+              "help": "Another check whose receipt satisfies this one; any one valid receipt passes (repeatable)"
             }
           ],
           "subcommands": []
@@ -2880,6 +3124,40 @@ expression: stdout_of(&output)
       "data_channel": false,
       "flags": [],
       "subcommands": [
+        {
+          "path": "record attestation",
+          "id": "record.attestation",
+          "about": "Record a release's attestation posture and what the verifier says of each archive's binary",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "binary",
+              "short": null,
+              "long": "binary",
+              "takes_value": true,
+              "positional": false,
+              "help": "The binary's file name inside each archive (a `.exe` suffix also matches)"
+            },
+            {
+              "name": "tag",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The release tag to judge; absent is the latest release"
+            },
+            {
+              "name": "verifier",
+              "short": null,
+              "long": "verifier",
+              "takes_value": true,
+              "positional": false,
+              "help": "The program that downloads the release and verifies each binary (default: gh)"
+            }
+          ],
+          "subcommands": []
+        },
         {
           "path": "record census",
           "id": "record.census",
@@ -2959,6 +3237,40 @@ expression: stdout_of(&output)
           "effect": "write",
           "data_channel": false,
           "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "record decide",
+          "id": "record.decide",
+          "about": "Derive a family's reading, record it without echoing it, and decide over it with the named rules",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "family",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The record family, which selects the reading and is the key a module reads it under"
+            },
+            {
+              "name": "input",
+              "short": null,
+              "long": "input",
+              "takes_value": true,
+              "positional": false,
+              "help": "A `<key>=<value>` input this family needs beyond stdin (repeatable)"
+            },
+            {
+              "name": "rule",
+              "short": null,
+              "long": "rule",
+              "takes_value": true,
+              "positional": false,
+              "help": "The declared rule that decides over the record just written (repeatable, at least one)"
+            }
+          ],
           "subcommands": []
         },
         {
@@ -3203,6 +3515,40 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "record probe",
+          "id": "record.probe",
+          "about": "Run a probe command and record the family's reading of its exit status and output",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "command",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The probe command, after `--`: its exit status is the `status` input and its output the document"
+            },
+            {
+              "name": "family",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The record family, which selects the reading and is the key a module reads it under"
+            },
+            {
+              "name": "input",
+              "short": null,
+              "long": "input",
+              "takes_value": true,
+              "positional": false,
+              "help": "A `<key>=<value>` input this family needs beyond stdin (repeatable)"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "record query",
           "id": "record.query",
           "about": "Run a declared `[[forge.query]]` read and record its reduction as the family it names",
@@ -3224,6 +3570,32 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": false,
               "help": "A `<name>=<value>` binding for one of the query's own placeholders (repeatable)"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "record release",
+          "id": "record.release",
+          "about": "Record a published release's assets, its checksum manifest's entries, and the entries whose bytes disagree",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "manifest",
+              "short": null,
+              "long": "manifest",
+              "takes_value": true,
+              "positional": false,
+              "help": "The checksum manifest's file name, as the release carries it"
+            },
+            {
+              "name": "tag",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The release's tag; empty or absent is the latest release"
             }
           ],
           "subcommands": []
@@ -3286,6 +3658,14 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": true,
               "help": "The `[[rule.tools]]` id whose verdict is being recorded"
+            },
+            {
+              "name": "pick",
+              "short": null,
+              "long": "pick",
+              "takes_value": true,
+              "positional": false,
+              "help": "Reduce `key=value` lines: `<name-key>=<token-key>` names the field that labels a record line and the one that scores it"
             }
           ],
           "subcommands": []
@@ -3313,11 +3693,77 @@ expression: stdout_of(&output)
     {
       "path": "release",
       "id": "release",
-      "about": "Answer whether a release is installable as it says it is",
+      "about": "Answer whether a release is installable as it says it is, hash its assets, and backfill its tracking",
       "effect": "unclassified",
       "data_channel": false,
       "flags": [],
       "subcommands": [
+        {
+          "path": "release backfill",
+          "id": "release.backfill",
+          "about": "Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "dry_run",
+              "short": null,
+              "long": "dry-run",
+              "takes_value": false,
+              "positional": false,
+              "help": "Print the plan, oldest first, and dispatch nothing"
+            },
+            {
+              "name": "max_polls",
+              "short": null,
+              "long": "max-polls",
+              "takes_value": true,
+              "positional": false,
+              "help": "Polls per tag before its run reads as never finishing (default: 240)"
+            },
+            {
+              "name": "pattern",
+              "short": null,
+              "long": "pattern",
+              "takes_value": true,
+              "positional": false,
+              "help": "The glob a release tag matches, as `git tag --list` matches it"
+            },
+            {
+              "name": "poll_interval",
+              "short": null,
+              "long": "poll-interval",
+              "takes_value": true,
+              "positional": false,
+              "help": "Seconds between polls; the forge's own interval raises it (default: 5)"
+            },
+            {
+              "name": "ref",
+              "short": null,
+              "long": "ref",
+              "takes_value": true,
+              "positional": false,
+              "help": "The branch the dispatched runs execute on"
+            },
+            {
+              "name": "tag",
+              "short": null,
+              "long": "tag",
+              "takes_value": true,
+              "positional": false,
+              "help": "A release tag to record (repeatable); absent, every tag the pattern selects, oldest first"
+            },
+            {
+              "name": "workflow",
+              "short": null,
+              "long": "workflow",
+              "takes_value": true,
+              "positional": false,
+              "help": "The workflow file dispatched once per tag"
+            }
+          ],
+          "subcommands": []
+        },
         {
           "path": "release install",
           "id": "release.install",
@@ -3325,6 +3771,48 @@ expression: stdout_of(&output)
           "effect": "unclassified",
           "data_channel": false,
           "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "release sums",
+          "id": "release.sums",
+          "about": "Hash a published release's own assets into a checksum manifest, never the manifest itself",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "manifest",
+              "short": null,
+              "long": "manifest",
+              "takes_value": true,
+              "positional": false,
+              "help": "The checksum manifest's file name, as the release carries it"
+            },
+            {
+              "name": "names",
+              "short": null,
+              "long": "names",
+              "takes_value": false,
+              "positional": false,
+              "help": "Print the manifest's path as sums=<path> and exit, with no tag, network or download"
+            },
+            {
+              "name": "out_dir",
+              "short": null,
+              "long": "out-dir",
+              "takes_value": true,
+              "positional": false,
+              "help": "Write the manifest under this directory (default: checksums)"
+            },
+            {
+              "name": "tag",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The release's tag; empty or absent is the latest release"
+            }
+          ],
           "subcommands": []
         }
       ]
@@ -3489,6 +3977,64 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": false,
               "help": "Milliseconds between the two sightings a reclaim requires"
+            },
+            {
+              "name": "task",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The task's name, which is what the lock is keyed by"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "singleton detach",
+          "id": "singleton.detach",
+          "about": "Run a command in the background under a task's lock, and report the previous run's failure",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "attached",
+              "short": null,
+              "long": "attached",
+              "takes_value": false,
+              "positional": false,
+              "help": "Run as the background copy: take the lock, run the command, record a failure"
+            },
+            {
+              "name": "command",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The command to run in the background, after `--`"
+            },
+            {
+              "name": "log",
+              "short": null,
+              "long": "log",
+              "takes_value": true,
+              "positional": false,
+              "help": "Where the background run's whole output is written"
+            },
+            {
+              "name": "marker",
+              "short": null,
+              "long": "marker",
+              "takes_value": true,
+              "positional": false,
+              "help": "Where a failed run's pointers wait, announced and cleared by the next invocation"
+            },
+            {
+              "name": "pattern",
+              "short": null,
+              "long": "pattern",
+              "takes_value": true,
+              "positional": false,
+              "help": "The `[[pattern]]` row whose matching output lines are the failure's pointers"
             },
             {
               "name": "task",
@@ -4014,6 +4560,24 @@ expression: stdout_of(&output)
       "flags": [],
       "subcommands": [
         {
+          "path": "wiring gate",
+          "id": "wiring.gate",
+          "about": "Link this clone's two commit hooks to a hook body the repository checks in",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "body",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The hook body to link, relative to the repository root"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "wiring reclaim",
           "id": "wiring.reclaim",
           "about": "Remove non-batten hook registrations from this host's merged surfaces",
@@ -4170,6 +4734,10 @@ expression: stdout_of(&output)
     {
       "id": "doctor.egress",
       "path": "doctor egress"
+    },
+    {
+      "id": "doctor.forge",
+      "path": "doctor forge"
     },
     {
       "id": "doctor.gate",

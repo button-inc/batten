@@ -1071,11 +1071,14 @@ task_cargo contains cmd if {
 # guard lifted off it — the whole line is the statement a foreign leg must spell
 # after `mise exec -- `. A step-cache line is EXCLUDED: it starts `cargo run` too,
 # and read whole it would demand the foreign leg spell the cache it has no use for.
+# EVERY `step` verb, not `run` alone: a `step check` or `step record` line is the
+# same cache, and reading one as the statement would call a body that runs no suite
+# a body that states one.
 task_cargo contains trimmed if {
 	some raw in split(task_run("test:cargo"), "\n")
 	trimmed := trim_space(raw)
 	startswith(trimmed, "cargo ")
-	not contains(trimmed, " step run ")
+	not contains(trimmed, " -- step ")
 }
 
 # AND THE STATEMENT THE STEP CACHE RUNS (CLOUD-843, CLOUD-1891). `test:cargo`

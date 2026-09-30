@@ -101,7 +101,16 @@ tag := name if {
 	some name in tags
 }
 
-workflow := input.tree.documents[workflow_path]
+# THE PATH IS SPELLED AS A LITERAL WHERE IT INDEXES THE INPUT, here and in
+# `literal` and the fixture below. Measured under regorus 0.11.0: an index derived
+# from the constant rule `workflow_path` reads nothing once `input` is replaced
+# with `with`, although the constant compares equal to the literal — so every
+# expectation below was undefined and every case over a fixture failed. The
+# literal index reads the same document. `workflow_path` stays for the pointers.
+workflow := document if {
+	path := ".github/workflows/release-artifacts.yml"
+	document := input.tree.documents[path]
+}
 
 # Every matrix leg carrying a target, across every job.
 legs contains leg if {
@@ -123,7 +132,8 @@ composed := {leg.target |
 
 # The literal operands of every `gh release upload` line, as basenames.
 literal contains name if {
-	some line in input.tree.lines[workflow_path]
+	path := ".github/workflows/release-artifacts.yml"
+	some line in input.tree.lines[path]
 	contains(line, "gh release upload")
 	some token in split(line, " ")
 	regex.match(data.batten.patterns["release-upload-operand"], token)
@@ -180,17 +190,21 @@ violation contains {
 
 # --- cases -------------------------------------------------------------------
 
-fixture(record, workflow_lines) := {"tree": {
-	"records": {"release-assets": record},
-	"documents": {
-		workflow_path: {"jobs": {"dist": {"strategy": {"matrix": {"include": [
-			{"target": "x86_64-unknown-linux-gnu", "build-tool": "cargo"},
-			{"target": "aarch64-unknown-linux-gnu", "build-tool": "cross"},
-		]}}}}},
-		"mise.toml": {"env": {"BATTEN_CLI_REFERENCE": "ref.md"}},
-	},
-	"lines": {workflow_path: workflow_lines},
-}}
+# The path is the literal, for the reason `workflow` above gives.
+fixture(record, workflow_lines) := document if {
+	path := ".github/workflows/release-artifacts.yml"
+	document := {"tree": {
+		"records": {"release-assets": record},
+		"documents": {
+			path: {"jobs": {"dist": {"strategy": {"matrix": {"include": [
+				{"target": "x86_64-unknown-linux-gnu", "build-tool": "cargo"},
+				{"target": "aarch64-unknown-linux-gnu", "build-tool": "cross"},
+			]}}}}},
+			"mise.toml": {"env": {"BATTEN_CLI_REFERENCE": "ref.md"}},
+		},
+		"lines": {path: workflow_lines},
+	}}
+}
 
 uploads := [`        run: gh release upload "$TAG" schema/batten.schema.json install.sh "$SPDX" --clobber`]
 

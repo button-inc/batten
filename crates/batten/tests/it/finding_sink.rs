@@ -44,7 +44,7 @@
 // carried: "CLOUD-775: an id that is not an issue key is not a home" crates/batten/src/turn.rs kind:mechanism
 // carried: "the mediated route files through batten mcp call, and a mediated read is not a home" crates/batten/src/turn.rs kind:mechanism
 // carried: "#1052: a row's column is known only from a read receipt, which a listing never mints" batten.toml
-// changed: "a firing exits 1 with turn:<n> finding-without-durable-write" crates/batten/src/lib.rs a firing is `check`'s exit 2 with the pointer `turn:<n>` and the rule `turn file other`: one exit table, no per-verb exception, and the stop handler's door says an exit 2 exactly as it said an exit 1
+// changed: "a firing exits 1 with turn:<n> finding-without-durable-write" crates/batten/src/lib.rs a firing is `check`'s exit 2 with the pointer `turn:<n>` and the rule `turn file missing`: one exit table, no per-verb exception, and the stop handler's door says an exit 2 exactly as it said an exit 1
 // changed: "the refusal names the practice: OPEN row" batten.toml the practice is the verdict's gloss and class, which `policy explain turn file missing` prints, rather than a sentence the task wrote beside the pointer
 // changed: "a clean turn prints nothing on either stream" crates/batten/src/lib.rs a clean turn prints nothing on STDOUT, the channel the handler door reads; stderr is the engine's diagnostic channel
 // changed: "CLOUD-775: outside a checkout every row reads as closed" crates/batten/src/record.rs outside a checkout there is no record store to decide over, so the verb abstains at exit 0 — the handler door's pass — rather than firing
@@ -114,7 +114,7 @@ kind = "command"
 target = "file an open issue"
 
 [[rule]]
-id = "turn file other"
+id = "turn file missing"
 kind = "policy"
 scope = "tree"
 module = "policy/finding-sink.rego"
@@ -247,7 +247,7 @@ fn fired(result: &(Option<i32>, String, String), turn: u32) {
         "the pointer is the turn: {}",
         result.2
     );
-    assert!(result.2.contains("turn file other"), "{}", result.2);
+    assert!(result.2.contains("turn file missing"), "{}", result.2);
 }
 
 fn clean(result: &(Option<i32>, String, String)) {
@@ -452,7 +452,7 @@ fn a_decided_record_never_answers_a_later_check() {
     fired(&turns.check(), 1);
     for argv in [
         &["check"][..],
-        &["check", "--rule", "turn file other"][..],
+        &["check", "--rule", "turn file missing"][..],
         &["enforce"][..],
     ] {
         let decided = common::run(&turns.repo, argv);
