@@ -56,7 +56,7 @@
 use crate::common;
 
 use std::path::{Path, PathBuf};
-use std::process::Output;
+use std::process::{Output, Stdio};
 
 use common::{at_root, git_in, init_repo, scratch, write};
 
@@ -458,9 +458,17 @@ fn a_list_that_cannot_be_derived_is_partial_never_complete() {
         let forge = forge(name, &assets, Some(&manifest_over(&assets, None)));
         let (code, text) = decide(&dir, &forge);
         assert_eq!(code, Some(2), "{name}: {text}");
-        assert!(text.contains("release read partial"), "{name}: {text}");
+        // THE TEXT CHANNEL IS POINTER-ONLY, `<path> <rule>`, so the verdict token
+        // is not on it and the two classes are told apart by their POINTERS:
+        // `release read partial` points at the workflow it could not derive the
+        // list from, while `release ship missing` carries only an artifact and
+        // falls back to the module's own path.
         assert!(
-            !text.contains("release ship missing"),
+            text.contains(".github/workflows/release-artifacts.yml release grade other"),
+            "{name}: {text}"
+        );
+        assert!(
+            !text.contains("policy/release-assets.rego"),
             "{name}: an unknown list demands nothing: {text}"
         );
     }
@@ -728,63 +736,63 @@ fn basename(path: &str) -> String {
 fn the_names_the_module_demands_are_the_names_the_producers_write() {
     // THE MODULE'S NAME CONSTANTS AGAINST THEIR PRODUCERS. `release-assets.rego`
     // spells the repository SBOM's two documents and each composed leg's binary
-    // SBOM name, stem and suffix both; the producers that write them are
-    // `[tasks.sbom]` (`--names`), `[tasks.sbom-binary-record]` (`--names <target>`)
-    // and `mise-tasks/dist.sh --stem` for the archive. A release carrying EXACTLY
-    // the names those producers print, plus the workflow's literal uploads and the
-    // reference, is clean — so a constant that drifts from its producer, or a
-    // producer that drifts from the constant, turns this red as a `release ship
-    // missing` for a name the other side does not spell.
+    // SBOM name, stem and suffix both; the producers that write them are `batten
+    // sbom --names`, `batten sbom --names --target <triple>` and `batten dist
+    // <triple> --stem` for the archive (CLOUD-843 retired the three shell
+    // producers onto those verbs). A release carrying EXACTLY the names those
+    // producers print, plus the workflow's literal uploads and the reference, is
+    // clean — so a constant that drifts from its producer, or a producer that
+    // drifts from the constant, turns this red as a `release ship missing` for a
+    // name the other side does not spell.
+    //
+    // ONE SCRATCH CRATE AT THE FIXTURE TAG'S VERSION, because `dist` names its
+    // stem from `cargo metadata` and the binary SBOM's name carries the same
+    // version: a crate named for this project's binary, and the `[sbom]` table
+    // the producers read their names from, copied from this repository's own.
     let legs = committed_legs();
-    let names = common::task_bash(&common::at_root("."), &common::task_body("sbom"))
-        .env("usage_names", "true")
-        .env("SBOM_OUT_DIR", "out")
-        .output()
-        .expect("the sbom producer runs");
-    assert!(names.status.success(), "{}", said(&names));
-    let documents: Vec<String> = String::from_utf8_lossy(&names.stdout)
-        .lines()
-        .filter_map(|line| line.split_once('=').map(|(_, path)| basename(path)))
-        .collect();
-    assert_eq!(documents.len(), 2, "{documents:?}");
-    // `dist.sh` reads the version from `Cargo.toml` in its working directory, so a
-    // scratch manifest at the fixture tag's version names the fixture's stems.
     let crate_dir = scratch("release-assets-stem");
     write(
         &crate_dir,
         "Cargo.toml",
-        &format!("version = \"{}\"\n", TAG.trim_start_matches('v')),
+        &format!(
+            "[package]\nname = \"batten\"\nversion = \"{}\"\nedition = \"2021\"\n\n[[bin]]\nname = \"batten\"\npath = \"src/main.rs\"\n\n[workspace]\n",
+            TAG.trim_start_matches('v')
+        ),
     );
-    let dist = common::at_root("mise-tasks/dist.sh");
-    let mut assets = documents;
+    write(&crate_dir, "src/main.rs", "fn main() {}\n");
+    // ITS OWN REPOSITORY, because the producers resolve the repository root
+    // before they read a manifest: under this checkout's `target/` the walk up
+    // finds THIS repository and names its version instead of the fixture's.
+    git_in(&crate_dir, &["init", "-q"]);
+    write(
+        &crate_dir,
+        "batten.toml",
+        "version = 1\n\n[sbom]\nsubject = \"batten\"\nout_dir = \"sbom\"\nbinary_out_dir = \"dist\"\n",
+    );
+    let names = |args: &[&str]| -> String {
+        let out = common::batten()
+            .args(args)
+            .current_dir(&crate_dir)
+            .stdin(Stdio::null())
+            .output()
+            .expect("the producer runs");
+        assert!(out.status.success(), "{args:?}: {}", said(&out));
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let mut assets: Vec<String> = names(&["sbom", "--names"])
+        .lines()
+        .filter_map(|line| line.split_once('=').map(|(_, path)| basename(path)))
+        .collect();
+    assert_eq!(assets.len(), 2, "{assets:?}");
     for (target, tool) in &legs {
-        let stem = common::task_bash(
-            &crate_dir,
-            &format!("'{}' --stem '{target}'", dist.display()),
-        )
-        .output()
-        .expect("dist.sh runs");
-        assert!(stem.status.success(), "{}", said(&stem));
-        let stem = String::from_utf8_lossy(&stem.stdout).trim().to_owned();
+        let stem = names(&["dist", target, "--stem"]).trim().to_owned();
         assert!(stem.contains(target.as_str()), "{stem}");
         assets.push(format!("{stem}.tar.gz"));
         if tool != "cross" {
-            // THE UPLOADED DOCUMENT'S NAME FROM THE TASK THAT WRITES IT, never a
-            // suffix spelled here: the retired body asked `sbom-binary -- --names`,
-            // and a suffix restated in this tier would agree with the module while
-            // both drifted from the producer.
-            let named = common::task_bash(
-                &common::at_root("."),
-                &common::task_body("sbom-binary-record"),
-            )
-            .env("usage_binary", "--names")
-            .env("usage_target", target)
-            .env("SBOM_BINARY_ROOT", &crate_dir)
-            .env("SBOM_BINARY_OUT_DIR", "out")
-            .output()
-            .expect("the binary sbom producer runs");
-            assert!(named.status.success(), "{}", said(&named));
-            let sbom: Vec<String> = String::from_utf8_lossy(&named.stdout)
+            // THE UPLOADED DOCUMENT'S NAME FROM THE VERB THAT WRITES IT, never a
+            // suffix spelled here: a suffix restated in this tier would agree with
+            // the module while both drifted from the producer.
+            let sbom: Vec<String> = names(&["sbom", "--names", "--target", target])
                 .lines()
                 .filter_map(|line| line.strip_prefix("sbom=").map(basename))
                 .collect();

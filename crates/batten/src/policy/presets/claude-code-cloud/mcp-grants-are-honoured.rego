@@ -86,14 +86,20 @@ authorities contains doc if {
 	is_array(doc.rule)
 }
 
-settings := input.tree.documents[settings_path]
+# A FIELD OF THE SETTINGS FILE, never the file bound whole. A complete rule's
+# value is part of the package document the engine walks, and the engine reads
+# any `deny` key it meets there as a bare-string deny set — so binding the
+# document exposed `permissions.deny` and every deny RULE the file carried came
+# back as a rule-less finding against the row. A function is not a member of
+# that document.
+settings_field(key) := input.tree.documents[".claude/settings.json"][key]
 
 # One `permissions.<arm>` list's string rules. EMPTY, never undefined, where the
 # file states no such arm: a settings file that parses and grants nothing has
 # answered. Where the file itself is absent the set is empty too, and the
 # `missing` clause below is what keeps an unreadable file from reading as clean.
 permission_list(arm) := {rule |
-	permissions := settings.permissions
+	permissions := settings_field("permissions")
 	is_object(permissions)
 	list := permissions[arm]
 	is_array(list)
@@ -112,7 +118,7 @@ server_of(rule) := parts[1] if {
 # The servers `enabledMcpjsonServers` turns on. A value that is not a list —
 # `true` is one the host accepts — enumerates nothing, so it has nothing to say.
 enabled := {server |
-	list := settings.enabledMcpjsonServers
+	list := settings_field("enabledMcpjsonServers")
 	is_array(list)
 	some server in list
 	is_string(server)
