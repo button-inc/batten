@@ -1055,6 +1055,21 @@ pub enum WeakeningKind {
     ///
     /// **Appended, never inserted**, for `PerfExemptionAdded`'s reason.
     BoardSweepRefusalWidened,
+    /// `[census.shell]` stopped reaching somewhere it reached, or set apart a
+    /// file it did not (CLOUD-1994).
+    ///
+    /// The table became policy-bearing when `shell-hygiene`'s shell ban started
+    /// reading it: the ban judges exactly the homes it declares and admits
+    /// exactly the files it exempts. So a workflow glob removed, a manifest's
+    /// command key or unit header removed, or a whole manifest dropped is a home
+    /// the ban no longer reads — and an exempt glob ADDED is a file it no longer
+    /// refuses. The exempt half is the added direction because that list is
+    /// exemptions, `PerfExemptionAdded`'s reason one table over; it is compared
+    /// only where the base declared a census at all, because a census ARRIVING is
+    /// the ban starting to apply, which is a tightening.
+    ///
+    /// Appended, for the `Ord` reason its neighbours give.
+    ShellCensusNarrowed,
 }
 
 impl WeakeningKind {
@@ -1136,6 +1151,7 @@ impl WeakeningKind {
         WeakeningKind::BoardSweepGateRemoved,
         WeakeningKind::BoardSweepAbstentionAdded,
         WeakeningKind::BoardSweepRefusalWidened,
+        WeakeningKind::ShellCensusNarrowed,
     ];
 
     /// The stable, lowercase identifier used in machine output (§6).
@@ -1168,6 +1184,7 @@ impl WeakeningKind {
             WeakeningKind::BoardSweepGateRemoved => "board-sweep-gate-removed",
             WeakeningKind::BoardSweepAbstentionAdded => "board-sweep-abstention-added",
             WeakeningKind::BoardSweepRefusalWidened => "board-sweep-refusal-widened",
+            WeakeningKind::ShellCensusNarrowed => "shell-census-narrowed",
             WeakeningKind::ReadyCutoverRelaxed => "ready-cutover-relaxed",
             WeakeningKind::PerfExemptionAdded => "perf-exemption-added",
             WeakeningKind::VerbRemoved => "verb-removed",
@@ -1584,15 +1601,9 @@ pub const CENSUS: &[FieldCoverage] = &[
     },
     FieldCoverage {
         field: "census",
-        coverage: Coverage::NotPolicyBearing(
-            "the shell census's declarations (CLOUD-843): where `batten census shell` looks \
-             and which files it sets apart. It MEASURES and decides nothing — no gate reads \
-             the table, and the refusal the count reports on is the shell ban's, whose own \
-             rows are compared. An override cannot speak to it either: `resolve` reads it \
-             from the committed authority alone, and `census_shell.rs` pins its `exempt` \
-             list to the ban's `stays_bash`, so a widened exemption fails there rather than \
-             passing as a smaller count",
-        ),
+        // Policy-bearing since CLOUD-1994: `shell-hygiene`'s shell ban reads this
+        // table as its list of homes and exemptions, so narrowing it lowers a bar.
+        coverage: Coverage::Compared(&[WeakeningKind::ShellCensusNarrowed]),
     },
     FieldCoverage {
         field: "sbom",
@@ -1898,6 +1909,7 @@ pub fn weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     // test fails on any field carrying none.
     found.extend(entry_weakenings(base, working));
     found.extend(scalar_weakenings(base, working));
+    found.extend(shell_census_weakenings(base, working));
 
     found.sort();
     found
@@ -2212,6 +2224,77 @@ fn perf_exemption_weakenings(base: &Config, working: &Config) -> Vec<Weakening> 
             ));
         }
     }
+    found
+}
+
+/// The shell census's declarations, compared as the ban reads them (CLOUD-1994).
+///
+/// Every home is keyed so a removal names what stopped being read: a workflow
+/// glob by itself, a manifest's command key as `path:key`, its unit header as
+/// `path:header`. The exempt list is compared in the ADDED direction, and only
+/// where the base declared a census — see [`WeakeningKind::ShellCensusNarrowed`].
+fn shell_census_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
+    let kind = WeakeningKind::ShellCensusNarrowed;
+    let shell = |config: &Config| {
+        config
+            .census
+            .as_ref()
+            .and_then(|census| census.shell.clone())
+    };
+    let keys = |census: &crate::census::ShellCensus| -> Vec<String> {
+        census
+            .manifests
+            .iter()
+            .flat_map(|manifest| {
+                manifest
+                    .keys
+                    .iter()
+                    .map(move |key| format!("{}:{key}", manifest.path))
+            })
+            .collect()
+    };
+    let units = |census: &crate::census::ShellCensus| -> Vec<String> {
+        census
+            .manifests
+            .iter()
+            .filter_map(|manifest| {
+                manifest
+                    .unit
+                    .as_ref()
+                    .map(|unit| format!("{}:{unit}", manifest.path))
+            })
+            .collect()
+    };
+    let exempt = |census: &crate::census::ShellCensus| -> Vec<String> {
+        census
+            .exempt
+            .iter()
+            .map(|glob| format!("census.shell.exempt[{glob}]"))
+            .collect()
+    };
+    let Some(was) = shell(base) else {
+        return Vec::new();
+    };
+    let now = shell(working).unwrap_or_default();
+    let mut found = removed_entries(
+        kind,
+        &was.workflows,
+        &now.workflows,
+        "census.shell.workflows",
+    );
+    found.extend(removed_entries(
+        kind,
+        &keys(&was),
+        &keys(&now),
+        "census.shell.manifest",
+    ));
+    found.extend(removed_entries(
+        kind,
+        &units(&was),
+        &units(&now),
+        "census.shell.manifest.unit",
+    ));
+    found.extend(added_entries(kind, &exempt(&was), &exempt(&now)));
     found
 }
 
@@ -4375,6 +4458,79 @@ mod tests {
             weakenings(&row, &edited).is_empty(),
             "an edited check is not a comparison two parsed configs can settle"
         );
+    }
+
+    #[test]
+    fn narrowing_the_shell_census_is_a_weakening_and_widening_it_is_not() {
+        // The shell ban reads `[census.shell]` as its homes and its exemptions
+        // (CLOUD-1994), so each way of reading less, or exempting more, is
+        // reported — and BOTH DIRECTIONS are pinned, since a comparison wired
+        // backwards would refuse every branch that declares one more home.
+        let census = |workflows: &str, exempt: &str, manifest: &str| {
+            config(&format!(
+                "[census.shell]\nworkflows = [{workflows}]\nexempt = [{exempt}]\n{manifest}"
+            ))
+        };
+        let manifest =
+            "[[census.shell.manifest]]\npath = \"m.toml\"\nkeys = [\"run\"]\nunit = \"[t.\"\n";
+        let full = census("\"ci/*.yml\"", "\"boot.sh\"", manifest);
+
+        assert_eq!(
+            only(&full, &census("", "\"boot.sh\"", manifest)),
+            Weakening::new(
+                WeakeningKind::ShellCensusNarrowed,
+                "census.shell.workflows[ci/*.yml]",
+                "present",
+                "absent",
+            )
+        );
+        assert_eq!(
+            only(
+                &full,
+                &census("\"ci/*.yml\"", "\"boot.sh\", \"x.sh\"", manifest)
+            ),
+            Weakening::new(
+                WeakeningKind::ShellCensusNarrowed,
+                "census.shell.exempt[x.sh]",
+                "absent",
+                "present",
+            )
+        );
+        assert_eq!(
+            only(
+                &full,
+                &census(
+                    "\"ci/*.yml\"",
+                    "\"boot.sh\"",
+                    "[[census.shell.manifest]]\npath = \"m.toml\"\nkeys = [\"run\"]\n"
+                )
+            ),
+            Weakening::new(
+                WeakeningKind::ShellCensusNarrowed,
+                "census.shell.manifest.unit[m.toml:[t.]",
+                "present",
+                "absent",
+            )
+        );
+        // A whole manifest dropped is its key AND its unit gone.
+        assert_eq!(
+            weakenings(&full, &census("\"ci/*.yml\"", "\"boot.sh\"", "")).len(),
+            2
+        );
+        // And the census deleted outright is every home at once.
+        assert_eq!(weakenings(&full, &config("")).len(), 3);
+
+        // THE OTHER DIRECTION. More homes, fewer exemptions, and a census
+        // arriving where there was none are all the ban reaching further.
+        assert!(weakenings(&census("", "\"boot.sh\"", manifest), &full).is_empty());
+        assert!(
+            weakenings(
+                &census("\"ci/*.yml\"", "\"boot.sh\", \"x.sh\"", manifest),
+                &full
+            )
+            .is_empty()
+        );
+        assert!(weakenings(&config(""), &full).is_empty());
     }
 
     #[test]

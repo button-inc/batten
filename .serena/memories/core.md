@@ -182,14 +182,21 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   (CLOUD-843): every shell home counted in code lines, as pointers (a path, a
   line, a unit's declared name, a count; never a body). **The detection is the
   ban's, not its own**: manifest bodies, one-liners and array entries, and
-  workflow `run: |` blocks by indent are `policy/shell-banned.rego`'s grammar down
-  to its quirks (a one-liner's first word keeps its quote), and
-  `tests/it/census_shell.rs` pins the ban's count to the census's through the
-  gate's own growth predicate (a base of `c` must not fire, `c - 1` must). Where
-  to look is `[census.shell]` in `batten.toml` — manifests, keys, unit header,
-  workflow globs, exempt globs — so the engine names no consumer path (rule 1);
-  an exempt file is measured and set apart, never totalled, and this repo's
-  exempt list is asserted equal to the ban's `stays_bash`. Not layered (§8): a
+  workflow `run: |` blocks by indent are the `shell-hygiene` preset's
+  `no-new-shell.rego` grammar down to its quirks (a one-liner's first word keeps
+  its quote), and `tests/it/census_shell.rs` pins the ban's count to the
+  census's through the gate's own growth predicate (a base of `c` must not fire,
+  `c - 1` must). Where to look is `[census.shell]` in `batten.toml` — manifests,
+  keys, unit header, workflow globs, exempt globs — so the engine names no
+  consumer path (rule 1); an exempt file is measured and set apart, never
+  totalled. **Since CLOUD-1994 the ban reads the SAME table** (the enabling row
+  declares `documents = ["batten.toml"]`; the preset finds `census.shell` by
+  shape and abstains without one) — through two matchers, so `validate` holds
+  its globs to `*`/`?`/`**` and refuses a brace, class or escape; `exempt`
+  over a manifest or workflow is the census's alone — so the table is
+  policy-bearing: `trust` compares it as `shell-census-narrowed` (a home
+  removed or an exemption added) and `tests/it/shell_banned.rs` pins the exempt
+  set exactly. Not layered (§8): a
   local file able to add an exempt glob could make a wave read as progress. The
   other CLOUD-843 foundation verbs (`step check|record|run`) carry final arguments
   and answer `unimplemented` at exit 3 until their package lands; the serena

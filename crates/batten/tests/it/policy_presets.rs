@@ -564,7 +564,7 @@ fn every_shipped_preset_passes_its_own_suite() {
         // than a gap (CLOUD-857). `preset_row` fabricates a `mediated_call`
         // scope for EVERY preset so one loop can load them all — but
         // `shell spelling wrong` is enabled `scope = "tree"` in this repository and its
-        // two modules decide over files, not commands. Asking them whether a
+        // three modules decide over files, not commands. Asking them whether a
         // test ever passed a compound COMMAND would be judging a surface this
         // helper invented, which is the fabricated-shape defect one level up.
         //
