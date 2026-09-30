@@ -203,6 +203,30 @@ violation contains {
 	not contains(verify_text, task)
 	not covered_by_a_lane_verify_runs(task)
 	not approximated_by_a_lane_verify_runs(task)
+	not run_by_a_hook_step_verify_runs(task)
+}
+
+# --- a task an hk step runs, where verify runs the hooks ----------------------
+#
+# `batten-check` is the case, and until CLOUD-843 made `verify` an argv sequence
+# it passed the name search above only because a COMMENT inside the old shell body
+# spelled it. What actually runs it locally is hk: `hk.pkl` declares a step whose
+# `check` is `mise run batten-check`, and `verify` reaches `hooks` (`hk check
+# --all`) through `ci`'s `depends`. So the manifest is asked the question the
+# comment was standing in for, on `covered_by_a_lane_verify_runs`'s terms: ONE
+# declared link, read from hk's own file rather than a walk of the task graph.
+#
+# CODE LINES ONLY, for the header's reason: `hk.pkl` names tasks in comments to
+# explain why they are ABSENT, and a gate that passes on its own documentation is
+# the defect this clause replaces.
+hook_lane := "hooks"
+
+run_by_a_hook_step_verify_runs(task) if {
+	lane_reaches(hook_lane)
+	some line in object.get(input.tree.lines, "hk.pkl", [])
+	not startswith(trim_space(line), "//")
+	some fragment in regex.find_n(data.batten.patterns["mise-run-task"], line, -1)
+	split(fragment, " ")[2] == task
 }
 
 # --- a task verify does not NAME may still be one verify RUNS -----------------
@@ -1409,6 +1433,29 @@ test_a_sequence_body_is_read_entry_by_entry if {
 
 test_a_sound_tree_is_clean if {
 	count(violation) == 0 with input as sound_input
+}
+
+hooked(hk_lines) := out if {
+	wf := {
+		"on": {"pull_request": {"types": ["opened"]}},
+		"jobs": {"ci": {"name": "ci", "runs-on": "ubuntu-latest", "steps": [lease_first, {"run": "mise run smoke"}]}},
+	}
+	base := swap(".github/workflows/ci.yml", wf)
+	out := {"tree": object.union(base.tree, {"lines": object.union(base.tree.lines, {"hk.pkl": hk_lines})})}
+}
+
+test_a_task_an_hk_step_runs_is_one_verify_runs if {
+	found := violation with input as hooked(["  [\"smoke\"] {", "    check = \"mise run smoke\""])
+	every f in found {
+		f.verdict != "task run missing"
+	}
+}
+
+# The regression the clause exists to end: a name in a COMMENT is not a step.
+test_a_task_named_only_in_an_hk_comment_is_refused if {
+	found := violation with input as hooked(["  // `mise run smoke` is not run here"])
+	some f in found
+	f.verdict == "task run missing"
 }
 
 test_a_ci_task_verify_does_not_run_is_refused if {

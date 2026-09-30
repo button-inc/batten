@@ -199,6 +199,7 @@ fn row() -> Rule {
         "line_sources": [
             ".github/workflows/*.yml",
             "crates/batten/src/lib.rs",
+            "hk.pkl",
         ],
         "module": "policy/ci-parity.rego",
         "severity": "deny",

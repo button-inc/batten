@@ -4670,6 +4670,11 @@ run = [
   "mise run batten -- check --rule 'test cover never'",
   "mise run perf-gate",
   "mise run prose-only-check",
+  # CI's slow-tier question, asked here as the `ci` job asks it (CLOUD-843). The
+  # answer is not a verdict on the change, so `ci step` maps both answers to
+  # exit 0; a 1 or a 3 is the question failing to be asked, which CI would
+  # otherwise be the first to discover.
+  "mise run batten -- ci step --verdict needed --on 0=true --on 2=false -- mise run ci-slow-needed origin/main",
   "mise run target-prune:lap",
   "cargo run --quiet -p batten -- receipt record verify",
 ]
