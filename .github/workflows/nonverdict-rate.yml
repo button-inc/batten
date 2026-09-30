@@ -86,17 +86,8 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: mise run batten -- record nonverdict > "$RUNNER_TEMP/nonverdict.txt"
-      - name: Publish the records
-        shell: bash
-        run: |
-          {
-            echo '### nonverdict-rate'
-            echo
-            echo '```'
-            cat "$RUNNER_TEMP/nonverdict.txt"
-            echo '```'
-          } >>"$GITHUB_STEP_SUMMARY"
+        # `ci step` publishes the records to the job summary from the run itself.
+        run: mise run batten -- ci step --summary nonverdict-rate -- mise run batten -- record nonverdict
       # Always, so the records above are published even when the budget is broken —
       # the number is the point, and a summary that only appears on green is a
       # report nobody reads at the moment it matters.

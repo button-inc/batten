@@ -20,6 +20,11 @@
 //! * **`cmd >file` and `cmd <file`** — a capture a later step reads.
 //!   `--save <path>` and `--stdin <path>` are those two, with the path
 //!   relative to where the step stands.
+//! * **`cmd "$TAG" "${{ steps.x.outputs.y }}"`** — a value handed to the
+//!   command through the step's `env:`. `--arg-env <NAME>` appends that
+//!   variable's value as ONE argument, in the order written, with no word
+//!   splitting and no glob. An unset or empty variable is a usage error, where
+//!   the shell would have passed an empty word and let the command guess.
 //!
 //! # The contract is the runner's, and it is generic
 //!
@@ -71,6 +76,8 @@ pub struct StepRequest {
     pub verdict: Option<String>,
     /// `code=value` rows mapping an exit code to the verdict's value.
     pub on: Vec<String>,
+    /// Variables whose values are appended to the command, one argument each.
+    pub arg_env: Vec<String>,
     /// The command, verbatim. Never empty — the surface requires it.
     pub command: Vec<String>,
 }
@@ -110,6 +117,30 @@ pub fn mapping(rows: &[String]) -> Result<Vec<(i32, String)>> {
                 })
         })
         .collect()
+}
+
+/// The command with each `--arg-env` variable's value appended, in order.
+///
+/// # Errors
+///
+/// A [`UsageError`] naming the first variable that is unset or empty.
+pub fn argv(
+    command: &[String],
+    names: &[String],
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Result<Vec<String>> {
+    let mut argv = command.to_vec();
+    for name in names {
+        match lookup(name).filter(|value| !value.is_empty()) {
+            Some(value) => argv.push(value),
+            None => {
+                return Err(UsageError::raise(format!(
+                    "ci step: --arg-env {name} names a variable that is unset or empty"
+                )));
+            }
+        }
+    }
+    Ok(argv)
 }
 
 /// The summary section: a title and the fenced tail of the output.
@@ -157,7 +188,10 @@ pub fn run(request: &StepRequest, out: &mut dyn Write, err: &mut dyn Write) -> R
             "ci step: --on maps a code to a value, and needs --verdict to name its key",
         ));
     }
-    let Some((program, args)) = request.command.split_first() else {
+    let command = argv(&request.command, &request.arg_env, |name| {
+        std::env::var(name).ok()
+    })?;
+    let Some((program, args)) = command.split_first() else {
         return Err(UsageError::raise("ci step: no command after `--`"));
     };
     let stdin = match request.stdin {
@@ -268,6 +302,25 @@ mod tests {
         );
         assert!(mapping(&["green".to_owned()]).is_err());
         assert!(mapping(&["x=green".to_owned()]).is_err());
+    }
+
+    //MUTANT empty-passed|s@        match lookup(name).filter(|value| !value.is_empty()) {@        match lookup(name) {@|an_env_argument_is_one_word_and_an_empty_one_is_refused
+    #[test]
+    fn an_env_argument_is_one_word_and_an_empty_one_is_refused() {
+        let command = vec!["gh".to_owned(), "release".to_owned()];
+        let names = vec!["TAG".to_owned(), "FILE".to_owned()];
+        let env = |name: &str| match name {
+            "TAG" => Some("v1.0.0".to_owned()),
+            "FILE" => Some("a b.tar.gz".to_owned()),
+            "EMPTY" => Some(String::new()),
+            _ => None,
+        };
+        assert_eq!(
+            argv(&command, &names, env).unwrap(),
+            vec!["gh", "release", "v1.0.0", "a b.tar.gz"]
+        );
+        assert!(argv(&command, &["EMPTY".to_owned()], env).is_err());
+        assert!(argv(&command, &["UNSET".to_owned()], env).is_err());
     }
 
     #[test]

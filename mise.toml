@@ -1643,12 +1643,19 @@ description = "Gate: measure this branch against its merge base and refuse a reg
 run = "cargo run --quiet -p batten -- perf gate"
 
 [tasks."perf-seed"]
-description = "Effect: build the perf pair's arm profile, which perf.yml stages as every pull request's base-arm seed"
+description = "Effect: build the perf pair's arm profile and stage it under target/perf/base-seed, which perf.yml saves as every pull request's base-arm seed"
 # A TASK RATHER THAN A WORKFLOW-SPELLED CARGO LINE (CLOUD-1891): `cargo spelling
 # wrong` reads every workflow `mise exec -- cargo` line as a foreign runner's copy
 # of `test:cargo`, and naming the build here keeps the profile the pair builds
 # under in one place — `perf::PAIR_PROFILE`'s value, which `perf pair` passes.
-run = "cargo build --profile perf-arm -p batten"
+# THE STAGING IS THE TASK'S, not a workflow step's: the seed's layout is what
+# `ci.yml`'s `perf` job restores, so one place writes it (CLOUD-843, Phase 4).
+run = [
+  "cargo build --profile perf-arm -p batten",
+  "rm -rf target/perf/base-seed",
+  "mkdir -p target/perf/base-seed",
+  "cp -a target/perf-arm target/perf/base-seed/perf-arm",
+]
 
 [tasks."mutant"]
 description = "Gate: every declared gate has a mutation its own suite is PROVEN to catch (CLOUD-418)"
@@ -1886,6 +1893,14 @@ run = [
   "cargo run --quiet -p batten -- record query drift-jobs",
 ]
 
+# The record and the decision over it as one workflow step (CLOUD-843, Phase 4):
+# `depends` runs the producer first and stops on its failure, so the check never
+# judges a record that was not written.
+[tasks.timeout-drift-check]
+description = "Gate: record each job's duration, then refuse a declared budget that no longer matches it"
+depends = ["timeout-drift-record"]
+run = "cargo run --quiet -p batten -- check --rule 'bound grade other' --fail-on-warning"
+
 # CLOUD-831's producer, ported off `mise-tasks/evaluator-closure-check.sh` under
 # CLOUD-1717. The two things that are not decisions: the `cargo metadata` spawn,
 # and the graph walk.
@@ -2086,6 +2101,14 @@ run = [
   "cargo run --quiet -p batten -- record query branch-merged",
 ]
 
+# The record and the decision over it as one workflow step (CLOUD-843, Phase 4):
+# `depends` runs the producer first and stops on its failure, so the check never
+# judges a record that was not written.
+[tasks.branch-age-check]
+description = "Gate: record the branch heads, tips and merges, then refuse a branch left open past its watch window"
+depends = ["branch-age-record"]
+run = "cargo run --quiet -p batten -- check --rule 'branch watch loose'"
+
 [tasks."render:cli"]
 description = "Effect: render the CLI reference from the command surface — the publish-time artifact, never committed (CLOUD-171)"
 # CLOUD-171, retired off `mise-tasks/render/cli.sh` under CLOUD-1752. An effect
@@ -2155,6 +2178,29 @@ run = "cargo run --quiet -p batten -- record release --manifest {{env.BATTEN_CHE
 [tasks.release-assets-check]
 description = "Gate: a release carries one archive per target the dist matrix builds, every uploaded asset, and a covering checksum manifest (CLOUD-258)"
 run = "cargo run --quiet -p batten -- check --rule 'release grade other' --rule 'release pin other'"
+
+# THE PAIR `release-assets.yml` RUNS AS ONE STEP (CLOUD-843, Phase 4): the record
+# and the decision over it, in order, so the check never judges a record that was
+# not written. The tag comes from the step's environment rather than an appended
+# argument, because an appended argument reaches a task's LAST command and the
+# tag belongs to the record. An unset `TAG` is a template error, never an empty
+# argument.
+[tasks.release-assets-audit]
+description = "Gate: record the release named by $TAG, then decide it carries one archive per target, every asset, and a covering checksum manifest"
+run = [
+  "cargo run --quiet -p batten -- record release --manifest {{env.BATTEN_CHECKSUM_MANIFEST}} {{env.TAG}}",
+  "cargo run --quiet -p batten -- check --rule 'release grade other' --rule 'release pin other'",
+]
+
+# The provenance half of the same audit, on the same terms: `batten record
+# attestation` probes, `commit grade unsafe` (the row enabling `supply-chain`)
+# decides.
+[tasks.release-attestation-audit]
+description = "Gate: record each archive's attestation verdict for the release named by $TAG, then decide the release carries build provenance"
+run = [
+  "cargo run --quiet -p batten -- record attestation {{env.TAG}} --binary batten",
+  "cargo run --quiet -p batten -- check --rule 'commit grade unsafe'",
+]
 
 # The name `auto-release-land.yml` runs, kept: exit 0 due, 2 holding.
 # `release-tracking-check`'s name, kept for `hk.pkl` and every hand that types it:

@@ -2660,6 +2660,10 @@ fn ci_of(matches: &ArgMatches) -> Option<CiCommand> {
                 .get_many::<String>("on")
                 .map(|rows| rows.cloned().collect())
                 .unwrap_or_default();
+            request.arg_env = matches
+                .get_many::<String>("arg-env")
+                .map(|names| names.cloned().collect())
+                .unwrap_or_default();
             request.command = matches.get_many::<String>("command")?.cloned().collect();
             Some(CiCommand::Step(request))
         }

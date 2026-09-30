@@ -2886,6 +2886,17 @@ const CI_STEP_ON: FlagDecl = FlagDecl {
     )
 };
 
+/// `--arg-env <NAME>` on `ci step`, REPEATABLE AND ORDERED: each appends one
+/// variable's value to the command as a single argument.
+const CI_STEP_ARG_ENV: FlagDecl = FlagDecl {
+    value: ValueDecl::StrMany,
+    ..FlagDecl::valued(
+        "arg-env",
+        "arg-env",
+        "Append this variable's value to the command as one argument, in order; unset or empty is refused (repeatable)",
+    )
+};
+
 /// The command on `ci step`, after the mandatory `--`.
 const CI_STEP_COMMAND: FlagDecl = FlagDecl::trailing(
     "command",
@@ -4016,6 +4027,7 @@ pub const SURFACE: &[CommandDecl] = &[
             CI_STEP_STDIN,
             CI_STEP_VERDICT,
             CI_STEP_ON,
+            CI_STEP_ARG_ENV,
             CI_STEP_COMMAND,
         ],
     },

@@ -80,17 +80,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BATTEN_DIVERGENCE_SINCE: ${{ inputs.since }}
-        run: mise run batten -- record divergence > "$RUNNER_TEMP/divergence.txt"
-      - name: Publish the records
-        shell: bash
-        run: |
-          {
-            echo '### land-divergence'
-            echo
-            echo '```'
-            cat "$RUNNER_TEMP/divergence.txt"
-            echo '```'
-          } >>"$GITHUB_STEP_SUMMARY"
+        # `ci step` publishes the records to the job summary from the run itself.
+        run: mise run batten -- ci step --summary land-divergence -- mise run batten -- record divergence
       # Always, so the records above are published even when a budget is broken —
       # the number is the point, and a summary that only appears on green is a
       # report nobody reads at the moment it matters.

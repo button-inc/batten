@@ -120,7 +120,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BATTEN_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
-        run: mise run release-assets-record "$TAG" && mise run release-assets-check
+        run: mise run release-assets-audit
       # The provenance half of the same question (CLOUD-583), on this clock for
       # the same reason the step above is: whether a published release is attested
       # changes with no diff, so it is a property of the WORLD and belongs nowhere
@@ -140,7 +140,7 @@ jobs:
       # step above went on calling the deleted task for as long as nothing asked
       # whether a workflow's callers still resolve — `workflow run unknown` is
       # that clause, and it reported this line.
-      # One step, so the step count stays flat; `&&` stops at the producer's
+      # One step, so the step count stays flat; the task stops at the producer's
       # own failure, so the check never judges a record that was not written.
       #
       # THE PRODUCER IS THE ENGINE'S since CLOUD-843 (`batten record
@@ -155,4 +155,4 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BATTEN_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
-        run: mise run batten -- record attestation "$TAG" --binary batten && mise run batten -- check --rule 'commit grade unsafe'
+        run: mise run release-attestation-audit

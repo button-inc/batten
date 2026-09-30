@@ -84,24 +84,9 @@ jobs:
           # The default token's read scope is all scorecard needs here; it is
           # never written back and the job holds `contents: read` only.
           GITHUB_AUTH_TOKEN: ${{ github.token }}
-        run: mise run scorecard >"$RUNNER_TEMP/scorecard.txt" 2>&1
-      # The report as a job summary, so it is readable without downloading
-      # anything.
-      - name: Publish the summary
-        if: always()
-        run: |
-          {
-            cat <<'MD'
-          ## OSSF scorecard
-
-          A report, not a gate — no threshold, not a required check.
-
-          Three zero-scores are expected and are not defects: Code-Review
-          (trunk-based review-after-merge), Token-Permissions (the landing
-          lease needs job-level actions write), and Maintained (repository age).
-
-          MD
-            echo '```'
-            cat "$RUNNER_TEMP/scorecard.txt"
-            echo '```'
-          } >>"$GITHUB_STEP_SUMMARY"
+        # The report as a job summary, written by `ci step` whatever the code,
+        # so it is readable without downloading anything. Three zero-scores are
+        # expected and are not defects: Code-Review (trunk-based
+        # review-after-merge), Token-Permissions (the landing lease needs
+        # job-level actions write), and Maintained (repository age).
+        run: mise run batten -- ci step --summary "OSSF scorecard - a report, not a gate, where zero Code-Review, Token-Permissions and Maintained scores are expected" -- mise run scorecard

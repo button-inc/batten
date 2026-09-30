@@ -67,10 +67,10 @@ jobs:
       # they recorded. Neither half can hold the other: section 5 makes `check`
       # `read` and incapable of spawning, and the engine calls no clock on any
       # evaluation path.
-      # One step, so the workflow's step count stays flat: `&&` stops at the
-      # producer's own failure, so the check never judges a record that was
-      # not written.
-      - run: mise run branch-age-record && mise run batten -- check --rule 'branch watch loose'
+      # One step, so the workflow's step count stays flat: the task `depends` on
+      # the producer and stops at its failure, so the check never judges a
+      # record that was not written.
+      - run: mise run branch-age-check
       # The landing lease is a ref, so its hygiene belongs in the ref sweep
       # rather than in a cron of its own — that is the whole reason it lands
       # here: an added step on a job that already spins costs no runner.

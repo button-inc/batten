@@ -94,25 +94,12 @@ jobs:
           path: fuzz/work
           key: fuzz-corpus-${{ github.run_id }}
           restore-keys: fuzz-corpus-
-      # Redirected, never piped: a pipeline hands the exit status to its LAST
-      # stage, which is the false-green shape `run-shape-guard` refuses locally
-      # and is no less wrong in a workflow.
-      - run: mise run fuzz >"$RUNNER_TEMP/fuzz.log" 2>&1
+      # Never piped: a pipeline hands the exit status to its LAST stage, the
+      # false-green shape `run-shape-guard` refuses locally. `ci step` tees the
+      # log and writes its tail as the job summary itself, whatever the code.
+      - run: mise run batten -- ci step --summary "Fuzz - a search, not a gate, where a crash is a reproducer to commit, see fuzz/artifacts/README.md" -- mise run fuzz
         env:
           FUZZ_SECONDS: ${{ inputs.seconds || '60' }}
-      - name: Publish the search summary
-        if: always()
-        run: |
-          {
-            echo '## Fuzz'
-            echo
-            echo 'A search, not a gate. A crash here is a reproducer to commit,'
-            echo 'not a branch to block — see fuzz/artifacts/README.md.'
-            echo
-            echo '```'
-            tail -n 40 "$RUNNER_TEMP/fuzz.log"
-            echo '```'
-          } >>"$GITHUB_STEP_SUMMARY"
       # Only on failure, and that is the point: an empty artifact every week
       # trains a reader to ignore the one week it is not empty.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

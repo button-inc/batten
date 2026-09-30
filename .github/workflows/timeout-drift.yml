@@ -76,7 +76,7 @@ jobs:
       # budget drifting is a report about the world rather than a verdict on a
       # branch, and this scheduled job is the one caller that should still go red
       # for it.
-      # One step, so the step count stays flat; `&&` stops at the producer's
+      # One step, so the step count stays flat; the task `depends` on the producer and stops at its
       # own failure, so the check never judges a record that was not written.
       - name: Record each job's duration, then report budgets that no longer match it
         shell: bash
@@ -86,4 +86,4 @@ jobs:
           # forge through `batten record query`, which presents only a declared
           # credential (CLOUD-843).
           GITHUB_PERSONAL_ACCESS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: mise run timeout-drift-record && mise run batten -- check --rule 'bound grade other' --fail-on-warning
+        run: mise run timeout-drift-check

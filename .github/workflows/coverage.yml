@@ -75,25 +75,12 @@ jobs:
           # so a shared cache entry would thrash.
           # The profile is part of the key too — see `ci.yml`'s `ci` job.
           shared-key: coverage-
-      # Redirected, never piped. A pipeline hands the exit status to its LAST
-      # stage, so `mise run coverage | tee ...` would report success whenever
-      # `tee` succeeded — the false-green shape `mise run run-shape-guard`
-      # exists to refuse locally, and it is no less wrong in a workflow.
-      - run: mise run coverage >"$RUNNER_TEMP/coverage-summary.txt" 2>&1
-      # The report as a job summary, so it is readable without downloading
-      # anything, and as an artifact for whatever wants to consume the lcov.
-      - name: Publish the summary
-        if: always()
-        run: |
-          {
-            echo '## Coverage'
-            echo
-            echo 'A report, not a gate — no threshold, not a required check.'
-            echo
-            echo '```'
-            cat "$RUNNER_TEMP/coverage-summary.txt"
-            echo '```'
-          } >>"$GITHUB_STEP_SUMMARY"
+      # Never piped: a pipeline hands the exit status to its LAST stage, the
+      # false-green shape `mise run run-shape-guard` refuses locally. `ci step`
+      # tees the output and writes the report as a job summary itself, so it is
+      # readable without downloading anything, and the step's code stays the
+      # task's. The lcov is the artifact below.
+      - run: mise run batten -- ci step --summary "Coverage - a report, not a gate, with no threshold and no required check" -- mise run coverage
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

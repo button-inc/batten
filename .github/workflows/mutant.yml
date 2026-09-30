@@ -107,26 +107,13 @@ jobs:
       # first greener and the second red, and is indistinguishable from doing the
       # work if only the first runs.
       #
-      # Redirected to a file rather than piped: a pipeline hands its exit status
-      # to the last stage, which is the false-green shape `run-shape-guard`
-      # refuses locally and is no less wrong in a workflow.
+      # Never piped: a pipeline hands its exit status to the last stage, the
+      # false-green shape `run-shape-guard` refuses locally. `ci step` writes
+      # each step's findings to the job summary itself, INCLUDING ON A FAILURE:
+      # the findings ARE the evidence, and a run that fails without publishing
+      # what it found sends the reader to re-run a sweep that costs the better
+      # part of an hour.
       - name: Census
-        run: mise run mutant-census >"$RUNNER_TEMP/census.txt"
+        run: mise run batten -- ci step --summary "Mutation census - every declared gate must have a mutation its own suite catches, CLOUD-418" -- mise run mutant-census
       - name: Sweep
-        run: mise run mutant >"$RUNNER_TEMP/mutant.txt"
-      # Always, including on a failure: the findings ARE the evidence, and a run
-      # that fails without publishing what it found sends the reader to re-run a
-      # sweep that costs the better part of an hour.
-      - name: Publish the findings
-        if: always()
-        run: |
-          {
-            echo '## Mutation coverage'
-            echo
-            echo "Every declared gate must have a mutation its own suite catches (CLOUD-418)."
-            echo
-            echo '```'
-            cat "$RUNNER_TEMP/census.txt" || true
-            cat "$RUNNER_TEMP/mutant.txt" || true
-            echo '```'
-          } >>"$GITHUB_STEP_SUMMARY"
+        run: mise run batten -- ci step --summary "Mutation sweep" -- mise run mutant
