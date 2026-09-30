@@ -49,7 +49,7 @@
 //! an out-of-date binary is an operator problem and refusing the agent's work is
 //! not how it gets fixed.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
@@ -670,16 +670,31 @@ pub fn merge(store_dir: &Path) -> Result<Merge> {
 
     let entries = read_shards(store_dir)?;
     let mut applied = 0;
+    // FOLDED IN MEMORY, WRITTEN ONCE PER RECORD. The shards are append-only and
+    // every merge replays all of them, so writing the record once per ENTRY made
+    // each merge cost two fsync+rename pairs per entry in the log's whole history
+    // — 354k of each for 229 records on this repository's own store, over 400s
+    // for one `enforce`. The fold is the same sequential fold per identity (entry
+    // order is kept within each record), so the landed records are byte-identical;
+    // only the number of intermediate writes changes. A record the fold leaves
+    // unchanged is not rewritten at all.
+    let mut folded: BTreeMap<Fingerprint, (FindingRecord, FindingRecord)> = BTreeMap::new();
     for entry in &entries {
         let Ok(fingerprint) = Fingerprint::from_hex(&entry.identity) else {
             continue;
         };
-        let Some(mut record) = crate::findings::load_one(store_dir, fingerprint)? else {
-            // An entry for an identity with no record is not an error: the
-            // record may be GC'd, or the scan that mints it may not have run
-            // here yet. Dropping the entry silently would lose a disposition, so
-            // it stays in the shard and is folded when the record appears.
-            continue;
+        let record = match folded.entry(fingerprint) {
+            std::collections::btree_map::Entry::Occupied(held) => &mut held.into_mut().1,
+            std::collections::btree_map::Entry::Vacant(slot) => {
+                let Some(loaded) = crate::findings::load_one(store_dir, fingerprint)? else {
+                    // An entry for an identity with no record is not an error: the
+                    // record may be GC'd, or the scan that mints it may not have run
+                    // here yet. Dropping the entry silently would lose a disposition,
+                    // so it stays in the shard and is folded when the record appears.
+                    continue;
+                };
+                &mut slot.insert((loaded.clone(), loaded)).1
+            }
         };
         record.merge_disposition(entry.disposition);
         // Presentation comes from the drain and nowhere else (see [`Origin::Scan`]),
@@ -689,8 +704,12 @@ pub fn merge(store_dir: &Path) -> Result<Merge> {
         if entry.origin == Origin::Drain {
             record.presentation = entry.presentation;
         }
-        crate::findings::save_one(store_dir, &record)?;
         applied += 1;
+    }
+    for (loaded, record) in folded.values() {
+        if record != loaded {
+            crate::findings::save_one(store_dir, record)?;
+        }
     }
 
     let mut format = match open(store_dir)? {
@@ -1087,6 +1106,41 @@ mod tests {
         merge(&dir).unwrap();
         let second = crate::findings::load_all(&dir).unwrap();
         assert_eq!(first, second);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_merge_rewrites_only_the_records_its_fold_changed() {
+        // THE COST HALF of idempotence. Every merge replays every shard, so a
+        // merge that wrote the record once per entry paid the log's whole history
+        // in fsyncs on every run (354k renames for 229 records on this repo's own
+        // store). The discriminator is the record's bytes: a trailing newline the
+        // parse ignores survives only if nothing rewrote the file — portable, where
+        // an inode or mtime comparison is not.
+        let dir = store("write-once");
+        crate::findings::save_one(&dir, &record_for("TODO")).unwrap();
+        for _ in 0..50 {
+            append(&dir, "shard-a", &entry_for("TODO", Disposition::Acted)).unwrap();
+        }
+        merge(&dir).unwrap();
+        let path = std::fs::read_dir(dir.join("findings"))
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "json"))
+            .expect("the record file");
+        let marked = format!("{}\n", std::fs::read_to_string(&path).unwrap());
+        std::fs::write(&path, &marked).unwrap();
+        merge(&dir).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            marked,
+            "a merge whose fold changed nothing must not rewrite the record"
+        );
+        assert_eq!(
+            crate::findings::load_all(&dir).unwrap()[0].disposition,
+            Some(Disposition::Acted)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
