@@ -7892,18 +7892,22 @@ count = "agent-turn-run"
 # The operator spoke and the session kept working without answering (measured
 # 2026-09-27: four mid-turn messages answered with tool calls only).
 #
-# `deny`, WHERE ITS SIBLING ABOVE SHIPS `warn`, AND THE DIFFERENCE IS THE
-# DISCHARGE. A `mediated_call` deny wedges a session when only a tool call can
-# clear it. This one clears on TEXT: one sentence to the operator zeroes the
-# count, and text is never a mediated call. It acts at PreToolUse and never at
-# Stop, so it forces no continuation and cannot loop.
+# `warn`, LIKE ITS SIBLING ABOVE, BECAUSE THE DENY DESTROYED ITS OWN DISCHARGE.
+# It shipped `deny` on the argument that text clears it and text is never a
+# mediated call. Measured 2026-09-30: an answer written in the same message as a
+# tool call the deny then cancelled never reached the transcript (the host drops
+# a cancelled message's text block), so the count rose 2 -> 3 over an answered
+# operator and every later call refused until a text-only turn. The session
+# stopped acting on the operator's instruction, which is the failure this row
+# exists to prevent. At `warn` the count still reaches the session on every call;
+# it no longer blocks the work that answers.
 [[rule]]
 id = "turn answer missing"
 no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/answer-the-operator.rego"
-severity = "deny"
+severity = "warn"
 
 [[rule.extract]]
 id = "unanswered-human-calls"
@@ -12988,7 +12992,7 @@ target = "policy/repetition-without-progress.rego"
 id = "turn answer missing"
 gloss = "the operator spoke and this session answered only with tool calls"
 class = """
-A message from the operator (a prompt, or one sent while the session was working) has no assistant text after it, and this call is another action. The count is tool calls since that message with nothing said. The remedy is one sentence to the operator that answers what they said, then act; text is never a mediated call, so saying something always clears it and this refusal can never wedge a session.
+A message from the operator (a prompt, or one sent while the session was working) has no assistant text after it, and this call is another action. The count is tool calls since that message with nothing said. The remedy is one sentence to the operator that answers what they said, then act; it is advisory, because a deny cancelled the very call whose message carried the answer and the host then dropped that text (measured 2026-09-30).
 """
 
 [[verdict.route]]

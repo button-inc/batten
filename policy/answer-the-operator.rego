@@ -9,12 +9,12 @@
 # host's `queued_command` attachment marked `humanTurn`) with no assistant text
 # between them. No span of what anyone said reaches this module (rule 4).
 #
-# IT SHIPS AT `deny`, AND UNLIKE ITS SIBLING THAT IS SAFE. `turn run loose`
-# ships at `warn` because a `mediated_call` deny refuses every later call and
-# only a tool call could clear it. Here the discharge is TEXT: one sentence to
-# the operator zeroes the count, and text is never a mediated call, so this can
-# refuse a call but can never wedge a session. It cannot loop either: it acts
-# only at PreToolUse and never at Stop, so it forces no continuation.
+# IT SHIPS AT `warn` (CLOUD-1917's session, 2026-09-30). It shipped `deny` on
+# the argument that text discharges it and text is never a mediated call. That
+# held only while the text reached the transcript: the host drops the text block
+# of a message whose tool call the deny cancelled, so an answered operator read
+# as unanswered and the count climbed on every retry until a text-only turn. A
+# deny that erases its own remedy blocks the work the operator asked for.
 #
 # ONE CALL OF SLACK. The call being adjudicated is itself counted, so a count of
 # 1 is "the first action after the message, with nothing said". That is the
