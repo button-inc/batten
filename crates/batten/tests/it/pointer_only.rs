@@ -816,6 +816,9 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // remote before any request, and this corpus names none, so its honest
     // answer is the could-not-look report, asserted pointer-only all the same.
     "record release",
+    // Retiring `[tasks.checksums]`, on the same terms: it reads the release's
+    // own assets from the forge remote this corpus does not name.
+    "release sums",
 ];
 
 /// One entry per leaf verb of [`SURFACE`], asserted total by
