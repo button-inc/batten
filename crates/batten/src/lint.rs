@@ -469,7 +469,7 @@ pub fn smells(
     // A rule at `allow` is configured off (CLOUD-61): it reads as a gate in the
     // file and is not one. Legal, and occasionally deliberate — which is exactly
     // why it deserves to be named rather than left to be noticed.
-    for rule in &located.rules {
+    for (rule, parsed) in located.rules.iter().zip(&config.rules) {
         // An absent `severity` is a judge row, which cannot be at `allow` because
         // it cannot carry the column at all — so it is not "configured off", it is
         // a kind with no on/off axis. Reporting it here would name every judge row
@@ -482,8 +482,15 @@ pub fn smells(
         }
         // THE REMEDY HALF OF §9 (CLOUD-1576). Both-keys and blank are load errors
         // already, so this sees only the two shapes a well-formed row can have.
+        //
+        // A kind whose permits refuse `no_fix_reason` is out of reach, and that
+        // is its declaration: `shape`, `receipt` and `pipeline` rows are
+        // adjudicated per mediated call and never reach the store, so a
+        // remediation there is decorative by construction, and their `reason`
+        // column is the remedy a refusal prints.
+        let declarable = parsed.kind.permits().contains(&"no_fix_reason");
         let remedy = match (&rule.fix, &rule.no_fix_reason) {
-            (None, None) => Some(REMEDY_UNDECLARED),
+            (None, None) if declarable => Some(REMEDY_UNDECLARED),
             (_, Some(reason)) if !crate::remedy::classified(reason) => Some(REASON_UNCLASSED),
             _ => None,
         };
@@ -1115,7 +1122,7 @@ mod tests {
 
     #[test]
     fn a_clean_config_has_no_smells() {
-        let text = "version = 1\nprotected = [\"a\"]\n\n[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"deny\"\n";
+        let text = "version = 1\nprotected = [\"a\"]\n\n[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"deny\"\nno_fix_reason = \"class 3 (x): y\"\n";
         assert!(ids(text).is_empty());
     }
 
@@ -1146,7 +1153,7 @@ mod tests {
 
     #[test]
     fn a_rule_switched_off_is_a_smell() {
-        let text = "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"allow\"\n";
+        let text = "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"allow\"\nno_fix_reason = \"class 3 (x): y\"\n";
         assert_eq!(ids(text), vec![RULE_DISABLED]);
     }
 
@@ -1257,7 +1264,7 @@ mod tests {
     fn with_waivers(waivers: &str) -> String {
         format!(
             "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\n\
-             pattern = \"x\"\nseverity = \"deny\"\n{waivers}"
+             pattern = \"x\"\nseverity = \"deny\"\nno_fix_reason = \"class 3 (x): y\"\n{waivers}"
         )
     }
 
@@ -1292,7 +1299,7 @@ mod tests {
         let text = with_waivers(&waiver_row("typo", "2099-01-01"));
         let found = smells(&text, "test", None, today(), &[]).unwrap();
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].line_text(), "batten.toml:11 waiver-names-no-rule");
+        assert_eq!(found[0].line_text(), "batten.toml:12 waiver-names-no-rule");
         assert!(
             !found[0].line_text().contains("tracked"),
             "the pointer must never carry the justification text"
@@ -1336,7 +1343,7 @@ mod tests {
         format!(
             "version = 1\n\n[[rule]]\nid = \"intentional\"\nkind = \"judge\"\n\
              glob = \"**/*.rs\"\ncriteria = \"does this read as intentional\"\n\
-             tier = \"advisory\"\nno_fix_reason = \"answered by a person\"\n{waivers}"
+             tier = \"advisory\"\nno_fix_reason = \"class 3 (a person's answer): answered by a person\"\n{waivers}"
         )
     }
 

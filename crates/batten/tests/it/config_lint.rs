@@ -173,7 +173,7 @@ fn weakening_pr(name: &str, trailer: Option<&str>) -> PathBuf {
     // branch: without a declared target a CLAIMED run could not find its fork
     // point and would stay unarmed, and every claim-armed case below would pass
     // by never deciding anything.
-    let base = "version = 1\nmust_land_on = \"origin/main\"\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"deny\"\n";
+    let base = "version = 1\nmust_land_on = \"origin/main\"\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"deny\"\nno_fix_reason = \"class 3 (x): y\"\n";
     let working = base.replace("\"deny\"", "\"warn\"");
     let dir = Fixture::new(name)
         .config(base)
@@ -349,7 +349,7 @@ fn a_claimed_branch_is_armed_at_its_fork_point_without_a_base_ref() {
 /// carry it has not been written.
 #[test]
 fn the_claim_armed_run_admits_what_the_board_groomed_before_any_trailer_exists() {
-    let base = "version = 1\nmust_land_on = \"origin/main\"\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"deny\"\n";
+    let base = "version = 1\nmust_land_on = \"origin/main\"\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"deny\"\nno_fix_reason = \"class 3 (x): y\"\n";
     let dir = Fixture::new("lint-admit-precommit")
         .config(base)
         .git()
@@ -391,7 +391,7 @@ fn a_config_below_the_repository_root_is_not_armed_by_the_roots_claim() {
     fs::create_dir_all(&nested).unwrap();
     fs::write(
         nested.join("batten.toml"),
-        "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"warn\"\n",
+        "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"warn\"\nno_fix_reason = \"class 3 (x): y\"\n",
     )
     .unwrap();
     let out = lint(&nested, &[]);
@@ -413,7 +413,7 @@ fn a_config_below_the_repository_root_is_not_armed_by_the_roots_claim() {
 /// the fork point there is nothing to report.
 #[test]
 fn the_claim_armed_run_does_not_charge_the_branch_for_trunk_changes() {
-    let forked = "version = 1\nmust_land_on = \"origin/main\"\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"warn\"\n";
+    let forked = "version = 1\nmust_land_on = \"origin/main\"\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"warn\"\nno_fix_reason = \"class 3 (x): y\"\n";
     let dir = Fixture::new("lint-admit-trunk-moved")
         .config(forked)
         .git()
@@ -444,7 +444,7 @@ fn the_claim_armed_run_does_not_charge_the_branch_for_trunk_changes() {
 /// A `forbid` rule at the given severity.
 fn rule(id: &str, severity: &str) -> String {
     format!(
-        "\n[[rule]]\nid = \"{id}\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\nseverity = \"{severity}\"\n"
+        "\n[[rule]]\nid = \"{id}\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\nseverity = \"{severity}\"\nno_fix_reason = \"class 3 (x): y\"\n"
     )
 }
 
@@ -580,7 +580,7 @@ fn judge_rule_config(waivers: &str) -> String {
     format!(
         "version = 1\n\n[[rule]]\nid = \"intentional\"\nkind = \"judge\"\n\
          glob = \"**/*.rs\"\ncriteria = \"does this read as intentional\"\n\
-         tier = \"advisory\"\nno_fix_reason = \"answered by a person\"\n{waivers}"
+         tier = \"advisory\"\nno_fix_reason = \"class 3 (a person): answered by a person\"\n{waivers}"
     )
 }
 
@@ -753,7 +753,7 @@ fn the_keys_cloud_721_added_reach_the_lint_with_their_own_pointers() {
         "version = 1\n",
         "\n[[verb]]\nverb = \"rm\"\neffect = \"destructive\"\n",
         "\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\n",
-        "pattern = \"TODO\"\nseverity = \"deny\"\n",
+        "pattern = \"TODO\"\nseverity = \"deny\"\nno_fix_reason = \"class 3 (x): y\"\n",
         "\n[[waiver]]\nrule = \"no-todo\"\nreason = \"tracked\"\nexpires = \"2020-01-01\"\n",
     );
     // Same rule, same severity, same waiver key: the glob is narrowed to match
@@ -762,7 +762,7 @@ fn the_keys_cloud_721_added_reach_the_lint_with_their_own_pointers() {
     let working = concat!(
         "version = 1\n",
         "\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"nothing/here/**\"\n",
-        "pattern = \"TODO\"\nseverity = \"deny\"\n",
+        "pattern = \"TODO\"\nseverity = \"deny\"\nno_fix_reason = \"class 3 (x): y\"\n",
         "\n[[waiver]]\nrule = \"no-todo\"\nreason = \"tracked\"\nexpires = \"2099-01-01\"\n",
     );
     let repo = pr_fixture("lint-cloud-721-keys", base, working);
@@ -867,13 +867,13 @@ fn the_reverse_edit_of_those_keys_is_clean() {
         "version = 1\n",
         "\n[[verb]]\nverb = \"rm\"\neffect = \"destructive\"\n",
         "\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\n",
-        "pattern = \"TODO\"\nseverity = \"deny\"\n",
+        "pattern = \"TODO\"\nseverity = \"deny\"\nno_fix_reason = \"class 3 (x): y\"\n",
         "\n[[waiver]]\nrule = \"no-todo\"\nreason = \"tracked\"\nexpires = \"2020-01-01\"\n",
     );
     let loose = concat!(
         "version = 1\n",
         "\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"nothing/here/**\"\n",
-        "pattern = \"TODO\"\nseverity = \"deny\"\n",
+        "pattern = \"TODO\"\nseverity = \"deny\"\nno_fix_reason = \"class 3 (x): y\"\n",
         "\n[[waiver]]\nrule = \"no-todo\"\nreason = \"tracked\"\nexpires = \"2099-01-01\"\n",
     );
     let repo = pr_fixture("lint-cloud-721-reverse", loose, tight);
@@ -885,7 +885,7 @@ fn the_reverse_edit_of_those_keys_is_clean() {
         // the base-ref class contributes exactly one line, the predicate change,
         // reported as a CHANGE in both directions because ranking two globs
         // would be a judgement.
-        "batten.toml:15 waiver-expired\n\
+        "batten.toml:16 waiver-expired\n\
          batten.toml:rule[no-todo].glob rule-predicate-changed\n\
          config-lint: 2 smell(s)\n"
     );
@@ -920,7 +920,7 @@ fn a_dropped_row_does_not_shift_the_waivers_reported_after_it() {
         concat!(
             "version = 1\n",
             "\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\n",
-            "pattern = \"TODO\"\nseverity = \"deny\"\n",
+            "pattern = \"TODO\"\nseverity = \"deny\"\nno_fix_reason = \"class 3 (x): y\"\n",
             "\n[[waiver]]\nrule = \"no-todo\"\nreason = \"first\"\nexpires = \"2099-01-01\"\n",
             "from_a_newer_schema = true\n",
             "\n[[waiver]]\nrule = \"no-todo\"\nreason = \"lapsed\"\nexpires = \"2020-01-01\"\n",

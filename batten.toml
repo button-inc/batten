@@ -611,7 +611,6 @@ sha256 = "b2c822742e8cbf355ba0cb4cc690c3cd8fdc9ec1916c8148f27bd9098cb7aee4"
 # agent read as advice and proposed for a class it could not have suppressed.
 [[rule]]
 id = "commit ship other"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -628,7 +627,6 @@ discarding the exact objects CI tested. Use `mise run land`, which comments \
 # this key exists.
 [[rule]]
 id = "review ship early"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -642,7 +640,6 @@ PR is MERGED or the fast-forward bot refuses."""
 
 [[rule]]
 id = "check watch loose"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -722,7 +719,6 @@ severity = "deny"
 
 [[rule]]
 id = "job watch loose"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -848,7 +844,6 @@ it rather than holding a foreground poll open."""
 # `--fail-on-warning`, so both a deleted row and a silently lowered one redden.
 [[rule]]
 id = "patch run loose"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -906,7 +901,6 @@ warn row on this surface reaches nobody."""
 # gates disagreeing with a green local run.
 [[rule]]
 id = "cargo run loose"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -963,7 +957,6 @@ mise.toml, so a green local run can mean nothing. Use `mise run <task>` (\
 # `batten enforce`, which is why `mise-tasks/issue-guard.sh` still exists.
 [[rule]]
 id = "review name unnamed"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -982,7 +975,6 @@ the work lands with nothing recording that it did."""
 # pair.
 [[rule]]
 id = "review open unnamed"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -1014,7 +1006,6 @@ own push. A PR that names no issue cannot move the board when it merges."""
 # move without this file restating them.
 [[rule]]
 id = "check read unread"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -1255,7 +1246,6 @@ counts = "."
 # fact about the WORK takes, which is why `claim-needs-receipt` below takes it.
 [[rule]]
 id = "review answer unread"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -1282,7 +1272,6 @@ on 89, so the usual outcome is that there is something to read."""
 # above.
 [[rule]]
 id = "review answer partial"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -1311,7 +1300,6 @@ answer needs another read."""
 # reads and could not tell a reader which one was missing.
 [[rule]]
 id = "review list unread"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -1367,7 +1355,6 @@ severity = "deny"
 # writes.
 [[rule]]
 id = "claim read unread"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -1481,7 +1468,6 @@ bytes the tracker returned, never a re-typed copy; do NOT re-type one by hand.""
 # red check on a named head is a fact a reader can verify, not a sentence.
 [[rule]]
 id = "turn mint ahead"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -3383,7 +3369,6 @@ zero-is-a-count = true
 # row does not touch — the engine reads the file that task already writes.
 [[rule]]
 id = "issue list unread"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -3452,7 +3437,6 @@ gated."""
 # Unbounded, one adjudication would authorise every later sweep in the clone.
 [[rule]]
 id = "review judge unread"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -3538,7 +3522,6 @@ different owner and is not gated here."""
 # bypassed rather than satisfied.
 [[rule]]
 id = "plan grade unread"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -3608,7 +3591,6 @@ gated here."""
 # returned rather than a field subset.
 [[rule]]
 id = "issue read stale"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
@@ -3667,7 +3649,6 @@ is never gated by this row (that is `issue list unread`)."""
 # drop` makes the call from a task, where no permission control applies.
 [[rule]]
 id = "review watch refused"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -3703,7 +3684,6 @@ body = "{now} {url}"
 
 [[rule]]
 id = "review open twice"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -3719,7 +3699,6 @@ the Ready block's `blockers`."""
 
 [[rule]]
 id = "timer mint refused"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -3733,7 +3712,6 @@ and act on its exit."""
 
 [[rule]]
 id = "event mint refused"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -3772,7 +3750,6 @@ clock nothing reads. Background the task and act on its exit."""
 # written into the prompt is not a claim about what the agent does with it.
 [[rule]]
 id = "spawn count wrong"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -3799,7 +3776,6 @@ count is what the spawn can actually be made to read."""
 # not arrive with its own arithmetic.
 [[rule]]
 id = "prompt measure wrong"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -3929,7 +3905,6 @@ exits 0, so a stale reference goes quiet rather than failing."""
 # `>/tmp/x.log` form the row above MANDATES allowed.
 [[rule]]
 id = "tool select other"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "pipeline"
 scope = "mediated_call"
 severity = "deny"
@@ -3962,7 +3937,6 @@ not refused."""
 
 [[rule]]
 id = "verdict guard missing"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "pipeline"
 scope = "mediated_call"
 severity = "deny"
@@ -5367,7 +5341,6 @@ fields = [
 # write succeeds through the verb.
 [[rule]]
 id = "issue read loose"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
@@ -8148,7 +8121,6 @@ subject = "tracker-body"
 # questions genuinely have different answers.
 [[rule]]
 id = "review ask missing"
-no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"

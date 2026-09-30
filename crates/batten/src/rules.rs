@@ -76,9 +76,6 @@ const PIPELINE_PERMITS: &[&str] = &[
     "bypass_env",
     "severity",
     "no_retry_reason",
-    // CLOUD-1576: every row states its remedy, and a mediated call has no `fix`
-    // to run, so the reason is this kind's whole answer.
-    "no_fix_reason",
 ];
 
 /// One reference-to-path rewrite for a [`CeilingUnit::TrackedArtifacts`] ceiling
@@ -177,8 +174,6 @@ const SHAPE_PERMITS: &[&str] = &[
     "bypass_env",
     "severity",
     "no_retry_reason",
-    // CLOUD-1576, for `PIPELINE_PERMITS`' reason.
-    "no_fix_reason",
 ];
 
 /// The columns a [`RuleKind::Receipt`] row may carry.
@@ -220,8 +215,6 @@ const RECEIPT_PERMITS: &[&str] = &[
     "bypass_env",
     "severity",
     "no_retry_reason",
-    // CLOUD-1576, for `PIPELINE_PERMITS`' reason.
-    "no_fix_reason",
 ];
 
 /// The kind of predicate a [`Rule`] applies to its matched files.

@@ -89,6 +89,10 @@ glob = "**/*/*"
 pattern = "<<<<<<< "
 severity = "deny"
 scope = "tree"
+# Every rule declares its remedy: a `fix` command, or why there is none, naming
+# the remedy class and the substrate that is missing. `batten config lint` names a
+# row that says neither.
+no_fix_reason = "class 3 (a person's choice of side): resolving a conflict is a judgement no command can make"
 
 # The governing config surface: the files whose bytes `batten config epoch` hashes
 # into one attributable value, so two records carrying the same epoch were
