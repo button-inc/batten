@@ -20,7 +20,7 @@
 // carried: "an In Review issue the tag shipped is movable" crates/batten/src/policy/presets/tracker-hygiene/shipping-is-not-sufficient.rego kind:mechanism
 // carried: "an issue in any other state is left alone, never touched" crates/batten/src/policy/presets/tracker-hygiene/shipping-is-not-sufficient.rego kind:mechanism
 // carried: "THE REFUSAL: an issue holding itself open is HELD, not movable" crates/batten/src/policy/presets/tracker-hygiene/shipping-is-not-sufficient.rego kind:mechanism
-// changed: "the refusal says why shipping is not enough, not merely that it refused" crates/batten/src/preset.rs the words moved from the body's stderr into the vendored `issue ship held` gloss, which `check` renders beside the pointer
+// changed: "the refusal says why shipping is not enough, not merely that it refused" crates/batten/src/preset.rs the words moved from the body's stderr into the vendored `issue ship held` class, which `batten policy explain` renders; the refusal itself is the id pointer
 // carried: "a held issue does not suppress the movable ones beside it" crates/batten/src/policy/presets/tracker-hygiene/shipping-is-not-sufficient.rego kind:mechanism
 // carried: "the marker only holds an In Review issue — a Done one is already past it" crates/batten/src/policy/presets/tracker-hygiene/shipping-is-not-sufficient.rego kind:mechanism
 // carried: "an issue with no marker and no description still moves" crates/batten/src/released.rs kind:mechanism
@@ -64,6 +64,9 @@ const PR: &str = r#"[{"url":"https://github.com/o/r/pull/1"}]"#;
 
 /// The one row every tracker question is checked under — the committed one.
 const ROW: &str = "issue state other";
+
+/// The predicate id the module's refusals carry, which `check` prints last.
+const RULE: &str = "issue ship other";
 
 fn git(repo: &Path, args: &[&str]) -> String {
     common::git_in(repo, args)
@@ -160,11 +163,20 @@ fn row(id: &str, column: &str, hold: &str) -> String {
     format!("issue\t{id}\t{column}\t{hold}\n")
 }
 
-/// Whether any refusal line names `id` — the record's own lines are tab
-/// separated, so a space-separated `<class> <id>` is the check's.
-fn refused_line(text: &str, class: &str, id: &str) -> bool {
+/// Whether `check` printed exactly this refusal: the row's id, then the rule.
+/// Which kind it is — held or refused, and the board gate's rule — is the
+/// record's `issue` and `refusal` lines, echoed above it.
+fn refusal(text: &str, pointer: &str) -> bool {
+    let line = format!("{pointer} {RULE}");
+    text.lines().any(|said| said.trim() == line)
+}
+
+/// Whether any refusal names `id`, whichever kind.
+fn refuses(text: &str, id: &str) -> bool {
+    let lead = format!("{id} ");
     text.lines()
-        .any(|line| line.contains(class) && line.contains(id) && !line.contains('\t'))
+        .map(str::trim)
+        .any(|said| said.starts_with(&lead) && said.ends_with(RULE))
 }
 
 #[test]
@@ -209,16 +221,12 @@ fn an_issue_holding_itself_open_is_held() {
     let (code, text) = released(&dir, "v0.0.2", &set(std::slice::from_ref(&held)));
     assert_eq!(code, Some(2), "{text}");
     assert!(text.contains(&row("CLOUD-2", "review", "held")), "{text}");
-    assert!(refused_line(&text, "issue ship held", "CLOUD-2"), "{text}");
-    assert!(
-        text.contains("necessary for Done, not sufficient"),
-        "{text}"
-    );
+    assert!(refusal(&text, "CLOUD-2"), "{text}");
     // A held issue does not suppress the movable one beside it.
     let (code, text) = released(&dir, "v0.0.2", &set(&[held, in_review("CLOUD-3")]));
     assert_eq!(code, Some(2), "{text}");
     assert!(text.contains(&row("CLOUD-3", "review", "free")), "{text}");
-    assert!(!refused_line(&text, "issue ship", "CLOUD-3"), "{text}");
+    assert!(!refuses(&text, "CLOUD-3"), "{text}");
 }
 
 #[test]
@@ -227,7 +235,7 @@ fn the_marker_holds_only_in_review_and_is_opt_in() {
     let done = issue("CLOUD-2", "Done", "DO-NOT-CLOSE", PR, "");
     let (code, text) = released(&dir, "v0.0.2", &set(&[done]));
     assert_eq!(code, Some(0), "{text}");
-    assert!(!text.contains("issue ship held"), "{text}");
+    assert!(!refuses(&text, "CLOUD-2"), "{text}");
     // No marker and an empty description still moves.
     let (code, text) = released(&dir, "v0.0.2", &set(&[in_review("CLOUD-2")]));
     assert_eq!(code, Some(0), "{text}");
@@ -249,7 +257,7 @@ fn a_commit_the_tag_contains_is_a_second_way_in() {
     let held = with_commit("CLOUD-9", &tip, "DO-NOT-CLOSE");
     let (code, text) = released(&dir, "v0.0.2", &set(&[held]));
     assert_eq!(code, Some(2), "{text}");
-    assert!(refused_line(&text, "issue ship held", "CLOUD-9"), "{text}");
+    assert!(refusal(&text, "CLOUD-9"), "{text}");
 }
 
 #[test]
@@ -317,10 +325,7 @@ fn an_in_review_issue_with_no_pr_is_refused_by_rule() {
         text.contains("refusal\tCLOUD-2\tin-review-no-pr\n"),
         "{text}"
     );
-    assert!(
-        refused_line(&text, "issue ship refused", "CLOUD-2 in-review-no-pr"),
-        "{text}"
-    );
+    assert!(refusal(&text, "CLOUD-2"), "{text}");
     // A non-PR attachment is not a linked PR.
     let doc = issue(
         "CLOUD-2",
@@ -331,15 +336,12 @@ fn an_in_review_issue_with_no_pr_is_refused_by_rule() {
     );
     let (code, text) = released(&dir, "v0.0.2", &set(&[doc]));
     assert_eq!(code, Some(2), "{text}");
-    assert!(
-        refused_line(&text, "issue ship refused", "CLOUD-2 in-review-no-pr"),
-        "{text}"
-    );
+    assert!(refusal(&text, "CLOUD-2"), "{text}");
     // A refused issue does not suppress the movable one beside it.
     let (code, text) = released(&dir, "v0.0.2", &set(&[bare, in_review("CLOUD-3")]));
     assert_eq!(code, Some(2), "{text}");
     assert!(text.contains(&row("CLOUD-3", "review", "free")), "{text}");
-    assert!(!refused_line(&text, "issue ship", "CLOUD-3"), "{text}");
+    assert!(!refuses(&text, "CLOUD-3"), "{text}");
 }
 
 #[test]
@@ -350,8 +352,10 @@ fn held_and_refused_are_both_reported() {
     let (code, text) = released(&dir, "v0.0.2", &set(&[refused, held]));
     assert_eq!(code, Some(2), "{text}");
     assert!(
-        refused_line(&text, "issue ship refused", "CLOUD-2")
-            && refused_line(&text, "issue ship held", "CLOUD-3"),
+        refusal(&text, "CLOUD-2")
+            && text.contains("refusal\tCLOUD-2\tin-review-no-pr\n")
+            && refusal(&text, "CLOUD-3")
+            && text.contains(&row("CLOUD-3", "review", "held")),
         "{text}"
     );
 }
@@ -366,7 +370,7 @@ fn a_done_issue_is_never_judged_nor_asked_for_keys() {
     );
     assert_eq!(code, Some(0), "{text}");
     assert!(
-        text.contains(&row("CLOUD-2", "other", "free")) && !text.contains("issue ship"),
+        text.contains(&row("CLOUD-2", "other", "free")) && !refuses(&text, "CLOUD-2"),
         "{text}"
     );
     let (code, text) = released(&dir, "v0.0.2", r#"[{"id":"CLOUD-2","status":"Done"}]"#);
@@ -435,7 +439,7 @@ fn a_blocker_outside_the_piped_set_is_not_a_refusal() {
     let (code, text) = released(&dir, "v0.0.2", &set(&[dangling]));
     assert_eq!(code, Some(0), "{text}");
     assert!(text.contains(&row("CLOUD-2", "review", "free")), "{text}");
-    assert!(!text.contains("issue ship"), "{text}");
+    assert!(!refuses(&text, "CLOUD-2"), "{text}");
 }
 
 /// A GATE THAT DID NOT RUN IS NEVER A PASS. The retired body refused a child
@@ -468,7 +472,10 @@ fn a_released_record_without_its_census_is_torn() {
     let decided = common::run(&dir, &["check", "--rule", ROW]);
     let text = said(&decided);
     assert_eq!(decided.status.code(), Some(2), "{text}");
-    assert!(text.contains("tag read partial"), "{text}");
+    assert!(
+        refusal(&text, "0"),
+        "the census count is the pointer: {text}"
+    );
 }
 
 /// The conjunction is composed, never copied, and the marker has one authority:

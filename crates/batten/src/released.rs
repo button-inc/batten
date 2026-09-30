@@ -68,7 +68,7 @@ fn refuse(why: &str) -> anyhow::Error {
 }
 
 /// The composed board gate did not answer — never an empty report.
-fn could_not_run(why: anyhow::Error) -> anyhow::Error {
+fn could_not_run(why: &anyhow::Error) -> anyhow::Error {
     refuse(&format!(
         "batten board check could not run ({why}); a gate that cannot run is not a pass"
     ))
@@ -142,7 +142,7 @@ fn rule_for(line: &str, id: &str) -> Option<String> {
 ///
 /// A [`UsageError`] for each could-not-look this module's header names.
 //MUTANT earlier-tag-reshipped|s@^    let hidden: Vec<String> = previous.iter().cloned().collect();$@    let hidden: Vec<String> = Vec::new();@|a_commit_an_earlier_tag_shipped_is_not_new
-//MUTANT unrun-gate-passes|s@^        Err(why) => return Err(could_not_run(why)),$@        Err(_) => Vec::new(),@|a_board_check_that_did_not_run_is_could_not_look
+//MUTANT unrun-gate-passes|s@^        Err(why) => return Err(could_not_run(&why)),$@        Err(_) => Vec::new(),@|a_board_check_that_did_not_run_is_could_not_look
 //MUTANT commit-path-dropped|s@^            by_commit.insert(id);$@            let _ = id;@|a_commit_the_tag_contains_is_a_second_way_in
 pub fn reading(
     inputs: &BTreeMap<String, String>,
@@ -204,10 +204,50 @@ pub fn reading(
             refuse("`board.review` is not declared, so no row can be read as In Review")
         })?;
     let in_review = |issue: &&Value| issue.get("status").map(text_of).as_deref() == Some(review);
+    require_review_keys(&set, &in_review)?;
+    let declared = crate::board_check::Declared {
+        board,
+        patterns,
+        grammar: &grammar,
+        root,
+    };
+    let findings = match crate::board_check::graph_findings(&set, &declared) {
+        Ok(findings) => findings,
+        Err(why) => return Err(could_not_run(&why)),
+    };
+
+    let by_commit = shipped_by_commit(&set, root, &commits);
+    shipped.extend(by_commit.into_iter().map(|id| (ordinal(&id), id)));
+
+    let mut judged = 0usize;
+    let mut rows = String::new();
+    for (_, id) in &shipped {
+        writeln!(record, "shipped\t{id}")?;
+        // Shipped but not piped is not a finding: the caller chose the closure.
+        let Some(issue) = set.iter().find(|issue| id_of(issue).as_deref() == Some(id)) else {
+            continue;
+        };
+        let column = if in_review(&issue) { "review" } else { "other" };
+        let body = issue.get("description").map(text_of).unwrap_or_default();
+        let marked = if hold.is_match(&body) { "held" } else { "free" };
+        writeln!(rows, "issue\t{id}\t{column}\t{marked}")?;
+        judged += 1;
+        for rule in findings.iter().filter_map(|line| rule_for(line, id)) {
+            writeln!(rows, "refusal\t{id}\t{rule}")?;
+        }
+    }
+    record.push_str(&rows);
+    writeln!(record, "census\tissues={judged}")?;
+    Ok(record)
+}
+
+/// Refuse a review-column payload missing a key the board gate decides on —
+/// PRESENCE, never truthiness: `[]` and `""` are data.
+fn require_review_keys(set: &[Value], in_review: &dyn Fn(&&Value) -> bool) -> Result<()> {
     for (key, remedy) in REVIEW_KEYS {
         let missing: Vec<String> = set
             .iter()
-            .filter(in_review)
+            .filter(|issue| in_review(issue))
             .filter(|issue| issue.get(key).is_none())
             .filter_map(id_of)
             .collect();
@@ -219,22 +259,16 @@ pub fn reading(
             )));
         }
     }
-    let declared = crate::board_check::Declared {
-        board,
-        patterns,
-        grammar: &grammar,
-        root,
-    };
-    let findings = match crate::board_check::graph_findings(&set, &declared) {
-        Ok(findings) => findings,
-        Err(why) => return Err(could_not_run(why)),
-    };
+    Ok(())
+}
 
+/// The ids whose payload `commit` the range contains.
+fn shipped_by_commit(set: &[Value], root: &Path, commits: &BTreeSet<String>) -> BTreeSet<String> {
     // THE SECOND WAY IN (CLOUD-260): a payload's `commit`, for work that landed
     // before every change carried its key. A sha that does not resolve is
     // supplementary evidence ignored, never fatal.
     let mut by_commit: BTreeSet<String> = BTreeSet::new();
-    for issue in &set {
+    for issue in set {
         let (Some(id), Some(sha)) = (id_of(issue), issue.get("commit").map(text_of)) else {
             continue;
         };
@@ -248,28 +282,7 @@ pub fn reading(
             by_commit.insert(id);
         }
     }
-    shipped.extend(by_commit.into_iter().map(|id| (ordinal(&id), id)));
-
-    let mut judged = 0usize;
-    let mut rows = String::new();
-    for (_, id) in &shipped {
-        writeln!(record, "shipped\t{id}")?;
-        // Shipped but not piped is not a finding: the caller chose the closure.
-        let Some(issue) = set.iter().find(|issue| id_of(issue).as_deref() == Some(id)) else {
-            continue;
-        };
-        let column = if in_review(&issue) { "review" } else { "other" };
-        let body = issue.get("description").map(text_of).unwrap_or_default();
-        let held = if hold.is_match(&body) { "held" } else { "free" };
-        writeln!(rows, "issue\t{id}\t{column}\t{held}")?;
-        judged += 1;
-        for rule in findings.iter().filter_map(|line| rule_for(line, id)) {
-            writeln!(rows, "refusal\t{id}\t{rule}")?;
-        }
-    }
-    record.push_str(&rows);
-    writeln!(record, "census\tissues={judged}")?;
-    Ok(record)
+    by_commit
 }
 
 /// The hold marker's declared row, compiled.
