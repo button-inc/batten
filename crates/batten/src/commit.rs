@@ -764,9 +764,8 @@ mod tests {
                 },
                 Unclaimed {
                     id: "update-bot".to_owned(),
-                    paths:
-                        r"^(\.github/workflows/[^/]+\.ya?ml|mise\.(toml|lock)|Cargo\.(toml|lock))$"
-                            .to_owned(),
+                    paths: r"^(ci/pipelines/[^/]+\.ya?ml|mise\.(toml|lock)|Cargo\.(toml|lock))$"
+                        .to_owned(),
                     author: Some(r"\[bot\]@users\.noreply\.github\.com$".to_owned()),
                 },
             ],
@@ -861,13 +860,13 @@ mod tests {
         let by_a_person = claimant(
             "cccccccc",
             "Someone <someone@example.com>",
-            &[".github/workflows/ci.yml"],
+            &["ci/pipelines/build.yml"],
             false,
         );
         let by_the_bot = claimant(
             "dddddddd",
             "renovate[bot] <29139614+renovate[bot]@users.noreply.github.com>",
-            &[".github/workflows/ci.yml", "mise.toml"],
+            &["ci/pipelines/build.yml", "mise.toml"],
             false,
         );
         let found = judge_claims(&[by_a_person, by_the_bot], &claims()).unwrap();

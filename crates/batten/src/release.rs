@@ -3,7 +3,7 @@
 //!
 //! # What retired into this module
 //!
-//! Three `mise.toml` task bodies, each a `gh` pipeline with a `sha256sum`, a
+//! Three inline task bodies, each a `gh` pipeline with a `sha256sum`, a
 //! `sort -V` or a poll loop around it:
 //!
 //! * `[tasks.checksums]` (CLOUD-278) is `batten release sums`: download a

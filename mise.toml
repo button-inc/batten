@@ -3346,7 +3346,10 @@ description = "Session start: put the not-signing posture into force, quietly â€
 # own rather than a flattened `1`.
 quiet = true
 silent = "stdout"
-run = "mise run batten -- attribution signing"
+# The INSTALLED binary, as `attribution-identity` beside it calls it: never
+# `cargo run` on a session-start path (CLOUD-1620), where `session-batten` has
+# just put the binary on PATH and a compile would stall the session.
+run = "batten attribution signing"
 
 [tasks."session:wiring"]
 description = "Session start: reclaim the hook surface from launcher-provisioned siblings â€” the third repair of the class `session:identity` and `session:signing` already close (CLOUD-1079)"

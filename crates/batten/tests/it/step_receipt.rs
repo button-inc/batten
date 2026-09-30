@@ -721,14 +721,22 @@ fn every_step_a_task_names_is_declared_and_the_retired_task_is_gone() {
             }
         }
     }
-    assert!(
-        named.len() >= 10,
-        "the scan must find the repointed call sites: {named:?}"
-    );
+    // THE TWO SETS ARE ONE SET, which is stronger than any count: a call site
+    // naming no row can never hit, and a row no call site names is an orphan
+    // caching nothing. The count this replaced (`>= 10`) dated from the paired
+    // `step check`/`step record` spelling, which `step run` collapsed to one line
+    // per task.
     for name in &named {
         assert!(
             ids.contains(&name.as_str()),
             "`batten step … {name}` names no `[[step]]` row, so it can never hit"
         );
     }
+    for id in &ids {
+        assert!(
+            named.iter().any(|name| name == id),
+            "`[[step]] {id}` is named by no task, so it caches nothing: {named:?}"
+        );
+    }
+    assert!(!named.is_empty(), "the scan must find the call sites");
 }

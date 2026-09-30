@@ -18116,19 +18116,6 @@ tools = [
   ["mise", "tasks", "info", "cross-check", "--json"],
 ]
 
-# The probe build `evaluator-io-record` skips on a hit. The retired table keyed it
-# on `mise tasks info evaluator-io-check`, a task that no longer exists, so the
-# key never formed and the step never hit; the body it caches is
-# `evaluator-io-record`'s, which is what this row names.
-[[step]]
-id = "evaluator-io-check"
-inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml"]
-tools = [
-  ["rustc", "--version"],
-  ["cargo", "--version"],
-  ["mise", "tasks", "info", "evaluator-io-record", "--json"],
-]
-
 [[step]]
 id = "darwin-link"
 inputs = ["crates", "Cargo.toml", "Cargo.lock", "batten.toml"]

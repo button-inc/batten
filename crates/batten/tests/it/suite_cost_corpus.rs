@@ -141,7 +141,7 @@ fn an_absent_report_is_could_not_look_rather_than_an_empty_corpus() {
     let dir = bench("no-report", &["a.bats"]);
     let output = record(&dir, false);
     assert_ne!(output.status.code(), Some(0), "{}", said(&output));
-    assert!(said(&output).contains("has not run"), "{}", said(&output));
+    assert!(said(&output).contains("no report at"), "{}", said(&output));
 }
 
 #[test]
