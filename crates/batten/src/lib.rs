@@ -678,21 +678,6 @@ fn run_artifacts_write(request: &cli::ArtifactsWrite, out: &mut dyn Write) -> Re
     Ok(ExitCode::Success)
 }
 
-/// A foundation verb whose package has not landed yet (CLOUD-843).
-///
-/// Its ARGUMENTS are final and its body is not. Exit 3 — could-not-look — naming
-/// the verb and nothing else, and never exit 0: a caller repointed at a verb that
-/// does nothing must fail rather than pass over work nobody did.
-///
-/// # Errors
-///
-/// Always, which is the whole of its contract.
-pub(crate) fn unimplemented(path: &str) -> Result<ExitCode> {
-    Err(anyhow::anyhow!(
-        "{path}: unimplemented — its arguments are final and its body lands with the retirement \
-         that replaces the shell it stands for (CLOUD-843)"
-    ))
-}
 /// A scratch directory that removes itself, however its owner leaves.
 ///
 /// `Drop` rather than a call before each `return`, because [`run_bench`] has
