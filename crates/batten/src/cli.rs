@@ -2662,11 +2662,11 @@ fn ci_of(matches: &ArgMatches) -> Option<CiCommand> {
                 .unwrap_or_default();
             request.capture = text("capture");
             request.require_env = matches
-                .get_many::<String>("require-env")
+                .get_many::<String>("require_env")
                 .map(|names| names.cloned().collect())
                 .unwrap_or_default();
             request.arg_env = matches
-                .get_many::<String>("arg-env")
+                .get_many::<String>("arg_env")
                 .map(|names| names.cloned().collect())
                 .unwrap_or_default();
             request.command = matches.get_many::<String>("command")?.cloned().collect();

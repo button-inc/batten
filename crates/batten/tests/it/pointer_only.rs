@@ -2484,6 +2484,14 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // `step run`'s reading: a command that writes nothing leaves nothing to
+    // relay, so the verb's own lines are held to the law.
+    Verb {
+        path: "ci step",
+        args: &["--", "true"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "bench tokens",
         args: &[],

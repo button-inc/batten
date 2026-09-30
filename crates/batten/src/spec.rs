@@ -874,6 +874,10 @@ mod tests {
             // diff and the declared headers and runs nothing.
             "ci".to_owned(),
             "ci slow-needed".to_owned(),
+            // The runner-file glue a workflow step used a shell for (CLOUD-843,
+            // Phase 4). OFF the read-only allowlist: it runs the command it is
+            // handed, so its effect is `step run`'s, not a reader's.
+            "ci step".to_owned(),
             "ci suites".to_owned(),
             // The pull-time claim noun (CLOUD-1121), ported off
             // `mise-tasks/claim-check.sh` on the terms `semver` below

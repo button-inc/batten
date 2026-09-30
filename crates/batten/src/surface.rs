@@ -2891,7 +2891,7 @@ const CI_STEP_ON: FlagDecl = FlagDecl {
 const CI_STEP_REQUIRE_ENV: FlagDecl = FlagDecl {
     value: ValueDecl::StrMany,
     ..FlagDecl::valued(
-        "require-env",
+        "require_env",
         "require-env",
         "Refuse the step before running anything when this variable is unset or empty, naming it and never its value (repeatable)",
     )
@@ -2909,7 +2909,7 @@ const CI_STEP_CAPTURE: FlagDecl = FlagDecl::valued(
 const CI_STEP_ARG_ENV: FlagDecl = FlagDecl {
     value: ValueDecl::StrMany,
     ..FlagDecl::valued(
-        "arg-env",
+        "arg_env",
         "arg-env",
         "Append this variable's value to the command as one argument, in order; unset or empty is refused (repeatable)",
     )
