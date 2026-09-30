@@ -451,10 +451,20 @@ fn the_release_workflow_uploads_the_binary_sbom_only_after_the_task_passes() {
             "the check runs on every leg that inventories"
         );
         let reads = format!("steps.{id}.outputs.sbom");
+        // The output reaches the upload through its `env:` since the step became
+        // one `ci step` argv (CLOUD-843, Phase 4); `run:` is still read, so the
+        // older spelling cannot slip past either.
+        let hands_on = |step: &Yaml| {
+            field(step, "run").contains(&reads)
+                || step["env"].as_hash().is_some_and(|env| {
+                    env.values()
+                        .any(|value| value.as_str().is_some_and(|v| v.contains(&reads)))
+                })
+        };
         let uploads: Vec<usize> = steps
             .iter()
             .enumerate()
-            .filter(|(_, step)| field(step, "run").contains(&reads))
+            .filter(|(_, step)| hands_on(step))
             .map(|(index, _)| index)
             .collect();
         assert!(!uploads.is_empty(), "something uploads {reads}");

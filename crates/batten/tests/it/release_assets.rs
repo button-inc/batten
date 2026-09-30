@@ -615,16 +615,25 @@ fn the_committed_tasks_are_argv_and_the_committed_row_reads_the_real_workflow() 
 
 #[test]
 fn the_real_workflow_publishes_both_schemas_and_the_manifest() {
+    // Each upload STEP, `env:` included: the files reach `gh release upload`
+    // through `ci step --arg-env` since the step became one argv (CLOUD-843,
+    // Phase 4), so a line-at-a-time read would see the command and none of them.
     let workflow = committed(WORKFLOW_PATH);
-    let uploads: String = workflow
-        .lines()
-        .filter(|l| l.contains("gh release upload"))
+    let steps: Vec<&str> = workflow.split("\n      - ").collect();
+    let uploads: String = steps
+        .iter()
+        .filter(|step| step.contains("gh release upload"))
+        .copied()
         .collect::<Vec<_>>()
         .join("\n");
     assert!(uploads.contains("batten.schema.json"), "{uploads}");
     assert!(uploads.contains("batten.local.schema.json"), "{uploads}");
     assert!(workflow.contains("mise run checksums"));
-    assert!(workflow.contains(r#"gh release upload "$TAG" "$SUMS" --clobber"#));
+    assert!(
+        steps.iter().any(|step| step.contains("gh release upload")
+            && step.contains("--arg-env TAG --arg-env SUMS")),
+        "{uploads}"
+    );
 }
 
 #[test]

@@ -55,8 +55,8 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context as _, Result, anyhow};
 
-use crate::ExitCode;
 use crate::error::UsageError;
+use crate::exit::ExitCode;
 
 /// The runner's file for step outputs.
 pub const OUTPUT_VAR: &str = "GITHUB_OUTPUT";

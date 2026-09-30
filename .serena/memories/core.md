@@ -178,6 +178,17 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   repos vouch for each other and the branch carries a licence nobody judged.
   Byte-identity of the upstream files is the workflow's half, stated as such —
   this bounds what the diff may say, not what upstream holds.
+- `ci_step.rs` — `batten ci step`, the runner-file glue a workflow `run:`
+  step used a shell for (CLOUD-843, Phase 4): `--outputs` appends a command's
+  `KEY=VALUE` stdout to `$GITHUB_OUTPUT`, `--summary` fences its tail into
+  `$GITHUB_STEP_SUMMARY`, `--verdict`/`--on` map an exit code to an output,
+  `--capture` writes the first stdout line under a key, `--save`/`--stdin` are
+  the file redirects, `--arg-env` appends a step `env:` value as ONE argument
+  (unset or empty is refused, never an empty word) and `--require-env` refuses
+  an empty credential naming it and never its value. The runner's variable
+  names are the only contract it knows (rule 1); outside a runner it writes
+  nothing but stdout. The child's code is the verb's unless an `--on` row maps
+  it.
 - `census.rs` — `batten census shell`, the bash retirement's measurement
   (CLOUD-843): every shell home counted in code lines, as pointers (a path, a
   line, a unit's declared name, a count; never a body). **The detection is the

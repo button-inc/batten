@@ -2638,11 +2638,16 @@ regex = '^\$\{\{[[:space:]]*(github\.event\.)?inputs\.([A-Za-z0-9_-]+)[[:space:]
 
 [[pattern]]
 id = "linear-key-guard"
-regex = '-z[[:space:]]+"?\$\{?LINEAR_ACCESS_KEY'
+# Either spelling of the guard: the shell's `-z` test, or `batten ci step
+# --require-env`, which refuses the unset or empty key before anything runs
+# (CLOUD-843, Phase 4).
+regex = '-z[[:space:]]+"?\$\{?LINEAR_ACCESS_KEY|--require-env[[:space:]]+LINEAR_ACCESS_KEY'
 
 [[pattern]]
 id = "gha-output-write"
-regex = '>>[[:space:]]*"?\$\{?GITHUB_OUTPUT'
+# Either spelling of a step-output write: the shell's append, or `batten ci
+# step` with a flag that writes the runner's output file (CLOUD-843, Phase 4).
+regex = '>>[[:space:]]*"?\$\{?GITHUB_OUTPUT|ci step .*--(capture|outputs|verdict)[[:space:]]'
 
 [[pattern]]
 id = "checkout-uses"

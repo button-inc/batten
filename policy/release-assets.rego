@@ -130,12 +130,31 @@ composed := {leg.target |
 	leg["build-tool"] != "cross"
 }
 
-# The literal operands of every `gh release upload` line, as basenames.
+# The literal operands of every `gh release upload` STEP, as basenames: the
+# tokens of its `run:` and the values of its `env:`. Both, because the operands
+# reach the command through `batten ci step --arg-env` since the step became one
+# argv (CLOUD-843, Phase 4), and a `run:`-only read would find the command and
+# none of its files.
+upload_operand contains token if {
+	some job in workflow.jobs
+	some upload_step in job.steps
+	is_string(upload_step.run)
+	contains(upload_step.run, "gh release upload")
+	some token in split(upload_step.run, " ")
+}
+
+upload_operand contains value if {
+	some job in workflow.jobs
+	some upload_step in job.steps
+	is_string(upload_step.run)
+	contains(upload_step.run, "gh release upload")
+	is_object(upload_step.env)
+	some value in upload_step.env
+	is_string(value)
+}
+
 literal contains name if {
-	path := ".github/workflows/release-artifacts.yml"
-	some line in input.tree.lines[path]
-	contains(line, "gh release upload")
-	some token in split(line, " ")
+	some token in upload_operand
 	regex.match(data.batten.patterns["release-upload-operand"], token)
 	parts := split(trim(token, "\""), "/")
 	name := parts[count(parts) - 1]
@@ -191,22 +210,31 @@ violation contains {
 # --- cases -------------------------------------------------------------------
 
 # The path is the literal, for the reason `workflow` above gives.
-fixture(record, workflow_lines) := document if {
+fixture(record, upload_steps) := document if {
 	path := ".github/workflows/release-artifacts.yml"
 	document := {"tree": {
 		"records": {"release-assets": record},
 		"documents": {
-			path: {"jobs": {"dist": {"strategy": {"matrix": {"include": [
-				{"target": "x86_64-unknown-linux-gnu", "build-tool": "cargo"},
-				{"target": "aarch64-unknown-linux-gnu", "build-tool": "cross"},
-			]}}}}},
+			path: {"jobs": {"dist": {
+				"strategy": {"matrix": {"include": [
+					{"target": "x86_64-unknown-linux-gnu", "build-tool": "cargo"},
+					{"target": "aarch64-unknown-linux-gnu", "build-tool": "cross"},
+				]}},
+				"steps": upload_steps,
+			}}},
 			"mise.toml": {"env": {"BATTEN_CLI_REFERENCE": "ref.md"}},
 		},
-		"lines": {path: workflow_lines},
+		"lines": {path: []},
 	}}
 }
 
-uploads := [`        run: gh release upload "$TAG" schema/batten.schema.json install.sh "$SPDX" --clobber`]
+uploads := [{"run": `gh release upload "$TAG" schema/batten.schema.json install.sh "$SPDX" --clobber`}]
+
+# The same upload as one `ci step` argv, its literal operands in `env:`.
+argv_uploads := [{
+	"run": "mise run batten -- ci step --arg-env TAG --arg-env SCHEMA --arg-env INSTALLER --arg-env SPDX -- gh release upload --clobber",
+	"env": {"TAG": "v1.2.3", "SCHEMA": "schema/batten.schema.json", "INSTALLER": "install.sh", "SPDX": "${{ steps.sbom.outputs.spdx }}"},
+}]
 
 complete := [
 	"release-tag\tv1.2.3",
@@ -223,6 +251,18 @@ complete := [
 test_a_complete_release_is_clean if {
 	count(violation) == 0 with input as fixture(complete, uploads)
 		with data.batten.patterns as patterns
+}
+
+# An operand handed through `env:` is demanded exactly as one in `run:` is.
+test_an_operand_in_the_upload_env_is_demanded if {
+	count(violation) == 0 with input as fixture(complete, argv_uploads)
+		with data.batten.patterns as patterns
+	found := violation with input as fixture(
+		[line | some line in complete; line != "release-asset\tinstall.sh"],
+		argv_uploads,
+	)
+		with data.batten.patterns as patterns
+	{entry.subjects[0].artifact | some entry in found} == {"install.sh"}
 }
 
 test_an_sbom_does_not_stand_in_for_an_archive if {
@@ -248,7 +288,7 @@ test_a_cross_leg_publishes_no_binary_sbom if {
 }
 
 test_no_upload_line_is_partial if {
-	found := violation with input as fixture(complete, ["        run: echo nothing"])
+	found := violation with input as fixture(complete, [{"run": "echo nothing"}])
 		with data.batten.patterns as patterns
 	{entry.verdict | some entry in found} == {"release read partial"}
 }
