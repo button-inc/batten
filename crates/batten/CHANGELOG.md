@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.193](https://github.com/button-inc/batten/compare/v0.0.192...v0.0.193) - 2026-09-30
+
+### Added
+
+- *(rules)* every rule declares its remedy, fix or a classed no_fix_reason
+
+### Fixed
+
+- *(lint)* hold only kinds that permit no_fix_reason to a declared remedy
+
 ## [0.0.192](https://github.com/button-inc/batten/compare/v0.0.191...v0.0.192) - 2026-09-30
 
 ### Added
