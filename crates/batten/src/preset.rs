@@ -1255,6 +1255,13 @@ asserted rather than tested.",
     // ONE ROW JUDGES ALL FIVE, which is safe only because the producer clears
     // every tracker family before it reads: the store then holds the answer to
     // the question just asked and nothing older (`record::run_derive`).
+    // CLOUD-1221 (P14 of CLOUD-843) folded the BOARD half into this entry rather
+    // than a second `Manifest` of the same name, which `no_preset_is_declared_twice`
+    // refuses: a column that lies, a cyclic or unfetched relation, a gloss the
+    // board contradicts, an unready ready queue, a citation naming nothing. Those
+    // five read the `board-*` families `batten board check` writes and evaluates
+    // in process; `crate::board_check` owns their names, so nothing here names a
+    // consumer fact either.
     Manifest {
         name: "tracker-hygiene",
         version: 1,
@@ -1290,6 +1297,38 @@ asserted rather than tested.",
                 source: include_str!(
                     "policy/presets/tracker-hygiene/duplicate-close-is-argued.rego"
                 ),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:tracker-hygiene>/board-columns-tell-the-truth.rego",
+                source: include_str!(
+                    "policy/presets/tracker-hygiene/board-columns-tell-the-truth.rego"
+                ),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:tracker-hygiene>/board-graph-is-acyclic.rego",
+                source: include_str!("policy/presets/tracker-hygiene/board-graph-is-acyclic.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:tracker-hygiene>/board-claims-agree.rego",
+                source: include_str!("policy/presets/tracker-hygiene/board-claims-agree.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:tracker-hygiene>/board-frontier-is-ready.rego",
+                source: include_str!("policy/presets/tracker-hygiene/board-frontier-is-ready.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:tracker-hygiene>/board-citations-resolve.rego",
+                source: include_str!("policy/presets/tracker-hygiene/board-citations-resolve.rego"),
             },
         ],
         verdicts: &[
@@ -1424,6 +1463,61 @@ census is written last and counts the lines above it.",
                     "task run first",
                     "record the board again with `batten record derive duplicate-close`",
                 )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "issue state wrong",
+                gloss: "a board column, relation or status gloss says something the board contradicts",
+                class: "A column is a claim about the work, and the board is the surface everyone \
+else reads it from. Pulled means somebody has it; landed means a pull request is attached unless \
+the row declares it lands no commit; a started row names its phase; the ready queue holds only \
+rows whose Ready block passes; the blocked-by relation has no cycle; and a body glossing another \
+row's column agrees with the board. The pointer names the row and the rule, never the body.",
+                routes: &[read("source read first", "the row the pointer names")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "issue judge partial",
+                gloss: "the piped payload set is too thin to judge, so the board has not been judged",
+                class: "Could-not-look, and it outranks a refusal: a verdict over a set only partly \
+read is not a verdict, because the next action is a re-fetch after which more refusals may \
+appear. A row without its relations, attachments, milestone or description, a blocker, parent \
+or claimed row the set does not carry, and a claimed column nobody piped occupies are each this \
+class, keyed to the set when the set is what is short.",
+                routes: &[read(
+                    "source read first",
+                    "the rows the pointer names, fetched again with relations and attachments",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "path point missing",
+                gloss: "a Ready block cites a test or a path the tree does not carry",
+                class: "This checks existence, never relevance. A cited test must be carried by \
+the declared corpus — a fixture quoting the citation is not the thing cited — and a cited path \
+must exist or be marked prospective beside its own path. A marked path an ancestor deleted is \
+refused anyway: history may refute a marker and is never asked to grant one.",
+                routes: &[read(
+                    "source read first",
+                    "the Ready block's live obligations clause",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "source point wrong",
+                gloss: "a clause citation in the tree names a clause its issue does not carry",
+                class: "A citation of a clause that is not there points a reader at nothing. Cite \
+the clause that holds the content, or the issue's own clause if it moved. A sparse clause set is \
+not a defect; only the citation of an absent clause is.",
+                routes: &[read("source read first", "the cited issue's Ready block")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "source point unread",
+                gloss: "a clause citation names an issue the piped set does not carry",
+                class: "Could-not-look, never a pass: an unfetched issue looks exactly like a clean \
+one. Fetch the cited issue and pipe the set again.",
+                routes: &[read("source read first", "the cited issue, fetched")],
                 applicability: crate::verdict::Applicability::Advice,
             },
         ],

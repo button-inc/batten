@@ -802,6 +802,16 @@ declared_modules := {
 	# runs the caller's probe command and hands back its status and output, which
 	# is `exec`'s class of effect, so the mediated path must not reach it.
 	"probe",
+	# `board_check` arrived with CLOUD-1221, retiring the three board gates. It
+	# READS and does not decide: it asks `ready` for the one definition of Ready,
+	# reads `board` for the column vocabulary, `landed` for its one reading of a
+	# pull-request URL, `git` for the tracked tree and a deleted path, and `rules`
+	# for the one glob semantics the crate has — then hands that reading to the
+	# `tracker-hygiene` preset through `preset` and `policy`, which is where every
+	# verdict lives. It reads a PAYLOAD SET, which no mediated call carries, so its
+	# `hook` edge is forbidden below — a mediated call reaching a verb that reads
+	# the whole tracked tree is the per-call cost CLOUD-689's ceiling refuses.
+	"board_check",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
@@ -1078,6 +1088,10 @@ forbidden[from] contains to if {
 		"turn": {"rules", "hook"},
 		"unsubscribe": {"rules", "hook"},
 		"probe": {"rules", "hook"},
+		# `board_check -> hook`, see its placement above: the board verb reads a
+		# payload set and the whole tracked tree, and must not reach the module
+		# that adjudicates a mediated call.
+		"board_check": {"hook"},
 	}
 	some to in targets
 }
@@ -1573,6 +1587,27 @@ test_the_mediated_path_must_not_reach_the_attestation_producer if {
 	count(violation) == 0 with input as judging(
 		"crates/batten/src/attestation.rs",
 		[internal("rest", 10), internal("record", 11), internal("exec", 12)],
+	)
+}
+
+# CLOUD-1221's placement, both directions. The board verb must not reach the
+# mediated call's adjudicator, and it DOES reach the grammar, the vocabulary and
+# the tracked tree it is built on — a table that banned the module outright would
+# satisfy the first half alone.
+test_the_board_check_must_not_reach_the_mediated_call if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/board_check.rs",
+		[internal("hook", 40)],
+	)
+}
+
+test_the_board_check_reaches_what_it_composes if {
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/board_check.rs",
+		[
+			internal("ready", 80), internal("board", 76), internal("git", 290), internal("rules", 285),
+			internal("policy", 400), internal("preset", 395),
+		],
 	)
 }
 

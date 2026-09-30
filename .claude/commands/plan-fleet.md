@@ -18,7 +18,7 @@ deviating; this file is the procedure, not the reasoning.
 - A ticket is dispatchable only if `blockedBy` is empty **or** every blocker has
   landed. Do not infer readiness from the column alone — a blocker added after
   promotion still holds.
-- Pipe the active columns' payloads to `mise run graph-check` rather than
+- Pipe the active columns' payloads to `batten board check` rather than
   eyeballing the graph.
 - You do **not** need perfect global knowledge before dispatching. Each child
   runs `mise run claim-check` per ticket and skips what is not pullable, so a
@@ -81,7 +81,7 @@ heads: one PR is one matrix, N PRs are N.
 **Three costs of the one-PR shape, none of them a reason not to choose it and
 all of them things a child must be told:**
 
-1. **The board reports N units of work for one contender.** `graph-check` counts
+1. **The board reports N units of work for one contender.** `batten board check` counts
    issues In Progress, so a five-ticket bundle reads WIP 5 against a cap of 6.
    Nothing in tree binds a ceiling to that count, so it is a reporting artifact
    rather than a refusal — CLOUD-502 measured it, and is Canceled, so a reader

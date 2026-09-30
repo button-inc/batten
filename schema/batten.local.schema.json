@@ -1240,7 +1240,6 @@
           "enum": [
             "ci-hygiene",
             "ci-signal",
-            "ci-signal",
             "claude-code-cloud",
             "commit-hygiene",
             "landing-loop",
@@ -1248,8 +1247,8 @@
             "pinned-toolchain",
             "release-hygiene",
             "shell-hygiene",
-            "supply-chain",
             "tracker-hygiene",
+            "supply-chain",
             "trunk-based"
           ]
         },

@@ -1,12 +1,13 @@
 //! `[tasks.released]` — which issues a release tag shipped (CLOUD-174), and the
 //! two refusals that make shipping necessary but not sufficient for Done: the
-//! hold marker (CLOUD-257) and `graph-check`'s verdict (CLOUD-309), over the
-//! task's own body (CLOUD-1752).
+//! hold marker (CLOUD-257) and `batten board check`'s verdict (CLOUD-309), over
+//! the task's own body (CLOUD-1752).
 //!
 //! Every case runs the committed body in a fixture clone with two tags: `v0.0.1`
-//! naming CLOUD-1, and `v0.0.2` adding CLOUD-2 and CLOUD-3. `graph-check`
-//! resolves from this checkout's `mise-tasks/` through `MISE_CONFIG_FILE`, which
-//! is how a caller's clone is judged by this manifest's gates.
+//! naming CLOUD-1, and `v0.0.2` adding CLOUD-2 and CLOUD-3. `board check` reads
+//! this checkout's `batten.toml` through `--config-in` on the directory of
+//! `MISE_CONFIG_FILE` (CLOUD-1221, which retired `graph-check`), which is how a
+//! caller's clone is judged by this manifest's gates.
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
@@ -411,6 +412,46 @@ fn a_blocker_outside_the_piped_set_is_not_a_refusal() {
     let (code, text) = released(&dir, "v0.0.2", &set(&[dangling]));
     assert_eq!(code, Some(0), "{text}");
     assert!(text.contains("CLOUD-2  In Review -> Done"), "{text}");
+}
+
+/// A stub `batten` ahead of the engine on the fixture's `PATH`: `task_command`
+/// puts `<repo>/bin` first.
+#[cfg(unix)]
+fn stub_engine(repo: &Path, script: &str) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let bin = repo.join("bin");
+    std::fs::create_dir_all(&bin).expect("stub dir");
+    let path = bin.join("batten");
+    std::fs::write(&path, script).expect("write stub");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod stub");
+}
+
+/// A GATE THAT DID NOT RUN IS NEVER A PASS. The retired body refused when the
+/// gate was not executable; the verb's equivalents are an engine that is not on
+/// `PATH`, that panics, that refuses its own invocation, or whose `board check`
+/// is still `unimplemented` at exit 3. Each would leave an empty report, and an
+/// empty report reads as "nothing refused" for every shipped row.
+#[cfg(unix)]
+#[test]
+fn a_board_check_that_did_not_run_is_could_not_look() {
+    for (name, script) in [
+        ("absent", "#!/bin/sh\nexit 127\n"),
+        ("panicked", "#!/bin/sh\nexit 101\n"),
+        ("usage", "#!/bin/sh\nexit 1\n"),
+        (
+            "unimplemented",
+            "#!/bin/sh\necho 'board check: unimplemented' >&2\nexit 3\n",
+        ),
+    ] {
+        let dir = repo(&format!("unrun-{name}"));
+        stub_engine(&dir, script);
+        let (code, text) = released(&dir, "v0.0.2", &set(&[in_review("CLOUD-2")]));
+        assert_eq!(code, Some(2), "{name}: {text}");
+        assert!(
+            text.contains("could not run") && !text.contains("In Review -> Done"),
+            "{name}: {text}"
+        );
+    }
 }
 
 /// The conjunction is composed, never copied, and the marker has one authority.

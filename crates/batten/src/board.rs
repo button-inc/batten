@@ -121,6 +121,70 @@ pub struct Board {
     /// board over zero gates.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sweep: Vec<SweepGate>,
+    /// The status TYPES that SETTLE a blocker, so its dependent may reach the
+    /// ready frontier (CLOUD-477, read by `batten board check`).
+    ///
+    /// **Types rather than column names, and the reason is a measured defect.**
+    /// The frontier used to resolve a blocker by NAME, so every column the name
+    /// match was not told about fell into the catch-all and blocked — including
+    /// the terminal ones meaning "this will never be done, and that is settled",
+    /// which starved their dependents off the frontier permanently. A tracker
+    /// stamps each column with a type, and the type is what survives a rename.
+    ///
+    /// The review column settles a blocker by NAME on top of this set, because
+    /// on a board where it shares its type with the pulled column a type-only
+    /// rule would starve every row behind landed-but-unreleased work.
+    ///
+    /// An EMPTY set is undeclared, for [`Board::started`]'s reason: a set that
+    /// matches nothing would hold every row off the frontier and read as "nothing
+    /// is ready".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub settled_types: Vec<String>,
+    /// The subset of [`Board::settled_types`] that settles a blocker by RETIRING
+    /// it rather than completing it (CLOUD-477's second decision).
+    ///
+    /// A dependent over one of these still reaches the frontier, and the reason
+    /// is put on the record: a blocker that was cancelled may have taken the
+    /// dependent's premise with it. Empty is a legitimate answer here — it only
+    /// decides whether that note is spoken.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retired_types: Vec<String>,
+    /// The receipt check a coherent `batten board check` mints, one file per
+    /// judged key (CLOUD-512).
+    ///
+    /// Named here rather than in the crate because which check a move guard
+    /// reads is this consumer's receipt vocabulary. Absent mints nothing, and the
+    /// verdict is unchanged: a receipt is the trigger a guard reads, never part of
+    /// what the board check decides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub move_receipt: Option<String>,
+    /// The tracked paths a Ready block's citations are resolved against
+    /// (CLOUD-826), as globs.
+    ///
+    /// Absent is could-not-look for `board check --cites`, never "every path":
+    /// which trees hold this consumer's tests and sources is its own layout.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cites_corpus: Vec<String>,
+    /// Globs carved OUT of [`Board::cites_corpus`] — the vacuity guard.
+    ///
+    /// A fixture that quotes a citation is not the thing cited, and a gate that
+    /// resolved a citation against a quotation of it would pass the very row it
+    /// exists to refuse.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cites_exclude: Vec<String>,
+    /// The marker written after a backticked path to declare it PROSPECTIVE —
+    /// absent by design, because the row exists to write it (CLOUD-920).
+    ///
+    /// Matched together with its path, so one marker elsewhere in a block cannot
+    /// excuse every citation in it. Absent means no path is prospective, which is
+    /// the strict direction: an unmarked absence stays a refusal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cites_prospective: Option<String>,
+    /// Globs of tracked paths whose clause citations `board check --refs` does
+    /// NOT scan (CLOUD-809) — a file that quotes a known-bad citation as its own
+    /// regression witness, which would otherwise report itself forever.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refs_exclude: Vec<String>,
 }
 
 /// One gate the board sweep runs (CLOUD-843).
@@ -290,6 +354,7 @@ mod tests {
                 "Done".to_owned(),
             ],
             sweep: Vec::new(),
+            ..Board::default()
         }
     }
 
@@ -326,6 +391,7 @@ mod tests {
             review: Some("Under Review".to_owned()),
             started: vec!["In Development".to_owned(), "Shipped".to_owned()],
             sweep: Vec::new(),
+            ..Board::default()
         };
         let columns = Columns::resolve(Some(&board));
         assert_eq!(columns.ready().unwrap(), "To Do");

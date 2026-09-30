@@ -460,7 +460,7 @@ pub enum Command {
     /// The release build and archive, retiring `mise-tasks/dist.sh` (CLOUD-843).
     Dist(DistRequest),
     /// The board discipline, retiring `mise-tasks/graph-check.sh` and its two
-    /// citation siblings (CLOUD-843).
+    /// citation siblings (CLOUD-843, CLOUD-1221).
     Board {
         /// The sub-verb selected.
         command: BoardCommand,
@@ -580,6 +580,12 @@ pub enum BoardCommand {
     Check {
         /// Issue keys to read out of the capture store; empty reads stdin.
         issues: Vec<String>,
+        /// Judge the payloads' Ready-block citations against the tree instead
+        /// of the graph (retiring `mise-tasks/ready-cites-check.sh`).
+        cites: bool,
+        /// Judge the tree's clause citations against the payloads instead of
+        /// the graph (retiring `mise-tasks/spec-ref-check.sh`).
+        refs: bool,
     },
     /// Run every declared board gate over one payload set and report the set
     /// (CLOUD-825), retiring `[tasks.board-sweep]` (CLOUD-843).
@@ -3303,6 +3309,8 @@ fn board_of(matches: &ArgMatches) -> Option<BoardCommand> {
                 .get_many::<String>("issue")
                 .map(|values| values.cloned().collect())
                 .unwrap_or_default(),
+            cites: flag(matches, "cites"),
+            refs: flag(matches, "refs"),
         }),
         ("sweep", matches) => Some(BoardCommand::Sweep {
             issues: matches

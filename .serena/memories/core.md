@@ -114,6 +114,23 @@ err)` takes **both** channels and the resolved `Mode`, so a verb can write a
   `-J`?), and a flag carries `hidden` plus `Rung` — which §3 ladder rung it
   selects — so "is this a ladder flag" is a column rather than a naming
   convention, and the ladder's totality is a census test.
+- `board_check.rs` — `batten board check` (CLOUD-1221), retiring `graph-check`,
+  `ready-cites-check` and `spec-ref-check` in one delta. It READS and the
+  `tracker-hygiene` preset's `board-*` modules DECIDE: the verb turns a payload
+  set into a tab-separated reading (`board-graph`, `board-cites`, `board-refs`
+  record families — columns normalised to `ready|in-progress|review|other`,
+  `ready::lint`'s verdict per queue row, extracted status claims, citation
+  existence facts), compiles the preset from `preset::MANIFESTS` and evaluates it
+  in process (`policy::deny` for refusals and gaps, `policy::strings` for the
+  frontier and notes), then renders `<id> <rule>` lines. The graph covers column
+  claims, `blockedBy` acyclicity, status glosses and milestones and prints the
+  ready frontier; `--cites` judges each live Ready block's citations against the
+  tracked tree, `--refs` the tree's clause citations against the payloads. Every vocabulary is `batten.toml`'s:
+  columns, settled/retired status types, the move receipt and the citation
+  corpus in `[board]`, expressions in `[[pattern]]`. `write`, because a coherent
+  graph mints one `board-move.<key>` receipt per judged id (CLOUD-512). Exits:
+  `2` a lying board or a refuted citation, `3` could-not-look (which outranks a
+  violation in the graph and not in the citation directions).
 - `board.rs` — the board's COLUMN VOCABULARY, resolved from the `[board]` table
   rather than held as engine constants (CLOUD-1623, non-negotiable rule 1).
   `landed` and `claim` decided over one tracker's words — Linear's
@@ -174,8 +191,7 @@ derive|file|link|ensure|closes` plus `claim bot`, and neither forge-reading one
   an exempt file is measured and set apart, never totalled, and this repo's
   exempt list is asserted equal to the ban's `stays_bash`. Not layered (§8): a
   local file able to add an exempt glob could make a wave read as progress. The
-  other CLOUD-843 foundation verbs (`step check|record|run`,
-  `board check`) carry final arguments
+  other CLOUD-843 foundation verbs (`step check|record|run`) carry final arguments
   and answer `unimplemented` at exit 3 until their package lands; the serena
   launcher's home is the existing `mcp spawn`, which
   `.mcp.json` now names (`mise-tasks/serena-mcp.sh` retired).

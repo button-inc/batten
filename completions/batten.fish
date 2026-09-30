@@ -4505,6 +4505,8 @@ normal\t'The default'
 verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
+complete -c batten -n "__fish_batten_using_subcommand board; and __fish_seen_subcommand_from check" -l cites -d 'Judge each payload\'s Ready-block citations against the tree instead of the graph'
+complete -c batten -n "__fish_batten_using_subcommand board; and __fish_seen_subcommand_from check" -l refs -d 'Judge the tree\'s clause citations against the payloads instead of the graph'
 complete -c batten -n "__fish_batten_using_subcommand board; and __fish_seen_subcommand_from check" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand board; and __fish_seen_subcommand_from check" -l silent -d 'Say nothing but a verdict or a usage error'
 complete -c batten -n "__fish_batten_using_subcommand board; and __fish_seen_subcommand_from check" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'

@@ -3003,6 +3003,24 @@ const BOARD_ISSUE: FlagDecl = FlagDecl {
     )
 };
 
+/// `--cites` on `board check` (CLOUD-826, retiring `mise-tasks/ready-cites-check.sh`).
+///
+/// A switch rather than a verb of its own: it is the same payload set read the
+/// same way, asked a different question, and a second verb would be a second
+/// place the set's reading could drift.
+const BOARD_CITES: FlagDecl = FlagDecl::switch(
+    "cites",
+    "cites",
+    "Judge each payload's Ready-block citations against the tree instead of the graph",
+);
+
+/// `--refs` on `board check` (CLOUD-809, retiring `mise-tasks/spec-ref-check.sh`).
+const BOARD_REFS: FlagDecl = FlagDecl::switch(
+    "refs",
+    "refs",
+    "Judge the tree's clause citations against the payloads instead of the graph",
+);
+
 /// `--ci-workflow <file>` on `record divergence`.
 ///
 /// A flag rather than a literal: which workflow carries the graded CI runs is the
@@ -7119,9 +7137,9 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[MCP_SETTINGS, MCP_CONFIG, MCP_LOGS, MCP_SPAWNS],
     },
-    // The `board` noun. Unclassified for `claim`'s reason: the tracker-hygiene
-    // packages may add arms that record, and a noun that claimed `read` would
-    // hand those writers to any consumer treating an entry as a prefix.
+    // The `board` noun. Unclassified for `claim`'s reason: its `check` arm
+    // records a receipt, and a noun that claimed `read` would hand that writer
+    // to any consumer treating an entry as a prefix.
     CommandDecl {
         path: "board",
         id: "board",
@@ -7132,17 +7150,19 @@ pub const SURFACE: &[CommandDecl] = &[
         flags: &[],
     },
     // The board discipline and the ready frontier (retiring `graph-check`,
-    // `ready-cites-check` and `spec-ref-check`). `read`: the payloads arrive on
-    // stdin or out of the capture store, the tree is read for citations, and
-    // nothing is spawned.
+    // `ready-cites-check` and `spec-ref-check`, CLOUD-1221). `write`, and the
+    // foundation's `read` was one fact short: a coherent graph MINTS one
+    // `[board] move_receipt` per judged key under `$GIT_DIR/batten-receipts/`,
+    // which is the file the move guard reads (CLOUD-512). `claim check` is
+    // `write` for the same reason. Nothing is spawned.
     CommandDecl {
         path: "board check",
         id: "board.check",
         about: "Refuse a board whose columns, graph or citations lie, and print the ready frontier",
         data_channel: false,
         exits: EXITS_VERDICT,
-        effect: Effect::Read,
-        flags: &[BOARD_ISSUE],
+        effect: Effect::Write,
+        flags: &[BOARD_ISSUE, BOARD_CITES, BOARD_REFS],
     },
     // Every board gate over ONE payload set, reported as a set (CLOUD-825),
     // retiring `[tasks.board-sweep]` (CLOUD-843). UNCLASSIFIED, not `read`: it

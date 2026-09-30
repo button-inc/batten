@@ -416,11 +416,9 @@ mod tests {
                 // separate row rather than covered by the noun because
                 // `attribution identity` shares that noun and writes .git/config.
                 "attribution tagger".to_owned(),
-                // The board discipline (CLOUD-843). The verb only: the `board`
-                // noun is unclassified for `claim`'s reason, since the
-                // tracker-hygiene packages may hang recording arms under it. The
-                // verb reads payloads and tracked files and spawns nothing.
-                "board check".to_owned(),
+                // `board check` LEFT this list with its body (CLOUD-1221): a
+                // coherent graph mints the move receipt a guard reads, so it is
+                // `write`, `claim check`'s class, and not a read-only entry.
                 // Both navigation verbs are on it, and the `capture` noun above
                 // them is not: the noun is unclassified because `capture prune`
                 // removes, which is the fail-safe reading a consumer treating an

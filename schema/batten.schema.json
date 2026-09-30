@@ -764,8 +764,36 @@
       "description": "The `[board]` table: this consumer's column vocabulary.\n\n# Why this table exists (non-negotiable rule 1)\n\n[`crate::landed`] and [`crate::claim`] decide over a board's COLUMN NAMES —\nwhich column is the ready queue, which means \"pulled\", which mean \"somebody\nhas this, or it landed, or it shipped\". Those are one tracker's words. Linear\nships `Todo`/`In Progress`/`In Review`/`Done`; Jira ships `To Do`/`In\nDevelopment`; a GitHub Project ships whatever the owner typed.\n\nCarried as engine constants they were rule 1's violation in its worst form.\nOff this board every comparison is false, so `is_started` never fires, the\nlanded-honesty sweep reports **zero findings over a board full of dishonest\ncolumns**, and `claim` never refuses. A gate that cannot fire is\nindistinguishable from a gate that found nothing, which is the one failure\nthis whole module family exists to avoid.\n\n# Absent is could-not-look, never a default\n\nAn undeclared table does **not** fall back to this repository's own words.\nA default would reinstate the violation with an extra step and make the dead\npath byte-identical to the working one again — the exact shape that let the\nconstants survive. A verb needing a column this table does not declare says\nso, by name, and decides nothing.\n\n# Why values and not `[[pattern]]` rows\n\n[`crate::config::Ready`]'s reason (CLOUD-472), and one more directly: a\ncolumn is matched by\nEQUALITY against the string the tracker echoes back, never by a regex over\nit. The pattern registry exists so one CONCEPT has one spelling; a literal\nthe round trip returns verbatim is a value.",
       "type": "object",
       "properties": {
+        "cites_corpus": {
+          "description": "The tracked paths a Ready block's citations are resolved against\n(CLOUD-826), as globs.\n\nAbsent is could-not-look for `board check --cites`, never \"every path\":\nwhich trees hold this consumer's tests and sources is its own layout.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cites_exclude": {
+          "description": "Globs carved OUT of [`Board::cites_corpus`] — the vacuity guard.\n\nA fixture that quotes a citation is not the thing cited, and a gate that\nresolved a citation against a quotation of it would pass the very row it\nexists to refuse.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cites_prospective": {
+          "description": "The marker written after a backticked path to declare it PROSPECTIVE —\nabsent by design, because the row exists to write it (CLOUD-920).\n\nMatched together with its path, so one marker elsewhere in a block cannot\nexcuse every citation in it. Absent means no path is prospective, which is\nthe strict direction: an unmarked absence stays a refusal.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "in_progress": {
           "description": "The column meaning \"pulled\": somebody is on this now.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "move_receipt": {
+          "description": "The receipt check a coherent `batten board check` mints, one file per\njudged key (CLOUD-512).\n\nNamed here rather than in the crate because which check a move guard\nreads is this consumer's receipt vocabulary. Absent mints nothing, and the\nverdict is unchanged: a receipt is the trigger a guard reads, never part of\nwhat the board check decides.",
           "type": [
             "string",
             "null"
@@ -778,12 +806,33 @@
             "null"
           ]
         },
+        "refs_exclude": {
+          "description": "Globs of tracked paths whose clause citations `board check --refs` does\nNOT scan (CLOUD-809) — a file that quotes a known-bad citation as its own\nregression witness, which would otherwise report itself forever.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "retired_types": {
+          "description": "The subset of [`Board::settled_types`] that settles a blocker by RETIRING\nit rather than completing it (CLOUD-477's second decision).\n\nA dependent over one of these still reaches the frontier, and the reason\nis put on the record: a blocker that was cancelled may have taken the\ndependent's premise with it. Empty is a legitimate answer here — it only\ndecides whether that note is spoken.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "review": {
           "description": "The column a row whose branch is behind git is asked to move back to.",
           "type": [
             "string",
             "null"
           ]
+        },
+        "settled_types": {
+          "description": "The status TYPES that SETTLE a blocker, so its dependent may reach the\nready frontier (CLOUD-477, read by `batten board check`).\n\n**Types rather than column names, and the reason is a measured defect.**\nThe frontier used to resolve a blocker by NAME, so every column the name\nmatch was not told about fell into the catch-all and blocked — including\nthe terminal ones meaning \"this will never be done, and that is settled\",\nwhich starved their dependents off the frontier permanently. A tracker\nstamps each column with a type, and the type is what survives a rename.\n\nThe review column settles a blocker by NAME on top of this set, because\non a board where it shares its type with the pulled column a type-only\nrule would starve every row behind landed-but-unreleased work.\n\nAn EMPTY set is undeclared, for [`Board::started`]'s reason: a set that\nmatches nothing would hold every row off the frontier and read as \"nothing\nis ready\".",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "started": {
           "description": "Every column meaning \"somebody has this, or it has landed, or it has\nshipped\".\n\n**The released column belongs in this set, and leaving it out was a\nmeasured defect** (CLOUD-1458). The engine constant this replaces read\n`[\"In Progress\", \"In Review\"]`, so a declined key that reached the\nreleased column escaped the sweep entirely — and released is where the\nclaim is strongest and the lie therefore costs most. Measured on that\ngate's own two rows: CLOUD-186 and CLOUD-1127 were declined with\n`DO-NOT-CLOSE` in the body of the pull request that landed the module,\nadvanced by the merge, moved back by hand, and advanced to the released\ncolumn by a release 2026-09-05T02:52:56Z — past the far edge of a\npredicate written the day before.\n\nThe ready-queue columns stay OUT: a declined key sitting there is\n`DO-NOT-CLOSE` working, and refusing it would make the marker unwritable.",
@@ -1111,6 +1160,21 @@
         "required_checks"
       ]
     },
+    "Claims": {
+      "description": "The `[commit.claims]` table: every commit names the row it serves (CLOUD-843).\n\n# The server-side half of a claim\n\nA claim receipt lives in the clone's own git directory and never leaves it,\nso no reviewer and no workflow can see it. What a server CAN see is whether\neach commit names the issue it serves — the half of the claim that survives a\nfresh checkout (CLOUD-431). This repository's `commit-lint` task asked that in\nshell, one `claim keys` spawn per commit; the question is this table's now,\nasked in process over the range `commit check` already walks.\n\n\"Names a row\" is `claim keys`' own reading of the WHOLE message — a closing\nkeyword first, then the first key of each `Refs:` trailer — through the\nconsumer's `[[pattern]]` grammar, never a key shape spelled here (rule 1).\nClaiming is stricter than mentioning: a commit citing a row as evidence has\nnot thereby become work on it (CLOUD-338/CLOUD-378).",
+      "type": "object",
+      "properties": {
+        "unclaimed": {
+          "description": "The commits that owe no claim, each a property of the COMMIT rather than\nof its wording: which paths it touched, and who authored it.\n\nEmpty by default. An exemption keyed to the file set cannot be claimed by\na hand-written commit that merely borrows a release's subject, which is why\nthe subject is not a column here.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Unclaimed"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "Column": {
       "description": "One column of a record.",
       "type": "object",
@@ -1168,6 +1232,18 @@
       "description": "The `[commit]` table: what a commit subject must look like here.\n\nConsumer-specific by nature (non-negotiable rule 1): the engine holds the\nmatcher, this table holds the answer. Which type words a repository admits,\nand whether it requires a scope, are that repository's business.",
       "type": "object",
       "properties": {
+        "claims": {
+          "description": "Whether every commit in a judged RANGE must name the tracker row it\nserves, and which commits are exempt (CLOUD-843).\n\nAbsent is the reading every consumer had before: a range is judged for\nits subjects and nothing else. Present, `commit check <base>..<head>`\nrefuses a commit whose message claims no row — see [`judge_claims`].",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Claims"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "subject_pattern": {
           "description": "The regular expression every non-merge commit's subject must match.\n\nRequired when the table is present: a `[commit]` declaring no pattern is\nthe half-change rule 2 refuses — it reads as though a convention is\nrecorded when nothing is.",
           "type": "string"
@@ -4251,7 +4327,6 @@
           "enum": [
             "ci-hygiene",
             "ci-signal",
-            "ci-signal",
             "claude-code-cloud",
             "commit-hygiene",
             "landing-loop",
@@ -4259,8 +4334,8 @@
             "pinned-toolchain",
             "release-hygiene",
             "shell-hygiene",
-            "supply-chain",
             "tracker-hygiene",
+            "supply-chain",
             "trunk-based"
           ]
         },
@@ -5224,6 +5299,33 @@
         }
       },
       "additionalProperties": false
+    },
+    "Unclaimed": {
+      "description": "One class of commit that owes no claim.",
+      "type": "object",
+      "properties": {
+        "author": {
+          "description": "When set, the commit's AUTHOR address — git's `%ae` — must match this too.\n\nThe author rather than the committer, because a forge commits an App's work\nas itself and only the author half names which App wrote it.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "id": {
+          "description": "The row's name, for a reader of the config — never printed per commit.",
+          "type": "string"
+        },
+        "paths": {
+          "description": "A regular expression EVERY path the commit changed must match. A commit\nthat changed nothing matches vacuously, as the retired shell's filter did.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "paths"
+      ]
     },
     "Unpack": {
       "description": "How to get the binary out of the fetched artifact.",

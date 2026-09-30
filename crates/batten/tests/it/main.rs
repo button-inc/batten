@@ -71,6 +71,7 @@ mod awk_regex;
 mod baseline;
 mod bats_invocation;
 mod bench_tokens;
+mod board_check;
 #[cfg(unix)]
 mod board_payloads;
 mod board_receipts;
@@ -299,6 +300,7 @@ mod punt_receipt;
 mod ratchet;
 mod raw_tracker_read;
 mod ready;
+mod ready_deferral;
 mod rebase;
 mod receipt_clean;
 mod receipt_verified;

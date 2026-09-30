@@ -4667,6 +4667,32 @@ fn path_transitions(
     Ok(found)
 }
 
+/// Whether an ancestor of `HEAD` DELETED `path` (CLOUD-920), or `None` where
+/// history cannot answer.
+///
+/// The one question `batten board check --cites` asks of history, and it asks it
+/// only to REFUTE: a Ready block marking a cited path prospective is claiming the
+/// file was never written, and a path some ancestor deleted was present, so the
+/// claim is false. History is never asked to GRANT a marker.
+///
+/// **Shallow is `None`, never `Some(false)`.** A shallow clone cannot see the
+/// commit that deleted a path, so "no deletion found" there is the same bytes as
+/// "never existed" — and reading it as the second would forgive exactly the
+/// stale citation the marker is not allowed to buy. The caller says so instead.
+///
+/// # Errors
+///
+/// Raises when `dir` is not a repository.
+pub fn path_was_deleted(dir: &Path, path: &str) -> Result<Option<bool>> {
+    let repo = open(dir)?;
+    if repo.is_shallow() {
+        return Ok(None);
+    }
+    Ok(Some(
+        !path_transitions(&repo, Some(path), false)?.is_empty(),
+    ))
+}
+
 /// Whether `commit`'s tree carries `path`.
 fn holds(repo: &gix::Repository, commit: &gix::Commit<'_>, path: &str) -> bool {
     let _ = repo;

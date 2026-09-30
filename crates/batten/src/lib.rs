@@ -20,6 +20,9 @@ pub mod baseline;
 /// The board's column vocabulary, resolved from config rather than held as
 /// engine constants (non-negotiable rule 1, CLOUD-1623).
 pub mod board;
+/// Whether the board's columns, its dependency graph and its citations tell the
+/// truth about the work (CLOUD-1221).
+pub mod board_check;
 pub mod bot;
 pub mod brief;
 pub mod budget;
@@ -507,7 +510,11 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // package's own declaration rather than a policy question.
         Some(Command::Dist(request)) => dist::run(&request, out, err),
         Some(Command::Board { command }) => match command {
-            cli::BoardCommand::Check { .. } => unimplemented("board check"),
+            cli::BoardCommand::Check {
+                issues,
+                cites,
+                refs,
+            } => run_board_check(&issues, cites, refs, &overrides, out, err),
             cli::BoardCommand::Sweep { issues } => run_board_sweep(&issues, &overrides, out, err),
         },
         // The census is the one foundation verb that answers today: the §8 chain
@@ -5783,6 +5790,94 @@ fn board_grammar(overrides: &Overrides) -> Result<ready::Grammar> {
                 .cloned()
                 .collect(),
         ))
+}
+
+/// `batten board check`: whether the board's columns, graph and citations tell
+/// the truth about the work (CLOUD-1221, retiring `mise-tasks/graph-check.sh`,
+/// `mise-tasks/ready-cites-check.sh` and `mise-tasks/spec-ref-check.sh`).
+///
+/// The payloads come from stdin, or — under `--issue` — out of the capture store,
+/// which hands over the bytes the tracker returned rather than text somebody
+/// re-typed. Everything the verb decides with is the consumer's declaration,
+/// resolved here once; [`board_check`] reads the set and the `tracker-hygiene`
+/// preset it evaluates holds every predicate.
+///
+/// # Errors
+///
+/// [`UsageError`] when an `--issue` has no stored read, when stdin cannot be
+/// read, or when the consumer has not declared the vocabulary the asked question
+/// needs.
+fn run_board_check(
+    issues: &[String],
+    cites: bool,
+    refs: bool,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    let grammar = board_grammar(overrides)?;
+    let root = board_root();
+    let text = if issues.is_empty() {
+        let mut raw = String::new();
+        std::io::stdin().read_to_string(&mut raw)?;
+        raw
+    } else {
+        board_check_payloads(&root, issues)?
+    };
+    board_check::run(
+        &board_check::Ask {
+            text: &text,
+            cites,
+            refs,
+            now: boundary_epoch(),
+        },
+        &board_check::Declared {
+            board: config.board.as_ref(),
+            patterns: &config.patterns,
+            grammar: &grammar,
+            root: &root,
+        },
+        out,
+        err,
+    )
+}
+
+/// Each key's newest stored READ, as one stream of payloads.
+///
+/// [`READ_TOOL`] alone, where `ready lint --issue` also takes the write's
+/// response: the board check reads RELATIONS and attachments, and a write's
+/// response omits the relations — so letting a later write displace the read
+/// would hand the gate a poorer payload than the one the tracker served
+/// (CLOUD-782).
+///
+/// **A key with no stored read is could-not-look, never skipped**: a set short
+/// one row is exactly the closure the graph refuses to judge by guessing.
+fn board_check_payloads(root: &Path, issues: &[String]) -> Result<String> {
+    let tools = [READ_TOOL.to_owned()];
+    let mut stream = String::new();
+    for key in issues {
+        let selector = capture::Selector {
+            tools: &tools,
+            key,
+            key_at: DEFAULT_KEY_AT,
+        };
+        let Some(found) = capture::find(root, &selector)? else {
+            return Err(UsageError::raise(format!(
+                "board check: no stored {READ_TOOL} read for {key} in this repository's capture \
+                 store — read the row and the capture mints itself, then run this again"
+            )));
+        };
+        let bytes = capture::read(root, &found.capture)?;
+        let text = String::from_utf8(bytes).map_err(|_| {
+            UsageError::raise(format!(
+                "board check: the stored response for {key} is not UTF-8"
+            ))
+        })?;
+        stream.push_str(&text);
+        stream.push('\n');
+    }
+    Ok(stream)
 }
 
 fn run_claim(
