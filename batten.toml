@@ -5206,15 +5206,8 @@ continue_on_error = false
 # because a connector the host authorises at its own layer must not have its name
 # translated into a grant the host did not give. `Linear` below is declared for
 # DISPATCH (`mcp call`), not for this.
-# P5-SCHEMA-PENDING (CLOUD-843): uncomment once `mise run schema` has regenerated
-# `schema/batten.schema.json` from the merged binary; the committed schema
-# predates the key, so the commit-time `taplo` step refuses it until then. NOT
-# OPTIONAL, and the branch does not land commented: commented out, the
-# `connector-allow-guard` pre-tool handler (`mcp:guard`) and the posture census
-# (CLOUD-765) decide nothing here, and `connector_allow_door.rs`'s
-# `this_repository_declares_the_names_its_guard_translates` is red until it is.
-# [mcp]
-# permission_aliases = ["Claude_Code_Remote"]
+[mcp]
+permission_aliases = ["Claude_Code_Remote"]
 
 # Claude Code's own local wiring.
 [[mcp.source]]
@@ -11166,55 +11159,48 @@ credential_names = ["BATTEN_GITHUB_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN"]
 # endpoint — a write cannot be probed without performing one, and the jobs read
 # needs a run that exists. The rows are the retired table's, byte for byte in
 # endpoint and claim, in its order.
-# P5-SCHEMA-PENDING (CLOUD-843): uncomment once `mise run schema` has regenerated
-# `schema/batten.schema.json` from the merged binary; the commit-time `taplo` step
-# refuses `forge.probe` until then. NOT OPTIONAL, and the branch does not land
-# commented: with no row, `batten doctor forge` refuses before it probes, so the
-# `session-credential` handler below reports a usage refusal at every session
-# start in place of the credential diagnosis, and `gh_preflight.rs`'s
-# `this_repository_declares_the_claims_its_tasks_need` is red until it is.
-# [[forge.probe]]
-# endpoint = "repos/{owner}/{repo}"
-# claim = "metadata=read"
-# used_by = "every task that resolves the repo"
-#
-# [[forge.probe]]
-# endpoint = "repos/{owner}/{repo}/commits/HEAD/check-runs"
-# claim = "checks=read"
-# used_by = "ci-wait (the whole poll)"
-#
-# [[forge.probe]]
-# endpoint = "repos/{owner}/{repo}/pulls?per_page=1"
-# claim = "pull_requests=read"
-# used_by = "land (PR state, merged/closed)"
-#
-# [[forge.probe]]
-# endpoint = "repos/{owner}/{repo}/actions/runs?per_page=1"
-# claim = "actions=read"
-# used_by = "land (the bot's refusal, read as a workflow-run conclusion — NOT a check-run on the PR head, which is where it never appears; CLOUD-235), and reading a failing job's logs after a red ci-wait"
-#
-# [[forge.probe]]
-# endpoint = "repos/{owner}/{repo}/actions/runs/1/jobs"
-# claim = "actions=read"
-# used_by = "batten record nonverdict (per-STEP conclusions, to tell a job that died in provisioning from one that rendered a verdict — the only reader of jobs[].steps[]; timeout-drift reads the same endpoint for durations, and batten record divergence for each leg's queue wait)"
-# probe = false
-#
-# [[forge.probe]]
-# endpoint = "repos/{owner}/{repo}/actions/workflows/ci.yml/runs?per_page=1"
-# claim = "actions=read"
-# used_by = "batten record divergence (a window of runs PER WORKFLOW — the global run list is not stably paginable at this repo's insertion rate, and this endpoint reports a total_count the walk checks itself against, because pagination hard-caps at 1000 items)"
-#
-# [[forge.probe]]
-# endpoint = "repos/{owner}/{repo}/issues/1/comments"
-# claim = "pull_requests=write"
-# used_by = "land (posting /fast-forward)"
-# probe = false
-#
-# [[forge.probe]]
-# endpoint = "repos/{owner}/{repo}/pulls/1"
-# claim = "pull_requests=write"
-# used_by = "gh pr ready — marking a draft ready is what starts CI here"
-# probe = false
+[[forge.probe]]
+endpoint = "repos/{owner}/{repo}"
+claim = "metadata=read"
+used_by = "every task that resolves the repo"
+
+[[forge.probe]]
+endpoint = "repos/{owner}/{repo}/commits/HEAD/check-runs"
+claim = "checks=read"
+used_by = "ci-wait (the whole poll)"
+
+[[forge.probe]]
+endpoint = "repos/{owner}/{repo}/pulls?per_page=1"
+claim = "pull_requests=read"
+used_by = "land (PR state, merged/closed)"
+
+[[forge.probe]]
+endpoint = "repos/{owner}/{repo}/actions/runs?per_page=1"
+claim = "actions=read"
+used_by = "land (the bot's refusal, read as a workflow-run conclusion — NOT a check-run on the PR head, which is where it never appears; CLOUD-235), and reading a failing job's logs after a red ci-wait"
+
+[[forge.probe]]
+endpoint = "repos/{owner}/{repo}/actions/runs/1/jobs"
+claim = "actions=read"
+used_by = "batten record nonverdict (per-STEP conclusions, to tell a job that died in provisioning from one that rendered a verdict — the only reader of jobs[].steps[]; timeout-drift reads the same endpoint for durations, and batten record divergence for each leg's queue wait)"
+probe = false
+
+[[forge.probe]]
+endpoint = "repos/{owner}/{repo}/actions/workflows/ci.yml/runs?per_page=1"
+claim = "actions=read"
+used_by = "batten record divergence (a window of runs PER WORKFLOW — the global run list is not stably paginable at this repo's insertion rate, and this endpoint reports a total_count the walk checks itself against, because pagination hard-caps at 1000 items)"
+
+[[forge.probe]]
+endpoint = "repos/{owner}/{repo}/issues/1/comments"
+claim = "pull_requests=write"
+used_by = "land (posting /fast-forward)"
+probe = false
+
+[[forge.probe]]
+endpoint = "repos/{owner}/{repo}/pulls/1"
+claim = "pull_requests=write"
+used_by = "gh pr ready — marking a draft ready is what starts CI here"
+probe = false
 
 # CLOUD-319's two readings, retiring `[tasks.release-due-record]` (CLOUD-843). The
 # body read the clock and the forge and recorded two AGES; these two rows move the

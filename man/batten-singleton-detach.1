@@ -1,0 +1,28 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-singleton-detach 1  batten 
+.SH NAME
+batten\-singleton\-detach \- Run a command in the background under a task\*(Aqs lock, and report the previous run\*(Aqs failure
+.SH SYNOPSIS
+\fBbatten singleton detach\fR [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-marker\fR> <\fB\-\-log\fR> <\fB\-\-pattern\fR> <\fItask\fR> <\fIcommand\fR> 
+.SH DESCRIPTION
+Run a command in the background under a task\*(Aqs lock, and report the previous run\*(Aqs failure
+.SH OPTIONS
+.TP
+\fB\-\-marker\fR \fI<marker>\fR
+Where a failed run\*(Aqs pointers wait, announced and cleared by the next invocation
+.TP
+\fB\-\-log\fR \fI<log>\fR
+Where the background run\*(Aqs whole output is written
+.TP
+\fB\-\-pattern\fR \fI<pattern>\fR
+The `[[pattern]]` row whose matching output lines are the failure\*(Aqs pointers
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fItask\fR>
+The task\*(Aqs name, which is what the lock is keyed by
+.TP
+<\fIcommand\fR>
+The command to run in the background, after `\-\-`

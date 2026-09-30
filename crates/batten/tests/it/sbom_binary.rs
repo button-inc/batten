@@ -387,9 +387,12 @@ fn the_binary_task_produces_and_its_check_task_decides() {
         "{produce}"
     );
     assert!(!produce.contains(" check "), "{produce}");
+    // The committed row enabling `supply-chain` is `commit grade unsafe`: one row
+    // per preset and scope (`policy::load`), so the SBOM half is decided there and
+    // `cargo list other` is the module's own rule, not a config row.
     let decide = run("sbom-binary-check");
     assert!(
-        decide.ends_with("check --rule 'cargo list other'"),
+        decide.ends_with("check --rule 'commit grade unsafe'"),
         "{decide}"
     );
 }

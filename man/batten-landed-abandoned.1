@@ -4,7 +4,7 @@
 .SH NAME
 batten\-landed\-abandoned \- Refuse an In Progress claim with no landing, no pull request, no branch and no recent touch
 .SH SYNOPSIS
-\fBbatten landed abandoned\fR [\fB\-\-claimed\fR] [\fB\-\-merged\-prs\fR] [\fB\-\-landed\-by\fR] [\fB\-\-refs\fR] [\fB\-\-instant\fR] [\fB\-\-max\-idle\-days\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBbatten landed abandoned\fR [\fB\-\-claimed\fR] [\fB\-\-merged\-prs\fR] [\fB\-\-landed\-by\fR] [\fB\-\-refs\fR] [\fB\-\-instant\fR] [\fB\-\-max\-idle\-days\fR] [\fB\-\-gather\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .SH DESCRIPTION
 Refuse an In Progress claim with no landing, no pull request, no branch and no recent touch
 .SH OPTIONS
@@ -26,6 +26,9 @@ The instant to measure the idle bound against, ISO\-8601 (default: now)
 .TP
 \fB\-\-max\-idle\-days\fR \fI<max_idle_days>\fR
 Days a claim may be idle before it reads as abandoned (default: 2)
+.TP
+\fB\-\-gather\fR
+Acquire each evidence arm no file was named for: the trunk\*(Aqs closing keys, merged pull requests, and the remote\*(Aqs branches
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

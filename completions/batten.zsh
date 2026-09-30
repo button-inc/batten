@@ -219,6 +219,8 @@ _arguments "${_arguments_options[@]}" : \
 '--lock-path=[Hold the lock at this path, for a resource the clone does not own]:lock_path:_default' \
 '--lock-attempts=[How many times to ask for the lock before reporting it held]:lock_attempts:_default' \
 '--lock-label=[What the wait is for, named by the caller for the refusal line]:lock_label:_default' \
+'*--tracked=[Append the tracked paths this pathspec selects to the command; run nothing if none]:tracked:_default' \
+'*--except=[Drop the tracked paths this glob matches from what --tracked selected]:except:_default' \
 '--format=[How Batten'\''s own record is encoded (hk'\''s axis)]: :((human\:"Pointer lines, one per fact"
 json\:"One JSON document"
 jsonl\:"One JSON record per line"))' \
@@ -816,6 +818,7 @@ trace\:"Add everything"))' \
             (slow-needed)
 _arguments "${_arguments_options[@]}" : \
 '--base=[The revision this checkout is diffed against]:base:_default' \
+'--head=[The revision whose tree the checkout must carry; refused when it does not]:head:_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
@@ -971,6 +974,75 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(sums)
+_arguments "${_arguments_options[@]}" : \
+'--manifest=[The checksum manifest'\''s file name, as the release carries it]:manifest:_default' \
+'--out-dir=[Write the manifest under this directory (default\: checksums)]:out_dir:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--names[Print the manifest'\''s path as sums=<path> and exit, with no tag, network or download]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'::tag -- The release'\''s tag; empty or absent is the latest release:_default' \
+&& ret=0
+;;
+(backfill)
+_arguments "${_arguments_options[@]}" : \
+'*--tag=[A release tag to record (repeatable); absent, every tag the pattern selects, oldest first]:tag:_default' \
+'--workflow=[The workflow file dispatched once per tag]:workflow:_default' \
+'--ref=[The branch the dispatched runs execute on]:ref:_default' \
+'--pattern=[The glob a release tag matches, as \`git tag --list\` matches it]:pattern:_default' \
+'--poll-interval=[Seconds between polls; the forge'\''s own interval raises it (default\: 5)]:poll_interval:_default' \
+'--max-polls=[Polls per tag before its run reads as never finishing (default\: 240)]:max_polls:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--dry-run[Print the plan, oldest first, and dispatch nothing]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__release__subcmd__help_commands" \
@@ -984,6 +1056,14 @@ _arguments "${_arguments_options[@]}" : \
         curcontext="${curcontext%:*:*}:batten-release-help-command-$line[1]:"
         case $line[1] in
             (install)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(sums)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(backfill)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -1461,6 +1541,35 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(forge)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (gate)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -1607,6 +1716,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (egress)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(forge)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -2882,6 +2995,7 @@ normal\:"The default"
 verbose\:"Explain what is being checked"
 debug\:"Add resolution detail"
 trace\:"Add everything"))' \
+'--gather[Acquire each evidence arm no file was named for\: the trunk'\''s closing keys, merged pull requests, and the remote'\''s branches]' \
 '--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
 '*--silent[Say nothing but a verdict or a usage error]' \
 '*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
@@ -3134,6 +3248,8 @@ _arguments "${_arguments_options[@]}" : \
 '--absent-ok=[Comma-separated check names for which having no run at all is a legitimate reading]:absent_ok:_default' \
 '--answered=[Comma-separated conclusions that constitute an answer; anything else is not yet one]:answered:_default' \
 '--fanin=[The fan-in check whose failure a cancelled sibling can manufacture]:fanin:_default' \
+'--sha=[Read this commit'\''s check runs from the forge instead of a reading on stdin]:sha:_default' \
+'--repo=[The repository to read, in the forge client'\''s own spelling]:repo:_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
@@ -3230,7 +3346,7 @@ trace\:"Add everything"))' \
         case $line[1] in
             (watch)
 _arguments "${_arguments_options[@]}" : \
-'--sha=[The commit whose check runs to read]:sha:_default' \
+'--sha=[The commit whose check runs to read — a sha, or a ref this checkout resolves]:sha:_default' \
 '--repo=[The repository to read, in the forge client'\''s own spelling]:repo:_default' \
 '--interval=[Seconds between requests; a server-requested floor raises it and nothing lowers it]:interval:_default' \
 '--progress=[Program to record the poll'\''s tick and reading-change signals]:progress:_default' \
@@ -3417,6 +3533,44 @@ trace\:"Add everything"))' \
 ':pr -- The pull request number this verb is about:_default' \
 && ret=0
 ;;
+(unsubscribed)
+_arguments "${_arguments_options[@]}" : \
+'--session-env=[The name of the environment variable holding this host'\''s session id; unset is no session]:session_env:_default' \
+'--token-env=[The name of the environment variable holding the path of the credential file \`drop\` sends]:token_env:_default' \
+'--endpoint=[The endpoint \`drop\` calls, with \`{session}\` where the session id goes]:endpoint:_default' \
+'--tool=[The tool \`drop\` asks the endpoint to call]:tool:_default' \
+'--arguments=[The tool'\''s arguments \`drop\` sends\: a JSON object whose strings may name {owner}, {repo}, {pr} and {session}]:arguments:_default' \
+'--family=[The record family \`check\` writes, and the prefix of this session'\''s receipts]:family:_default' \
+'--rule=[The declared rule \`check\` decides with over the record it writes]:rule:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':verb -- drop | record | check:_default' \
+':pr -- The pull request number this verb is about:_default' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__pr__subcmd__help_commands" \
@@ -3450,6 +3604,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (closes)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(unsubscribed)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -3870,6 +4028,41 @@ trace\:"Add everything"))' \
 ':task -- The task'\''s name, which is what the lock is keyed by:_default' \
 && ret=0
 ;;
+(detach)
+_arguments "${_arguments_options[@]}" : \
+'--marker=[Where a failed run'\''s pointers wait, announced and cleared by the next invocation]:marker:_default' \
+'--log=[Where the background run'\''s whole output is written]:log:_default' \
+'--pattern=[The \`\[\[pattern\]\]\` row whose matching output lines are the failure'\''s pointers]:pattern:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--attached[Run as the background copy\: take the lock, run the command, record a failure]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':task -- The task'\''s name, which is what the lock is keyed by:_default' \
+'*::command -- The command to run in the background, after `--`:_default' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__singleton__subcmd__help_commands" \
@@ -3887,6 +4080,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (release)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(detach)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -4410,6 +4607,35 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(signing)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__attribution__subcmd__help_commands" \
@@ -4431,6 +4657,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (identity)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(signing)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -5085,6 +5315,7 @@ trace\:"Add everything"))' \
 ;;
 (status)
 _arguments "${_arguments_options[@]}" : \
+'*--or=[Another check whose receipt satisfies this one; any one valid receipt passes (repeatable)]:or:_default' \
 '--key=[Which git fact the receipt is judged against\: the exact commit, or the branch]: :((head\:"Keyed to the exact commit; an amend, a rebase, or a moved trunk expires it"
 branch\:"Keyed to the branch; every commit on it continues to serve the claim"
 named\:"Keyed to a value the CALL names, read through \[\`Rule\:\:key_from\`\] (CLOUD-987)"
@@ -5718,6 +5949,7 @@ trace\:"Add everything"))' \
 ;;
 (tool)
 _arguments "${_arguments_options[@]}" : \
+'--pick=[Reduce \`key=value\` lines\: \`<name-key>=<token-key>\` names the field that labels a record line and the one that scores it]:pick:_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
@@ -5748,6 +5980,39 @@ trace\:"Add everything"))' \
 ;;
 (forge)
 _arguments "${_arguments_options[@]}" : \
+'--fanin=[With --fetch\: record nothing until this check has an answered conclusion]:fanin:_default' \
+'--answered=[With --fetch\: comma-separated conclusions that constitute an answer; anything else is not recorded]:answered:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fetch[Read the commit'\''s check-runs from the forge instead of \`<check> <conclusion>\` lines on stdin]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':ref -- The ref or sha the verdict was taken against:_default' \
+&& ret=0
+;;
+(validate)
+_arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
@@ -5773,7 +6038,7 @@ trace\:"Add everything"))' \
 '--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-':ref -- The ref or sha the verdict was taken against:_default' \
+':id -- The `\[\[rule.tools\]\]` id whose argv runs and whose verdict is recorded:_default' \
 && ret=0
 ;;
 (named)
@@ -6048,6 +6313,70 @@ trace\:"Add everything"))' \
 ':id -- The `\[\[forge.query\]\]` id, which is also the record family written:_default' \
 && ret=0
 ;;
+(probe)
+_arguments "${_arguments_options[@]}" : \
+'*--input=[A \`<key>=<value>\` input this family needs beyond stdin (repeatable)]:input:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':family -- The record family, which selects the reading and is the key a module reads it under:_default' \
+'*::command -- The probe command, after `--`\: its exit status is the `status` input and its output the document:_default' \
+&& ret=0
+;;
+(decide)
+_arguments "${_arguments_options[@]}" : \
+'*--input=[A \`<key>=<value>\` input this family needs beyond stdin (repeatable)]:input:_default' \
+'*--rule=[The declared rule that decides over the record just written (repeatable, at least one)]:rule:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':family -- The record family, which selects the reading and is the key a module reads it under:_default' \
+&& ret=0
+;;
 (divergence)
 _arguments "${_arguments_options[@]}" : \
 '--ci-workflow=[The workflow file whose runs are the graded CI runs (default\: \$LAND_CI_WORKFLOW)]:ci_workflow:_default' \
@@ -6112,6 +6441,38 @@ trace\:"Add everything"))' \
 '--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(attestation)
+_arguments "${_arguments_options[@]}" : \
+'--binary=[The binary'\''s file name inside each archive (a \`.exe\` suffix also matches)]:binary:_default' \
+'--verifier=[The program that downloads the release and verifies each binary (default\: gh)]:verifier:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'::tag -- The release tag to judge; absent is the latest release:_default' \
 && ret=0
 ;;
 (census)
@@ -6310,6 +6671,37 @@ esac
     ;;
 esac
 ;;
+(release)
+_arguments "${_arguments_options[@]}" : \
+'--manifest=[The checksum manifest'\''s file name, as the release carries it]:manifest:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'::tag -- The release'\''s tag; empty or absent is the latest release:_default' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__record__subcmd__help_commands" \
@@ -6331,6 +6723,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (forge)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(validate)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -6370,11 +6766,23 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(probe)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(decide)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (divergence)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (nonverdict)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(attestation)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -6409,6 +6817,10 @@ _arguments "${_arguments_options[@]}" : \
         esac
     ;;
 esac
+;;
+(release)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
@@ -6587,6 +6999,36 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(gate)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':body -- The hook body to link, relative to the repository root:_default' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__wiring__subcmd__help_commands" \
@@ -6600,6 +7042,10 @@ _arguments "${_arguments_options[@]}" : \
         curcontext="${curcontext%:*:*}:batten-wiring-help-command-$line[1]:"
         case $line[1] in
             (reclaim)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(gate)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -7297,6 +7743,36 @@ trace\:"Add everything"))' \
 ':reference -- The remote reference to replay onto:_default' \
 && ret=0
 ;;
+(linear)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':reference -- The remote reference to replay onto:_default' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__land__subcmd__help_commands" \
@@ -7330,6 +7806,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (lap)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(linear)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -7549,7 +8029,7 @@ trace\:"Add everything"))' \
 ;;
 (dist)
 _arguments "${_arguments_options[@]}" : \
-'--build-tool=[How to build for the target\: cargo, cross or zigbuild (default\: cargo)]:build_tool:_default' \
+'--build-tool=[How to build for the target\: cargo, cross or zigbuild (default\: \$DIST_BUILD_TOOL, else cargo)]:build_tool:_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
@@ -7648,6 +8128,36 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(sweep)
+_arguments "${_arguments_options[@]}" : \
+'*--issue=[Read this issue'\''s payload from the capture store rather than stdin (repeatable)]:issue:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__board__subcmd__help_commands" \
@@ -7661,6 +8171,10 @@ _arguments "${_arguments_options[@]}" : \
         curcontext="${curcontext%:*:*}:batten-board-help-command-$line[1]:"
         case $line[1] in
             (check)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(sweep)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -7757,6 +8271,104 @@ _arguments "${_arguments_options[@]}" : \
         curcontext="${curcontext%:*:*}:batten-census-help-command-$line[1]:"
         case $line[1] in
             (shell)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(artifacts)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+":: :_batten__subcmd__artifacts_commands" \
+"*::: :->artifacts" \
+&& ret=0
+
+    case $state in
+    (artifacts)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-artifacts-command-$line[1]:"
+        case $line[1] in
+            (write)
+_arguments "${_arguments_options[@]}" : \
+'--completions=[Write the bash, zsh and fish completion scripts into this directory]:completions:_default' \
+'--man=[Write one man page per command into this directory, removing stale pages]:man:_default' \
+'--schema=[Write the config and policy-input JSON Schemas into this directory]:schema:_default' \
+'--reference=[Write the markdown CLI reference to this file]:reference:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__artifacts__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-artifacts-help-command-$line[1]:"
+        case $line[1] in
+            (write)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -7940,6 +8552,14 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(sums)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(backfill)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
         esac
     ;;
 esac
@@ -8021,6 +8641,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (egress)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(forge)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -8340,6 +8964,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(unsubscribed)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
         esac
     ;;
 esac
@@ -8405,6 +9033,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (release)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(detach)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -8493,6 +9125,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (identity)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(signing)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -8732,6 +9368,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(validate)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (named)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -8768,11 +9408,23 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(probe)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(decide)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (divergence)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (nonverdict)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(attestation)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -8807,6 +9459,10 @@ _arguments "${_arguments_options[@]}" : \
         esac
     ;;
 esac
+;;
+(release)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
 ;;
         esac
     ;;
@@ -8845,6 +9501,10 @@ _arguments "${_arguments_options[@]}" : \
         curcontext="${curcontext%:*:*}:batten-help-wiring-command-$line[1]:"
         case $line[1] in
             (reclaim)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(gate)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -8952,6 +9612,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(linear)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
         esac
     ;;
 esac
@@ -9008,6 +9672,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(sweep)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
         esac
     ;;
 esac
@@ -9025,6 +9693,26 @@ _arguments "${_arguments_options[@]}" : \
         curcontext="${curcontext%:*:*}:batten-help-census-command-$line[1]:"
         case $line[1] in
             (shell)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(artifacts)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__help__subcmd__artifacts_commands" \
+"*::: :->artifacts" \
+&& ret=0
+
+    case $state in
+    (artifacts)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-help-artifacts-command-$line[1]:"
+        case $line[1] in
+            (write)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -9056,7 +9744,7 @@ _batten_commands() {
 'mcp:Dispatch a declared MCP call and hand back a reduction instead of the payload' \
 'target:Inspect and reclaim this repository'\''s build tree' \
 'ci:Answer what this repository'\''s continuous integration needs of a change' \
-'release:Answer whether a release is installable as it says it is' \
+'release:Answer whether a release is installable as it says it is, hash its assets, and backfill its tracking' \
 'config:Inspect configuration' \
 'lint:Lint an artifact against a declared schema' \
 'spec:Print the tool'\''s own command spec' \
@@ -9099,6 +9787,7 @@ _batten_commands() {
 'dist:Build the release binary for a target and stage its archive, printing KEY=VALUE pointers to both' \
 'board:Whether the board'\''s columns and graph tell the truth about the work' \
 'census:Count what this repository declares it is retiring, as pointers' \
+'artifacts:Write the committed derivations of the command surface' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten commands' commands "$@"
@@ -9108,12 +9797,44 @@ _batten__subcmd__adjudicate_commands() {
     local commands; commands=()
     _describe -t commands 'batten adjudicate commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__artifacts_commands] )) ||
+_batten__subcmd__artifacts_commands() {
+    local commands; commands=(
+'write:Write completions, man pages, schemas or the CLI reference where the caller names' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten artifacts commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__artifacts__subcmd__help_commands] )) ||
+_batten__subcmd__artifacts__subcmd__help_commands() {
+    local commands; commands=(
+'write:Write completions, man pages, schemas or the CLI reference where the caller names' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten artifacts help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__artifacts__subcmd__help__subcmd__help_commands] )) ||
+_batten__subcmd__artifacts__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten artifacts help help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__artifacts__subcmd__help__subcmd__write_commands] )) ||
+_batten__subcmd__artifacts__subcmd__help__subcmd__write_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten artifacts help write commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__artifacts__subcmd__write_commands] )) ||
+_batten__subcmd__artifacts__subcmd__write_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten artifacts write commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__attribution_commands] )) ||
 _batten__subcmd__attribution_commands() {
     local commands; commands=(
 'check:Refuse vendor authorship, branding or session links in commit metadata' \
 'tagger:Refuse a tag cut by an identity this repository is not accountable to' \
 'identity:Set this clone'\''s repo-local git identity when it is unset or denied' \
+'signing:Switch signing off in this clone when its signer cannot be verified or reproduced' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten attribution commands' commands "$@"
@@ -9129,6 +9850,7 @@ _batten__subcmd__attribution__subcmd__help_commands() {
 'check:Refuse vendor authorship, branding or session links in commit metadata' \
 'tagger:Refuse a tag cut by an identity this repository is not accountable to' \
 'identity:Set this clone'\''s repo-local git identity when it is unset or denied' \
+'signing:Switch signing off in this clone when its signer cannot be verified or reproduced' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten attribution help commands' commands "$@"
@@ -9148,6 +9870,11 @@ _batten__subcmd__attribution__subcmd__help__subcmd__identity_commands() {
     local commands; commands=()
     _describe -t commands 'batten attribution help identity commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__attribution__subcmd__help__subcmd__signing_commands] )) ||
+_batten__subcmd__attribution__subcmd__help__subcmd__signing_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten attribution help signing commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__attribution__subcmd__help__subcmd__tagger_commands] )) ||
 _batten__subcmd__attribution__subcmd__help__subcmd__tagger_commands() {
     local commands; commands=()
@@ -9157,6 +9884,11 @@ _batten__subcmd__attribution__subcmd__help__subcmd__tagger_commands() {
 _batten__subcmd__attribution__subcmd__identity_commands() {
     local commands; commands=()
     _describe -t commands 'batten attribution identity commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__attribution__subcmd__signing_commands] )) ||
+_batten__subcmd__attribution__subcmd__signing_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten attribution signing commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__attribution__subcmd__tagger_commands] )) ||
 _batten__subcmd__attribution__subcmd__tagger_commands() {
@@ -9203,6 +9935,7 @@ _batten__subcmd__bench__subcmd__tokens_commands() {
 _batten__subcmd__board_commands() {
     local commands; commands=(
 'check:Refuse a board whose columns, graph or citations lie, and print the ready frontier' \
+'sweep:Run every declared board gate over one payload set and report the set of refusals' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten board commands' commands "$@"
@@ -9216,6 +9949,7 @@ _batten__subcmd__board__subcmd__check_commands() {
 _batten__subcmd__board__subcmd__help_commands() {
     local commands; commands=(
 'check:Refuse a board whose columns, graph or citations lie, and print the ready frontier' \
+'sweep:Run every declared board gate over one payload set and report the set of refusals' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten board help commands' commands "$@"
@@ -9229,6 +9963,16 @@ _batten__subcmd__board__subcmd__help__subcmd__check_commands() {
 _batten__subcmd__board__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'batten board help help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__board__subcmd__help__subcmd__sweep_commands] )) ||
+_batten__subcmd__board__subcmd__help__subcmd__sweep_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten board help sweep commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__board__subcmd__sweep_commands] )) ||
+_batten__subcmd__board__subcmd__sweep_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten board sweep commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__capture_commands] )) ||
 _batten__subcmd__capture_commands() {
@@ -9681,6 +10425,7 @@ _batten__subcmd__doctor_commands() {
 'target:Make one rustup target installed, purging a half-installed one first, behind the toolchain'\''s own lock' \
 'mediator:Diagnose whether the engine the registrations reach was built from this tree' \
 'egress:Diagnose whether the agent proxy would carry this container'\''s requests' \
+'forge:Diagnose whether the forge credential carries the claims this repository'\''s tasks declare' \
 'gate:Diagnose whether this checkout'\''s commit path runs the gate' \
 'toolchain:Diagnose whether every tool the manifest declares is installed' \
 'hooks:Diagnose whether batten is wired on every hook surface of every harness' \
@@ -9694,6 +10439,11 @@ _batten__subcmd__doctor__subcmd__egress_commands() {
     local commands; commands=()
     _describe -t commands 'batten doctor egress commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__doctor__subcmd__forge_commands] )) ||
+_batten__subcmd__doctor__subcmd__forge_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten doctor forge commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__doctor__subcmd__gate_commands] )) ||
 _batten__subcmd__doctor__subcmd__gate_commands() {
     local commands; commands=()
@@ -9705,6 +10455,7 @@ _batten__subcmd__doctor__subcmd__help_commands() {
 'target:Make one rustup target installed, purging a half-installed one first, behind the toolchain'\''s own lock' \
 'mediator:Diagnose whether the engine the registrations reach was built from this tree' \
 'egress:Diagnose whether the agent proxy would carry this container'\''s requests' \
+'forge:Diagnose whether the forge credential carries the claims this repository'\''s tasks declare' \
 'gate:Diagnose whether this checkout'\''s commit path runs the gate' \
 'toolchain:Diagnose whether every tool the manifest declares is installed' \
 'hooks:Diagnose whether batten is wired on every hook surface of every harness' \
@@ -9717,6 +10468,11 @@ _batten__subcmd__doctor__subcmd__help_commands() {
 _batten__subcmd__doctor__subcmd__help__subcmd__egress_commands() {
     local commands; commands=()
     _describe -t commands 'batten doctor help egress commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__doctor__subcmd__help__subcmd__forge_commands] )) ||
+_batten__subcmd__doctor__subcmd__help__subcmd__forge_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten doctor help forge commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__doctor__subcmd__help__subcmd__gate_commands] )) ||
 _batten__subcmd__doctor__subcmd__help__subcmd__gate_commands() {
@@ -9878,7 +10634,7 @@ _batten__subcmd__help_commands() {
 'mcp:Dispatch a declared MCP call and hand back a reduction instead of the payload' \
 'target:Inspect and reclaim this repository'\''s build tree' \
 'ci:Answer what this repository'\''s continuous integration needs of a change' \
-'release:Answer whether a release is installable as it says it is' \
+'release:Answer whether a release is installable as it says it is, hash its assets, and backfill its tracking' \
 'config:Inspect configuration' \
 'lint:Lint an artifact against a declared schema' \
 'spec:Print the tool'\''s own command spec' \
@@ -9921,6 +10677,7 @@ _batten__subcmd__help_commands() {
 'dist:Build the release binary for a target and stage its archive, printing KEY=VALUE pointers to both' \
 'board:Whether the board'\''s columns and graph tell the truth about the work' \
 'census:Count what this repository declares it is retiring, as pointers' \
+'artifacts:Write the committed derivations of the command surface' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten help commands' commands "$@"
@@ -9930,12 +10687,25 @@ _batten__subcmd__help__subcmd__adjudicate_commands() {
     local commands; commands=()
     _describe -t commands 'batten help adjudicate commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__help__subcmd__artifacts_commands] )) ||
+_batten__subcmd__help__subcmd__artifacts_commands() {
+    local commands; commands=(
+'write:Write completions, man pages, schemas or the CLI reference where the caller names' \
+    )
+    _describe -t commands 'batten help artifacts commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__artifacts__subcmd__write_commands] )) ||
+_batten__subcmd__help__subcmd__artifacts__subcmd__write_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help artifacts write commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__help__subcmd__attribution_commands] )) ||
 _batten__subcmd__help__subcmd__attribution_commands() {
     local commands; commands=(
 'check:Refuse vendor authorship, branding or session links in commit metadata' \
 'tagger:Refuse a tag cut by an identity this repository is not accountable to' \
 'identity:Set this clone'\''s repo-local git identity when it is unset or denied' \
+'signing:Switch signing off in this clone when its signer cannot be verified or reproduced' \
     )
     _describe -t commands 'batten help attribution commands' commands "$@"
 }
@@ -9948,6 +10718,11 @@ _batten__subcmd__help__subcmd__attribution__subcmd__check_commands() {
 _batten__subcmd__help__subcmd__attribution__subcmd__identity_commands() {
     local commands; commands=()
     _describe -t commands 'batten help attribution identity commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__attribution__subcmd__signing_commands] )) ||
+_batten__subcmd__help__subcmd__attribution__subcmd__signing_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help attribution signing commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__attribution__subcmd__tagger_commands] )) ||
 _batten__subcmd__help__subcmd__attribution__subcmd__tagger_commands() {
@@ -9975,6 +10750,7 @@ _batten__subcmd__help__subcmd__bench__subcmd__tokens_commands() {
 _batten__subcmd__help__subcmd__board_commands() {
     local commands; commands=(
 'check:Refuse a board whose columns, graph or citations lie, and print the ready frontier' \
+'sweep:Run every declared board gate over one payload set and report the set of refusals' \
     )
     _describe -t commands 'batten help board commands' commands "$@"
 }
@@ -9982,6 +10758,11 @@ _batten__subcmd__help__subcmd__board_commands() {
 _batten__subcmd__help__subcmd__board__subcmd__check_commands() {
     local commands; commands=()
     _describe -t commands 'batten help board check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__board__subcmd__sweep_commands] )) ||
+_batten__subcmd__help__subcmd__board__subcmd__sweep_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help board sweep commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__capture_commands] )) ||
 _batten__subcmd__help__subcmd__capture_commands() {
@@ -10185,6 +10966,7 @@ _batten__subcmd__help__subcmd__doctor_commands() {
 'target:Make one rustup target installed, purging a half-installed one first, behind the toolchain'\''s own lock' \
 'mediator:Diagnose whether the engine the registrations reach was built from this tree' \
 'egress:Diagnose whether the agent proxy would carry this container'\''s requests' \
+'forge:Diagnose whether the forge credential carries the claims this repository'\''s tasks declare' \
 'gate:Diagnose whether this checkout'\''s commit path runs the gate' \
 'toolchain:Diagnose whether every tool the manifest declares is installed' \
 'hooks:Diagnose whether batten is wired on every hook surface of every harness' \
@@ -10196,6 +10978,11 @@ _batten__subcmd__help__subcmd__doctor_commands() {
 _batten__subcmd__help__subcmd__doctor__subcmd__egress_commands() {
     local commands; commands=()
     _describe -t commands 'batten help doctor egress commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__doctor__subcmd__forge_commands] )) ||
+_batten__subcmd__help__subcmd__doctor__subcmd__forge_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help doctor forge commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__doctor__subcmd__gate_commands] )) ||
 _batten__subcmd__help__subcmd__doctor__subcmd__gate_commands() {
@@ -10316,6 +11103,7 @@ _batten__subcmd__help__subcmd__land_commands() {
 'verify:Run the configured gate over this head and record what it answered' \
 'fast-forward:Ask this head'\''s pull request to fast-forward, and read the answer that request got' \
 'lap:Drive the whole lap and lap again on any refusal a rebase would clear' \
+'linear:Whether this head is built on the reference'\''s current tip, so it can fast-forward' \
     )
     _describe -t commands 'batten help land commands' commands "$@"
 }
@@ -10328,6 +11116,11 @@ _batten__subcmd__help__subcmd__land__subcmd__fast-forward_commands() {
 _batten__subcmd__help__subcmd__land__subcmd__lap_commands() {
     local commands; commands=()
     _describe -t commands 'batten help land lap commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__land__subcmd__linear_commands] )) ||
+_batten__subcmd__help__subcmd__land__subcmd__linear_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help land linear commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__land__subcmd__push_commands] )) ||
 _batten__subcmd__help__subcmd__land__subcmd__push_commands() {
@@ -10622,6 +11415,7 @@ _batten__subcmd__help__subcmd__pr_commands() {
 'link:Write the closing key into a bot pull request'\''s body, so its merge moves the row' \
 'ensure:File the row and link it, doing whatever this tick can and saying what it did' \
 'closes:Whether a pull request'\''s body still closes a tracker key, asked at the last moment' \
+'unsubscribed:Drop this session'\''s webhook subscription to a pull request, attest it, or record and decide the reading' \
     )
     _describe -t commands 'batten help pr commands' commands "$@"
 }
@@ -10649,6 +11443,11 @@ _batten__subcmd__help__subcmd__pr__subcmd__file_commands() {
 _batten__subcmd__help__subcmd__pr__subcmd__link_commands() {
     local commands; commands=()
     _describe -t commands 'batten help pr link commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__pr__subcmd__unsubscribed_commands] )) ||
+_batten__subcmd__help__subcmd__pr__subcmd__unsubscribed_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help pr unsubscribed commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__pr__subcmd__watch_commands] )) ||
 _batten__subcmd__help__subcmd__pr__subcmd__watch_commands() {
@@ -10720,7 +11519,8 @@ _batten__subcmd__help__subcmd__record_commands() {
     local commands; commands=(
 'suites:Derive what each bats suite costs from the report the runner wrote, and record it where an author reads it' \
 'tool:Record a declared tool row'\''s verdict, read as \`<name> <token>\` lines on stdin' \
-'forge:Record the forge'\''s check verdicts for one commit, read as \`<check> <conclusion>\` lines on stdin' \
+'forge:Record the forge'\''s check verdicts for one commit, read as \`<check> <conclusion>\` lines on stdin or with --fetch from the forge' \
+'validate:Run a declared tool row'\''s \`run\` argv and record its exit code under the row'\''s key' \
 'named:Record one named family under this branch, read from stdin' \
 'derive:Derive one named family'\''s record from its input and write it' \
 'keyed:Put one value into a keyed store family, read from stdin' \
@@ -10730,11 +11530,20 @@ _batten__subcmd__help__subcmd__record_commands() {
 'plan:Record this branch'\''s plan, read as \`<id> <status>\` lines on stdin' \
 'closes:Record which rows this branch'\''s pull request body closes, read on stdin' \
 'query:Run a declared \`\[\[forge.query\]\]\` read and record its reduction as the family it names' \
+'probe:Run a probe command and record the family'\''s reading of its exit status and output' \
+'decide:Derive a family'\''s reading, record it without echoing it, and decide over it with the named rules' \
 'divergence:Record how far the landing loop diverged from linear over a window of runs' \
 'nonverdict:Record which recent required-check failures never reached a verdict' \
+'attestation:Record a release'\''s attestation posture and what the verifier says of each archive'\''s binary' \
 'census:Record whether a landing was in flight when a container was replaced, and read the verdict back' \
+'release:Record a published release'\''s assets, its checksum manifest'\''s entries, and the entries whose bytes disagree' \
     )
     _describe -t commands 'batten help record commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__record__subcmd__attestation_commands] )) ||
+_batten__subcmd__help__subcmd__record__subcmd__attestation_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help record attestation commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__record__subcmd__census_commands] )) ||
 _batten__subcmd__help__subcmd__record__subcmd__census_commands() {
@@ -10770,6 +11579,11 @@ _batten__subcmd__help__subcmd__record__subcmd__census__subcmd__tally_commands() 
 _batten__subcmd__help__subcmd__record__subcmd__closes_commands() {
     local commands; commands=()
     _describe -t commands 'batten help record closes commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__record__subcmd__decide_commands] )) ||
+_batten__subcmd__help__subcmd__record__subcmd__decide_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help record decide commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__record__subcmd__derive_commands] )) ||
 _batten__subcmd__help__subcmd__record__subcmd__derive_commands() {
@@ -10816,10 +11630,20 @@ _batten__subcmd__help__subcmd__record__subcmd__plan_commands() {
     local commands; commands=()
     _describe -t commands 'batten help record plan commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__help__subcmd__record__subcmd__probe_commands] )) ||
+_batten__subcmd__help__subcmd__record__subcmd__probe_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help record probe commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__help__subcmd__record__subcmd__query_commands] )) ||
 _batten__subcmd__help__subcmd__record__subcmd__query_commands() {
     local commands; commands=()
     _describe -t commands 'batten help record query commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__record__subcmd__release_commands] )) ||
+_batten__subcmd__help__subcmd__record__subcmd__release_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help record release commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__record__subcmd__show_commands] )) ||
 _batten__subcmd__help__subcmd__record__subcmd__show_commands() {
@@ -10836,17 +11660,34 @@ _batten__subcmd__help__subcmd__record__subcmd__tool_commands() {
     local commands; commands=()
     _describe -t commands 'batten help record tool commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__help__subcmd__record__subcmd__validate_commands] )) ||
+_batten__subcmd__help__subcmd__record__subcmd__validate_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help record validate commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__help__subcmd__release_commands] )) ||
 _batten__subcmd__help__subcmd__release_commands() {
     local commands; commands=(
 'install:Decide whether install.sh, the release matrix and the binstall manifest agree on every asset name, and that no binary is committed' \
+'sums:Hash a published release'\''s own assets into a checksum manifest, never the manifest itself' \
+'backfill:Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed' \
     )
     _describe -t commands 'batten help release commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__release__subcmd__backfill_commands] )) ||
+_batten__subcmd__help__subcmd__release__subcmd__backfill_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help release backfill commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__release__subcmd__install_commands] )) ||
 _batten__subcmd__help__subcmd__release__subcmd__install_commands() {
     local commands; commands=()
     _describe -t commands 'batten help release install commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__release__subcmd__sums_commands] )) ||
+_batten__subcmd__help__subcmd__release__subcmd__sums_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help release sums commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__sbom_commands] )) ||
 _batten__subcmd__help__subcmd__sbom_commands() {
@@ -10882,6 +11723,7 @@ _batten__subcmd__help__subcmd__singleton_commands() {
     local commands; commands=(
 'acquire:Take a task'\''s lock for a pid, or refuse naming the process that holds it' \
 'release:Drop a task'\''s lock, which its exit trap does and a kill cannot' \
+'detach:Run a command in the background under a task'\''s lock, and report the previous run'\''s failure' \
     )
     _describe -t commands 'batten help singleton commands' commands "$@"
 }
@@ -10889,6 +11731,11 @@ _batten__subcmd__help__subcmd__singleton_commands() {
 _batten__subcmd__help__subcmd__singleton__subcmd__acquire_commands() {
     local commands; commands=()
     _describe -t commands 'batten help singleton acquire commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__singleton__subcmd__detach_commands] )) ||
+_batten__subcmd__help__subcmd__singleton__subcmd__detach_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help singleton detach commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__singleton__subcmd__release_commands] )) ||
 _batten__subcmd__help__subcmd__singleton__subcmd__release_commands() {
@@ -11034,8 +11881,14 @@ _batten__subcmd__help__subcmd__verdict_commands() {
 _batten__subcmd__help__subcmd__wiring_commands() {
     local commands; commands=(
 'reclaim:Remove non-batten hook registrations from this host'\''s merged surfaces' \
+'gate:Link this clone'\''s two commit hooks to a hook body the repository checks in' \
     )
     _describe -t commands 'batten help wiring commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__wiring__subcmd__gate_commands] )) ||
+_batten__subcmd__help__subcmd__wiring__subcmd__gate_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help wiring gate commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__wiring__subcmd__reclaim_commands] )) ||
 _batten__subcmd__help__subcmd__wiring__subcmd__reclaim_commands() {
@@ -11123,6 +11976,7 @@ _batten__subcmd__land_commands() {
 'verify:Run the configured gate over this head and record what it answered' \
 'fast-forward:Ask this head'\''s pull request to fast-forward, and read the answer that request got' \
 'lap:Drive the whole lap and lap again on any refusal a rebase would clear' \
+'linear:Whether this head is built on the reference'\''s current tip, so it can fast-forward' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten land commands' commands "$@"
@@ -11141,6 +11995,7 @@ _batten__subcmd__land__subcmd__help_commands() {
 'verify:Run the configured gate over this head and record what it answered' \
 'fast-forward:Ask this head'\''s pull request to fast-forward, and read the answer that request got' \
 'lap:Drive the whole lap and lap again on any refusal a rebase would clear' \
+'linear:Whether this head is built on the reference'\''s current tip, so it can fast-forward' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten land help commands' commands "$@"
@@ -11159,6 +12014,11 @@ _batten__subcmd__land__subcmd__help__subcmd__help_commands() {
 _batten__subcmd__land__subcmd__help__subcmd__lap_commands() {
     local commands; commands=()
     _describe -t commands 'batten land help lap commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__land__subcmd__help__subcmd__linear_commands] )) ||
+_batten__subcmd__land__subcmd__help__subcmd__linear_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten land help linear commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__land__subcmd__help__subcmd__push_commands] )) ||
 _batten__subcmd__land__subcmd__help__subcmd__push_commands() {
@@ -11184,6 +12044,11 @@ _batten__subcmd__land__subcmd__help__subcmd__wait_commands() {
 _batten__subcmd__land__subcmd__lap_commands() {
     local commands; commands=()
     _describe -t commands 'batten land lap commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__land__subcmd__linear_commands] )) ||
+_batten__subcmd__land__subcmd__linear_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten land linear commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__land__subcmd__push_commands] )) ||
 _batten__subcmd__land__subcmd__push_commands() {
@@ -11805,6 +12670,7 @@ _batten__subcmd__pr_commands() {
 'link:Write the closing key into a bot pull request'\''s body, so its merge moves the row' \
 'ensure:File the row and link it, doing whatever this tick can and saying what it did' \
 'closes:Whether a pull request'\''s body still closes a tracker key, asked at the last moment' \
+'unsubscribed:Drop this session'\''s webhook subscription to a pull request, attest it, or record and decide the reading' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten pr commands' commands "$@"
@@ -11838,6 +12704,7 @@ _batten__subcmd__pr__subcmd__help_commands() {
 'link:Write the closing key into a bot pull request'\''s body, so its merge moves the row' \
 'ensure:File the row and link it, doing whatever this tick can and saying what it did' \
 'closes:Whether a pull request'\''s body still closes a tracker key, asked at the last moment' \
+'unsubscribed:Drop this session'\''s webhook subscription to a pull request, attest it, or record and decide the reading' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten pr help commands' commands "$@"
@@ -11872,6 +12739,11 @@ _batten__subcmd__pr__subcmd__help__subcmd__link_commands() {
     local commands; commands=()
     _describe -t commands 'batten pr help link commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__pr__subcmd__help__subcmd__unsubscribed_commands] )) ||
+_batten__subcmd__pr__subcmd__help__subcmd__unsubscribed_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten pr help unsubscribed commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__pr__subcmd__help__subcmd__watch_commands] )) ||
 _batten__subcmd__pr__subcmd__help__subcmd__watch_commands() {
     local commands; commands=()
@@ -11881,6 +12753,11 @@ _batten__subcmd__pr__subcmd__help__subcmd__watch_commands() {
 _batten__subcmd__pr__subcmd__link_commands() {
     local commands; commands=()
     _describe -t commands 'batten pr link commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__pr__subcmd__unsubscribed_commands] )) ||
+_batten__subcmd__pr__subcmd__unsubscribed_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten pr unsubscribed commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__pr__subcmd__watch_commands] )) ||
 _batten__subcmd__pr__subcmd__watch_commands() {
@@ -12033,7 +12910,8 @@ _batten__subcmd__record_commands() {
     local commands; commands=(
 'suites:Derive what each bats suite costs from the report the runner wrote, and record it where an author reads it' \
 'tool:Record a declared tool row'\''s verdict, read as \`<name> <token>\` lines on stdin' \
-'forge:Record the forge'\''s check verdicts for one commit, read as \`<check> <conclusion>\` lines on stdin' \
+'forge:Record the forge'\''s check verdicts for one commit, read as \`<check> <conclusion>\` lines on stdin or with --fetch from the forge' \
+'validate:Run a declared tool row'\''s \`run\` argv and record its exit code under the row'\''s key' \
 'named:Record one named family under this branch, read from stdin' \
 'derive:Derive one named family'\''s record from its input and write it' \
 'keyed:Put one value into a keyed store family, read from stdin' \
@@ -12043,12 +12921,21 @@ _batten__subcmd__record_commands() {
 'plan:Record this branch'\''s plan, read as \`<id> <status>\` lines on stdin' \
 'closes:Record which rows this branch'\''s pull request body closes, read on stdin' \
 'query:Run a declared \`\[\[forge.query\]\]\` read and record its reduction as the family it names' \
+'probe:Run a probe command and record the family'\''s reading of its exit status and output' \
+'decide:Derive a family'\''s reading, record it without echoing it, and decide over it with the named rules' \
 'divergence:Record how far the landing loop diverged from linear over a window of runs' \
 'nonverdict:Record which recent required-check failures never reached a verdict' \
+'attestation:Record a release'\''s attestation posture and what the verifier says of each archive'\''s binary' \
 'census:Record whether a landing was in flight when a container was replaced, and read the verdict back' \
+'release:Record a published release'\''s assets, its checksum manifest'\''s entries, and the entries whose bytes disagree' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten record commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__record__subcmd__attestation_commands] )) ||
+_batten__subcmd__record__subcmd__attestation_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten record attestation commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__record__subcmd__census_commands] )) ||
 _batten__subcmd__record__subcmd__census_commands() {
@@ -12122,6 +13009,11 @@ _batten__subcmd__record__subcmd__closes_commands() {
     local commands; commands=()
     _describe -t commands 'batten record closes commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__record__subcmd__decide_commands] )) ||
+_batten__subcmd__record__subcmd__decide_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten record decide commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__record__subcmd__derive_commands] )) ||
 _batten__subcmd__record__subcmd__derive_commands() {
     local commands; commands=()
@@ -12147,7 +13039,8 @@ _batten__subcmd__record__subcmd__help_commands() {
     local commands; commands=(
 'suites:Derive what each bats suite costs from the report the runner wrote, and record it where an author reads it' \
 'tool:Record a declared tool row'\''s verdict, read as \`<name> <token>\` lines on stdin' \
-'forge:Record the forge'\''s check verdicts for one commit, read as \`<check> <conclusion>\` lines on stdin' \
+'forge:Record the forge'\''s check verdicts for one commit, read as \`<check> <conclusion>\` lines on stdin or with --fetch from the forge' \
+'validate:Run a declared tool row'\''s \`run\` argv and record its exit code under the row'\''s key' \
 'named:Record one named family under this branch, read from stdin' \
 'derive:Derive one named family'\''s record from its input and write it' \
 'keyed:Put one value into a keyed store family, read from stdin' \
@@ -12157,12 +13050,21 @@ _batten__subcmd__record__subcmd__help_commands() {
 'plan:Record this branch'\''s plan, read as \`<id> <status>\` lines on stdin' \
 'closes:Record which rows this branch'\''s pull request body closes, read on stdin' \
 'query:Run a declared \`\[\[forge.query\]\]\` read and record its reduction as the family it names' \
+'probe:Run a probe command and record the family'\''s reading of its exit status and output' \
+'decide:Derive a family'\''s reading, record it without echoing it, and decide over it with the named rules' \
 'divergence:Record how far the landing loop diverged from linear over a window of runs' \
 'nonverdict:Record which recent required-check failures never reached a verdict' \
+'attestation:Record a release'\''s attestation posture and what the verifier says of each archive'\''s binary' \
 'census:Record whether a landing was in flight when a container was replaced, and read the verdict back' \
+'release:Record a published release'\''s assets, its checksum manifest'\''s entries, and the entries whose bytes disagree' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten record help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__record__subcmd__help__subcmd__attestation_commands] )) ||
+_batten__subcmd__record__subcmd__help__subcmd__attestation_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten record help attestation commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__record__subcmd__help__subcmd__census_commands] )) ||
 _batten__subcmd__record__subcmd__help__subcmd__census_commands() {
@@ -12198,6 +13100,11 @@ _batten__subcmd__record__subcmd__help__subcmd__census__subcmd__tally_commands() 
 _batten__subcmd__record__subcmd__help__subcmd__closes_commands() {
     local commands; commands=()
     _describe -t commands 'batten record help closes commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__record__subcmd__help__subcmd__decide_commands] )) ||
+_batten__subcmd__record__subcmd__help__subcmd__decide_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten record help decide commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__record__subcmd__help__subcmd__derive_commands] )) ||
 _batten__subcmd__record__subcmd__help__subcmd__derive_commands() {
@@ -12249,10 +13156,20 @@ _batten__subcmd__record__subcmd__help__subcmd__plan_commands() {
     local commands; commands=()
     _describe -t commands 'batten record help plan commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__record__subcmd__help__subcmd__probe_commands] )) ||
+_batten__subcmd__record__subcmd__help__subcmd__probe_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten record help probe commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__record__subcmd__help__subcmd__query_commands] )) ||
 _batten__subcmd__record__subcmd__help__subcmd__query_commands() {
     local commands; commands=()
     _describe -t commands 'batten record help query commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__record__subcmd__help__subcmd__release_commands] )) ||
+_batten__subcmd__record__subcmd__help__subcmd__release_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten record help release commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__record__subcmd__help__subcmd__show_commands] )) ||
 _batten__subcmd__record__subcmd__help__subcmd__show_commands() {
@@ -12268,6 +13185,11 @@ _batten__subcmd__record__subcmd__help__subcmd__suites_commands() {
 _batten__subcmd__record__subcmd__help__subcmd__tool_commands() {
     local commands; commands=()
     _describe -t commands 'batten record help tool commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__record__subcmd__help__subcmd__validate_commands] )) ||
+_batten__subcmd__record__subcmd__help__subcmd__validate_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten record help validate commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__record__subcmd__journal_commands] )) ||
 _batten__subcmd__record__subcmd__journal_commands() {
@@ -12294,10 +13216,20 @@ _batten__subcmd__record__subcmd__plan_commands() {
     local commands; commands=()
     _describe -t commands 'batten record plan commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__record__subcmd__probe_commands] )) ||
+_batten__subcmd__record__subcmd__probe_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten record probe commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__record__subcmd__query_commands] )) ||
 _batten__subcmd__record__subcmd__query_commands() {
     local commands; commands=()
     _describe -t commands 'batten record query commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__record__subcmd__release_commands] )) ||
+_batten__subcmd__record__subcmd__release_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten record release commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__record__subcmd__show_commands] )) ||
 _batten__subcmd__record__subcmd__show_commands() {
@@ -12314,21 +13246,40 @@ _batten__subcmd__record__subcmd__tool_commands() {
     local commands; commands=()
     _describe -t commands 'batten record tool commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__record__subcmd__validate_commands] )) ||
+_batten__subcmd__record__subcmd__validate_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten record validate commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__release_commands] )) ||
 _batten__subcmd__release_commands() {
     local commands; commands=(
 'install:Decide whether install.sh, the release matrix and the binstall manifest agree on every asset name, and that no binary is committed' \
+'sums:Hash a published release'\''s own assets into a checksum manifest, never the manifest itself' \
+'backfill:Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten release commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__release__subcmd__backfill_commands] )) ||
+_batten__subcmd__release__subcmd__backfill_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release backfill commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__release__subcmd__help_commands] )) ||
 _batten__subcmd__release__subcmd__help_commands() {
     local commands; commands=(
 'install:Decide whether install.sh, the release matrix and the binstall manifest agree on every asset name, and that no binary is committed' \
+'sums:Hash a published release'\''s own assets into a checksum manifest, never the manifest itself' \
+'backfill:Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten release help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__release__subcmd__help__subcmd__backfill_commands] )) ||
+_batten__subcmd__release__subcmd__help__subcmd__backfill_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release help backfill commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__release__subcmd__help__subcmd__help_commands] )) ||
 _batten__subcmd__release__subcmd__help__subcmd__help_commands() {
@@ -12340,10 +13291,20 @@ _batten__subcmd__release__subcmd__help__subcmd__install_commands() {
     local commands; commands=()
     _describe -t commands 'batten release help install commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__release__subcmd__help__subcmd__sums_commands] )) ||
+_batten__subcmd__release__subcmd__help__subcmd__sums_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release help sums commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__release__subcmd__install_commands] )) ||
 _batten__subcmd__release__subcmd__install_commands() {
     local commands; commands=()
     _describe -t commands 'batten release install commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__release__subcmd__sums_commands] )) ||
+_batten__subcmd__release__subcmd__sums_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release sums commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__sbom_commands] )) ||
 _batten__subcmd__sbom_commands() {
@@ -12417,6 +13378,7 @@ _batten__subcmd__singleton_commands() {
     local commands; commands=(
 'acquire:Take a task'\''s lock for a pid, or refuse naming the process that holds it' \
 'release:Drop a task'\''s lock, which its exit trap does and a kill cannot' \
+'detach:Run a command in the background under a task'\''s lock, and report the previous run'\''s failure' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten singleton commands' commands "$@"
@@ -12426,11 +13388,17 @@ _batten__subcmd__singleton__subcmd__acquire_commands() {
     local commands; commands=()
     _describe -t commands 'batten singleton acquire commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__singleton__subcmd__detach_commands] )) ||
+_batten__subcmd__singleton__subcmd__detach_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten singleton detach commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__singleton__subcmd__help_commands] )) ||
 _batten__subcmd__singleton__subcmd__help_commands() {
     local commands; commands=(
 'acquire:Take a task'\''s lock for a pid, or refuse naming the process that holds it' \
 'release:Drop a task'\''s lock, which its exit trap does and a kill cannot' \
+'detach:Run a command in the background under a task'\''s lock, and report the previous run'\''s failure' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten singleton help commands' commands "$@"
@@ -12439,6 +13407,11 @@ _batten__subcmd__singleton__subcmd__help_commands() {
 _batten__subcmd__singleton__subcmd__help__subcmd__acquire_commands() {
     local commands; commands=()
     _describe -t commands 'batten singleton help acquire commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__singleton__subcmd__help__subcmd__detach_commands] )) ||
+_batten__subcmd__singleton__subcmd__help__subcmd__detach_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten singleton help detach commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__singleton__subcmd__help__subcmd__help_commands] )) ||
 _batten__subcmd__singleton__subcmd__help__subcmd__help_commands() {
@@ -12742,17 +13715,29 @@ _batten__subcmd__verdict_commands() {
 _batten__subcmd__wiring_commands() {
     local commands; commands=(
 'reclaim:Remove non-batten hook registrations from this host'\''s merged surfaces' \
+'gate:Link this clone'\''s two commit hooks to a hook body the repository checks in' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten wiring commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__wiring__subcmd__gate_commands] )) ||
+_batten__subcmd__wiring__subcmd__gate_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten wiring gate commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__wiring__subcmd__help_commands] )) ||
 _batten__subcmd__wiring__subcmd__help_commands() {
     local commands; commands=(
 'reclaim:Remove non-batten hook registrations from this host'\''s merged surfaces' \
+'gate:Link this clone'\''s two commit hooks to a hook body the repository checks in' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten wiring help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__wiring__subcmd__help__subcmd__gate_commands] )) ||
+_batten__subcmd__wiring__subcmd__help__subcmd__gate_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten wiring help gate commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__wiring__subcmd__help__subcmd__help_commands] )) ||
 _batten__subcmd__wiring__subcmd__help__subcmd__help_commands() {

@@ -3036,6 +3036,15 @@ record nonverdict` classifies failed required jobs by their failed steps and
   `attestation-is-verified.rego` does. No declared credential, no remote, a
   posture neither 200 nor 404, a failed download or unpack: exit 3 and the stale
   record removed.
+- `tracker_reading.rs` — the readings the `tracker-hygiene` preset decides over
+  (CLOUD-843, package p7): a tracker's issue payloads and a pull request's body,
+  each reduced to one record family by `batten record derive <family>`
+  (`done`, `done-pr`, `duplicate-close`, `deferral`, `closing-key`). It retired
+  five inline bodies that parsed payloads with `jq`, walked `git log` twice and
+  split paragraphs with `awk`. Mechanism only: it owns the family names and line
+  shapes, mints no finding, and every decision is a preset module's. The
+  producer clears every tracker family before it reads, so the one enabling row
+  judges the question just asked.
 - `turn.rs`, `unsubscribe.rs`, `probe.rs` — package p11-records of CLOUD-843,
   retiring the `finding-sink-check`, `pr-unsubscribed` and `evaluator-io-record`
   bodies. `turn.rs` READS a session's last turn (main thread, `tool_result` is

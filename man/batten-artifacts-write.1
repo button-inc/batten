@@ -1,0 +1,25 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-artifacts-write 1  batten 
+.SH NAME
+batten\-artifacts\-write \- Write completions, man pages, schemas or the CLI reference where the caller names
+.SH SYNOPSIS
+\fBbatten artifacts write\fR [\fB\-\-completions\fR] [\fB\-\-man\fR] [\fB\-\-schema\fR] [\fB\-\-reference\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Write completions, man pages, schemas or the CLI reference where the caller names
+.SH OPTIONS
+.TP
+\fB\-\-completions\fR \fI<completions>\fR
+Write the bash, zsh and fish completion scripts into this directory
+.TP
+\fB\-\-man\fR \fI<man>\fR
+Write one man page per command into this directory, removing stale pages
+.TP
+\fB\-\-schema\fR \fI<schema>\fR
+Write the config and policy\-input JSON Schemas into this directory
+.TP
+\fB\-\-reference\fR \fI<reference>\fR
+Write the markdown CLI reference to this file
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

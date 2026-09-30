@@ -804,7 +804,7 @@ nothing. Its only symptom is an approval prompt on every call, which reads as ha
 rather than as a settings bug.",
                 routes: &[run(
                     "rule fix first",
-                    "name the server literally in `.claude/settings.json` (`mcp__<server>` or \
+                    "name the server literally in the host's settings file (`mcp__<server>` or \
 `mcp__<server>__<tool>`); a tool-segment glob after a literal server is fine",
                 )],
                 applicability: crate::verdict::Applicability::Advice,
@@ -818,7 +818,7 @@ unattended: every call stops for a human. Measured on one consumer, whose code-n
 shipped exactly that way.",
                 routes: &[run(
                     "grant add first",
-                    "add an allow rule naming the server in `.claude/settings.json`, or stop \
+                    "add an allow rule naming the server in the host's settings file, or stop \
 enabling it",
                 )],
                 applicability: crate::verdict::Applicability::Advice,

@@ -146,11 +146,20 @@ fn the_network_callers_are_the_declared_ones_and_nothing_else() {
         // It is a MODULE rather than four call sites for the reason `lease.rs`
         // is one: the credential belongs to whoever builds the request, and a
         // token resolved in four places is four places it can be printed.
+        //
+        // `unsubscribe.rs` is the fifth (CLOUD-843, retiring `pr-unsubscribed.sh`),
+        // and it is not `mcp.rs`'s door wearing another name. `mcp.rs` builds a
+        // request from a declared `[mcp]` source and the credential that source
+        // names; this is the HOST's own session channel — the endpoint, tool and
+        // token file the `[hook]` host table declares for this harness — which no
+        // `[mcp]` row describes. It resolves that token in one place, as the other
+        // four do, and the retired body spent it through `curl` instead.
         vec![
             "lease.rs".to_owned(),
             "mcp.rs".to_owned(),
             "provision.rs".to_owned(),
             "rest.rs".to_owned(),
+            "unsubscribe.rs".to_owned(),
         ],
         "exactly these modules may call the network adapter"
     );

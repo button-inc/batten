@@ -4,13 +4,16 @@
 .SH NAME
 batten\-ci\-slow\-needed \- Decide whether a diff can move the slow tier, so a diff that cannot does not pay for it
 .SH SYNOPSIS
-\fBbatten ci slow\-needed\fR [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-base\fR> 
+\fBbatten ci slow\-needed\fR [\fB\-\-head\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-base\fR> 
 .SH DESCRIPTION
 Decide whether a diff can move the slow tier, so a diff that cannot does not pay for it
 .SH OPTIONS
 .TP
 \fB\-\-base\fR \fI<base>\fR
 The revision this checkout is diffed against
+.TP
+\fB\-\-head\fR \fI<head>\fR
+The revision whose tree the checkout must carry; refused when it does not
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

@@ -1580,16 +1580,15 @@ const DETACH_PATTERN: FlagDecl = FlagDecl {
 
 /// `--attached` on `singleton detach`: this invocation is the background copy.
 ///
-/// HIDDEN, because no caller types it: the announcing invocation starts the
-/// copy with it, and it is the copy's whole difference.
-const DETACH_ATTACHED: FlagDecl = FlagDecl {
-    hidden: true,
-    ..FlagDecl::switch(
-        "attached",
-        "attached",
-        "Run as the background copy: take the lock, run the command, record a failure",
-    )
-};
+/// VISIBLE, though no caller is expected to type it: the announcing invocation
+/// starts the copy with it. Hidden is reserved for the diagnostic rungs
+/// (`only_a_diagnostic_rung_is_hidden`), and a flag that changes what a verb does
+/// is documented rather than tucked away, so its help says who passes it.
+const DETACH_ATTACHED: FlagDecl = FlagDecl::switch(
+    "attached",
+    "attached",
+    "Run as the background copy the announcing invocation starts: take the lock, run the command, record a failure",
+);
 
 /// The command `singleton detach` runs in the background, after `--`.
 const DETACH_COMMAND: FlagDecl = FlagDecl::trailing(

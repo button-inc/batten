@@ -1,0 +1,25 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-release-sums 1  batten 
+.SH NAME
+batten\-release\-sums \- Hash a published release\*(Aqs own assets into a checksum manifest, never the manifest itself
+.SH SYNOPSIS
+\fBbatten release sums\fR [\fB\-\-out\-dir\fR] [\fB\-\-names\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-manifest\fR> [\fItag\fR] 
+.SH DESCRIPTION
+Hash a published release\*(Aqs own assets into a checksum manifest, never the manifest itself
+.SH OPTIONS
+.TP
+\fB\-\-manifest\fR \fI<manifest>\fR
+The checksum manifest\*(Aqs file name, as the release carries it
+.TP
+\fB\-\-out\-dir\fR \fI<out_dir>\fR
+Write the manifest under this directory (default: checksums)
+.TP
+\fB\-\-names\fR
+Print the manifest\*(Aqs path as sums=<path> and exit, with no tag, network or download
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+[\fItag\fR]
+The release\*(Aqs tag; empty or absent is the latest release

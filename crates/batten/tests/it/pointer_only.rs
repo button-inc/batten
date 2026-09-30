@@ -2292,6 +2292,29 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-843's release doors (package p8). The corpus is a clone with no forge
+    // remote and no credential, so each answers its refusal — naming what it
+    // could not resolve and nothing a release carries. What each would record or
+    // write on success is `release_assets.rs`'s and `release_backfill.rs`'s own
+    // assertion over the store and the dispatch plan.
+    Verb {
+        path: "record release",
+        args: &["--manifest", "SHA256SUMS", "v0.0.1"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "release sums",
+        args: &["--manifest", "SHA256SUMS", "v0.0.1"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "release backfill",
+        args: &["--workflow", "backfill.yml", "--dry-run"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // CLOUD-843's probe door. The command is `true`, which reads nothing and
     // prints nothing; the family is one no reading declares, so the verb answers
     // its usage refusal naming the family and never a byte of the probe's output.
