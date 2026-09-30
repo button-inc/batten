@@ -132,12 +132,18 @@ violation contains {
 	not due
 }
 
+# THE POINTER NAMES THE WINDOW THAT WOULD NOT READ, not a count. `check` carries
+# pointers and the rule and never the verdict token, so a hold (a count of the
+# commits keeping trunk busy) and a torn window must differ in the POINTER or a
+# reader cannot tell "not yet" from "could not look" — which is the whole reason
+# they are two classes.
 violation contains {
 	"rule": "release grade early",
 	"verdict": "release measure partial",
-	"subjects": [{"count": count(whole)}],
+	"subjects": unread,
 } if {
 	torn
+	unread := [{"artifact": name} | some name in families; not name in whole]
 }
 
 # --- cases -------------------------------------------------------------------

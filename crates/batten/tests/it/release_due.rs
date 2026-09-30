@@ -209,10 +209,12 @@ fn a_busy_main_inside_the_max_wait_holds() {
     assert_eq!(code, Some(2), "a hold: {text}");
     // THE HOLD, NOT ONLY THE CODE: a torn window also exits 2 under this rule, so
     // a producer regression writing a malformed record would pass on the exit
-    // alone. The class tells them apart.
-    assert!(text.contains("release ship early"), "a hold: {text}");
+    // alone. The POINTER tells them apart, because `check` carries pointers and
+    // never the verdict token: a hold points at a count, a torn window names the
+    // window that would not read.
+    assert!(text.contains("release grade early"), "a hold: {text}");
     assert!(
-        !text.contains("release measure partial"),
+        !text.contains("release-due-"),
         "a hold, not a torn window: {text}"
     );
     assert!(
@@ -241,7 +243,10 @@ fn a_timestamp_later_than_now_reads_as_a_busy_trunk() {
     let future = r#"[{"sha": "abc", "commit": {"committer": {"date": "2099-01-01T00:00:00Z"}}}]"#;
     let (code, text) = verdict("future", future, &latest(Some(3600)));
     assert_eq!(code, Some(2), "{text}");
-    assert!(text.contains("release ship early"), "{text}");
+    assert!(
+        !text.contains("release-due-"),
+        "a hold, not a torn window: {text}"
+    );
 }
 
 #[test]
@@ -293,15 +298,18 @@ fn a_release_due_window_that_is_absent_or_torn_is_partial() {
     let decided = against(&dir, &forge, &["check", "--rule", "release grade early"]);
     assert_eq!(decided.status.code(), Some(2), "{}", said(&decided));
     assert!(
-        said(&decided).contains("release measure partial"),
-        "partial, not a hold: {}",
+        said(&decided).contains("release-due-latest release grade early"),
+        "partial, pointing at the window never recorded: {}",
         said(&decided)
     );
 
     // A TRUNK THAT READ NO COMMIT measured nothing, which is not quiet.
     let (code, text) = verdict("empty-trunk", "[]", &latest(Some(3600)));
     assert_eq!(code, Some(2), "{text}");
-    assert!(text.contains("release measure partial"), "{text}");
+    assert!(
+        text.contains("release-due-activity release grade early"),
+        "{text}"
+    );
 
     // A WINDOW TORN MID-WRITE: the closing line disagrees with the rows.
     let torn = repo("torn");
@@ -318,7 +326,7 @@ fn a_release_due_window_that_is_absent_or_torn_is_partial() {
     let decided = common::run(&torn, &["check", "--rule", "release grade early"]);
     assert_eq!(decided.status.code(), Some(2), "{}", said(&decided));
     assert!(
-        said(&decided).contains("release measure partial"),
+        said(&decided).contains("release-due-activity release grade early"),
         "torn, not a hold: {}",
         said(&decided)
     );

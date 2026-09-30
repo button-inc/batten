@@ -246,21 +246,23 @@ verdict_closes := closes if {
 violation contains {
 	"rule": "check grade red",
 	"verdict": "check grade red",
-	"subjects": [{"artifact": name}, {"artifact": verdict_label(run.conclusion)}],
+	"subjects": [{"artifact": pointer}],
 } if {
 	some name in verdict_names
 	some run in verdict_winners(name)
 	verdict_rank(run) == 2
+	pointer := sprintf("%s %s", [name, verdict_label(run.conclusion)])
 }
 
 violation contains {
 	"rule": "check grade early",
 	"verdict": "check grade early",
-	"subjects": [{"artifact": name}, {"artifact": verdict_pointer(run)}],
+	"subjects": [{"artifact": pointer}],
 } if {
 	some name in verdict_names
 	some run in verdict_winners(name)
 	verdict_rank(run) >= 3
+	pointer := sprintf("%s %s", [name, verdict_pointer(run)])
 }
 
 # A window the query could not finish: a prefix is never judged as the
@@ -328,7 +330,7 @@ test_failure_and_timed_out_are_red if {
 
 test_the_red_pointer_is_the_name_and_the_conclusion if {
 	found := violation with input as verdict_case_one("completed", "failure")
-	{[entry.subjects[0].artifact, entry.subjects[1].artifact] | some entry in found} == {["lint", "failure"]}
+	{entry.subjects[0].artifact | some entry in found} == {"lint failure"}
 }
 
 test_running_skipped_cancelled_and_unseen_are_early if {
@@ -349,7 +351,7 @@ test_each_name_is_judged_on_its_own_latest if {
 		verdict_case_row("completed", "failure", "build", "2026-08-12T03:00:00Z", "2026-08-12T03:01:00Z", 1),
 		verdict_case_row("completed", "success", "lint", "2026-08-12T03:05:00Z", "2026-08-12T03:06:00Z", 2),
 	])
-	{entry.subjects[0].artifact | some entry in found} == {"build"}
+	{entry.subjects[0].artifact | some entry in found} == {"build failure"}
 }
 
 test_a_later_failure_supersedes_a_success if {

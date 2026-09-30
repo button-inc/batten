@@ -673,6 +673,15 @@ fn the_preset_and_checks_green_agree_on_every_reading() {
     // over the same readings. Green is a pass; red is `check grade red`; pending
     // and dead-end are both "no answer" and are `check grade early`.
     for (name, runs, _) in readings() {
+        // THE EMPTY READING IS NOT THE SAME INPUT TO BOTH, so it is not replayed.
+        // `checks green` reads every check on a commit, where nothing at all is
+        // "nothing graded yet" — pending, and pinned so by its own unit tier. The
+        // preset reads a window the forge query already filtered to ONE name,
+        // where nothing is "that check never ran", which `--absent-ok` says is no
+        // veto: `absent_is_not_a_veto_and_an_empty_reading_is_absent` pins it.
+        if runs.is_empty() {
+            continue;
+        }
         let (code, text) = verdict(&format!("replay-{name}"), &runs);
         let preset = if code == Some(0) {
             "green"
