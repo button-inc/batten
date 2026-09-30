@@ -58,10 +58,14 @@ profile_exclude := "profile_exclude"
 # The two acquired plans, guarded. `null` is a hard evaluation FAULT under
 # `some .. in` rather than a silent miss, and a plan that could not be acquired is
 # `null` or absent.
-plan(id) := acquired if {
+#
+# The local is NOT named `acquired`: that is the package rule below, and regorus
+# resolves the local against the rule, which left every plan undefined and the
+# whole module silent.
+plan(id) := found if {
 	is_object(input.tree.plan)
-	acquired := input.tree.plan[id]
-	is_object(acquired)
+	found := input.tree.plan[id]
+	is_object(found)
 }
 
 acquired if {
@@ -114,13 +118,21 @@ violation contains {
 #
 # Told apart from ABSENT by `acquired`: a plan that could not be taken never binds
 # it, and that is could-not-look rather than a finding.
+#
+# NEGATED, NEVER COUNTED: a partial set with no members is UNDEFINED under
+# regorus rather than `{}`, so `count(tier) == 0` was undefined in exactly the
+# case this arm exists for and the evaporated tier read as clean.
+tier_declared if {
+	some _ in tier
+}
+
 violation contains {
 	"rule": "hook declare other",
 	"verdict": "tier list empty",
 	"subjects": [{"artifact": "gate-fast"}],
 } if {
 	acquired
-	count(tier) == 0
+	not tier_declared
 }
 
 # THE ECONOMY HALF, and it is a property of a FILE rather than of a plan.

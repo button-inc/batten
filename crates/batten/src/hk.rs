@@ -312,8 +312,20 @@ pub fn project(value: &serde_json::Value) -> Look<Surface> {
     ) else {
         return Look::CouldNotLook;
     };
-    let Some(profiles) = string_list(value.get("profiles")) else {
-        return Look::CouldNotLook;
+    // ABSENT IS THE EMPTY LIST HERE, and only here. The pinned runner omits the
+    // `profiles` key when no profile is enabled — measured on hk 1.56.1 under
+    // `--profile '!slow'` — rather than printing `[]`, so reading absence as
+    // could-not-look left every fast-tier plan unacquired and the two-tier gate
+    // silent on exactly the plan it exists to compare. A PRESENT key that is not a
+    // list of strings is still refused.
+    let profiles = match value.get("profiles") {
+        None => Vec::new(),
+        present => {
+            let Some(profiles) = string_list(present) else {
+                return Look::CouldNotLook;
+            };
+            profiles
+        }
     };
     let Some(groups) = groups_in(value.get("groups")) else {
         return Look::CouldNotLook;
@@ -821,13 +833,23 @@ pub fn planned_steps(value: &serde_json::Value) -> Look<Vec<PlannedStep>> {
         ) else {
             return Look::CouldNotLook;
         };
-        let (Some(order_index), Some(parallel_group_id)) = (
-            entry.get("orderIndex").and_then(serde_json::Value::as_u64),
-            entry
-                .get("parallelGroupId")
-                .and_then(serde_json::Value::as_str),
-        ) else {
+        let Some(order_index) = entry.get("orderIndex").and_then(serde_json::Value::as_u64) else {
             return Look::CouldNotLook;
+        };
+        // ABSENT IS NO GROUP, not could-not-look: the pinned runner omits
+        // `parallelGroupId` (and the plan's `groups`) when there is only one step
+        // to schedule — measured on hk 1.56.1 — so a one-step plan was never
+        // acquired and a tier that evaporated down to it read as clean. A PRESENT
+        // id that is not a string is still refused. The contract projection keeps
+        // its own `groups` requirement: this repository's plan always has several.
+        let parallel_group_id = match entry.get("parallelGroupId") {
+            None => "",
+            Some(id) => {
+                let Some(id) = id.as_str() else {
+                    return Look::CouldNotLook;
+                };
+                id
+            }
         };
         steps.push(PlannedStep {
             name: name.to_owned(),
@@ -939,8 +961,20 @@ pub fn acquire(root: &Path, query: &PlanQuery) -> Look<Planned> {
     ) else {
         return Look::CouldNotLook;
     };
-    let Some(profiles) = string_list(value.get("profiles")) else {
-        return Look::CouldNotLook;
+    // ABSENT IS THE EMPTY LIST HERE, and only here. The pinned runner omits the
+    // `profiles` key when no profile is enabled — measured on hk 1.56.1 under
+    // `--profile '!slow'` — rather than printing `[]`, so reading absence as
+    // could-not-look left every fast-tier plan unacquired and the two-tier gate
+    // silent on exactly the plan it exists to compare. A PRESENT key that is not a
+    // list of strings is still refused.
+    let profiles = match value.get("profiles") {
+        None => Vec::new(),
+        present => {
+            let Some(profiles) = string_list(present) else {
+                return Look::CouldNotLook;
+            };
+            profiles
+        }
     };
     let Look::Is(steps) = planned_steps(&value) else {
         return Look::CouldNotLook;
@@ -1581,9 +1615,13 @@ mod tests {
         assert_eq!(project(&empty), Look::CouldNotLook);
     }
 
+    /// `profiles` is not in this list, because the runner omits it when no
+    /// profile is enabled (hk 1.56.1, `--profile '!slow'`): absent is the empty
+    /// list, and a PRESENT key that is not a list of strings is the refusal —
+    /// `a_misshapen_profiles_key_is_could_not_look` below.
     #[test]
     fn a_plan_missing_a_key_is_could_not_look() {
-        for key in ["hook", "runType", "profiles", "groups", "steps"] {
+        for key in ["hook", "runType", "groups", "steps"] {
             let mut broken = plan_document();
             let Some(object) = broken.as_object_mut() else {
                 panic!("the fixture is an object")
@@ -1594,6 +1632,32 @@ mod tests {
                 Look::CouldNotLook,
                 "a plan with no `{key}` cannot be projected"
             );
+        }
+    }
+
+    #[test]
+    fn an_absent_profiles_key_is_no_profile_enabled() {
+        let mut bare = plan_document();
+        let Some(object) = bare.as_object_mut() else {
+            panic!("the fixture is an object")
+        };
+        object.remove("profiles");
+        let Look::Is(surface) = project(&bare) else {
+            panic!("a plan the runner printed with no profile enabled must project")
+        };
+        assert!(surface.profiles.is_empty());
+    }
+
+    #[test]
+    fn a_misshapen_profiles_key_is_could_not_look() {
+        for misshapen in [
+            serde_json::json!("slow"),
+            serde_json::json!([1]),
+            serde_json::json!(null),
+        ] {
+            let mut broken = plan_document();
+            broken["profiles"] = misshapen;
+            assert_eq!(project(&broken), Look::CouldNotLook);
         }
     }
 
