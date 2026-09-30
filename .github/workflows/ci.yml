@@ -1138,5 +1138,6 @@ jobs:
       # only alongside CLOUD-528 — arming a deterministic gate while `main` sits
       # at C Security Rating would refuse every PR in the repository.
       #
-      # `mise run sonar-gate` still exists and still works; nothing reads it in
-      # the landing path.
+      # `mise run sonar-gate <sha>` still exists and still works; nothing reads
+      # it in the landing path. The "+25s after" rows above were the branch
+      # analysis posting after the merge, not a race (`mem:workflow/sonar-scope`).

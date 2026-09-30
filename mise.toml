@@ -647,7 +647,7 @@ CI_VERDICT_STEPS = "Run mise run ,Run mise exec -- "
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,skill-frontmatter-complete,spawn-widening,stop-posture,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,engine-task,run-arg-shape,engine-cargo-graph,branch-age,task-released,evaluator-closure,evaluator-io-probe,agent-spawn,macos-link,ntia,release-tracking,sbom-actions,task-sonar-gate,task-callable,transcript-corpus,engine-rules,release-assets,durable-write,spawn-factory,turn-ask,engine-forge,engine-forge-query,engine-git,engine-census,ci-signal,engine-ci-signal,docs-tree-absent,ripcord-untracked,hk-pin-agreement,engine-record,hk-fix-selection.pkl,engine-dist,engine-sbom,supply-chain,engine-reclaim,engine-durable,engine-step,engine-step-table,engine-mcp-grant,engine-mcp-posture,engine-preflight,engine-trust,engine-sweep,sweep-exit-table,tracker-hygiene,engine-tracker-reading,task-duplicate-close-check,engine-release,release-hygiene,task-sbom-binary-record,engine-hk,hook-profile,engine-attestation,engine-turn,engine-unsubscribe,engine-probe,finding-sink,engine-commit,engine-receipt,engine-board-check"
+MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,skill-frontmatter-complete,spawn-widening,stop-posture,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,engine-task,run-arg-shape,engine-cargo-graph,branch-age,task-released,evaluator-closure,evaluator-io-probe,agent-spawn,macos-link,ntia,release-tracking,sbom-actions,task-callable,transcript-corpus,engine-rules,release-assets,durable-write,spawn-factory,turn-ask,engine-forge,engine-forge-query,engine-git,engine-census,ci-signal,engine-ci-signal,docs-tree-absent,ripcord-untracked,hk-pin-agreement,engine-record,hk-fix-selection.pkl,engine-dist,engine-sbom,supply-chain,engine-reclaim,engine-durable,engine-step,engine-step-table,engine-mcp-grant,engine-mcp-posture,engine-preflight,engine-trust,engine-sweep,sweep-exit-table,tracker-hygiene,engine-tracker-reading,task-duplicate-close-check,engine-release,release-hygiene,task-sbom-binary-record,engine-hk,hook-profile,engine-attestation,engine-turn,engine-unsubscribe,engine-probe,finding-sink,engine-commit,engine-receipt,engine-board-check,check-verdict"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -4248,95 +4248,32 @@ run = [
 ]
 
 # The external analyzer's verdict on one SHA (CLOUD-441), retired off
-# `mise-tasks/sonar-gate.sh` under CLOUD-1717. The DECISION was always
-# `checks-green`'s — latest run per name (CLOUD-436), `cancelled` and `skipped`
-# not an answer (CLOUD-363), the least conclusive of an unorderable pair — and
-# the program restated it in awk. It is now `batten checks green` over a roster
-# of one name that may be absent: an analyzer that declines to grade produces no
-# run, and failing on that would wedge every PR it has no opinion about.
-#
-# What stays here is the fetch and its one distinction: a SHA the remote has
-# never seen (404 unauthenticated, 422 "No commit found" authenticated) is "no
-# answer yet", because `land` mints a commit every lap; any other failed read is
-# could-not-look. Nothing in the landing path reads this since CLOUD-897; it is
+# `mise-tasks/sonar-gate.sh` under CLOUD-1717 and off its bash body under
+# CLOUD-843. The READING is the `check-runs` `[[forge.query]]` row in
+# `batten.toml`, walked by the vendored client and filtered at the forge to the
+# analyzer's one name; the DECISION is the `check-verdict` preset — latest run per
+# name (CLOUD-436), absent is not a veto (CLOUD-441), skipped and cancelled not an
+# answer (CLOUD-363). Nothing in the landing path reads this since CLOUD-897; it is
 # the reading `mem:workflow/sonar-scope` runs by hand.
 #
-# Answers in the predecessor's table like its sibling adapters: 0 green, 1 red,
-# 2 could not look, 3 no answer yet. `SONAR_GATE_RUNS` injects a reading and
-# `SONAR_GATE_GH` the client, which is how the tier runs offline.
+# The analyzer's name is THIS repository's fact and lives here, as the flag's
+# default; `SONAR_CHECK_NAME` overrides it, as it overrode the retired body's. The
+# single quotes keep a name with spaces one argument.
+#
+# Answers on the engine's one contract: 0 green or absent, 2 red or no answer
+# yet (the verdict token says which), 3 could not look — including a SHA the
+# remote has never seen, which the query refuses and records nothing for. The
+# repository is the checkout's forge remote, or `GH_REPO`.
 [tasks."sonar-gate"]
-#MUTANT-SUITE crates/batten/tests/it/sonar_gate.rs
-#MUTANT red-analysis-passes|s@^\t\techo "::error:: \$check is red on@\t\texit 0; echo "@|a_failed_or_timed_out_analysis_is_red_and_names_only_a_pointer
-#MUTANT unpushed-read-as-unreadable|s@if grep -qiE 'HTTP 404@if false \&\& grep -qiE 'HTTP 404@|an_unpushed_sha_is_no_answer_yet_at_404_and_at_an_authenticated_422
-#MUTANT absent-unread|s@END { exit !found }@END { exit found }@|absent_is_not_a_veto_and_an_empty_reading_takes_no_network
-#MUTANT red-filter-dropped|s@\&\& \$2 !~ /^(success@\&\& $2 ~ /^(success@|an_unorderable_pair_fails_closed_and_points_at_the_red_one
-description = "Gate: the external analyzer's verdict on this SHA (0 pass / 1 red / 2 could not look / 3 no answer yet)"
-shell = "bash -c"
-run = '''
-{% raw %}
-set -uo pipefail
-if [[ -n "${BATTEN_BIN:-}" ]]; then batten=("$BATTEN_BIN"); else batten=(cargo run --quiet -p batten --); fi
-check="${SONAR_CHECK_NAME:-SonarCloud Code Analysis}"
-sha="${SHA:-$(git rev-parse HEAD 2>/dev/null || true)}"
-could_not_look() { echo "::error:: sonar-gate: $*" >&2; exit 2; }
-# `${VAR+set}`: an explicitly empty reading is a SHA carrying no run yet.
-if [[ -n "${SONAR_GATE_RUNS+set}" ]]; then
-	runs="$SONAR_GATE_RUNS"
-else
-	[[ -n "$sha" ]] || could_not_look "no SHA to judge: neither \$SHA nor a git HEAD."
-	repo="${REPO:-}"
-	[[ -n "$repo" ]] || repo='{owner}/{repo}'
-	err=$(mktemp)
-	trap 'rm -f "$err"' EXIT
-	if ! runs=$("${SONAR_GATE_GH:-gh}" api "repos/$repo/commits/$sha/check-runs?per_page=100" \
-		--jq '.check_runs[]? | "\(.status)\t\(.conclusion // "-")\t\(.name)\t\(.started_at // "")\t\(.id // 0)"' 2>"$err"); then
-		# The message beside the code: a bare 422 is any validation refusal.
-		if grep -qiE 'HTTP 404|not found|no commit found for sha' "$err"; then
-			echo "sonar-gate: $sha carries no check-runs at all — not pushed yet, or the remote has never seen it."
-			exit 3
-		fi
-		could_not_look "could not read the check-runs for $sha. A reading this gate cannot take is not a pass."
-	fi
-fi
-# Absent is decided before the engine is asked, only to say so in words: the
-# roster below would call it green either way.
-if ! awk -F'\t' -v want="$check" '$3 == want { found = 1 } END { exit !found }' <<<"$runs"; then
-	echo "sonar-gate: no $check run on $sha — absent is not a verdict, and not a veto."
-	exit 0
-fi
-answer=$(printf '%s\n' "$runs" | "${batten[@]}" checks green \
-	--required "$check" --absent-ok "$check" \
-	--answered "${CI_ANSWERED_CONCLUSIONS:?the answering conclusions are declared in [env]}" 2>&1)
-rc=$?
-case "$rc" in
-0)
-	echo "sonar-gate: $check is green on $sha"
-	exit 0
-	;;
-2)
-	if [[ "$answer" == *"checks green: red"* ]]; then
-		# Pointer-only: the conclusion and the name, never the analysis.
-		# A conclusion that IS red, never merely the last line: an unorderable
-		# success/failure pair is red, and must not print `success` beside exit 1.
-		conclusion=$(awk -F'\t' -v want="$check" '
-			$3 == want && $1 == "completed" && $2 !~ /^(success|neutral|skipped|cancelled)$/ { print $2; exit }
-		' <<<"$runs")
-		printf '%s\t%s\n' "$conclusion" "$check"
-		echo "::error:: $check is red on $sha. Read the analysis on the check-run's details page and fix it locally." >&2
-		exit 1
-	fi
-	echo "sonar-gate: not an answer yet on $sha — $check has no verdict (pending, skipped or cancelled)"
-	exit 3
-	;;
-3)
-	# A dead-end — skipped or cancelled — is terminal, but still no verdict.
-	echo "sonar-gate: not an answer yet on $sha — $check has no verdict (pending, skipped or cancelled)"
-	exit 3
-	;;
-*) could_not_look "the engine could not judge the reading for $sha" ;;
-esac
-{% endraw %}
+description = "Gate: the external analyzer's verdict on one SHA (0 pass / 2 red or no answer yet / 3 could not look)"
+usage = '''
+arg "<sha>" help="The commit whose analysis is read"
+flag "--check <name>" env="SONAR_CHECK_NAME" default="SonarCloud Code Analysis" help="The check-run name the analyzer posts under"
 '''
+run = [
+  "cargo run --quiet -p batten -- record query check-runs --input sha={{usage.sha}} --input 'check={{usage.check}}'",
+  "cargo run --quiet -p batten -- check --rule 'check grade other' --fail-on-warning",
+]
 
 [tasks."checks-green"]
 description = "Is this SHA green over the required check set? (0 green / 1 red / 2 could not look / 3 no answer yet)"

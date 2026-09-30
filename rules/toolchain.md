@@ -334,12 +334,14 @@ schedules, so every session computes the same frontier. Fan-out protocol:
 run"** (CLOUD-327). `$CI_REQUIRED_CHECKS` in `mise.toml [env]` names the checks
 that carry a verdict about this repository, and `land`'s `graded_runs` reads the
 same value, so the two cannot drift. **An external analyzer stays out of that
-roster and is gated inside `final` instead** (CLOUD-441): `mise run sonar-gate`
-judges the one check-run by name, in CI and in `verify`. It is not a job, so
-`needs:` cannot reach it and `ci-local-parity` would reject its name; it is not
-draft-gated either, so `graded_runs` counting it would read a draft-era skip set
-as answered. Absent is a pass there for the `zizmor` reason; exit 3 passes in
-`verify` (an unpushed HEAD has no verdict) and fails in CI after a bounded retry. **Each name is judged by its LATEST run**
+roster** (CLOUD-441): it is not a job, so `needs:` cannot reach it and
+`ci-local-parity` would reject its name; it is not draft-gated either, so
+`graded_runs` counting it would read a draft-era skip set as answered. Nothing in
+the landing path reads it since CLOUD-897 (`ci.yml`'s `final` says why);
+`mise run sonar-gate <sha>` judges its one check-run by name, by hand, through the
+`check-verdict` preset. Absent is a pass there for the `zizmor` reason; red and
+no-answer-yet both exit 2 and the verdict token says which, and a SHA the remote
+has never seen is could-not-look at 3. **Each name is judged by its LATEST run**
 (CLOUD-436): a SHA accumulates a check-run per event, so a PR created as a draft
 carries its `opened`-event skip set forever, and judging the union let that
 residue veto a verdict that already existed — an unbounded poll over a green

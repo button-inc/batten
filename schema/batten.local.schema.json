@@ -1238,6 +1238,7 @@
             "null"
           ],
           "enum": [
+            "check-verdict",
             "ci-hygiene",
             "ci-signal",
             "claude-code-cloud",

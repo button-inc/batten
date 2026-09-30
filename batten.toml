@@ -2583,6 +2583,14 @@ writer = "batten record query release-due-activity"
 record = "release-due-latest"
 writer = "batten record query release-due-latest"
 
+# CLOUD-441's reading, retired off `[tasks."sonar-gate"]`'s bash body under
+# CLOUD-843: the `check-runs` `[[forge.query]]` row writes it and the
+# `check-verdict` preset decides over it — the family name is that preset's
+# contract, which is why it is spelled exactly so.
+[[record]]
+record = "check-runs"
+writer = "mise run sonar-gate <sha>"
+
 # A release ARCHIVE, as `policy/release-assets.rego` reads one: the name ends in
 # a packed extension. A composed leg's `<stem>.spdx.json` carries the same triple,
 # so it must not satisfy this, and the extension is what keeps it out.
@@ -7685,6 +7693,33 @@ scope = "tree"
 module = "policy/release-due.rego"
 severity = "deny"
 
+# CLOUD-441, retired off `[tasks."sonar-gate"]`'s bash body under CLOUD-843.
+# `mise run sonar-gate <sha>` records the commit's check-runs for the analyzer's
+# one name, then checks this one row with `--fail-on-warning`, which is what keeps
+# the gate a gate.
+#
+# A PRESET, NOT A MODULE OF THIS REPOSITORY'S. Latest run per name, absent is no
+# veto and "not yet" is never a pass are true of the practice: the decision is
+# `checks green`'s ordering, and a consumer module restating it named two facts
+# of ours besides — the analyzer's name and the answered set. The name is now the
+# query's `check_name` filter, bound by the task, and the answered set is the
+# forge vocabulary's own partition, which the preset owns and
+# `crates/batten/tests/it/sonar_gate.rs` holds to `[env] CI_ANSWERED_CONCLUSIONS`
+# in both directions.
+#
+# `warn` BECAUSE THE RECORD IS BRANCH-KEYED AND THE SHA IS NOT. The task judges
+# whatever commit it is handed, by hand (nothing in the landing path reads it
+# since CLOUD-897), and its record then stays on the branch it was run from. Under
+# `deny`, one red reading of some other SHA would fail every later `check` on that
+# branch; under `warn` an ordinary `check` reports it and passes, and only the
+# task's own `--fail-on-warning` step exits 2.
+[[rule]]
+id = "check grade other"
+kind = "policy"
+scope = "tree"
+preset = "check-verdict"
+severity = "warn"
+
 [[rule]]
 id = "plan cover partial"
 kind = "policy"
@@ -11247,6 +11282,26 @@ params = { state = "closed", sort = "created", direction = "desc" }
 per_page = 100
 max_pages = 10
 select = ["head.ref", "merged_at"]
+
+# One commit's check-runs under one name, as the `check-verdict` preset reads them
+# (CLOUD-441, retired off `[tasks."sonar-gate"]`'s bash body under CLOUD-843).
+# `sha` and `check` are the two inputs; the slug is the engine's. The name is a
+# FORGE-SIDE filter, `check_name`, so another check's run never reaches the
+# record at all — the preset judges every name it is handed, and what it is
+# handed is this row's decision. The endpoint's default `filter=latest` is kept,
+# as the retired `gh api` call kept it. Six fields per run and nothing else:
+# `completed_at` is the ordering key `checks green` leads with (CLOUD-1662), which
+# the retired five-column reading never carried. Three pages of 100 is far past
+# one name's run count on a head; a head past it records a truncated window,
+# which the preset refuses to judge as the whole.
+[[forge.query]]
+id = "check-runs"
+endpoint = "repos/{owner}/{repo}/commits/{sha}/check-runs"
+rows = "check_runs"
+params = { check_name = "{check}" }
+per_page = 100
+max_pages = 3
+select = ["status", "conclusion", "name", "started_at", "completed_at", "id"]
 
 # --- the scripts the launcher re-arms every spawn (CLOUD-1704) -----------------
 #
