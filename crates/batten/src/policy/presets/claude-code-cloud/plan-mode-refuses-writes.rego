@@ -1,6 +1,7 @@
 #MUTANT-SUITE crates/batten/tests/it/preapprove.rs
 #MUTANT plan-mode-unread|s@^\tinput.call\["permission-mode"\] == "plan"$@\tinput.call["permission-mode"] == "none"@|a_plan_mode_write_is_refused
 #MUTANT plan-file-refused|s@^\tnot plan_file_write(input.call)$@\ttrue@|the_plan_file_is_writable_in_plan_mode
+#MUTANT unwatch-refused-in-plan|s@^\tnot unwatch_method(input.call.tool)$@\ttrue@|an_unsubscribe_is_preapproved_in_every_mode
 # In plan mode, a call either reads or is refused — never prompted (CLOUD-1949).
 #
 # The owner's ruling, verbatim: "either you're banned from making writes during
@@ -31,6 +32,11 @@ violation contains {
 	not read_only(input.call)
 	not plan_tools(input.call.tool)
 	not plan_file_write(input.call)
+
+	# Dropping a PR subscription undoes one the harness made unasked, so it is
+	# never refused here. One definition, `unwatch_method` in
+	# `unwatch-is-preapproved.rego`, decides both this exemption and the grant.
+	not unwatch_method(input.call.tool)
 }
 
 # The host's own plan-mode surface: leaving it, asking, and its task list, which
@@ -79,6 +85,13 @@ test_the_plan_file_is_not if {
 	count(violation) == 0 with input as {"call": {
 		"event": "pre-tool", "permission-mode": "plan", "tool": "Write",
 		"arguments": {"file_path": "/root/.claude/plans/a-plan.md"},
+	}}
+}
+
+test_dropping_a_pr_subscription_is_not if {
+	count(violation) == 0 with input as {"call": {
+		"event": "pre-tool", "permission-mode": "plan",
+		"tool": "mcp__Claude_Code_Remote__unsubscribe_pr_activity",
 	}}
 }
 

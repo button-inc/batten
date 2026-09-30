@@ -786,6 +786,14 @@ than its producer, which writes whole or removes, and reads the same way.",
             PresetModule {
                 scope: RuleScope::MediatedCall,
                 provider: None,
+                pointer: "<preset:claude-code-cloud>/unwatch-is-preapproved.rego",
+                source: include_str!(
+                    "policy/presets/claude-code-cloud/unwatch-is-preapproved.rego"
+                ),
+            },
+            PresetModule {
+                scope: RuleScope::MediatedCall,
+                provider: None,
                 pointer: "<preset:claude-code-cloud>/plan-mode-refuses-writes.rego",
                 source: include_str!(
                     "policy/presets/claude-code-cloud/plan-mode-refuses-writes.rego"

@@ -122,6 +122,29 @@ fn a_host_read_is_preapproved_in_every_mode() {
     }
 }
 
+/// DROPPING A PR SUBSCRIPTION NEVER STOPS THE WORLD. The owner's ruling: the
+/// harness subscribes unasked, so the undo is granted in every mode and never
+/// refused in plan mode — measured 2026-09-30 as `plan write refused` on the
+/// drop, with the host in plan mode and the session halted on it.
+#[test]
+fn an_unsubscribe_is_preapproved_in_every_mode() {
+    let drop = serde_json::json!({ "owner": "o", "repo": "r", "pullNumber": 1 });
+    for mode in ["default", "plan", "auto", "acceptEdits"] {
+        for tool in [
+            "mcp__Claude_Code_Remote__unsubscribe_pr_activity",
+            "mcp__github__unsubscribe_pr_activity",
+        ] {
+            assert_granted_by(&envelope(mode, tool, &drop), "watch drop now");
+        }
+    }
+    // The subscribe is the one call the grant must never reach.
+    assert_not_granted(&envelope(
+        "auto",
+        "mcp__Claude_Code_Remote__subscribe_pr_activity",
+        &drop,
+    ));
+}
+
 #[test]
 fn a_read_pipeline_is_preapproved() {
     assert_granted_by(
