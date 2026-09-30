@@ -238,8 +238,9 @@ verdict_truncated if {
 # Bound through `lines` rather than counted over `verdict_lines` directly: a
 # comprehension over an undefined record is the EMPTY array, and a count of zero
 # there would call every tree without the family torn.
-verdict_closes := count([line | some line in lines; startswith(line, "window\t")]) if {
+verdict_closes := closes if {
 	lines := verdict_lines
+	closes := count([line | some line in lines; startswith(line, "window\t")])
 }
 
 violation contains {

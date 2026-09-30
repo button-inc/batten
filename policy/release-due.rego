@@ -70,15 +70,16 @@ present contains name if {
 
 # One window's closing line, as `key -> value`, or undefined where the record
 # carries anything but exactly one.
-closing(name) := {pair[0]: pair[1] |
-	some field in array.slice(split(ending, "\t"), 1, 100)
-	pair := split(field, "=")
-	count(pair) == 2
-} if {
+closing(name) := fields if {
 	lines := input.tree.records[name]
 	endings := [line | some line in lines; startswith(line, "window\t")]
 	count(endings) == 1
 	ending := endings[0]
+	fields := {pair[0]: pair[1] |
+		some field in array.slice(split(ending, "\t"), 1, 100)
+		pair := split(field, "=")
+		count(pair) == 2
+	}
 }
 
 # A count off the closing line, or undefined — never a fault: regorus `to_number`

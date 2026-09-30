@@ -59,7 +59,7 @@ violation contains {
 	"subjects": [{"path": first}, {"count": count(docs.entries)}],
 } if {
 	count(docs.entries) > 0
-	first := min({entry.path | some entry in docs.entries})
+	first := min({indexed.path | some indexed in docs.entries})
 }
 
 # --- the load-time tier ------------------------------------------------------

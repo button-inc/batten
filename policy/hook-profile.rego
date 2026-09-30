@@ -77,16 +77,16 @@ acquired if {
 # (`any(.reasons[]?; .kind == "profile_exclude")`). Reading the first alone would
 # drop a step whose runner listed another reason ahead of the profile out of the
 # tier, and nothing would say so.
-tier contains step.name if {
+tier contains plan_step.name if {
 	acquired
-	some step in plan("gate-fast").steps
-	step.status == skipped
-	profile_exclude in step.reasonKinds
+	some plan_step in plan("gate-fast").steps
+	plan_step.status == skipped
+	profile_exclude in plan_step.reasonKinds
 }
 
-selected contains step.name if {
-	some step in plan("gate").steps
-	step.status == included
+selected contains plan_step.name if {
+	some plan_step in plan("gate").steps
+	plan_step.status == included
 }
 
 # A slow-tier step that `check` does not select.

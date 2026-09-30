@@ -79,13 +79,17 @@ board_nodes contains edge.to if {
 	some edge in board_edges
 }
 
-# Each node's successors, self-edges dropped.
-board_next := {node: {edge.to |
-	some edge in board_edges
-	edge.from == node
-	edge.to != node
-} |
+# Each node's successors, self-edges dropped. A rule body, not a comprehension
+# nested in a comprehension's head: regorus cannot schedule the inner set's read
+# of the outer `node` once this package carries the other tracker modules too
+# ("statements not scheduled"), and a faulting module faults the whole package.
+board_next[node] := successors if {
 	some node in board_nodes
+	successors := {edge.to |
+		some edge in board_edges
+		edge.from == node
+		edge.to != node
+	}
 }
 
 board_cycle contains node if {

@@ -244,7 +244,10 @@ task_run(name) := body_text(object.get(input.tree.documents["mise.toml"].tasks, 
 # every relation over them silently false.
 body_text(run) := run if is_string(run)
 
-body_text(run) := concat("\n", [entry | some entry in run; is_string(entry)]) if is_array(run)
+body_text(run) := text if {
+	is_array(run)
+	text := concat("\n", [entry | some entry in run; is_string(entry)])
+}
 
 # NARROWING IS A PREFIX, AND THE DIRECTION IS THE WHOLE SOUNDNESS OF IT. `covered`
 # holds when the COVERING body is a prefix of the covered one — the covered lane
