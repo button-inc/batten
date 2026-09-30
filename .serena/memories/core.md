@@ -3056,6 +3056,16 @@ record nonverdict` classifies failed required jobs by their failed steps and
   shapes, mints no finding, and every decision is a preset module's. The
   producer clears every tracker family before it reads, so the one enabling row
   judges the question just asked.
+- `released.rs` — the preset's sixth family, `batten record derive released`
+  (CLOUD-843, retiring `[tasks.released]`'s body): a release tag's range
+  (`git::previous_tag` is `describe --tags --abbrev=0 <tag>^`), the keys its
+  messages name, a payload `commit` the range contains, and per shipped piped
+  row its column token, whether the declared hold marker matches its
+  description, and every rule `board_check::graph_findings` raised for it — the
+  board gate COMPOSED in process, never copied. HELD and REFUSED are
+  `shipping-is-not-sufficient.rego`'s. Could-not-look (no tag, not payloads, a
+  review payload missing `attachments`/`description`/`relations`, a gate that
+  could not run) records nothing.
 - `turn.rs`, `unsubscribe.rs`, `probe.rs` — package p11-records of CLOUD-843,
   retiring the `finding-sink-check`, `pr-unsubscribed` and `evaluator-io-record`
   bodies. `turn.rs` READS a session's last turn (main thread, `tool_result` is

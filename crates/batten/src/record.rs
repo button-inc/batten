@@ -1296,8 +1296,13 @@ pub fn run_derive(
     // that refuses would leave its own previous record answering as current.
     // Clearing first makes both absences true: the store holds this answer or
     // nothing.
-    if crate::tracker_reading::is_family(family) {
-        for sibling in crate::tracker_reading::FAMILIES {
+    // `released` is the preset's sixth family and is cleared with the five, for
+    // the same reason: one row decides over all of them.
+    if crate::tracker_reading::is_family(family) || family == crate::released::FAMILY {
+        for sibling in crate::tracker_reading::FAMILIES
+            .iter()
+            .chain(&[crate::released::FAMILY])
+        {
             clear_named("record derive", sibling)?;
         }
     }
@@ -1580,6 +1585,24 @@ fn derive_reading(
         // The `tracker-hygiene` preset's five readings (CLOUD-843). The module
         // owns the reading; this arm hands it the consumer's pattern table, the
         // checkout it walks, and stdin — nothing here spawns.
+        // CLOUD-843's retirement of `[tasks.released]`: the tag's range and the
+        // composed board gate, read in process. A terminal on stdin is the
+        // retired body's `[[ -t 0 ]]`: no payloads, so the tag's refs alone.
+        crate::released::FAMILY => {
+            let config = resolve::resolve(Path::new("."), overrides)?;
+            let stdin = if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                String::new()
+            } else {
+                verdict_lines()?
+            };
+            crate::released::reading(
+                inputs,
+                config.board.as_ref(),
+                &config.patterns,
+                Path::new("."),
+                &stdin,
+            )?
+        }
         tracker if crate::tracker_reading::is_family(tracker) => {
             let config = resolve::resolve(Path::new("."), overrides)?;
             let stdin = verdict_lines()?;

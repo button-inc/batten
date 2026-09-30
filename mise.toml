@@ -2334,182 +2334,37 @@ description = "Probe the GitHub read endpoints this repo's tasks call, and decla
 run = "batten doctor forge"
 
 # Which CLOUD-* issues did a release tag ship (CLOUD-174), and which of them are
-# still In Review — retired off `mise-tasks/released.sh` under CLOUD-1752. `Done`
-# means RELEASED, and no tracker integration fires on "a tag now contains this
-# commit", so this is the predicate half; the move stays with the caller.
+# still In Review — retired off `mise-tasks/released.sh` under CLOUD-1752, and
+# off its inline body under CLOUD-843. `Done` means RELEASED, and no tracker
+# integration fires on "a tag now contains this commit", so this is the
+# predicate half; the move stays with the caller.
 #
-# Source of truth is git, the tag's commit range: `describe` walks the graph for
-# the predecessor (creation date sorts tags cut seconds apart arbitrarily). A
-# second way in (CLOUD-260): a payload's `commit` contained in the range, for work
-# that landed before every change carried its key.
+# The reading is `batten record derive released` (`crates/batten/src/released.rs`):
+# the tag's range (`describe` walks the graph for the predecessor), the keys its
+# messages name, a payload's `commit` the range contains (CLOUD-260), and the
+# board gate COMPOSED in process — its verdict forwarded, never its predicate
+# copied. The decision is the `tracker-hygiene` preset's
+# `shipping-is-not-sufficient` module: a shipped In Review row carrying the
+# `released-hold-marker` row is HELD (CLOUD-257), one the board gate rejects is
+# REFUSED (CLOUD-309), and both are reported before the exit.
 #
-# SHIPPING IS NECESSARY FOR Done, NOT SUFFICIENT. Two refusals, both reported
-# before either exits: an issue carrying `HOLD_MARKER` is HELD (CLOUD-257), and
-# one `batten board check` rejects is REFUSED (CLOUD-309) — the conjunction is composed
-# by calling that gate, never by copying its predicate, so no `pull/` appears here.
-# `dangling-blocker` is a property of the piped SET and is not a refusal.
+# The engine's exit table: `0` clean, `2` held or refused, `1` could not look —
+# no tag, stdin that is not a payload set, an In Review payload missing a key the
+# board gate decides on (`attachments`, `description`, `relations`; PRESENCE,
+# never truthiness), or a board gate that could not run. The reading refuses and
+# records nothing, so the check entry never runs. No stdin records only what the
+# tag shipped: a pure-chore release ships no issue, which is clean.
 #
-# COULD NOT LOOK is exit 2, never a pass: no tag, stdin that is not a payload set,
-# or an In Review payload missing a key the gate decides on (`attachments`,
-# `description`, `relations` — CLOUD-783, since `board check` keys those absences
-# to its `graph` pseudo-id, which the per-issue lookup never matches). PRESENCE,
-# never truthiness: `[]` and `""` are data. So is a `board check` that did not
-# answer with one of its own verdicts: exit 1, a missing or crashing engine, or a
-# verb still `unimplemented` all leave an empty report, never a pass.
-#
-# `dir = "{{cwd}}"`: it judges the caller's clone, and `batten board check` reads
-# the manifest's own `batten.toml` through `--config-in` (CLOUD-1221, which
-# retired `graph-check`). Pointer-only and sorted, so byte-stable.
+# `dir = "{{cwd}}"`: it judges the caller's clone under the caller's
+# `batten.toml`. Pointer-only and sorted, so byte-stable.
 [tasks.released]
-#MUTANT-SUITE crates/batten/tests/it/released.rs
-#MUTANT description-absence-is-silent|s/^for key in description relations; do$/for key in relations; do/|an_in_review_payload_with_no_description_is_refused_and_named
-#MUTANT relations-absence-is-silent|s/^for key in description relations; do$/for key in description; do/|an_in_review_payload_with_no_relations_is_refused_and_named
-#MUTANT attachments-absence-is-silent|s@^if \[\[ -n "\$missing_attachments" \]\]; then$@if false; then@|an_in_review_payload_with_no_attachments_key_is_could_not_look
-#MUTANT hold-ignored|s@^\tif \[\[ "\$status" = "In Review" \]\] .*HOLD_MARKER.*; then$@\tif false; then@|an_issue_holding_itself_open_is_held
-#MUTANT gate-verdict-dropped|s@^\t\[\[ "\$status" != "In Review" \]\] @\ttrue @|an_in_review_issue_with_no_pr_is_refused_by_rule
-#MUTANT commit-path-dropped|s@^\tby_commit="\$by_commit \$id"$@\t:@|a_commit_the_tag_contains_is_a_second_way_in
-#MUTANT unrun-gate-passes|s@^if \[\[ "\$gate_status" != \[02\] \]\]@if [[ "$gate_status" = 99 ]]@|a_board_check_that_did_not_run_is_could_not_look
-#MUTANT unimplemented-verb-passes|s@ && grep -q 'payload(s) could not be judged' <<<"\$gate_report"; }@; }@|a_board_check_that_did_not_run_is_could_not_look
-#MUTANT earlier-tag-reshipped|s@^\t\t! git merge-base --is-ancestor "\$sha" "\$prev" 2>/dev/null @\t\ttrue @|a_commit_an_earlier_tag_shipped_is_not_new
 description = "Which CLOUD-* issues did a release tag ship? Resolves refs from the tag's commit range; cross-checks piped board payloads for the ones still In Review"
-shell = "bash -c"
 dir = "{{cwd}}"
 usage = 'arg "[tag]" help="the release tag whose commit range is judged"'
-run = '''
-{% raw %}
-set -euo pipefail
-# The marker an issue puts in its own body to hold itself open, stated once here.
-HOLD_MARKER='DO-NOT-CLOSE'
-manifest="${MISE_CONFIG_FILE:-${MISE_PROJECT_ROOT:-$PWD}/mise.toml}"
-tag="${usage_tag:-${1:-}}"
-if [[ -z "$tag" ]]; then
-	echo "::error:: usage: mise run released <tag> [< get_issue payloads on stdin]" >&2
-	exit 2
-fi
-if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null 2>&1; then
-	echo "::error:: no such tag: $tag. A tag that does not exist is a caller error, not an empty release." >&2
-	exit 2
-fi
-prev=$(git describe --tags --abbrev=0 "$tag^" 2>/dev/null || true)
-if [[ "$prev" = "$tag" ]] || [[ -z "$prev" ]]; then
-	range="$tag"
-else
-	range="$prev..$tag"
-fi
-refs=$(git log --format='%B' "$range" 2>/dev/null | grep -oE 'CLOUD-[0-9]+' | sort -u || true)
-# No stdin, or an empty one: report the refs. A pure-chore release ships no issue,
-# which is clean — exiting non-zero would break the release path.
-if [[ -t 0 ]] || ! payload=$(cat) || [[ -z "${payload//[[:space:]]/}" ]]; then
-	if [[ -z "$refs" ]]; then
-		echo "released: $tag ($range) references no CLOUD-* issue"
-	else
-		echo "released: $tag ($range) shipped:"
-		# shellcheck disable=SC2086  # one id per line
-		printf '  %s\n' $refs
-	fi
-	exit 0
-fi
-if ! issues=$(jq -sc 'if length == 1 and (.[0] | type == "array") then .[0] else . end' <<<"$payload" 2>/dev/null) ||
-	! jq -e 'all(.[]; has("id") and has("status"))' <<<"$issues" >/dev/null 2>&1; then
-	echo "::error:: stdin is not a set of get_issue payloads (need id and status per issue)" >&2
-	exit 2
-fi
-missing_attachments=$(jq -r '[.[] | select(.status == "In Review") | select(has("attachments") | not) | .id] | join(" ")' <<<"$issues")
-if [[ -n "$missing_attachments" ]]; then
-	echo "::error:: no \`attachments\` on In Review issue(s): $missing_attachments. The board gate reads that key to decide \`in-review-no-pr\`, so a payload without it cannot answer whether anything landed — re-fetch with attachments included." >&2
-	exit 2
-fi
-for key in description relations; do
-	missing=$(jq -r --arg k "$key" '[.[] | select(.status == "In Review") | select(has($k) | not) | .id] | join(" ")' <<<"$issues")
-	[[ -n "$missing" ]] || continue
-	case "$key" in
-	description)
-		reads="the §8 status-claim scan and the Ready-block delegation"
-		remedy="re-fetch with the description included"
-		;;
-	relations)
-		reads="\`blockedby-cycle\` and \`dangling-blocker\`"
-		remedy="re-fetch with \`includeRelations: true\`"
-		;;
-	esac
-	echo "::error:: no \`$key\` on In Review issue(s): $missing. The board gate reads that key to decide $reads, so a payload without it cannot answer — $remedy." >&2
-	exit 2
-done
-# A per-issue violation is the payload, not the status, so the exit is not fatal.
-gate_status=0
-gate_report=$(batten --config-in "$(dirname -- "$manifest")" board check <<<"$issues" 2>&1 >/dev/null) || gate_status=$?
-# Only the verb's own answers are a judgement: 0 coherent, 2 a violation, and 3
-# the graph's gap verdict, which names itself. Everything else is a gate that did
-# not run — 1 (an undeclared vocabulary), 126/127 (no engine), 101 (a panic), or
-# a 3 without that verdict (an engine whose verb is still `unimplemented`) — and
-# an empty report read as "nothing refused" would pass every shipped row. As many
-# lines as the executable test it replaced: the inline count may not rise.
-if [[ "$gate_status" != [02] ]] && ! { [[ "$gate_status" = 3 ]] && grep -q 'payload(s) could not be judged' <<<"$gate_report"; }; then
-	echo "::error:: batten board check could not run (exit $gate_status). A gate that cannot run is not a pass — the sweep needs it, so this is 'could not look'." >&2
-	exit 2
-fi
-refusal_for() {
-	grep -oE "^$1 [a-z-]+" <<<"$gate_report" | awk '{print $2}' | grep -vx 'dangling-blocker' | head -n1 || true
-}
-# A malformed or unknown sha is supplementary evidence, ignored rather than fatal.
-by_commit=""
-while IFS= read -r pair; do
-	[[ -n "$pair" ]] || continue
-	id="${pair%% *}"
-	sha="${pair#* }"
-	git rev-parse -q --verify "${sha}^{commit}" >/dev/null 2>&1 || continue
-	git merge-base --is-ancestor "$sha" "$tag" 2>/dev/null || continue
-	if [[ -n "$prev" ]] && [[ "$prev" != "$tag" ]]; then
-		! git merge-base --is-ancestor "$sha" "$prev" 2>/dev/null || continue
-	fi
-	by_commit="$by_commit $id"
-done <<<"$(jq -r '.[] | select((.commit // "") != "") | "\(.id) \(.commit)"' <<<"$issues" 2>/dev/null || true)"
-# shellcheck disable=SC2086  # one id per line
-refs=$(printf '%s\n' $refs $by_commit | sort -u)
-if [[ -z "${refs//[[:space:]]/}" ]]; then
-	echo "released: $tag ($range) references no CLOUD-* issue"
-	exit 0
-fi
-movable=0
-skipped=0
-held=0
-refused=0
-for ref in $refs; do
-	status=$(jq -r --arg id "$ref" '.[] | select(.id == $id) | .status' <<<"$issues" | head -n1)
-	# Shipped but not piped is not a finding: the caller chose the closure.
-	[[ -n "$status" ]] || continue
-	body=$(jq -r --arg id "$ref" '.[] | select(.id == $id) | .description // ""' <<<"$issues" | head -c 100000)
-	rule=""
-	[[ "$status" != "In Review" ]] || rule=$(refusal_for "$ref")
-	if [[ "$status" = "In Review" ]] && [[ "${body#*"$HOLD_MARKER"}" != "$body" ]]; then
-		echo "  $ref  HELD — the issue holds itself open"
-		held=$((held + 1))
-	elif [[ -n "$rule" ]]; then
-		echo "  $ref  REFUSED ($rule) — the board gate rejects it"
-		refused=$((refused + 1))
-	elif [[ "$status" = "In Review" ]]; then
-		echo "  $ref  In Review -> Done"
-		movable=$((movable + 1))
-	else
-		echo "  $ref  $status (left alone)"
-		skipped=$((skipped + 1))
-	fi
-done
-tally="released: $tag ($range) — $movable to move, $skipped left alone"
-[[ "$held" = 0 ]] || tally="$tally, $held HELD"
-[[ "$refused" = 0 ]] || tally="$tally, $refused REFUSED"
-echo "$tally"
-if [[ "$held" != 0 ]]; then
-	echo "::error:: $held issue(s) shipped in $tag but carry \`$HOLD_MARKER\`. Shipping a ref is necessary for Done, not sufficient — resolve the hold or strike the marker before moving them." >&2
-fi
-if [[ "$refused" != 0 ]]; then
-	echo "::error:: $refused issue(s) shipped in $tag are rejected by batten board check. In Review -> Done is a conjunction: the tag must have shipped it AND the board must be labelling it honestly. Fix the board state named above — do not move them." >&2
-fi
-if [[ "$held" != 0 ]] || [[ "$refused" != 0 ]]; then
-	exit 1
-fi
-{% endraw %}
-'''
+run = [
+  "{{vars.batten}} record derive released --input tag={{usage.tag}} --input hold=released-hold-marker",
+  "{{vars.batten}} check --rule 'issue state other'",
+]
 
 [tasks.duplicate-close-check]
 #MUTANT-SUITE crates/batten/tests/it/tracker_hygiene.rs

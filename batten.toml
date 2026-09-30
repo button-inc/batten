@@ -2053,6 +2053,15 @@ regex = '(?i)judge?ment call|not verified'
 id = "closing-hold-marker"
 regex = '^[[:space:]]*DO-NOT-CLOSE'
 
+# The marker a tracker row puts in its OWN description to hold itself open past
+# a release that shipped it (CLOUD-257): `record derive released --input
+# hold=released-hold-marker` marks the row `held`. Unanchored, as the retired
+# `[tasks.released]` body's substring test was — a row's description is the
+# row speaking, so a mention there is a use (CLOUD-843 moved the literal here).
+[[pattern]]
+id = "released-hold-marker"
+regex = 'DO-NOT-CLOSE'
+
 # The §1 span, narrowed before the paths are read (CLOUD-854).
 #
 # The fifth column holds every path the BODY names, and a path-name intersection
@@ -2553,6 +2562,12 @@ writer = "mise run deferral-check"
 [[record]]
 record = "closing-key"
 writer = "mise run closing-key-check"
+
+# The preset's sixth family (CLOUD-843, retiring `[tasks.released]`'s body):
+# which rows a release tag shipped, with the board gate's verdict composed in.
+[[record]]
+record = "released"
+writer = "mise run released"
 
 # CLOUD-518's reading, ported off `pr-unsubscribed.sh`'s `check` under CLOUD-1717.
 [[record]]
@@ -7609,7 +7624,8 @@ line_sources = [".github/workflows/*.yml"]
 severity = "warn"
 
 # CLOUD-843: the board's own claims, held to what git and the forge already
-# say, as the vendored `tracker-hygiene` preset. It carries the five decisions
+# say, as the vendored `tracker-hygiene` preset. `released`'s two refusals
+# (CLOUD-257, CLOUD-309) joined it when that task's body retired. It carries the five decisions
 # that were four consumer modules and one shell body — `done-check` (CLOUD-192),
 # `done-pr-check` (CLOUD-468), `duplicate-close-check` (CLOUD-829),
 # `deferral-check` (CLOUD-323) and `closing-key-check` (CLOUD-192, CLOUD-674) —

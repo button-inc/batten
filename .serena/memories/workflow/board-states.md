@@ -26,11 +26,13 @@ Two gates, and neither alone is the transition (CLOUD-309):
 - `released <tag>` — "did this tag ship it": a ref in the tag's commit range, or a
   supplied commit the range contains (CLOUD-260).
 
-`mise run released` now composes them: pipe the In Review closure and it runs
-`graph-check` by path, reports any issue that gate names as `REFUSED (<rule>)`,
-and exits 1. **Pipe `attachments`** — the key is what decides `in-review-no-pr`,
-and a payload assembled without it cannot answer the question at all, so an In
-Review issue missing the key is exit 2 ("could not look"), not a verdict.
+`mise run released` now composes them: pipe the In Review closure and `record
+derive released` runs the board gate in process, records every rule it raises
+per shipped row, and `check` refuses such a row as `issue ship refused <id>
+<rule>` (a held one as `issue ship held <id>`) at exit 2. **Pipe
+`attachments`** — the key is what decides `in-review-no-pr`, and a payload
+assembled without it cannot answer the question at all, so an In Review issue
+missing the key is exit 1 (the engine's "could not look"), not a verdict.
 
 Why the order exists: `released` resolves refs from commit _messages_, so an issue
 a commit merely CITES reads as shipped. CLOUD-228 and CLOUD-231 were In Review

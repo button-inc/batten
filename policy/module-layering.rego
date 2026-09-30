@@ -772,6 +772,13 @@ declared_modules := {
 	# reason: a producer that reached the engine deciding over its record would
 	# be a measurement that knew which verdict it was feeding.
 	"tracker_reading",
+	# `released` arrived with CLOUD-843, retiring `[tasks.released]`'s body. A
+	# READING in `tracker_reading`'s class, for the preset's sixth family: it
+	# reaches `git` for the tag's range, `ready` for the key grammar, and
+	# `board_check` to COMPOSE the board gate's verdict rather than copy its
+	# predicate. It decides nothing over its own record, so its `rules` and
+	# `hook` edges are forbidden below for `forge_query`'s reason.
+	"released",
 	# `release` arrived with CLOUD-843, retiring three release task bodies. A
 	# PRODUCER in `forge_query`'s class: it reads a release over `rest`, hashes
 	# its assets, writes through `record`'s named-family store and polls through
@@ -1074,6 +1081,8 @@ forbidden[from] contains to if {
 		"sweep": {"rules", "hook"},
 		# `tracker_reading -> {rules, hook}`, `forge_query`'s pair for its reason.
 		"tracker_reading": {"rules", "hook"},
+		# `released -> {rules, hook}`, `tracker_reading`'s pair for its reason.
+		"released": {"rules", "hook"},
 		# `release -> {rules, hook}`, `forge_query`'s pair for its reason: the
 		# producer of a release record and a checksum manifest must not reach the
 		# engine deciding over them (CLOUD-843).

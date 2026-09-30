@@ -1439,6 +1439,14 @@ reviewed change to the committed config. Anything else is a verb, a module or a 
             PresetModule {
                 scope: RuleScope::Tree,
                 provider: None,
+                pointer: "<preset:tracker-hygiene>/shipping-is-not-sufficient.rego",
+                source: include_str!(
+                    "policy/presets/tracker-hygiene/shipping-is-not-sufficient.rego"
+                ),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
                 pointer: "<preset:tracker-hygiene>/board-columns-tell-the-truth.rego",
                 source: include_str!(
                     "policy/presets/tracker-hygiene/board-columns-tell-the-truth.rego"
@@ -1579,6 +1587,34 @@ did not finish rather than a clean board.",
                 routes: &[run(
                     "task run first",
                     "record the board again with `batten record derive done`",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "issue ship held",
+                gloss: "a release shipped this row, and it holds itself open: shipping is necessary for Done, not sufficient",
+                class: "A row in review carries the hold marker in its own description. The tag \
+contains its work, and the row still says it is not finished. Resolve the hold, or strike the \
+marker, before moving it to Done.",
+                routes: &[read("record read first", "the row's description")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "issue ship refused",
+                gloss: "a release shipped this row, and the board gate rejects its column: fix the board before moving it",
+                class: "Review to Done is a conjunction: the tag must have shipped the row AND the \
+board must be labelling it honestly. The second half is the board gate's own verdict, forwarded \
+by the producer rather than re-derived, and the pointer names the rule it raised.",
+                routes: &[run("task run first", "batten board check")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "tag read partial",
+                gloss: "the released record carries no closing census, or one that disagrees with its lines",
+                class: "A record torn mid-write judges part of a release as if it were all of it.",
+                routes: &[run(
+                    "task run first",
+                    "record the release again with `batten record derive released`",
                 )],
                 applicability: crate::verdict::Applicability::Advice,
             },

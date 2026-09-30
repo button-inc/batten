@@ -131,6 +131,7 @@ pub mod recorder;
 pub mod redirect;
 pub mod refusal;
 pub mod release;
+pub mod released;
 pub mod render;
 pub mod repair;
 pub mod resolve;

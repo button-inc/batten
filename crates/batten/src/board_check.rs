@@ -921,6 +921,42 @@ impl Scan {
     }
 }
 
+/// The graph's refusals over a payload set, for a caller that COMPOSES this gate
+/// rather than copying its predicate (CLOUD-309's conjunction, which `record
+/// derive released` is).
+///
+/// Every `violation` of either lane — a report or a gap — as the `<id> <rule>`
+/// pointer lines the verb prints, in its byte-stable order. The notes and the
+/// frontier are not refusals and are left out; no receipt is minted, because a
+/// composition is not the verb's own success path.
+///
+/// # Errors
+///
+/// Could-not-look, each a gate that did not run rather than an empty report: an
+/// undeclared vocabulary, a set that is not payloads, a preset that did not
+/// decide, or a class the graph has no lane for.
+pub fn graph_findings(set: &[Value], declared: &Declared<'_>) -> Result<Vec<String>> {
+    let vocabulary = Vocabulary::resolve(declared.board, declared.patterns)?;
+    let reading =
+        read_graph(set, declared.grammar, &vocabulary, declared.root).ok_or_else(|| {
+            UsageError::raise(
+                "board check: stdin is not a set of get_issue payloads (need id and status per issue)"
+                    .to_owned(),
+            )
+        })?;
+    let decided = decide(GRAPH, &reading.lines)
+        .map_err(|why| UsageError::raise(format!("board check: {why}")))?;
+    if let Some(class) = decided.unknown(&[GRAPH_REPORT, GRAPH_GAP]) {
+        return Err(UsageError::raise(format!(
+            "board check: the preset raised `{class}`, which the graph has no lane for"
+        )));
+    }
+    let mut lines = decided.lines_of(GRAPH_REPORT);
+    lines.extend(decided.lines_of(GRAPH_GAP));
+    sort_lines(&mut lines);
+    Ok(lines)
+}
+
 /// Render the graph's decision, and mint the move receipts on a coherent board.
 fn graph(
     set: &[Value],

@@ -1600,6 +1600,84 @@ pub fn messages_reachable(dir: &Path, tips: &[String], hidden: &[String]) -> Res
     Ok(messages)
 }
 
+/// Every commit reachable from any of `tips` and from none of `hidden`, as full
+/// hex ids (CLOUD-260).
+///
+/// [`messages_reachable`]'s walk answering with identities rather than
+/// messages, for a caller asking whether one supplied commit is in a range:
+/// "reachable from the tip and from no hidden rev" is `merge-base --is-ancestor`
+/// against both ends, asked once for the whole range rather than per commit.
+///
+/// # Errors
+///
+/// As [`messages_reachable`]: could not look, never an empty range standing in
+/// for one nobody walked.
+pub fn commits_reachable(
+    dir: &Path,
+    tips: &[String],
+    hidden: &[String],
+) -> Result<BTreeSet<String>> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("could not walk the commit history".to_owned());
+    let resolve = |rev: &String| {
+        repo.rev_parse_single(rev.as_str())
+            .map(gix::Id::detach)
+            .map_err(|_| refused())
+    };
+    let from = tips.iter().map(resolve).collect::<Result<Vec<_>>>()?;
+    if from.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+    let excluded = hidden.iter().map(resolve).collect::<Result<Vec<_>>>()?;
+    let walk = repo
+        .rev_walk(from)
+        .with_hidden(excluded)
+        .all()
+        .map_err(|_| refused())?;
+    let mut commits = BTreeSet::new();
+    for step in walk {
+        commits.insert(step.map_err(|_| refused())?.id.to_hex().to_string());
+    }
+    Ok(commits)
+}
+
+/// The tag nearest to `tag`'s first parent: `git describe --tags --abbrev=0
+/// <tag>^` (CLOUD-174).
+///
+/// **The GRAPH decides the predecessor, never a date.** Creation order sorts
+/// tags cut seconds apart arbitrarily, so a release's range is measured back to
+/// whichever tag the commit graph reaches first — annotated or lightweight, as
+/// `--tags` has it.
+///
+/// `None` for a tag whose commit has no parent, or whose ancestry carries no
+/// tag: the range is then the tag's whole history, which is what a first
+/// release shipped.
+///
+/// # Errors
+///
+/// A [`UsageError`] when the repository cannot be opened, `refs/tags/<tag>`
+/// does not name a commit, or the graph walk fails — could not look.
+pub fn previous_tag(dir: &Path, tag: &str) -> Result<Option<String>> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise(format!("could not describe the tag before {tag}"));
+    let id = repo
+        .rev_parse_single(format!("refs/tags/{tag}^{{commit}}").as_str())
+        .map_err(|_| refused())?;
+    let commit = repo.find_commit(id.detach()).map_err(|_| refused())?;
+    let Some(parent) = commit.parent_ids().next() else {
+        return Ok(None);
+    };
+    let parent = repo.find_commit(parent.detach()).map_err(|_| refused())?;
+    let found = parent
+        .describe()
+        .names(gix::commit::describe::SelectRef::AllTags)
+        .try_resolve()
+        .map_err(|_| refused())?;
+    Ok(found
+        .and_then(|resolution| resolution.outcome.name)
+        .map(|name| name.to_string()))
+}
+
 /// One commit's attribution record: who wrote it, who committed it, what it
 /// trails, and what it says.
 ///
