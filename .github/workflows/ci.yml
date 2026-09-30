@@ -489,14 +489,7 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          if mise run ci-slow-needed "$BASE_SHA" "$HEAD_SHA"; then
-            echo "needed=true" >>"$GITHUB_OUTPUT"
-          else
-            rc=$?
-            [ "$rc" -eq 2 ] || exit "$rc"
-            echo "needed=false" >>"$GITHUB_OUTPUT"
-          fi
+        run: mise run batten -- ci step --verdict needed --on 0=true --on 2=false --arg-env BASE_SHA --arg-env HEAD_SHA -- mise run ci-slow-needed --
       - run: mise run ci
         if: steps.slow.outputs.needed == 'true'
         env:
@@ -1022,7 +1015,7 @@ jobs:
       # runner-side cache restore has no local counterpart to be.
       - name: Resolve the merge base the pair will build
         id: base
-        run: echo "sha=$(git merge-base origin/main HEAD)" >>"$GITHUB_OUTPUT"
+        run: mise run batten -- ci step --capture sha -- git merge-base origin/main HEAD
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target/perf/base-seed

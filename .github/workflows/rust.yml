@@ -482,7 +482,7 @@ jobs:
           # completed job on that pull request behind `semver`, and it is in
           # `CI_REQUIRED_CHECKS` — so every ready paid it.
           save-if: false
-      - run: mise run darwin-link ${{ matrix.target }}
+      - run: mise run batten -- ci step --arg-env DOCTOR_TARGETS -- mise run darwin-link --
         env:
           # Exactly the target being linked; doctor's default would also fetch
           # the Windows std that cross-check's own job owns.

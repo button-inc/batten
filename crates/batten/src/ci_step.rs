@@ -20,6 +20,14 @@
 //! * **`cmd >file` and `cmd <file`** — a capture a later step reads.
 //!   `--save <path>` and `--stdin <path>` are those two, with the path
 //!   relative to where the step stands.
+//! * **`echo "sha=$(git merge-base origin/main HEAD)" >>"$GITHUB_OUTPUT"`** — a
+//!   bare answer captured under a key. `--capture <key>` writes `KEY=` and the
+//!   first line of the command's stdout, trimmed, or nothing after the `=` when
+//!   it printed none.
+//! * **`if [ -z "$SECRET" ]; then echo ::error::…; exit 1; fi`** — a credential
+//!   that must not be empty. `--require-env <NAME>` refuses the step before the
+//!   command runs when the variable is unset or empty, naming the variable and
+//!   NEVER its value.
 //! * **`cmd "$TAG" "${{ steps.x.outputs.y }}"`** — a value handed to the
 //!   command through the step's `env:`. `--arg-env <NAME>` appends that
 //!   variable's value as ONE argument, in the order written, with no word
@@ -78,6 +86,10 @@ pub struct StepRequest {
     pub on: Vec<String>,
     /// Variables whose values are appended to the command, one argument each.
     pub arg_env: Vec<String>,
+    /// The output key the first stdout line is captured under.
+    pub capture: Option<String>,
+    /// Variables that must be set and non-empty before the command runs.
+    pub require_env: Vec<String>,
     /// The command, verbatim. Never empty — the surface requires it.
     pub command: Vec<String>,
 }
@@ -119,6 +131,18 @@ pub fn mapping(rows: &[String]) -> Result<Vec<(i32, String)>> {
         .collect()
 }
 
+/// The first required variable that is unset or empty, by name.
+#[must_use]
+pub fn missing<'a>(
+    names: &'a [String],
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Option<&'a str> {
+    names
+        .iter()
+        .find(|name| lookup(name).is_none_or(|value| value.is_empty()))
+        .map(String::as_str)
+}
+
 /// The command with each `--arg-env` variable's value appended, in order.
 ///
 /// # Errors
@@ -141,6 +165,18 @@ pub fn argv(
         }
     }
     Ok(argv)
+}
+
+/// The `KEY=VALUE` line a capture writes: the first non-blank stdout line,
+/// trimmed, or an empty value.
+#[must_use]
+pub fn captured(key: &str, stdout: &str) -> String {
+    let value = stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    format!("{key}={value}\n")
 }
 
 /// The summary section: a title and the fenced tail of the output.
@@ -187,6 +223,13 @@ pub fn run(request: &StepRequest, out: &mut dyn Write, err: &mut dyn Write) -> R
         return Err(UsageError::raise(
             "ci step: --on maps a code to a value, and needs --verdict to name its key",
         ));
+    }
+    if let Some(name) = missing(&request.require_env, |name| std::env::var(name).ok()) {
+        writeln!(
+            err,
+            "::error:: ci step: {name} is unset or empty, and this step requires it"
+        )?;
+        return Ok(ExitCode::Violation);
     }
     let command = argv(&request.command, &request.arg_env, |name| {
         std::env::var(name).ok()
@@ -253,6 +296,9 @@ pub fn run(request: &StepRequest, out: &mut dyn Write, err: &mut dyn Write) -> R
             .map(|line| format!("{line}\n"))
             .collect();
         append_to(OUTPUT_VAR, &lines)?;
+    }
+    if let Some(ref key) = request.capture {
+        append_to(OUTPUT_VAR, &captured(key, &stdout))?;
     }
     if let Some(ref title) = request.summary {
         append_to(
@@ -321,6 +367,29 @@ mod tests {
         );
         assert!(argv(&command, &["EMPTY".to_owned()], env).is_err());
         assert!(argv(&command, &["UNSET".to_owned()], env).is_err());
+    }
+
+    //MUTANT require-empty-passed|s@        .find(|name| lookup(name).is_none_or(|value| value.is_empty()))@        .find(|name| lookup(name).is_none())@|a_required_variable_must_be_set_and_non_empty
+    #[test]
+    fn a_required_variable_must_be_set_and_non_empty() {
+        let env = |name: &str| match name {
+            "SET" => Some("x".to_owned()),
+            "EMPTY" => Some(String::new()),
+            _ => None,
+        };
+        assert_eq!(missing(&["SET".to_owned()], env), None);
+        assert_eq!(
+            missing(&["SET".to_owned(), "EMPTY".to_owned()], env),
+            Some("EMPTY")
+        );
+        assert_eq!(missing(&["UNSET".to_owned()], env), Some("UNSET"));
+    }
+
+    //MUTANT capture-blank|s@        .find(|line| !line.is_empty())@        .next()@|a_capture_is_the_first_non_blank_line_or_empty
+    #[test]
+    fn a_capture_is_the_first_non_blank_line_or_empty() {
+        assert_eq!(captured("sha", "\n  abc123  \nother\n"), "sha=abc123\n");
+        assert_eq!(captured("tag", ""), "tag=\n");
     }
 
     #[test]

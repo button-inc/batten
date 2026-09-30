@@ -2886,6 +2886,24 @@ const CI_STEP_ON: FlagDecl = FlagDecl {
     )
 };
 
+/// `--require-env <NAME>` on `ci step`, REPEATABLE: a variable that must be set
+/// and non-empty before the command runs. Its value is never printed.
+const CI_STEP_REQUIRE_ENV: FlagDecl = FlagDecl {
+    value: ValueDecl::StrMany,
+    ..FlagDecl::valued(
+        "require-env",
+        "require-env",
+        "Refuse the step before running anything when this variable is unset or empty, naming it and never its value (repeatable)",
+    )
+};
+
+/// `--capture <key>` on `ci step`.
+const CI_STEP_CAPTURE: FlagDecl = FlagDecl::valued(
+    "capture",
+    "capture",
+    "Write the first line of the command's stdout to the runner's step outputs under this key",
+);
+
 /// `--arg-env <NAME>` on `ci step`, REPEATABLE AND ORDERED: each appends one
 /// variable's value to the command as a single argument.
 const CI_STEP_ARG_ENV: FlagDecl = FlagDecl {
@@ -4028,6 +4046,8 @@ pub const SURFACE: &[CommandDecl] = &[
             CI_STEP_VERDICT,
             CI_STEP_ON,
             CI_STEP_ARG_ENV,
+            CI_STEP_CAPTURE,
+            CI_STEP_REQUIRE_ENV,
             CI_STEP_COMMAND,
         ],
     },

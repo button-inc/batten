@@ -418,7 +418,7 @@ jobs:
       # Compile only when there is nothing to restore, as every warm job here
       # does. `DOCTOR_TARGETS` must match the reader's or this fills a different
       # target's artifacts.
-      - run: mise run darwin-link ${{ matrix.target }}
+      - run: mise run batten -- ci step --arg-env DOCTOR_TARGETS -- mise run darwin-link --
         if: steps.rust-cache.outputs.cache-hit != 'true'
         env:
           DOCTOR_TARGETS: ${{ matrix.target }}
@@ -615,15 +615,21 @@ jobs:
       # release-plz clones the repo into a temp dir; `git fetch origin main` there
       # has no credentials (actions/checkout's auth lives only on the main clone),
       # so it cannot rebase the release branch onto main — the PR is then re-opened
-      # on a stale base and can never fast-forward. A global insteadOf with the
+      # on a stale base and can never fast-forward. An insteadOf carrying the
       # token gives every github.com git operation (including that temp clone) a
-      # credential.
-      - name: Authenticate git to github.com for release-plz's internal clone
-        env:
-          GH_PAT: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
-        run: git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "https://github.com/"
+      # credential. It travels as `GIT_CONFIG_*` environment on the two steps
+      # that clone, which git reads as configuration, so no step writes a global
+      # config and no later step inherits the credential.
       - run: mise run release
+        env:
+          GIT_CONFIG_COUNT: 1
+          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}@github.com/.insteadOf
+          GIT_CONFIG_VALUE_0: https://github.com/
       - run: mise run release-pr
+        env:
+          GIT_CONFIG_COUNT: 1
+          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}@github.com/.insteadOf
+          GIT_CONFIG_VALUE_0: https://github.com/
       # CLOUD-618. THE TAG IS PUSHED FROM A CLONE THIS CHECKOUT CANNOT SEE, so
       # without this step the resolver below finds nothing and every tracking step
       # skips — green, silent, and wrong.
@@ -660,13 +666,13 @@ jobs:
       # of truth for what shipped — Linear receives a projection, never a second
       # list.
       #
-      # NO `shell:` KEY, deliberately. The default is `bash -e {0}` and an
-      # explicit `shell: bash` would add `-o pipefail`, under which the empty case
-      # — no tag at HEAD, so `grep` exits 1 — would kill the step instead of
-      # yielding the empty string every consumer below is written to handle.
+      # THE EMPTY CASE IS AN EMPTY VALUE, never a failure: no release tag at
+      # HEAD prints nothing, `--capture` writes `tag=` for it, and every consumer
+      # below is written to handle the empty string. `git tag --list` filters to
+      # release tags itself, so there is no pipeline whose status could hide one.
       - name: Resolve the release tag this push shipped
         id: release-tag
-        run: echo "tag=$(git tag --points-at HEAD | grep -E '^v[0-9]' | head -n1)" >>"$GITHUB_OUTPUT"
+        run: mise run batten -- ci step --capture tag -- git tag --points-at HEAD --list v[0-9]*
       # THE SCHEMA IS A RELEASE ASSET, SO A STALE BINARY CAN REASON ABOUT THE
       # WORLD IT IS BEHIND (CLOUD-1572).
       #
@@ -689,7 +695,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.release-tag.outputs.tag }}
-        run: gh release upload "$TAG" schema/batten.schema.json --clobber
+          SCHEMA: schema/batten.schema.json
+        run: mise run batten -- ci step --arg-env TAG --arg-env SCHEMA -- gh release upload --clobber
 
       # An empty secret must FAIL a tagged push, never skip tracking quietly. The
       # silent form is the one that costs a release: the job stays green, the
@@ -700,11 +707,9 @@ jobs:
         if: steps.release-tag.outputs.tag != ''
         env:
           LINEAR_ACCESS_KEY: ${{ secrets.LINEAR_ACCESS_KEY }}
-        run: |
-          if [ -z "$LINEAR_ACCESS_KEY" ]; then
-            echo "::error:: LINEAR_ACCESS_KEY is empty, so this tagged push would ship untracked. Set the secret; do not remove this guard." >&2
-            exit 1
-          fi
+        # An empty key means this tagged push would ship untracked: set the
+        # secret, do not remove this guard.
+        run: mise run batten -- ci step --require-env LINEAR_ACCESS_KEY -- true
       # TWO INVOCATIONS, AND THE SECOND IS NOT OPTIONAL. `sync` records the
       # release object and attaches the `CLOUD-*` issues whose identifiers appear
       # in the tag's commit range. The `batten` pipeline is `type: scheduled`, so

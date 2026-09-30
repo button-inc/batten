@@ -118,13 +118,17 @@ jobs:
       # a first release carrying only its own commit is correct rather than a
       # defect.
       #
-      # TAG through `env:`, never interpolated into the body; the OUTPUT is read
-      # through `with:` below, where interpolation is not a shell substitution.
+      # The revision through `env:`, never interpolated into the body; the
+      # OUTPUT is read through `with:` below, where interpolation is not a shell
+      # substitution. A first release has no tag before it, so `describe` fails
+      # and prints nothing: `continue-on-error` keeps the run going and the
+      # capture has already written the empty `ref=` every consumer handles.
       - name: Resolve the tag this one follows
         id: base
+        continue-on-error: true
         env:
-          TAG: ${{ inputs.tag }}
-        run: echo "ref=$(git describe --abbrev=0 --tags "$TAG^" 2>/dev/null || true)" >>"$GITHUB_OUTPUT"
+          PARENT: ${{ inputs.tag }}^
+        run: mise run batten -- ci step --capture ref --arg-env PARENT -- git describe --abbrev=0 --tags
       # The same guard the release path carries, for the same reason: an empty
       # secret must FAIL this run rather than hand the action nothing and stay
       # green. Here it matters more, not less — a sweep over 111 tags would
