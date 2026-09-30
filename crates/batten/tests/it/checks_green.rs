@@ -467,3 +467,314 @@ fn a_repo_without_a_sha_is_a_usage_error() {
     });
     assert_eq!(code, 1, "{stderr}");
 }
+
+// ---------------------------------------------------------------------------
+// `[tasks."checks-green"]`: the committed task, run through mise (CLOUD-843).
+//
+// The task's bash body retired onto one argv over this verb. Every case below
+// runs the COMMITTED task with `mise run`, the engine this suite built first on
+// `PATH` and the fixture forge answering — so mise's own templating binds `$SHA`,
+// `$REPO` and the `[env]` roster exactly as a workflow's call does, and a case
+// asserts the declared task rather than a copy of it.
+//
+// RETIREMENT LEDGER for the body, per behaviour — what `shell retire partial`
+// reads:
+//
+// carried: "[tasks.checks-green] body" crates/batten/src/lib.rs kind:verb crates/batten/tests/it/checks_green.rs
+// carried: "checks-green: $SHA names the commit, else the checkout's HEAD" crates/batten/src/lib.rs kind:mechanism crates/batten/tests/it/checks_green.rs
+// carried: "checks-green: $REPO names the repository, else the checkout's forge remote" mise.toml kind:mechanism crates/batten/tests/it/checks_green.rs
+// carried: "checks-green: the roster is the four CI_* values in [env]" mise.toml kind:mechanism crates/batten/tests/it/checks_green.rs
+// carried: "checks-green: a green head is 0" crates/batten/src/lib.rs kind:verb crates/batten/tests/it/checks_green.rs
+// carried: "checks-green: a closed set with a masked name is 3 and says dead-end (CLOUD-497)" crates/batten/src/lib.rs kind:verb crates/batten/tests/it/checks_green.rs
+// carried: "checks-green: the engine's answer is printed" crates/batten/src/lib.rs kind:verb crates/batten/tests/it/checks_green.rs
+// changed: "checks-green: a red head is 1" crates/batten/src/lib.rs kind:verb exit 2 on the engine's table where the body said 1; the word `red` still travels on stdout and as `verdict` in the `--json` document, which is what `auto-bot-land.yml` reads to freeze a red head. One exit table, no per-verb exception (house-style §7)
+// changed: "checks-green: a head with no answer yet is 3" crates/batten/src/lib.rs kind:verb exit 2 where the body said 3, sharing it with red because both mean "may not land"; the word is `pending`
+// changed: "checks-green: a reading that could not be taken is 2" crates/batten/src/lib.rs kind:verb exit 3 where the body said 2, sharing it with a dead end (CLOUD-497); a could-not-look prints no verdict word at all, so a `--json` caller tells the two apart by the word's absence, as `auto-release-land.yml` and `auto-bot-land.yml` do
+// changed: "checks-green: no $SHA and no git HEAD is could-not-look" crates/batten/src/lib.rs kind:verb the literal `HEAD` a checkout cannot resolve reaches the forge as written and is refused there — could-not-look still, at exit 3 where the body said 2, and never a pass
+// changed: "checks-green: an unusable roster is 2" crates/batten/src/lib.rs kind:verb the engine's usage error, exit 1, which `an_unusable_roster_is_a_usage_error_and_not_the_policy_verdict` pins over the verb the task runs; mise's `[env]` outranks a caller's environment, so the task tier cannot empty the committed roster to re-assert it
+// changed: "checks-green: CHECKS_GREEN_RUNS injects a reading, and an explicitly empty one is no answer yet without the network" crates/batten/src/lib.rs kind:verb the injection seam went with the pipe it fed: a reading in hand is `batten checks green` without `--sha`, deciding over stdin, and an empty one is still `pending` with no network — `every_non_green_state_exits_non_zero`'s "nothing registered yet" row
+
+/// The committed `[env]` value `key`, split into names the way the verb splits it.
+fn committed_env(key: &str) -> Vec<String> {
+    let manifest: toml::Value = toml::from_str(
+        &std::fs::read_to_string(common::at_root("mise.toml")).expect("the manifest"),
+    )
+    .expect("mise.toml parses");
+    manifest["env"][key]
+        .as_str()
+        .unwrap_or_else(|| panic!("[env] {key} is a plain string"))
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// The required names that must REGISTER for a head to be green: the roster
+/// less the names whose absence it tolerates.
+fn must_register() -> Vec<String> {
+    let absent_ok = committed_env("CI_ABSENT_OK_CHECKS");
+    committed_env("CI_REQUIRED_CHECKS")
+        .into_iter()
+        .filter(|name| !absent_ok.contains(name))
+        .collect()
+}
+
+/// One check-run as the endpoint returns it.
+fn check_run(name: &str, status: &str, conclusion: Option<&str>, id: usize) -> serde_json::Value {
+    let completed = (status == "completed").then_some("2026-08-12T00:01:00Z");
+    serde_json::json!({
+        "name": name,
+        "status": status,
+        "conclusion": conclusion,
+        "started_at": "2026-08-12T00:00:00Z",
+        "completed_at": completed,
+        "id": id,
+    })
+}
+
+/// A page in which every registering name concluded `siblings` (success when
+/// `None`), except `name`, whose run is `status`/`conclusion`.
+fn reading(name: &str, status: &str, conclusion: Option<&str>, siblings: Option<&str>) -> String {
+    let runs: Vec<serde_json::Value> = must_register()
+        .iter()
+        .enumerate()
+        .map(|(i, each)| {
+            if each == name {
+                check_run(each, status, conclusion, i + 1)
+            } else {
+                check_run(
+                    each,
+                    "completed",
+                    Some(siblings.unwrap_or("success")),
+                    i + 1,
+                )
+            }
+        })
+        .collect();
+    serde_json::json!({"total_count": runs.len(), "check_runs": runs}).to_string()
+}
+
+/// A checkout with one commit and a forge remote, and the commit's sha.
+fn checkout(name: &str) -> (std::path::PathBuf, String) {
+    let dir = common::scratch(&format!("checks-green-task-{name}"));
+    common::init_repo(&dir);
+    common::git_in(
+        &dir,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example/example.git",
+        ],
+    );
+    common::git_in(&dir, &["commit", "--quiet", "--allow-empty", "-m", "base"]);
+    let head = common::git_in(&dir, &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+    (dir, head)
+}
+
+/// `mise run checks-green <args>` in `dir`, against `forge`, with `env` set.
+fn task(
+    dir: &std::path::Path,
+    forge: &std::path::Path,
+    args: &str,
+    env: &[(&str, &str)],
+) -> std::process::Output {
+    let forge = forge.to_str().expect("a utf-8 scratch path").to_owned();
+    let mut all: Vec<(&str, &str)> = vec![("BATTEN_REST_FIXTURE", forge.as_str())];
+    all.extend_from_slice(env);
+    common::mise_task(dir, &format!("checks-green {args}"), &all, "")
+}
+
+/// The `verdict` word of the task's `--json` document, if it printed one.
+fn verdict_word(output: &std::process::Output) -> Option<String> {
+    common::stdout(output)
+        .lines()
+        .filter(|line| line.starts_with('{'))
+        .find_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .and_then(|document| document["verdict"].as_str().map(ToOwned::to_owned))
+}
+
+/// The committed task is one argv over the verb: no shell key and no character
+/// a shell would interpret, so what runs is exactly what is written.
+#[test]
+fn the_task_is_one_argv_over_the_verb() {
+    let block = common::task_block("checks-green").expect("[tasks.\"checks-green\"] is declared");
+    assert_eq!(common::task_value(&block, "shell"), "", "no shell is named");
+    let run = common::task_value(&block, "run");
+    assert!(run.starts_with("batten checks green --sha "), "{run}");
+    assert!(
+        !batten::census::shell_syntax(&run),
+        "an argv, not a shell body: {run}"
+    );
+    for key in [
+        "CI_REQUIRED_CHECKS",
+        "CI_ABSENT_OK_CHECKS",
+        "CI_ANSWERED_CONCLUSIONS",
+        "CI_FANIN_CHECK",
+    ] {
+        assert!(
+            run.contains(&format!("'{{{{env.{key}}}}}'")),
+            "{key} reaches a flag, quoted: {run}"
+        );
+    }
+}
+
+/// `--sha HEAD` is the checkout's commit by the time the forge is asked: the
+/// request carries the resolved sha, never the ref (`ref-unresolved`).
+#[test]
+fn the_task_names_the_checkouts_head_by_its_commit() {
+    let (dir, head) = checkout("head");
+    let names = must_register();
+    let forge = forge(
+        "task-head",
+        200,
+        &reading(&names[0], "completed", Some("success"), None),
+    );
+    let output = task(&dir, &forge, "", &[("SHA", ""), ("REPO", "")]);
+    let asked = std::fs::read_to_string(forge.join("args")).unwrap_or_default();
+    assert!(
+        asked.contains(&format!("repos/example/example/commits/{head}/check-runs")),
+        "the request names the resolved commit on the checkout's remote: {asked}\n{}",
+        common::stderr(&output)
+    );
+    assert!(
+        !asked.contains("commits/HEAD/"),
+        "and never the ref itself: {asked}"
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", common::stderr(&output));
+}
+
+/// `$SHA` and `$REPO` still name the commit and the repository, as the body's
+/// `${SHA:-…}` and `${REPO:-…}` did (`sha-override-ignored`,
+/// `repo-override-ignored`).
+#[test]
+fn the_task_reads_the_named_sha_from_the_named_repo() {
+    let (dir, head) = checkout("named");
+    let names = must_register();
+    let forge = forge(
+        "task-named",
+        200,
+        &reading(&names[0], "completed", Some("success"), None),
+    );
+    let output = task(
+        &dir,
+        &forge,
+        "",
+        &[("SHA", FETCH_SHA), ("REPO", FETCH_REPO)],
+    );
+    let asked = std::fs::read_to_string(forge.join("args")).unwrap_or_default();
+    assert!(
+        asked.contains(&format!(
+            "repos/{FETCH_REPO}/commits/{FETCH_SHA}/check-runs"
+        )),
+        "{asked}\n{}",
+        common::stderr(&output)
+    );
+    assert!(
+        !asked.contains(&head),
+        "the checkout's own head is not asked about: {asked}"
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", common::stderr(&output));
+}
+
+/// THE TABLE, over the committed roster: every state's code AND its word, the
+/// word being what a workflow reads where two states share a code
+/// (`fanin-dropped`, `absent-ok-dropped`).
+#[test]
+fn the_task_answers_the_engines_table_with_the_word_on_stdout() {
+    let names = must_register();
+    let fanin = committed_env("CI_FANIN_CHECK");
+    let first = names
+        .iter()
+        .find(|name| !fanin.contains(name))
+        .expect("a required name that is not the fan-in")
+        .clone();
+    let cases: [(&str, String, i32, &str); 4] = [
+        // Every registering name green, and every absent-ok name absent — which
+        // only the `--absent-ok` flag reaching the verb makes green.
+        (
+            "green",
+            reading(&first, "completed", Some("success"), None),
+            0,
+            "green",
+        ),
+        // CLOUD-900: a non-fan-in failure over cancelled siblings is the verdict.
+        // Without `--fanin` it is a dead end, so the fan-in reaching the verb is
+        // what this row sees.
+        (
+            "red",
+            reading(&first, "completed", Some("failure"), Some("cancelled")),
+            2,
+            "red",
+        ),
+        (
+            "pending",
+            reading(&first, "in_progress", None, None),
+            2,
+            "pending",
+        ),
+        // CLOUD-497: a closed set whose latest run of one name is a skip.
+        (
+            "dead-end",
+            reading(&first, "completed", Some("skipped"), None),
+            3,
+            "dead-end",
+        ),
+    ];
+    let env = [("SHA", FETCH_SHA), ("REPO", FETCH_REPO)];
+    for (what, body, code, word) in cases {
+        let (dir, _) = checkout(&format!("table-{what}"));
+        let json_forge = forge(&format!("task-table-{what}"), 200, &body);
+        let json = task(&dir, &json_forge, "--json", &env);
+        assert_eq!(
+            json.status.code(),
+            Some(code),
+            "{what}: {}{}",
+            common::stdout(&json),
+            common::stderr(&json)
+        );
+        assert_eq!(
+            verdict_word(&json).as_deref(),
+            Some(word),
+            "{what}: {}",
+            common::stdout(&json)
+        );
+        // And the plain task prints the engine's line with the same word.
+        let plain_forge = forge(&format!("task-table-{what}-plain"), 200, &body);
+        let plain = task(&dir, &plain_forge, "", &env);
+        assert_eq!(plain.status.code(), Some(code), "{what}");
+        assert!(
+            common::stdout(&plain).contains(&format!("checks green: {word} ")),
+            "{what}: {}",
+            common::stdout(&plain)
+        );
+    }
+}
+
+/// A reading the forge declines is could-not-look: exit 3, and NO verdict word,
+/// which is how a `--json` caller tells it from a dead end at the same code.
+#[test]
+fn a_declined_read_through_the_task_is_could_not_look_with_no_word() {
+    let (dir, _) = checkout("declined");
+    let forge = forge(
+        "task-declined",
+        404,
+        r#"{"message": "No commit found for SHA"}"#,
+    );
+    let output = task(
+        &dir,
+        &forge,
+        "--json",
+        &[("SHA", FETCH_SHA), ("REPO", FETCH_REPO)],
+    );
+    assert_eq!(output.status.code(), Some(3), "{}", common::stderr(&output));
+    assert_eq!(verdict_word(&output), None, "{}", common::stdout(&output));
+    assert!(
+        common::stderr(&output).contains("could not look"),
+        "{}",
+        common::stderr(&output)
+    );
+}

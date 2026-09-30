@@ -4324,65 +4324,40 @@ run = [
   "cargo run --quiet -p batten -- check --rule 'check grade other' --fail-on-warning",
 ]
 
+# Is one SHA green over the required check set? ONE ARGV, NO SHELL (CLOUD-843),
+# `ci-wait`'s shape asked once instead of polled. The body this replaces did
+# three things around `batten checks green`, and each now lives where it belongs:
+#
+# * THE SUBJECT. `$SHA`, else the checkout's HEAD — now `--sha`, which the verb
+#   resolves against this checkout before asking the forge, so `HEAD` reaches the
+#   request as the commit it names. `$REPO` still names another repository; unset,
+#   the verb reads the checkout's forge remote, which is what `gh`'s
+#   `{owner}/{repo}` placeholder resolved to.
+# * THE READING. `gh api … --jq` into a TSV on the verb's stdin, every failure
+#   could-not-look — now the verb's in-process read, with the same posture: a
+#   reading it cannot take is exit `3`, never a pass and never "not yet". The
+#   `CHECKS_GREEN_RUNS` injection seam went with the pipe; a reading in hand is
+#   `batten checks green` WITHOUT `--sha`, which decides over its stdin, and an
+#   empty one is still "no answer yet" with no network.
+# * THE EXIT TABLE. It re-read the engine's stdout to translate onto a legacy
+#   `0 green / 1 red / 2 could-not-look / 3 no answer yet` spelling. The task now
+#   answers the one table every verb shares (house-style §7): `0` green; `2` red
+#   OR not yet answered, which mean the same thing to a lander; `3` no verdict is
+#   coming (a closed set with a masked name, CLOUD-497) or could not look; `1` an
+#   unusable roster. The words `red`, `pending` and `dead-end` travel on stdout —
+#   and as `verdict` in the `--json` document, which a caller asks for by
+#   appending `--json` — for the workflows that need more than "may it land".
+#
+# The roster is this repository's, declared once in `[env]`, single-quoted
+# because a matrix leg's name carries spaces and parentheses.
 [tasks."checks-green"]
-description = "Is this SHA green over the required check set? (0 green / 1 red / 2 could not look / 3 no answer yet)"
-shell = "bash -c"
-run = '''
-set -uo pipefail
-sha="${SHA:-$(git rev-parse HEAD 2>/dev/null || true)}"
-# `${VAR+set}` rather than emptiness: an explicitly empty reading is a real state
-# — a SHA with no check runs yet — and must answer "no answer yet" rather than
-# fall through to the network.
-if [[ -n "${CHECKS_GREEN_RUNS+set}" ]]; then
-  runs="$CHECKS_GREEN_RUNS"
-else
-  if [[ -z "$sha" ]]; then
-    echo "::error:: checks-green: no SHA to judge: neither \$SHA nor a git HEAD." >&2
-    exit 2
-  fi
-  repo="${REPO:-}"
-  [[ -n "$repo" ]] || repo='{owner}/{repo}'
-  runs=$(gh api "repos/$repo/commits/$sha/check-runs?per_page=100" \
-    --jq '.check_runs[]? | "\(.status)\t\(.conclusion // "-")\t\(.name)\t\(.started_at // "")\t\(.id // 0)"' 2>/dev/null) || {
-    echo "::error:: checks-green: could not read the check runs for $sha. A reading this gate cannot take is not a pass." >&2
-    exit 2
-  }
-fi
-answer=$(printf '%s\n' "$runs" | batten checks green \
-  --required "${CI_REQUIRED_CHECKS:-}" \
-  --absent-ok "${CI_ABSENT_OK_CHECKS:-}" \
-  --answered "${CI_ANSWERED_CONCLUSIONS:-}" \
-  --fanin "${CI_FANIN_CHECK:-}" 2>&1)
-rc=$?
-printf '%s\n' "$answer"
-# THE DISCRIMINATION COMES OFF STDOUT, which is where the engine puts it on
-# purpose: red and not-yet share an exit code because they differ only in whether
-# to ask again, never in whether the head may land, so a caller that reads only
-# the code holds either way. This adapter is the caller that does read it, and it
-# is the only one that needs to.
-case "$rc" in
-0) exit 0 ;;
-2)
-  case "$answer" in
-  *"checks green: red"*) exit 1 ;;
-  *) exit 3 ;;
-  esac
-  ;;
-# A DEAD END AND A COULD-NOT-LOOK SHARE EXIT 3 FROM THE ENGINE (CLOUD-497), and
-# they want opposite things from this adapter's caller: one is worth another
-# look, the other never will be. So this arm reads the word off stdout, exactly
-# as the arm above reads red from not-yet, and keeps the shell's own four-code
-# table intact — a masked terminal set is "no answer yet" in that vocabulary,
-# which is 3, while anything else at this code is still "could not look".
-3)
-  case "$answer" in
-  *"checks green: dead-end"*) exit 3 ;;
-  *) exit 2 ;;
-  esac
-  ;;
-*) exit 2 ;;
-esac
-'''
+#MUTANT-SUITE crates/batten/tests/it/checks_green.rs
+#MUTANT sha-override-ignored|s@{% if env.SHA %}{{env.SHA}}{% else %}HEAD{% endif %}@HEAD@|the_task_reads_the_named_sha_from_the_named_repo
+#MUTANT repo-override-ignored|s@{% if env.REPO %}--repo '{{env.REPO}}' {% endif %}@@|the_task_reads_the_named_sha_from_the_named_repo
+#MUTANT fanin-dropped|/^run = "batten checks green /s@ --fanin '{{env.CI_FANIN_CHECK}}'@@|the_task_answers_the_engines_table_with_the_word_on_stdout
+#MUTANT absent-ok-dropped|/^run = "batten checks green /s@--absent-ok '{{env.CI_ABSENT_OK_CHECKS}}' @@|the_task_answers_the_engines_table_with_the_word_on_stdout
+description = "Is this SHA green over the required check set? (0 green / 2 red or no answer yet / 3 no answer coming or could not look / 1 an unusable roster)"
+run = "batten checks green --sha {% if env.SHA %}{{env.SHA}}{% else %}HEAD{% endif %} {% if env.REPO %}--repo '{{env.REPO}}' {% endif %}--required '{{env.CI_REQUIRED_CHECKS}}' --absent-ok '{{env.CI_ABSENT_OK_CHECKS}}' --answered '{{env.CI_ANSWERED_CONCLUSIONS}}' --fanin '{{env.CI_FANIN_CHECK}}'"
 
 [tasks."ci-wait"]
 description = "Block until every required check on HEAD reaches a verdict — `pr watch`'s own codes (0 green / 2 red / 3 no verdict is coming or could not look / 1 an unusable roster)"

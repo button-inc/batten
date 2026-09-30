@@ -269,7 +269,7 @@ jobs:
       # the verb — a deadlock broken once by landing that release PR by hand. So
       # the precondition is not "a release exists" but "a release carrying the
       # verb this task calls exists", and the failure mode when it does not is
-      # exit 2 from the step below, which reads as could-not-look rather than as
+      # exit 3 from the step below, which reads as could-not-look rather than as
       # a version floor. A future rename or signature change to `checks green`
       # reopens exactly this, and the tree's own suite will not catch it, because
       # the tree always has the new binary.
@@ -375,10 +375,13 @@ jobs:
       # check graded, none skipped, none pending. The inline jq this replaces
       # filtered `skipped` out before counting, so a wholly skipped set — every
       # draft-era refresh, now the normal state — read as zero outstanding, i.e.
-      # green (CLOUD-327's false green, second author). Exit 3 "no answer yet" and
-      # exit 1 "red" are both ordinary here and must not fail the run; only exit 2
-      # is. Read with GITHUB_TOKEN — it carries checks:read; the release PAT does
-      # not.
+      # green (CLOUD-327's false green, second author). "Red", "no answer yet" and
+      # "no answer is coming" are all ordinary here and must not fail the run;
+      # only a reading that could not be taken is. The task answers the engine's
+      # table (CLOUD-843), where "could not look" and "no answer is coming" share
+      # exit 3, so the `verdict` word of its `--json` document is what this reads:
+      # no word at all is could-not-look. Read with GITHUB_TOKEN — it carries
+      # checks:read; the release PAT does not.
       - name: Is every required check green on the head SHA?
         if: steps.debounce.outputs.due == 'true' && steps.target.outputs.draft == 'false'
         id: checks
@@ -386,13 +389,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ steps.target.outputs.sha }}
         run: |
-          set +e
-          mise run checks-green
-          verdict=$?
+          verdict=$(mise run checks-green --json | jq -r '.verdict // empty') || true
           case "$verdict" in
-            0) echo "green=true" >> "$GITHUB_OUTPUT" ;;
-            1 | 3) echo "green=false" >> "$GITHUB_OUTPUT" ;;
-            *) exit "$verdict" ;;
+            green) echo "green=true" >> "$GITHUB_OUTPUT" ;;
+            red | pending | dead-end) echo "green=false" >> "$GITHUB_OUTPUT" ;;
+            *) exit 3 ;;
           esac
       # `force=false` is the fast-forward assertion: the API refuses the update
       # unless `main` is an ancestor of this SHA, and branch protection independently

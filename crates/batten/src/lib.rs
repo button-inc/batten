@@ -4216,11 +4216,23 @@ fn parse_run(line: &str) -> Option<checks_green::Run> {
 //MUTANT-SUITE crates/batten/tests/it/checks_green.rs
 //MUTANT declined-read-as-empty|s@^    if !answer.is_reading() {$@    if false {@|a_declined_forge_read_is_could_not_look_never_not_yet
 //MUTANT fetch-ignores-sha|s@^        sha: sha.to_owned(),$@        sha: String::from("HEAD"),@|the_fetched_reading_is_the_named_commits
+//MUTANT ref-unresolved|s@^    let resolved = match git::resolve_ref(Path::new("."), sha) {$@    let resolved = match Ok::<Option<String>, ()>(None) {@|the_task_names_the_checkouts_head_by_its_commit
 fn checks_green_fetch(
     sha: &str,
     repo: Option<String>,
     err: &mut dyn Write,
 ) -> Result<Option<Vec<checks_green::Run>>> {
+    // A REF THIS CHECKOUT KNOWS IS RESOLVED, AND ANYTHING ELSE PASSES THROUGH —
+    // `pr watch`'s reading of `--sha`, for the same reason: the consumer's
+    // `checks-green` task names its own working tree as `HEAD` now that no shell
+    // runs `rev-parse` for it, and a forge asked about the literal `HEAD` answers
+    // about its default branch. A name no checkout resolves reaches the forge as
+    // written, where a bad one is could-not-look.
+    let resolved = match git::resolve_ref(Path::new("."), sha) {
+        Ok(Some(resolved)) => resolved,
+        Ok(None) | Err(_) => sha.to_owned(),
+    };
+    let sha = resolved.as_str();
     let config = pr_watch::Config {
         sha: sha.to_owned(),
         // `--repo` first, then the checkout's remote — `pr watch`'s order.

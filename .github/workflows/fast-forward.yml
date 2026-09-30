@@ -216,8 +216,8 @@ jobs:
       # enforce this roster BY CONSTRUCTION, so the enforcement point is here.
       #
       # THE PREDICATE IS THE ENGINE'S, REUSED WHOLE. `mise run checks-green` is
-      # the adapter `land` itself decides on: it fetches the runs with `gh api`
-      # and hands them to `batten checks green`, a pure function of that TSV.
+      # `batten checks green --sha`, the same decision `land` makes in process
+      # over the same in-process read of the head's check runs.
       # Re-deriving "green" here would be a second authority over one word, which
       # is CLOUD-363 exactly — `land` counted `cancelled` as an answer,
       # `checks-green` read it as red, and the two composed into a branch wedge
@@ -229,11 +229,12 @@ jobs:
       # from the web UI while the matrix is still running, which is the measured
       # case.
       #
-      # EXIT 3 IS A REFUSAL, and that is the adapter's own contract rather than a
-      # reading of it: 0 green, 1 red, 2 could-not-look, 3 no answer yet. Only 0
-      # may land. Could-not-look is refused too — "a reading this gate cannot
-      # take is not a pass" is the posture `checks-green` states for its own
-      # `gh api` failure, and honouring it anywhere else would be a second one.
+      # EVERY CODE BUT 0 IS A REFUSAL, on the engine's one table (CLOUD-843):
+      # 0 green, 2 red or no answer yet, 3 no answer coming or could not look,
+      # 1 an unusable roster. Only 0 may land. Could-not-look is refused too — "a
+      # reading this gate cannot take is not a pass" is the posture the verb
+      # states for its own failed read, and honouring it anywhere else would be
+      # a second one.
       #
       # THE SETUP IS PAID LAST ON PURPOSE. The two refusals above are one
       # `gh api` call each, so a draft or an unreviewed fork head is turned away
@@ -281,9 +282,9 @@ jobs:
             exit 0
           fi
           case "$rc" in
-            1) why="a required check is RED" ;;
-            3) why="a required check has not answered yet" ;;
-            *) why="the check runs could not be read, and a reading this gate cannot take is not a pass" ;;
+            2) why="a required check is RED or has not answered yet" ;;
+            3) why="no verdict is coming, or the check runs could not be read, and a reading this gate cannot take is not a pass" ;;
+            *) why="the required roster is unusable" ;;
           esac
           # Pointer-only: the PR, the head, and which arm refused — never a run's
           # log, and never the comment body, which is how a substring trigger
