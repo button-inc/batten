@@ -2949,9 +2949,30 @@ fn run_target(
     // "is there a manifest beside it" discriminator is a question about the
     // caller's directory, and it decides nothing if the path was rewritten first.
     let here = Path::new(".");
-    let resolved = resolve::resolve(here, overrides)?;
     let cli::TargetCommand::Prune { yes, dry_run, root } = command;
-    let Some(declared) = resolved.prune.as_ref() else {
+    // A BUILD THE CONFIG HAS OUTRUN STILL RECLAIMS (CLOUD-843). The retired task
+    // body answered a whole-file refusal by building the engine, which spends
+    // disk on the one input this verb exists to make room for. The `[prune]`
+    // table alone is what the reclaim needs, and it is still read strictly —
+    // see `prune::declared_alone` — so this reaches only a refusal about some
+    // OTHER table; anything the committed file cannot yield keeps the original
+    // error.
+    let declared = match resolve::resolve(here, overrides) {
+        Ok(resolved) => resolved.prune,
+        Err(problem) => {
+            let Some(alone) = prune::declared_alone(here) else {
+                return Err(problem);
+            };
+            output::message(
+                mode,
+                output::Verbosity::Normal,
+                err,
+                "target prune: this build cannot load the whole config, so it reclaims by the committed [prune] table alone",
+            )?;
+            Some(alone)
+        }
+    };
+    let Some(declared) = declared.as_ref() else {
         // A repository that declares no `[prune]` has no floor to judge against,
         // and inventing one would be the core holding a number about somebody
         // else's build. Not a refusal: nothing was asked for.
@@ -4377,7 +4398,17 @@ fn run_receipt(
     match command {
         ReceiptCommand::Clean => receipt::run_clean(out, err),
         ReceiptCommand::Record { check } => receipt::run_record(&check, mode, err),
-        ReceiptCommand::Status { check, key, json } => receipt::run_status(&check, key, json, out),
+        // `--or` absent is the single-check reading every earlier caller makes,
+        // through the same walk: a one-element disjunction IS `run_status`.
+        ReceiptCommand::Status {
+            check,
+            or,
+            key,
+            json,
+        } => {
+            let checks: Vec<String> = std::iter::once(check).chain(or).collect();
+            receipt::run_status_any(&checks, key, json, out)
+        }
         ReceiptCommand::Verified => receipt::run_verified(out),
     }
 }
@@ -4863,6 +4894,17 @@ fn run_pr(
         }
     };
 
+    // A REF THIS CHECKOUT KNOWS IS RESOLVED, AND ANYTHING ELSE PASSES THROUGH
+    // (CLOUD-843). `--sha HEAD` is how the consumer's `ci-wait` names its own
+    // working tree now that no shell reads it for the verb — still the caller
+    // naming its subject, which is what `WAIT_SHA`'s required flag keeps. A full
+    // sha resolves to itself; a sha this clone has never fetched, or a directory
+    // that is no checkout, reaches the forge exactly as it was written, where a
+    // bad one is refused as it always was.
+    let sha = match git::resolve_ref(Path::new("."), &sha) {
+        Ok(Some(resolved)) => resolved,
+        Ok(None) | Err(_) => sha,
+    };
     let config = pr_watch::Config {
         sha,
         // `--repo` FIRST, THEN THE REMOTE, and the placeholder only where neither
@@ -14539,6 +14581,50 @@ fn commit_label(sha: &str) -> String {
     sha.chars().take(8).collect()
 }
 
+/// The claim clause's evidence, gathered over `range` (CLOUD-843).
+///
+/// Range mode only, and that is the retired `commit-lint` body's own scope: a
+/// pending message has no commit yet, and its claim is the claim RECEIPT's
+/// question at the edit rather than this one at the range.
+///
+/// Each commit's paths and author come off [`git::metadata_facts`] — merges
+/// excluded, exactly as `rev-list --no-merges` excluded them — and whether its
+/// message claims a row is `claim keys`' reading, [`race::claimed_from`] over the
+/// whole message through the consumer's grammar, asked in process rather than
+/// spawned per commit.
+///
+/// # Errors
+///
+/// A range the walk cannot read, a commit it cannot peel, or a grammar the
+/// config does not declare — each a could-not-look, never a clean pass over
+/// commits nobody read.
+fn commit_claims(
+    range: &str,
+    claims: &commit::Claims,
+    overrides: &Overrides,
+) -> Result<Vec<commit::Finding>> {
+    let root = Path::new(".");
+    let grammar = board_grammar(overrides)?;
+    let walked = git::metadata_facts(root, &[range.to_owned()])?;
+    let Some(commits) = walked.get(range) else {
+        return Err(UsageError::raise(format!(
+            "commit check: `{range}` did not resolve, so no commit's claim could be read"
+        )));
+    };
+    let mut claimants = Vec::with_capacity(commits.len());
+    for meta in commits {
+        let record = git::commit_record(root, &meta.commit)?;
+        let claimed = race::claimed_from("", "", &record.body, "", &grammar, race::Source::All);
+        claimants.push(commit::Claimant {
+            label: commit_label(&meta.commit),
+            author: meta.author.clone(),
+            paths: meta.paths.clone(),
+            claims: !claimed.is_empty(),
+        });
+    }
+    commit::judge_claims(&claimants, claims)
+}
+
 fn run_commit_check(
     json: bool,
     range: Option<&str>,
@@ -14573,9 +14659,13 @@ fn run_commit_check(
         (None, Some(message)) => vec![commit::read_message(Path::new(message))?],
     };
 
-    let mut findings = commit_policy(overrides)?.judge(&subjects)?;
+    let policy = commit_policy(overrides)?;
+    let mut findings = policy.judge(&subjects)?;
     findings.extend(commit_admissions(range, message, overrides)?);
     findings.extend(commit_arm_sequencing(range, message, overrides)?);
+    if let (Some(range), Some(claims)) = (range, policy.claims.as_ref()) {
+        findings.extend(commit_claims(range, claims, overrides)?);
+    }
 
     if json {
         // Emitted unconditionally, including for a clean run: JSON that is

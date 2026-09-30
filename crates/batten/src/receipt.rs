@@ -1944,6 +1944,62 @@ pub fn run_status(
     })
 }
 
+/// `receipt status <check> --or <check>…`: any ONE of several receipts answering
+/// the same question (CLOUD-843).
+///
+/// # The disjunction `verify` used to spell in shell
+///
+/// A branch is claimed by a refined issue, an allowlisted bot or a licence carry
+/// — three receipt kinds attesting three different things (CLOUD-693,
+/// CLOUD-1295), kept three rather than widened into one. The retired body asked
+/// each in turn and refused only when none was valid; this is that walk, with
+/// every kind judged by [`run_status`] and so by [`branch_validity`] — one
+/// predicate, never a second spelling of it.
+///
+/// Each check prints its own pointer line in the order given, and the FIRST valid
+/// one ends the walk at `Success`, so the output says which kind answered. None
+/// valid is `Violation` with every kind's verdict printed, because `missing` and
+/// `stale-main` carry different remedies and the lines are what tell them apart.
+///
+/// # Errors
+///
+/// As [`run_status`] — the first check it cannot judge ends the walk, so a
+/// detached HEAD under `--key branch` is still could-not-look rather than a
+/// verdict about any receipt. And a [`UsageError`] for `--json` beside more than
+/// one check: the verb's document is ONE verdict, and several documents on one
+/// stream are not one document.
+//MUTANT-SUITE crates/batten/src/receipt.rs
+//MUTANT receipt-any-stops-at-the-first|s@        if verdict == ExitCode::Success {@        if verdict != ExitCode::Success {@|any_one_valid_receipt_satisfies_the_walk
+pub fn run_status_any(
+    checks: &[String],
+    key: ReceiptKey,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    if json && checks.len() > 1 {
+        return Err(UsageError::raise(
+            "receipt status: --json reports one receipt's verdict and --or asks about several; drop one of them",
+        ));
+    }
+    any_valid(checks, &mut |check| run_status(check, key, json, out))
+}
+
+/// The walk [`run_status_any`] takes, over a judge the caller supplies, so the
+/// disjunction is decidable without a repository.
+fn any_valid(
+    checks: &[String],
+    judge: &mut dyn FnMut(&str) -> Result<ExitCode>,
+) -> Result<ExitCode> {
+    let mut verdict = ExitCode::Violation;
+    for check in checks {
+        verdict = judge(check.as_str())?;
+        if verdict == ExitCode::Success {
+            break;
+        }
+    }
+    Ok(verdict)
+}
+
 /// The checks a head must carry a valid receipt for, when a consumer declares
 /// none.
 ///
@@ -2490,6 +2546,57 @@ mod tests {
             "and the verdict denies rather than passing over an unrecorded surface"
         );
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// `#MUTANT receipt-any-stops-at-the-first` reddens here. The disjunction
+    /// `verify`'s claim step asks (CLOUD-843): the second kind answering is
+    /// enough, and the third is never read.
+    #[test]
+    fn any_one_valid_receipt_satisfies_the_walk() {
+        let checks = vec!["claim".to_owned(), "bot".to_owned(), "carry".to_owned()];
+        let mut asked: Vec<String> = Vec::new();
+        let verdict = any_valid(&checks, &mut |check| {
+            asked.push(check.to_owned());
+            Ok(if check == "bot" {
+                ExitCode::Success
+            } else {
+                ExitCode::Violation
+            })
+        });
+        assert_eq!(verdict.ok(), Some(ExitCode::Success));
+        assert_eq!(
+            asked,
+            vec!["claim".to_owned(), "bot".to_owned()],
+            "the walk ends at the first valid receipt"
+        );
+    }
+
+    /// The mirror: with no kind valid the walk is the verdict, and every kind was
+    /// asked — so each one's pointer line reached the reader.
+    #[test]
+    fn no_valid_receipt_is_the_verdict_and_every_kind_is_asked() {
+        let checks = vec!["claim".to_owned(), "bot".to_owned(), "carry".to_owned()];
+        let mut asked = 0_usize;
+        let verdict = any_valid(&checks, &mut |_| {
+            asked += 1;
+            Ok(ExitCode::Violation)
+        });
+        assert_eq!(verdict.ok(), Some(ExitCode::Violation));
+        assert_eq!(asked, 3);
+    }
+
+    /// A kind that could not be judged ends the walk as could-not-look rather
+    /// than falling through to the next kind — a detached HEAD is not "no claim".
+    #[test]
+    fn a_kind_that_cannot_be_judged_ends_the_walk_rather_than_passing_it_on() {
+        let checks = vec!["claim".to_owned(), "bot".to_owned()];
+        let mut asked = 0_usize;
+        let verdict = any_valid(&checks, &mut |_| {
+            asked += 1;
+            Err(anyhow::anyhow!("detached"))
+        });
+        assert!(verdict.is_err());
+        assert_eq!(asked, 1);
     }
 
     #[test]

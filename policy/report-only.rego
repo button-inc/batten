@@ -133,8 +133,16 @@ violation contains {
 	"subjects": [{"path": manifest}],
 } if {
 	some task in reports
-	invokes_task(verify.run, task)
+	invokes_task(run_text(verify), task)
 }
+
+# THE BODY IS A STRING OR A SEQUENCE OF STRINGS (CLOUD-843). `verify` became a
+# `run` array when its shell mapper retired — mise runs each entry in order — so
+# the text a call is sought in is every entry, joined, rather than one scalar a
+# sequence would make undefined and so silently unjudged.
+run_text(task) := task.run if is_string(task.run)
+
+run_text(task) := concat("\n", [entry | some entry in task.run; is_string(entry)]) if is_array(task.run)
 
 # The other way onto the landing path, and the one `verify` cannot see.
 violation contains {
@@ -186,6 +194,18 @@ test_a_report_in_verifys_depends_is_refused if {
 
 test_a_report_invoked_by_verifys_body_is_refused if {
 	count(violation) == 1 with input as verify_task({"depends": ["ci"], "run": "mise run scorecard"})
+}
+
+# A SEQUENCE BODY IS READ ENTRY BY ENTRY (CLOUD-843): `verify` is a `run` array,
+# and a report named in any one entry is on the landing path exactly as it was in
+# the scalar body.
+test_a_report_in_one_entry_of_a_sequence_body_is_refused if {
+	some v in violation with input as verify_task({"run": ["mise run target-prune:lap", "mise run coverage"]})
+	v.verdict == "task judge silent"
+}
+
+test_a_sequence_body_naming_no_report_is_clean if {
+	count(violation) == 0 with input as verify_task({"run": ["mise run target-prune:lap", "mise run verify:gated"]})
 }
 
 # THE BOUNDARY CASE the predecessor word-bounded a grep for. A parsed `depends`
@@ -250,3 +270,4 @@ test_a_report_run_on_a_schedule_is_the_point_not_a_violation if {
 #MUTANT report-on-pull-request-passes|s@^\ton_pull_request(doc)$@\ttrue@|a_report_run_on_a_schedule_is_the_point_not_a_violation
 #MUTANT report-in-depends-unread|s@named == task@false@|a_report_in_verifys_depends_is_refused_over_the_binary
 #MUTANT report-no-verify-unread|s@not verify$@false@|no_verify_task_is_could_not_look
+#MUTANT report-sequence-body-unread|s@^run_text(task) := concat@run_text_retired(task) := concat@|a_report_in_one_entry_of_a_sequence_body_is_refused_over_the_binary

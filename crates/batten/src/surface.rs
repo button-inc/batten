@@ -2550,11 +2550,15 @@ const ANSWERED_CONCLUSIONS: FlagDecl = FlagDecl {
 /// picks its own subject would answer about a commit the caller never named, and
 /// the caller — which knows whether it means its working tree, a lease holder's
 /// head, or a commit it just pushed — is the one place that distinction exists.
+///
+/// A REF IS ACCEPTED AND RESOLVED, which keeps that property rather than bending
+/// it (CLOUD-843): `--sha HEAD` is still the caller naming its subject, spelled
+/// the way a caller with no shell to run `rev-parse` can spell it.
 const WAIT_SHA: FlagDecl = FlagDecl {
     id: "sha",
     long: Some("sha"),
     short: None,
-    help: "The commit whose check runs to read",
+    help: "The commit whose check runs to read — a sha, or a ref this checkout resolves",
     env: EnvDecl::None,
     global: false,
     positional: false,
@@ -2813,6 +2817,27 @@ impl FlagDecl {
         }
     }
 }
+
+/// `--or <check>` on `receipt status` (CLOUD-843): another check whose receipt
+/// answers the same question, any ONE valid receipt passing.
+///
+/// THE DISJUNCTION `verify` USED TO SPELL IN SHELL. A branch is claimed by a
+/// refined issue, by an allowlisted bot, or by a licence carry (CLOUD-431,
+/// CLOUD-693, CLOUD-1295) — three receipt kinds that attest three different
+/// things, which is why they stay three rather than one widened kind. Each is
+/// still judged by the one predicate, `receipt::branch_validity`, so the
+/// staleness rule CLOUD-516 put on the first holds for all of them.
+///
+/// REPEATABLE AND ORDERED, for `ValueDecl::StrMany`'s reason: a second `--or`
+/// silently replacing the first would drop a kind the caller named.
+const RECEIPT_OR: FlagDecl = FlagDecl {
+    value: ValueDecl::StrMany,
+    ..FlagDecl::valued(
+        "or",
+        "or",
+        "Another check whose receipt satisfies this one; any one valid receipt passes (repeatable)",
+    )
+};
 
 /// `<step>` on the three `step` arms: the name a `[[step]]` row declares.
 const STEP_NAME: FlagDecl = FlagDecl::positional(
@@ -5934,6 +5959,7 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[
             FlagDecl::positional("check", "The check whose receipt is judged"),
+            RECEIPT_OR,
             FlagDecl::defaulted_enum(
                 "key",
                 "key",

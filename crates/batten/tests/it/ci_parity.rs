@@ -475,6 +475,80 @@ fn the_fixture_shape_is_clean_too() {
 }
 
 // ---------------------------------------------------------------------------
+// Bodies that are argv (CLOUD-843): a `run` ARRAY, and a body that IS the cargo
+// statement. Both are how the retired shell bodies ship now, and a reader that
+// asked only the scalar, guarded form would make every relation over them false.
+// ---------------------------------------------------------------------------
+
+/// The fixture manifest with `from` replaced by `to`, asserting it was there.
+fn manifest_with(from: &str, to: &str) -> String {
+    assert!(
+        MANIFEST.contains(from),
+        "the fixture carries the body this case rewrites: {from}"
+    );
+    MANIFEST.replace(from, to)
+}
+
+/// `#MUTANT sequence-body-unread` reddens here.
+#[test]
+fn a_sequence_body_is_read_entry_by_entry() {
+    let root = sound("sequence-body");
+    common::write(
+        &root,
+        "mise.toml",
+        &manifest_with(
+            "run = \"if ! cargo nextest run --workspace --target x86_64-unknown-linux-musl; then exit 1; fi\"",
+            "run = [\"mise run target-ensure x86_64-unknown-linux-musl\", \"cargo nextest run --workspace --target x86_64-unknown-linux-musl\"]",
+        ),
+    );
+    assert!(
+        findings(&root).is_empty(),
+        "an approximated lane declared as a sequence still names its triple: {:?}",
+        findings(&root)
+    );
+}
+
+/// `#MUTANT bare-cargo-statement-unread` reddens here.
+#[test]
+fn a_test_cargo_body_that_is_the_statement_is_read() {
+    let root = sound("bare-statement");
+    common::write(
+        &root,
+        "mise.toml",
+        &manifest_with(
+            "run = \"\"\"\nif ! cargo nextest run --workspace; then exit 1; fi\n\"\"\"",
+            "run = \"cargo nextest run --workspace\"",
+        ),
+    );
+    assert!(
+        findings(&root).is_empty(),
+        "a body that is the statement is read as the statement: {:?}",
+        findings(&root)
+    );
+}
+
+/// `#MUTANT wrapped-cargo-statement-unread` and `#MUTANT
+/// wrapper-read-as-the-statement` redden here: the step cache's tail is the
+/// statement a foreign leg spells, and the wrapper line read whole is not.
+#[test]
+fn a_test_cargo_body_the_step_cache_wraps_is_read() {
+    let root = sound("wrapped-statement");
+    common::write(
+        &root,
+        "mise.toml",
+        &manifest_with(
+            "run = \"\"\"\nif ! cargo nextest run --workspace; then exit 1; fi\n\"\"\"",
+            "run = \"cargo run --quiet -p batten -- step run test:cargo -- cargo nextest run --workspace\"",
+        ),
+    );
+    assert!(
+        findings(&root).is_empty(),
+        "a body the step cache wraps is read as its tail: {:?}",
+        findings(&root)
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The defects, each shown able to fail (CLOUD-418).
 // ---------------------------------------------------------------------------
 

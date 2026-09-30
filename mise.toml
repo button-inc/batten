@@ -683,7 +683,7 @@ CI_VERDICT_STEPS = "Run mise run ,Run mise exec -- "
 BATS_TEST_TIMEOUT = "300"
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,task-target-prune,engine-task,run-arg-shape,engine-cargo-graph,branch-age,task-released,evaluator-closure,evaluator-io-probe,agent-spawn,macos-link,ntia,task-test:cargo,release-tracking,sbom-actions,task-sonar-gate,task-callable,transcript-corpus,engine-rules,release-assets,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,ci-signal,engine-ci-signal,docs-tree-absent,ripcord-untracked,hk-pin-agreement,engine-record,hk-fix-selection.pkl,engine-dist,engine-sbom,supply-chain,engine-reclaim,engine-durable,engine-step,engine-step-table,engine-mcp-grant,engine-mcp-posture,engine-preflight,engine-trust,engine-sweep,sweep-exit-table,tracker-hygiene,engine-tracker-reading,task-duplicate-close-check,engine-release,release-hygiene,task-sbom-binary-record,engine-hk,hook-profile,engine-attestation,engine-turn,engine-unsubscribe,engine-probe,finding-sink"
+MUTANT_GATES = "agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,bats-invocation,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,graph-check,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,ready-cites-check,ready-lint,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,skill-frontmatter-complete,spawn-widening,spec-ref-check,stop-posture,suite-cost-corpus,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,engine-task,run-arg-shape,engine-cargo-graph,branch-age,task-released,evaluator-closure,evaluator-io-probe,agent-spawn,macos-link,ntia,release-tracking,sbom-actions,task-sonar-gate,task-callable,transcript-corpus,engine-rules,release-assets,durable-write,spawn-factory,turn-ask,shell-banned,engine-forge,engine-forge-query,engine-git,engine-census,ci-signal,engine-ci-signal,docs-tree-absent,ripcord-untracked,hk-pin-agreement,engine-record,hk-fix-selection.pkl,engine-dist,engine-sbom,supply-chain,engine-reclaim,engine-durable,engine-step,engine-step-table,engine-mcp-grant,engine-mcp-posture,engine-preflight,engine-trust,engine-sweep,sweep-exit-table,tracker-hygiene,engine-tracker-reading,task-duplicate-close-check,engine-release,release-hygiene,task-sbom-binary-record,engine-hk,hook-profile,engine-attestation,engine-turn,engine-unsubscribe,engine-probe,finding-sink,engine-commit,engine-receipt"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -1295,93 +1295,76 @@ description = "Run every test suite — Rust and shell"
 depends = ["test:cargo", "test:bats"]
 
 # A NAMED subset of the suite, for observing one case red under one mutation
-# (CLOUD-418). `test:cargo` cannot serve this: its body takes no `"$@"`, so a
-# filter passed to it is silently DROPPED and the whole suite runs — and because
-# nextest fail-fast then cancels scheduling, a case that never ran reads exactly
-# like a case that passed. Measured this session: a `-E 'test(differential)'`
-# that matched nothing summarised green.
+# (CLOUD-418). `test:cargo` used to be unable to serve this: its shell body took
+# no `"$@"`, so a filter passed to it was silently DROPPED and the whole suite
+# ran — and a case that never ran read exactly like a case that passed. Measured
+# then: a `-E 'test(differential)'` that matched nothing summarised green. Since
+# CLOUD-843 `test:cargo` is one argv too, and mise appends a filter to it just as
+# it does here; this task stays the NAMED door for a subset, so `test:cargo`
+# keeps meaning the whole suite to every caller that reads its name.
 #
 # Deliberately NOT receipt-routed and deliberately NOT part of `test` or
 # `verify`. A receipt keyed on the step's inputs would be minted by a run of ONE
 # case and then answer for the whole suite; and a subset is never the evidence
 # that a suite passed. `--no-fail-fast` is fixed here rather than left to the
 # caller, because the whole point is to see every named case's own verdict.
+#
+# NO `"$@"` (CLOUD-843). mise APPENDS a task's arguments to an inline `run`
+# string, shell-quoted one by one — the measured behaviour `task-registry`'s
+# comment records — so the expansion only ever expanded to nothing, and the
+# filter reached nextest through the append all along. Without it the body is
+# one argv and no shell.
 [tasks."test:filter"]
 description = "Run named Rust tests (nextest filter expression) — never a substitute for test:cargo"
-run = 'cargo nextest run --workspace --no-fail-fast "$@"'
+run = "cargo nextest run --workspace --no-fail-fast"
 
 [tasks."test:cargo"]
-#MUTANT-SUITE crates/batten/tests/it/test_cargo_path.rs
-#MUTANT installed-batten-visible|s@\[ "[$][{]f##[*]/[}]" = batten \] [[:punct:]][[:punct:]] @@|the_mask_hides_every_batten_and_keeps_the_rest
-#MUTANT suite-tree-write-admitted|s@\[ "[$]tracked_before" != "[$]tracked_after" \]@false@|a_suite_that_rewrites_a_tracked_file_is_refused
 description = "Run the Rust workspace test suite"
-# Routed through the per-step receipt (CLOUD-424): same sources, same command,
-# same toolchain ⇒ same verdict, so a hit answers from the receipt instead of
-# rebuilding the workspace. Fail closed — a check that cannot answer runs the
-# suite — and the record is an economy whose failure must never fail a suite
-# that passed.
-run = '''
-if [ "$(cargo run --quiet -p batten -- step check test:cargo | cut -c1-3)" = hit ]; then exit 0; fi
-# THE CARGO STATEMENT STAYS BARE, and property 16 of `ci-local-parity` is why
-# (CLOUD-662): it reads this task's single cargo statement and requires a
-# foreign CI leg's line to be `mise exec -- ` plus exactly that statement. A
-# `--profile` flag here was refused by that property at
-# `.github/workflows/rust.yml:900` and `:1057`, and rightly — two spellings is
-# the drift it exists to catch. The fail-fast posture rides on
-# `NEXTEST_PROFILE` in `[env]` instead, which nextest reads natively and which
-# every leg through mise inherits, foreign ones included.
+# ONE ARGV (CLOUD-843, CLOUD-1990). The cargo statement was always the task; the
+# shell around it did three jobs that belong elsewhere, and all three moved:
 #
-# NO `batten` IS RESOLVABLE BY NAME WHILE THE SUITE RUNS, AS ON CI (CLOUD-1951).
-# `_.path` puts `target/release` first and `~/.local/bin` holds the installed
-# release; CI's test job has neither. So a case or hook that spawns a bare
-# `batten` passed here and failed there -- the retired `doctor` handler on #928
-# cost a matrix that way. Every PATH directory holding a `batten` is swapped for
-# a shadow carrying its other entries, because `mise` shares `~/.local/bin` with
-# the installed binary and dropping the directory would hide it too. Cases reach
-# the tree's own binary through `CARGO_BIN_EXE_batten`, which this leaves alone.
-# `test_cargo_path.rs` runs the block between the markers, verbatim.
-# >>> no-batten-path
-shadow="${CARGO_TARGET_DIR:-target}/no-batten-path"
-# ABSOLUTE, because cases run in scratch directories: a relative entry resolves
-# against each case's cwd, and the linked `mise` vanishes with it.
-case $shadow in /*) ;; *) shadow="$PWD/$shadow" ;; esac
-rm -rf "$shadow" && mkdir -p "$shadow"
-masked=""
-old_ifs=$IFS; IFS=:
-for d in $PATH; do
-  if [ -n "$d" ] && [ -e "$d/batten" ]; then
-    for f in "$d"/*; do
-      [ "${f##*/}" = batten ] || ln -s "$f" "$shadow/" 2>/dev/null
-    done
-    d="$shadow"
-  fi
-  masked="${masked:+$masked:}$d"
-done
-IFS=$old_ifs
-PATH="$masked"; export PATH
-# <<< no-batten-path
+# * THE STEP RECEIPT (CLOUD-424, CLOUD-1891). Same sources, same command, same
+#   toolchain => same verdict, so a hit answers from the receipt instead of
+#   rebuilding the workspace. The retired body bracketed the statement with
+#   `step-receipt check` and `step-receipt record`; `batten step run` IS that
+#   bracket — a hit exits 0, a miss runs the command after its `--` and records
+#   only when it passes. That verb and its step table are CLOUD-843's P4 package
+#   (`[[step]] id = "test:cargo"` in `batten.toml`), not `step-receipt`'s shell
+#   `case`, whose `test:cargo` arm this retirement removed with its last caller.
+#   P4 is merged on this branch, so `step run` reads that row. `cargo run`
+#   rather than a bare `batten`, the spelling `deny` and
+#   `lint:clippy` use: this task must run in a clone that has built nothing yet.
+# * NO `batten` RESOLVABLE BY NAME WHILE THE SUITE RUNS (CLOUD-1951). CI's test
+#   job has neither `target/release` nor an installed release on PATH, so a case
+#   or hook spawning a bare `batten` passed here and failed there. The mask is
+#   `common::ambient_path()` — this PATH with every directory holding a `batten`
+#   swapped for a shadow of its other entries — and it now reaches a child
+#   through the doors that hand it over: `common::batten()`, `task_bash()`,
+#   `git_command()` (a fixture's hooks run under git's PATH), and the by-hand
+#   spawns that set PATH from it. NARROWER THAN THE RETIRED BODY, stated rather
+#   than absorbed: that body masked the whole `cargo nextest` process tree, so a
+#   lib unit test, or an `it` case spawning some other program with the ambient
+#   PATH, is no longer covered. Cases reach the tree's own binary through
+#   `CARGO_BIN_EXE_batten`.
+# * THE SUITE LEAVES THE CHECKOUT AS IT FOUND IT (CLOUD-1953). The before/after
+#   comparison of tracked state is `receipt clean`'s predicate, run after the
+#   lap's gates in BOTH places the suite runs as a gate: locally it is
+#   `receipt record`'s refusal of a tree that differs from HEAD, at the end of
+#   `verify:gated`; on CI it is the `mise run tree-clean` step `ci.yml` runs right
+#   after `mise run ci`. Either covers every gate that lap ran rather than this
+#   one suite. STRICTER THAN THE RETIRED BODY, which read `--untracked-files=no`:
+#   a case that leaves a new untracked, unignored file behind now refuses too.
+#   NARROWER IN ITS DIAGNOSTIC: the retired body listed the changed paths, and
+#   `receipt clean` prints a count and never a path (house-style §6), so the
+#   reader runs `git status` to find them. What it no longer catches is a bare `mise run test:cargo` outside either lap,
+#   which no gate reads.
 #
-# THE SUITE LEAVES THE REAL CHECKOUT AS IT FOUND IT (CLOUD-1953). On #928
-# `bench_tokens` rewrote the committed `RESULTS.md` from a verb whose cwd was
-# this checkout, and nothing noticed until a later lap's diff. A line predicate
-# over test sources cannot see that -- the write is a verb's, at run time -- so
-# the check is the tree itself: tracked state before and after, compared, and a
-# difference is a refusal naming the paths. Untracked files are out of scope:
-# `target/` and the scratch parent are expected to move.
-# >>> tree-before
-tracked_before=$(git status --porcelain --untracked-files=no)
-# <<< tree-before
-if ! cargo nextest run --workspace; then exit 1; fi
-# >>> tree-after
-tracked_after=$(git status --porcelain --untracked-files=no)
-if [ "$tracked_before" != "$tracked_after" ]; then
-  echo "::error:: test:cargo: the suite changed tracked files in this checkout -- a case wrote outside its scratch directory:" >&2
-  printf '%s\n' "$tracked_after" | cut -c4- >&2
-  exit 1
-fi
-# <<< tree-after
-cargo run --quiet -p batten -- step record test:cargo || true
-'''
+# THE STATEMENT AFTER THE `--` STAYS BARE, and `ci-local-parity` property 16 is
+# why (CLOUD-662): a foreign CI leg's line must be `mise exec -- ` plus exactly
+# that tail, and `task_cargo` in `policy/ci-parity.rego` lifts it off the
+# `step run test:cargo -- ` wrapper. The fail-fast posture rides
+# `NEXTEST_PROFILE` in `[env]`, which every leg inherits.
+run = "cargo run --quiet -p batten -- step run test:cargo -- cargo nextest run --workspace"
 
 # --- the four tiers `hk` reaches by name (CLOUD-1164) ---------------------------
 #
@@ -1399,39 +1382,47 @@ cargo run --quiet -p batten -- step record test:cargo || true
 #
 # NOT receipt-routed, for `test:filter`'s reason: a receipt keyed on a subset's
 # inputs would be minted by a run of one target and then answer for the rest.
+#
+# `--test it <module>::` RATHER THAN A FILTERSET (CLOUD-843). The expression form
+# `binary(it) & test(/^<module>::/)` needed a shell to carry its `&` and parens,
+# and the two spellings select the same set: `--test it` IS `binary(it)`, and a
+# positional filter is a substring over `<module>::<case>` names in which each of
+# these seven modules appears once, at the head — `tests/it/main.rs` declares no
+# other module whose name contains one of them. `--no-tests=fail` still refuses a
+# selection that matches nothing, so a renamed module reds rather than passing.
 [tasks."test:reference-coverage"]
 description = "Gate: the rendered CLI reference and the command spec name exactly the same flags, in both directions (CLOUD-171)"
-run = "cargo nextest run -p batten --no-tests=fail -E 'binary(it) & test(/^reference_coverage::/)'"
+run = "cargo nextest run -p batten --no-tests=fail --test it reference_coverage::"
 env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
 
 [tasks."test:skill-contract"]
 description = "Gate: every shipped skill stays inside its line budget and describes only the surface the binary ships (CLOUD-213)"
-run = "cargo nextest run -p batten --no-tests=fail -E 'binary(it) & test(/^skill_contract::/)'"
+run = "cargo nextest run -p batten --no-tests=fail --test it skill_contract::"
 env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
 
 [tasks."test:config-schema"]
 description = "Gate: the committed JSON Schemas match the ones the binary derives from the config types (CLOUD-33)"
-run = "cargo nextest run -p batten --no-tests=fail -E 'binary(it) & test(/^config_schema::/)'"
+run = "cargo nextest run -p batten --no-tests=fail --test it config_schema::"
 env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
 
 [tasks."test:hook-profile"]
 description = "Gate: the hook profile the wiring declares is the one the binary reports (CLOUD-509)"
-run = "cargo nextest run -p batten --no-tests=fail -E 'binary(it) & test(/^hook_profile::/)'"
+run = "cargo nextest run -p batten --no-tests=fail --test it hook_profile::"
 env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
 
 [tasks."test:verdict-vocabulary"]
 description = "Gate: every verdict vocabulary word is one token under the declared pin (CLOUD-1284 arm 4)"
-run = "cargo nextest run -p batten --no-tests=fail -E 'binary(it) & test(/^verdict_vocabulary::/)'"
+run = "cargo nextest run -p batten --no-tests=fail --test it verdict_vocabulary::"
 env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
 
 [tasks."test:refusal-ceiling"]
 description = "Gate: every emitted mediated refusal line is within the declared `[refusal]` ceiling (CLOUD-1286)"
-run = "cargo nextest run -p batten --no-tests=fail -E 'binary(it) & test(/^refusal_ceiling::/)'"
+run = "cargo nextest run -p batten --no-tests=fail --test it refusal_ceiling::"
 env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
 
 [tasks."test:config-deprecations"]
 description = "Gate: no config key left the published schema without a deprecation window (CLOUD-360)"
-run = "cargo nextest run -p batten --no-tests=fail -E 'binary(it) & test(/^config_deprecations::/)'"
+run = "cargo nextest run -p batten --no-tests=fail --test it config_deprecations::"
 env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
 
 [tasks.prose-only-check]
@@ -1740,10 +1731,10 @@ description = "Reclaim superseded build artifacts, and refuse below a measured d
 # carrying CLOUD-1030's repair.
 #
 # THE TASK NAME SURVIVES THE MIGRATION, for `perf-pair`'s reason above and with
-# the same edge: `verify`'s body and `mise-tasks/land.sh` both invoke
-# `mise run target-prune` by name, and `land.sh` is an authored shell rule
-# `shell edit refused` refuses to see edited. Keeping the name is what holds
-# this retirement to the one program being retired.
+# the same edge: `build:release` depends on it by name, and `verify` reaches it
+# as `target-prune:lap`, which runs this same argv with the open-lap marker
+# cleared. Keeping the name is what holds this retirement to the one program
+# being retired.
 #
 # `-y` RATHER THAN A PROMPT, and it is house-style §5's binding on a destructive
 # verb rather than a convenience: the primary caller is `verify`, which is
@@ -1757,98 +1748,49 @@ description = "Reclaim superseded build artifacts, and refuse below a measured d
 # program that enforced it, and parsed its own source at runtime to check the
 # arithmetic; the engine validates that at config load instead.
 #
-# THE INSTALLED BINARY FIRST, AND THIS ONE IS NOT STYLE — it is the circularity
-# the port created, raised on #734 and confirmed. Every other migrated task is a
-# bare `cargo run`, which is right for them: they run when the tree is healthy.
-# This one runs when the disk is SHORT, at the top of `verify` and every `land`
-# lap, and `cargo run` has to write to `target/` before it can reclaim anything.
-# So on the exact input this task exists for, a build-first entry point fails
-# during the build — and fails having consumed more of the disk, reporting
-# "pruning did not recover it" about a prune that never ran. The predecessor
-# needed no build at all, so this is a capability the migration would otherwise
-# have dropped silently.
+# ONE ARGV, AND THE FALLBACK CASCADE IS GONE (CLOUD-843, CLOUD-1990). The body
+# this replaces tried the installed binary, fell through to `cargo run` when it
+# refused, and — with no binary at all — compared `df` against `[prune.cold]`
+# in `awk` before deciding whether to build. Each arm had a real reason, and each
+# reason now has a home that is not a shell string:
 #
-# `session-start.sh` installs the binary (`mise run install:local`), so the first
-# branch is the ordinary one. The fallback is for a clone that has not been
-# provisioned, where the disk is not the problem. A stale installed binary is not
-# a silent wrong answer: `Config` is `deny_unknown_fields`, so one predating
-# `[prune]` refuses the table outright rather than pruning to a floor it invented.
+# * A BINARY THE CONFIG HAS OUTRUN (CLOUD-1146) is the engine's to answer, and it
+#   does: `target prune` reads the committed `[prune]` table ALONE when the whole
+#   file will not load under it (`prune::declared_alone`), strictly — a `[prune]`
+#   key it predates still refuses. So the stale-binary case reclaims instead of
+#   building, which is the circularity #734 raised, removed rather than routed.
+# * NO BINARY AT ALL (CLOUD-1838) is provisioning's, and it is answered before any
+#   task runs: `session:batten` installs the latest release through `install.sh`,
+#   which stays shell because nothing else can run before `batten` exists. On a
+#   machine nobody provisioned this now fails at once with the runner's own
+#   "not found", before a build has written a byte — stricter than the retired
+#   arm, which built whenever the disk was above the cold floor.
 #
-# AND THAT LOUD REFUSAL MUST NOT BE THE LAST WORD, which is the half the paragraph
-# above got wrong (CLOUD-1146). `deny_unknown_fields` makes the stale binary
-# refuse rather than invent a floor — right — but `verify` treats this task's
-# non-zero as a DISK verdict and reports "not enough disk … pruning did not
-# recover it" over a run that was a config-parse error on 17 GB of free space.
-# The wrong cause is the defect: a reader is sent to free space that is already
-# free.
+# THE COST, stated rather than absorbed: until a release carries
+# `declared_alone`, a release binary older than the tree's `batten.toml` refuses
+# here where the retired body built the engine instead. `_.path` puts this
+# checkout's own `target/release` first, so the window closes the moment a
+# release build of this tree exists. A clone with neither a release build nor an
+# installed `batten` cannot reach one through `build:release` either, since that
+# task depends on this one: it runs `./install.sh` or `cargo build --release -p
+# batten` once by hand (a `cargo run` puts its binary in `target/debug`, which
+# `_.path` does not name, so it would not close the window).
 #
-# `land`'s speculative linearization is what makes it routine rather than rare.
-# It rebases this branch onto another branch's UNLANDED commits to keep lapping
-# while the landing lease is held, so the tree carries that branch's `batten.toml`
-# and this container's installed binary — which is built from THIS branch and
-# cannot know a key the other one just added. Measured over one session:
-# `protected_readers`, `[prune.cold.basis]` and a new `[[recorder]]` value variant
-# each killed a lap this way, none of them a fault of the branch trying to land.
-#
-# So a failed first attempt falls through to the build, which is the only entry
-# point where engine and config are the pair that ships — `batten-check` states
-# that reason for choosing `cargo run` outright. The circularity argument above
-# survives intact, because it is about which entry point goes FIRST: the install
-# is still tried first and still needs no build, so the disk-short case this task
-# exists for reaches the reclaim exactly as before. Only a first attempt that
-# already failed pays for a build, and where that failure really was the disk the
-# build fails too — the same refusal today gives, with the build's own cause
-# rather than a borrowed one.
-#
-# AND AN ABSENT `batten` ASKS THE DISK QUESTION BEFORE IT BUILDS (CLOUD-1838). The
-# paragraph above holds for a binary that is PRESENT and refuses. It does not hold
-# when there is no binary at all — a fresh clone, a developer machine, provisioning
-# that did not finish — because then there is no first attempt, and the fallback
-# is the only arm: it compiled the engine and wrote to `target/` before anything
-# looked at the disk, so on a short disk the reclaim died on cargo's `ENOSPC`
-# without ever speaking. The one state this task exists for was the one state it
-# could not answer.
-#
-# So the absent arm answers the narrower question that needs no engine: is there
-# room to BUILD the engine that would answer? `[prune.cold] mb` is exactly that
-# number — the measured cost of a cold build — so it is read, not re-derived, and
-# the floor keeps one authority. Below it, refuse with exit 2, which is the code
-# the engine gives its own below-floor refusal. At or above it, or where either
-# number cannot be read, fall through to the build exactly as before: the new arm
-# refuses only on evidence and never invents a verdict.
-#
-# `awk`, not `taplo`: an unprovisioned clone is where a mise-installed tool is
-# likeliest missing, and depending on one would reopen the hole in the case that
-# makes it. String comparison rather than a regex, so the program carries no
-# escape a TOML basic string would have to survive.
-#
-# `sh -o errexit`, not bash-without-`set -e` — this task declares no `shell`, so
-# `rules/toolchain.md`'s no-`set -e` note does not cover it. Every command that
-# may fail therefore sits in an `if` or an `&&` list, where errexit does not fire.
-#
-# THE COST, stated: with no `batten` and free space between the warm and cold
-# floors, this refuses where the engine might have passed a warm tree. That is
-# the one manual step CLOUD-1838 accepts for this shape. It cannot produce a pass
-# the engine would have refused.
-#MUTANT-SUITE crates/batten/tests/it/target_prune.rs
-#MUTANT prune-fallback-builds|s@^if command -v batten >/dev/null 2>&1; then$@if true; then@|an_absent_engine_on_a_short_disk_is_refused_without_a_build
-run = """
-if command -v batten >/dev/null 2>&1; then
-  if batten target prune -y; then
-    exit 0
-  fi
-else
-  free="${TARGET_PRUNE_FREE_MB%%,*}"
-  if [ -z "$free" ]; then
-    free="$(df -Pm . | awk 'NR == 2 { print $4 }')"
-  fi
-  if cold="$(awk '$0 == "[prune.cold]" { inside = 1; next } substr($0, 1, 1) == "[" { inside = 0 } inside && $1 == "mb" && $2 == "=" { print $3; exit }' batten.toml)" && [ -n "$cold" ] && [ -n "$free" ] && [ "$free" -lt "$cold" ]; then
-    echo "target-prune: no batten on PATH, and ${free}MB free is below the ${cold}MB a cold build needs — refusing rather than building the engine to ask" >&2
-    exit 2
-  fi
-fi
-cargo run --quiet -p batten -- target prune -y
-"""
+# `batten`, BARE, and resolved through `_.path` like `alive` and `ci-wait`: the
+# point of this task is to run WITHOUT building, which `cargo run` cannot do.
+run = "batten target prune -y"
+
+# THE LAP'S OWN BOUNDARY (CLOUD-861, CLOUD-1913), as a task because the marker is
+# an environment fact and a `run` array cannot scope one to a single step.
+# `verify` exports `BATTEN_PRUNE_LAP_OPEN` to everything it runs so that any
+# nested `target-prune` (a `build:release` reached mid-gate) does not escalate;
+# the lap's opener and closer are the two prunes that must act anyway, so they
+# clear it for their own call and nothing else. This is the retired body's
+# `BATTEN_PRUNE_LAP_OPEN= mise run target-prune`, spelled as data.
+[tasks."target-prune:lap"]
+description = "Open or close a verify lap: `target-prune` with the open-lap marker cleared for this one call"
+env = { BATTEN_PRUNE_LAP_OPEN = "" }
+run = "batten target prune -y"
 
 [tasks.filed-here-check]
 description = "Gate: every row this branch put on the board was refined at creation and none names code this branch has open (reads the recorder's record; pointer-only)"
@@ -2759,21 +2701,26 @@ description = "Build the release binary the hook registrations execute"
 # `the_reclaim_itself_stays_dependency_free_and_the_surfaces_are_not_empty` in
 # `crates/batten/tests/it/session_provisioning.rs` asserts rather than assumes.
 #
-# WHETHER IT NEEDS A BUILD depends on whether `batten` is installed, and this
-# paragraph once said otherwise. It claimed the reclaim "needs no build in order
-# to run" and called that checked; `target-prune`'s own header says the fallback
-# is "for a clone that has not been provisioned", and that fallback was `cargo
-# run` — a build. So on an unprovisioned clone with a short disk, the precondition
-# this task depends on compiled the engine first and died on `ENOSPC`. CLOUD-1838
-# closed that: with `batten` installed the reclaim runs build-free; with it absent,
-# a disk below the cold-build floor is refused WITHOUT a build, and only a disk
-# with room for one pays for it. The claim is now true because the code changed,
-# not because the sentence did.
+# THE PRECONDITION NEEDS A `batten` TO RUN AT ALL (CLOUD-843), and this is a
+# narrowing stated rather than absorbed. `target-prune` is one bare `batten`
+# argv now, never a build: the retired body's no-binary arm (CLOUD-1838), which
+# compared `df` against `[prune.cold]` and built only above it, is gone with the
+# shell it was written in. So on a machine with no `batten` on PATH and no
+# `target/release/batten`, this task — and `install:local` through it — stops
+# at the runner's "not found" before a byte is built. That case is
+# provisioning's: `session:batten` installs a release through `install.sh`, and
+# a clone nobody provisioned runs `./install.sh` (or `cargo build --release -p
+# batten`, which puts the tree's own binary first on `_.path`) once by hand.
 #
-# IT DOES NOT REACH INSIDE `verify`'S LAP, which is the pairing that would break
-# if it did: this task's callers are `install:local` and the two benches, while
-# `verify`, `verify:gated` and `land` reach the engine through `cargo run -p
-# batten` directly. So the two prune calls that bracket a lap keep their order.
+# IT DOES NOT REACH INSIDE `verify`'S LAP TODAY: its callers are `install:local`
+# and the two benches, none of which `verify` runs — `test:bats`'s reach into it
+# went with its startup-table dependency (CLOUD-1753). `verify` itself reaches the
+# engine two ways, `cargo run -p batten` for its questions and a bare `batten`
+# for the prunes that bracket the lap. Should a caller of this task ever run
+# under `verify`, CLOUD-1913's open-lap marker, which `verify` exports to
+# everything it runs, makes that nested prune touch nothing, while
+# `target-prune:lap` clears the marker for the lap's own opener and closer. So
+# those two keep their order either way.
 #
 # WHAT IT DOES COST, stated so a reviewer need not derive it. `prune::Phase` is
 # DERIVED from the lap journal rather than declared — a run that finds an open
@@ -4128,19 +4075,17 @@ description = "Run the workspace suite against x86_64-unknown-linux-musl — the
 # than the cost: a receipt keyed on the same sources, command and toolchain would
 # be minted by whichever suite ran first and then answer for the other. Same
 # reason `test:filter` and the four `hk` tiers above decline one.
-run = '''
-# Guarded by hand because a task body does not run under `set -e`
-# (rules/toolchain.md). Routed through target-ensure so a concurrent toolchain
-# mutator queues on the lock instead of colliding inside rustup (CLOUD-220).
-if ! mise run target-ensure x86_64-unknown-linux-musl; then
-  echo "::error:: test:musl: could not install the musl target, so its suite did not run." >&2
-  exit 1
-fi
-if ! cargo nextest run --workspace --target x86_64-unknown-linux-musl; then
-  echo "::error:: test:musl: the suite fails against x86_64-unknown-linux-musl — the triple install.sh resolves for every Linux consumer." >&2
-  exit 1
-fi
-'''
+#
+# TWO ARGV STEPS, NO SHELL (CLOUD-843). mise runs a `run` array in order and
+# stops at the first step that fails, carrying that step's own exit code — which
+# is exactly what the hand-written `if ! …; then exit 1; fi` guards spelled, less
+# the flattening to 1. The target step still goes through `target-ensure`, so a
+# concurrent toolchain mutator queues on the lock instead of colliding inside
+# rustup (CLOUD-220).
+run = [
+  "mise run target-ensure x86_64-unknown-linux-musl",
+  "cargo nextest run --workspace --target x86_64-unknown-linux-musl",
+]
 
 [tasks.hk-version]
 description = "Gate: hk's version is pinned identically in mise.toml and hk.pkl (amends URL). A bump to one without the other is the moment to revisit the hook config."
@@ -4298,9 +4243,10 @@ env = { MCP_TIMEOUT_LOGS = "target/mcp-logs-for-fixtures-never-created" }
 # CORRECTED 2026-09-01, measured. These three comments said "with no `set -e`" and
 # were wrong. The discriminator is a DECLARED SHELL, not the file: a task that
 # declares `shell = "bash -c"` really does run every line regardless — that is the
-# case `rules/toolchain.md` documents and `tests/task-fail-closed.bats`
-# gates, over `verify` and `verify:gated`, both of which declare it. This task
-# declares none, so it gets the default and `-e` with it. Observed while landing
+# case `rules/toolchain.md` documents. `verify` and `verify:gated` were its two
+# instances until CLOUD-843 made both `run` arrays, which need no guard at all
+# (`crates/batten/tests/it/verify_chain.rs`). This task declares no shell, so it
+# gets the default and `-e` with it. Observed while landing
 # CLOUD-1085: a bare call in a default body aborted the task before the branch
 # reporting which failure it was could run.
 #
@@ -4535,11 +4481,11 @@ run = "hk check --all"
 # CLOUD-1753.
 #
 # THE TASK NAME SURVIVES THE MIGRATION, for `perf-pair`'s reason and with a
-# sharper edge here: `verify:gated` names it in BOTH `depends` and its body, and
-# two governed suites — `tests/verify.bats` and `tests/task-fail-closed.bats` —
-# assert the literal string in each place, the second including that the body's
-# call PRECEDES the `receipt record` it guards. A renamed task would need those
-# suites edited, which a retirement may not do.
+# sharper edge here: `verify:gated` names it in BOTH `depends` and its run
+# array, and `crates/batten/tests/it/verify_chain.rs` asserts the literal name in
+# each place, including that the array's first step PRECEDES the `receipt record`
+# it guards (`the_receipt_is_the_last_step_and_follows_the_lap_close`). A renamed
+# task would need that tier edited alongside it.
 #
 # A ONE-LINE WRAPPER, and the whole predicate is the engine's. `receipt clean`
 # and the guard inside `receipt record` both call one `receipt::tree_state`, so
@@ -4803,44 +4749,30 @@ esac
 '''
 
 [tasks."ci-wait"]
-description = "Block until every required check on this SHA reaches a verdict (0 green / 1 red / 2 could not look / 3 no verdict is coming)"
-shell = "bash -c"
-run = '''
-set -uo pipefail
-sha="${SHA:-$(git rev-parse HEAD 2>/dev/null || true)}"
-if [[ -z "$sha" ]]; then
-  echo "::error:: ci-wait: no SHA to judge: neither \$SHA nor a git HEAD." >&2
-  exit 2
-fi
-args=(--sha "$sha"
-  --interval "${CI_WAIT_INTERVAL:-1}"
-  --required "${CI_REQUIRED_CHECKS:-}"
-  --absent-ok "${CI_ABSENT_OK_CHECKS:-}"
-  --answered "${CI_ANSWERED_CONCLUSIONS:-}"
-  --fanin "${CI_FANIN_CHECK:-}")
-[[ -z "${REPO:-}" ]] || args+=(--repo "$REPO")
-# The two progress signals are the poll's (CLOUD-499); which program writes them
-# down is this repository's, which is why the engine takes it as a flag. Silent
-# when $BATTEN_TASK_PID is unset, which is every caller but `land`.
-[[ -z "${BATTEN_TASK_PID:-}" ]] || args+=(--progress "batten task" --progress-id "$BATTEN_TASK_PID")
-batten pr watch "${args[@]}"
-rc=$?
-# NO "NOT YET" ARM, AND NOW ONE "NOT EVER" ARM (CLOUD-497). The claim that the
-# poll does not return until the answer is in was true of every state but one: a
-# required set that is fully terminal with a masked name mints nothing further,
-# so the poll would have returned only by being killed — measured at 48 minutes
-# on PR #378 over a head whose CI was green, holding the landing lease against a
-# queue the whole time. The engine now ends that wait at `Internal`, and this
-# passes it through as 3 rather than flattening it onto could-not-look, because
-# `land` must tell a closed question from an unread one: the first stops and
-# releases the lease, the second laps.
-case "$rc" in
-0) exit 0 ;;
-2) exit 1 ;;
-3) exit 3 ;;
-*) exit 2 ;;
-esac
-'''
+description = "Block until every required check on HEAD reaches a verdict — `pr watch`'s own codes (0 green / 2 red / 3 no verdict is coming or could not look / 1 an unusable roster)"
+# ONE ARGV, NO SHELL (CLOUD-843, CLOUD-1990). The body this replaces did three
+# things around `batten pr watch`, and each now lives where it belongs:
+#
+# * THE SUBJECT. It resolved `$SHA` or the checkout's HEAD in bash. `--sha HEAD`
+#   now reaches the verb, which resolves a ref this checkout knows before asking
+#   the forge — the caller still NAMES the commit, which is the property
+#   `pr watch`'s required `--sha` exists to keep. Another commit is
+#   `batten pr watch --sha <sha> …` directly; `$SHA` is no longer read.
+# * THE ROSTER. The four `CI_*` values are this repository's, declared once in
+#   `[env]`, and reach the flags through mise's own template — single-quoted,
+#   because a matrix leg's name carries spaces and parentheses. `--interval` and
+#   `--repo` are left to the verb's defaults (1s, and the remote's slug); a caller
+#   wanting either appends it, since mise appends a task's arguments to its body.
+#   The `--progress` pair keyed on `$BATTEN_TASK_PID` went with the only caller
+#   that set it: `land` polls in process now (`land::wait`).
+# * THE EXIT TABLE. It translated the engine's codes onto a legacy
+#   `0 green / 1 red / 2 could-not-look / 3 no-verdict-coming` spelling. Nothing
+#   reads that spelling any more — `land` stopped running this task when it moved
+#   in process — so the task answers in the one table every verb shares
+#   (house-style §7): a red head is `2`, the verdict; a closed question with a
+#   masked name and a reading that could not be taken are both `3`, which the
+#   engine's own stdout tells apart (CLOUD-497); an unusable roster is `1`.
+run = "batten pr watch --sha HEAD --required '{{env.CI_REQUIRED_CHECKS}}' --absent-ok '{{env.CI_ABSENT_OK_CHECKS}}' --answered '{{env.CI_ANSWERED_CONCLUSIONS}}' --fanin '{{env.CI_FANIN_CHECK}}'"
 
 [tasks."task-registry"]
 description = "Record what a long-running task is doing, so its liveness and phase can be read without a log"
@@ -4934,240 +4866,64 @@ depends = ["hooks", "deny"]
 
 [tasks.verify]
 description = "Full local pre-flight — run this before marking any draft PR ready"
-shell = "bash -c"
-# NO `depends`, and that absence is the whole of CLOUD-407. mise runs a
-# dependency BEFORE the body and propagates its exit code VERBATIM, so every
-# code a `depends` task can mint escaped this task unmapped — including the one
-# code that means something else here. `batten check` exits 2 for a policy
-# violation (house-style §6-§7, non-negotiable rule 5) and reaches `verify`
-# through `hooks` -> `ci`; `tree-clean` and `semver` each exit 2 for "could not
-# look". `land` reads a 2 from `verify` as "main moved under the run, lap", so a
-# real refusal of the tree read as the harmless rebase race and lapped to the
-# backstop — measured on PR #322, eight laps and ~13 minutes, with three named
-# `path:line` pointers nobody surfaced.
+# A SEQUENCE OF ARGV STEPS, AND NO LONGER A MAPPER (CLOUD-843, CLOUD-1990). mise
+# runs a `run` array in order, stops at the first step that fails, and exits with
+# THAT step's code — measured, the same verbatim propagation CLOUD-407 recorded
+# for `depends`. The body this replaces existed to re-number those codes: every
+# failure left as 1 except `linear-check`'s behind-verdict, which left as 2,
+# because `land` read a 2 from `verify` as "main moved, lap" and a policy verdict
+# arriving as 2 had lapped a refused tree to the backstop (PR #322).
 #
-# So this task is now a MAPPER and nothing else. It owns exactly one decision:
-# which failures mean "lap" and which mean "stop". Everything that can fail for a
-# content reason lives in `verify:gated` and reaches here through one guarded
-# call, which flattens whatever code it carried to 1.
+# THE DECISION MOVED TO THE ONE READER THAT MADE IT (CLOUD-318, CLOUD-407).
+# Whether trunk moved is a fact `land` can READ — it races `main-watch` against
+# this very gate already — so `land::verify_raced` now confirms a gate's 2 against
+# its own reading of the base before it laps, and a 2 the base did not move under
+# is a refusal of the tree like any other. A code no longer has to carry that
+# fact, so no shell has to mint it; see `land::confirmed`.
 #
-# The ordering changed with the split, deliberately: `linear-check` now runs
-# BEFORE the expensive gate set rather than after it. That is the cheap staleness
-# question preceding the costly one, which is the landing loop's own economy —
-# a branch that is behind is going to lap regardless, and paying for `ci` and
-# `cross-check` first buys nothing. `tree-clean`'s fail-fast is unaffected: it is
-# still in `verify:gated`'s `depends`, which mise runs in parallel.
-run = '''
-# A HEAD THIS GATE ALREADY PROVED IS NOT PROVED TWICE (CLOUD-1891). The receipt
-# the last line of `verify:gated` writes is valid only for THIS head, taken in
-# THIS checkout, against the `origin/main` that resolves now — so fetch first,
-# as `linear-check` would, and a trunk that moved invalidates it. A clean tree
-# too, because the receipt attests HEAD's bytes and a dirty tree is not them.
-# Anything short of all three falls through to the full gate below.
-if git fetch -q origin main 2>/dev/null && mise run tree-clean >/dev/null 2>&1 \
-  && cargo run --quiet -p batten -- receipt status verify >/dev/null 2>&1; then
-  echo "verify: fast-forward-green — a valid receipt already covers this HEAD against current origin/main"
-  exit 0
-fi
-# A task body does not run under `set -e` (see rules/toolchain.md), so
-# every step whose failure changes the verdict is guarded by hand. Unguarded,
-# a failed linear-check let this body run commit-lint against a stale
-# origin/main, write the receipt below, and print "fast-forward-green" — a
-# silent false green in the one gate that decides whether CI minutes get spent.
-# The code is PROPAGATED, not flattened (CLOUD-318). `linear-check` answers 2
-# for "measured, and this branch is behind" and 1 for the two environment
-# refusals — a fetch that failed, an origin/main that does not resolve. A caller
-# driving a loop laps on the first and stops on the second, and it can only do
-# that if the distinction survives this guard.
+# THE ORDER IS THE RETIRED BODY'S, AND EACH STEP STILL MEANS WHAT IT MEANT:
 #
-# This is the ONLY `exit 2` in the task, and that is now a checkable property
-# rather than an intention (tests/verify.bats). Everything else is a stop.
+# 1. RECLAIM FIRST (CLOUD-766, CLOUD-861). The only guard the others cannot
+#    survive failing: with no disk every question below answers "failed" for a
+#    reason unrelated to the tree. `target-prune:lap` because this task exports the
+#    open-lap marker below and the lap's own opener must act regardless.
+# 2. THE TOOLCHAIN (CLOUD-1683), after the reclaim and before anything that runs
+#    `cargo run`, so an unprovisioned tree is refused as that and not as a missing
+#    claim receipt.
+# 3. THE CLAIM RECEIPT (CLOUD-431, CLOUD-693, CLOUD-1295). The hook row is the
+#    fast half and can be unloaded; this is the half every landing path runs. ANY
+#    ONE of the three kinds satisfies it — `claim.<branch>` from a refined issue,
+#    `bot.<branch>` from `batten claim bot`, `carry.<branch>` from `batten claim
+#    carry` — and `receipt status --or` is that disjunction in the engine, judged
+#    by `receipt::branch_validity` for each, so CLOUD-516's staleness rule holds
+#    for all three. A DETACHED HEAD IS NO LONGER EXEMPT: the verb reports it as
+#    could-not-look, which `land` reads as a gate that did not judge. `land`
+#    never verifies detached — its replay leaves the branch checked out — so the
+#    carve-out's stated reason (`land.sh` rebasing) retired with that program.
+# 4. LINEARITY (CLOUD-318), cheap before costly: a branch that is behind laps
+#    regardless, so paying for the gate set first buys nothing. `linear-check`'s
+#    own 2 still means "behind", and it reaches `land` unchanged.
+# 5. THE GATE SET, `verify:gated`, which writes the receipt last.
 #
-# THE CLAIM RECEIPT, FIRST (CLOUD-431), because it decides whether this branch
-# should exist at all — a cheaper question than any below it, and a different
-# kind of question from all of them.
+# THE OPEN-LAP MARKER (CLOUD-1913) is exported to every step, and — because a
+# nested `mise run` inherits its parent's environment where a task's own
+# `depends` do not — to everything `verify:gated` depends on, which is the reach
+# the retired `export` had. `{{config_root}}` is this checkout's root, the tree
+# `prune::inside_open_lap` compares against.
 #
-# `batten hook`'s `claim-needs-receipt` row is the fast feedback for this and it
-# is a HOOK, which means it can be unloaded. So the load-bearing half sits here,
-# in the one task every landing path runs. `claim-check` mints the receipt on its
-# pullable path only, so its presence attests that some issue was checked for a
-# competitor AND for refinement that predates this session.
-#
-# Detached HEAD is exempt, the same carve-out the engine makes deliberately:
-# a rebase detaches, and refusing there would fail every lap of `land` for a
-# state that is not a defect.
-#
-# ANY OF THE THREE SATISFIES THIS, AND THEY ARE THREE BECAUSE THEY ATTEST THREE THINGS
-# (CLOUD-693). `claim.<branch>` says a human or agent read a refined issue and
-# checked it for a competitor. Nothing on a BOT branch can say that honestly —
-# there was no session and the row was derived rather than refined — so
-# `batten claim bot` mints `bot.<branch>`, which attests what is
-# actually true there: an allowlisted bot opened the head, its diff touches only
-# manifests the lane owns, and its body names the row derived from that diff.
-# A THIRD kind joins them for the same reason (CLOUD-1295): a licence-carry
-# branch has no session and no bot, and `batten claim carry` attests that its
-# diff only carries rows the base table already maps.
-# Widening the agent receipt to cover bots would have made it mean less
-# everywhere, which is the trust path CLOUD-431 exists to prevent.
-# RECLAIM BEFORE ANYTHING IS SPENT (CLOUD-766). `target/deps` grows ~1.5-2 GB per
-# lap — a rebase mints a new SHA, which changes every artifact's metadata hash,
-# and cargo never reclaims the superseded copy — so a session that lands more
-# than a couple of issues runs the volume out. Measured twice in one session.
-#
-# It is FIRST, ahead of even the claim receipt, because it is the only guard here
-# whose failure the others cannot survive: with no disk, every question below
-# answers "failed" for a reason that has nothing to do with the tree. Exhaustion
-# otherwise arrives as a rustc IO error inside a test run, under a `land` line
-# telling the author to fix their own diff.
-#
-# Exit 1 is "still short with nothing left to reclaim", which is a stop, not a
-# lap: `land` reads 2 as "main moved, try again" and nothing about a full volume
-# improves by rebasing.
-# THE SLOW-TIER DECISION, PROVED LOCALLY RATHER THAN IN CI. The `ci` job asks
-# `ci-slow-needed` whether a diff can move the hk slow tier and pays for it only
-# when the answer is yes, so a wrong answer is a verdict silently not taken. The
-# retired program carried a `--probe` mode as its own gate; the list is
-# `[ci] slow_inert` now and the probes are `path list loose`
-# (`policy/ci-slow-inert.rego`), so `batten check` runs them with every other row
-# and NO separate invocation belongs here — one added below was answered by this
-# task's own `cargo` stub in `tests/verify.bats` and would have passed vacuously.
-# (`ci-local-parity` property 3 is satisfied by the name appearing in this block.)
-
-# THIS IS THE LAP-OPEN BOUNDARY. Its twin at the end of `verify:gated` closes
-# the lap this admits, which is what makes the floor an invariant rather than a
-# precondition (CLOUD-861).
-#
-# THE ONE-WAY GUARD STAYS, and that is a finding about CLOUD-1153 rather than a
-# preference. That row wants three messages here, because this line reports ANY
-# non-zero as "not enough disk" — so a `batten` refusing for a config reason is
-# reported as a full volume, which is the misattribution the row is about, one
-# layer out. It cannot be written HERE: `tests/verify.bats`'s "a volume that
-# cannot be recovered is a STOP, not a lap" pins exit 1 to that exact phrase, and
-# `shell edit refused` refuses an edit to a bats suite with no override route
-# and no `bypass_env`. So CLOUD-1153 is a row whose §1 is written in the wrong
-# shape — it needs the classification where a gate can already see it, not a
-# fourth authority in this body — and it is left on the board rather than
-# smuggled through a governed file.
-if ! mise run target-prune; then
-  echo "::error:: verify: not enough disk to run the gate, and pruning did not recover it — the refusal above names free space and the floor. No receipt written." >&2
-  exit 1
-fi
-# THE LAP IS OPEN, AND ONLY ITS OWN CLOSE MAY PRUNE IT (CLOUD-1913). Everything
-# the gate spawns inherits this, so a `build:release` reached from inside —
-# `test:bats`'s startup repair — no longer escalates mid-gate over the suite's
-# fixtures and clippy's tree. The value names this tree, so a fixture elsewhere
-# prunes as before. `verify:gated`'s close clears it for its own call.
-export BATTEN_PRUNE_LAP_OPEN="$PWD"
-# THE TOOLCHAIN, BEFORE ANYTHING IS DECIDED OR WRITTEN (CLOUD-1683). Measured:
-# `mise install` wrote `mise ERROR` and exited 0 on a credential failure,
-# provisioning reported success, and this task then returned 0 without running a
-# single gate — a branch carrying no claim receipt at all reported green, which
-# is rule 5 defeated at the one place it cannot be observed.
-#
-# Fixing the install alone is not enough and that is the load-bearing half: ANY
-# absent dependency reproduces it, so the invariant is asserted HERE, over the
-# declaration, rather than trusted from upstream of it.
-#
-# AFTER the reclaim and BEFORE the receipt. After, because a run needs disk
-# before it needs tools, and the reclaim's precedence over the receipt is pinned
-# textually in `tests/verify.bats`. Before, because the receipt question is
-# `cargo run -p batten -- …`: on an unprovisioned tree that fails for the wrong
-# reason and gets reported as "no VALID claim receipt", which is the
-# misattribution one layer up from the one this row closes.
-#
-# `mise run`, never `batten doctor toolchain` directly. `tests/verify.bats` stubs
-# the task runner and nothing else, answering 0 for any task it was not told
-# about; a direct invocation has no stub, would escape to the real PATH inside
-# that sandbox, and would redden a suite `shell edit refused` forbids editing —
-# retire it whole or leave it alone, and there is no third shape.
-#
-# Exit 1, never 2: `linear-check`'s behind-verdict is the only 2 this mapper
-# mints, `land` reads 2 as "main moved, lap", and nothing about an unprovisioned
-# container improves by rebasing.
-if ! mise run toolchain-check; then
-  echo "::error:: verify: this checkout's toolchain is not provisioned — the refusal above names every declared tool that is not installed, so the gates below would not run at all rather than run and pass. Run \`mise run session:install\`, then verify again. No receipt written." >&2
-  exit 1
-fi
-claim_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
-if [ -n "$claim_branch" ]; then
-  # ONE PREDICATE, NOT A SECOND ONE WRITTEN IN SHELL (CLOUD-741).
-  #
-  # This was `[ -f "$claim_receipt" ]` — a presence test, and therefore strictly
-  # weaker than the engine's reader, which also applies CLOUD-516's staleness
-  # rule. So a branch restarted with `git checkout -B <name> origin/main` after
-  # its PR merged was void to the hook and PASSED here: the exact incident
-  # CLOUD-516 was filed for, where a receipt naming CLOUD-230 authorised edits
-  # behind four unrelated stories. The backstop was the weaker of the two, which
-  # inverts the reason a backstop exists — `claim-needs-receipt` is a HOOK and a
-  # hook can be unloaded (CLOUD-187), so when it is, nothing was left that could
-  # see staleness at all.
-  #
-  # It could not simply be taught the rule: writing that comparison a second
-  # time, in a second language, with nothing holding the two in agreement, is how
-  # this pair drifted in the first place. `receipt status --key branch` exposes
-  # `receipt::branch_validity` to the tree surface instead — which a `receipt`
-  # RULE structurally cannot reach, since `RuleKind::scopes` pins the kind to the
-  # mediated call and `batten check` can never evaluate one.
-  #
-  # `cargo run` for `batten-check`'s reason: the gate must judge the working
-  # tree's engine, not whatever binary was built last.
-  claim_line="$(cargo run --quiet -p batten -- receipt status claim --key branch 2>/dev/null)"
-  claim_rc=$?
-  if [ "$claim_rc" != 0 ]; then
-    # A bot branch attests something different and is keyed separately
-    # (CLOUD-693), but it is the same predicate over the same receipt shape —
-    # `batten claim bot` records a `base` line too, so it gets CLOUD-516's
-    # staleness rule here for free rather than needing its own.
-    #
-    # The remedy names the live verb and only the live verb. It briefly did not:
-    # `tests/verify.bats` pins this message's prose, a `.bats` under `tests/` is
-    # governed by `shell-retirement`, and the repointing arm could only admit a
-    # span that named its callee by PATH — so retiring `bot-issue` left the dead
-    # task name alive here with nowhere to put the fix. CLOUD-1299's arm 5 admits
-    # a task-name span, so the suite and this line were repointed together and
-    # the workaround is gone rather than documented.
-    bot_line="$(cargo run --quiet -p batten -- receipt status bot --key branch 2>/dev/null)"
-    bot_rc=$?
-    if [ "$bot_rc" != 0 ]; then
-      # THE THIRD KIND, AND IT IS THIRD FOR THE SAME REASON THE SECOND IS
-      # (CLOUD-1295). A licence-carry branch has no session and no bot either:
-      # `sbom-actions-currency` opens it, and neither receipt above fits. So
-      # `batten claim carry` attests what IS true there — the diff only carries
-      # rows whose repo the base table already maps, changing the sha alone, and
-      # touches nothing else. Same receipt shape, so CLOUD-516's staleness rule
-      # applies here for free rather than needing its own.
-      carry_line="$(cargo run --quiet -p batten -- receipt status carry --key branch 2>/dev/null)"
-      carry_rc=$?
-      if [ "$carry_rc" != 0 ]; then
-        # The verdict is printed rather than swallowed: `missing` and `stale-main`
-        # carry different remedies, and the pointer line is what tells them apart.
-        echo "  $claim_line" >&2
-        echo "  $bot_line" >&2
-        echo "  $carry_line" >&2
-        echo "::error:: verify: this branch carries no VALID claim receipt, so nothing attests that the work on it was pulled from a refined issue. \`missing\` means mint one: run \`mise run claim-check\` with the issue's get_issue payload on stdin, on a bot branch \`batten claim bot\`, or on a licence-carry branch \`batten claim carry\`. \`stale-main\` means a receipt EXISTS but the branch was restarted out from under it (CLOUD-516), so it must be re-claimed rather than trusted. No receipt written." >&2
-        exit 1
-      fi
-    fi
-  fi
-fi
-linear_rc=0
-mise run linear-check || linear_rc=$?
-if [ "$linear_rc" = 2 ]; then
-  echo "::error:: verify: main moved under this branch — rebase and verify again, there is nothing here to fix. No receipt written." >&2
-  exit 2
-fi
-if [ "$linear_rc" != 0 ]; then
-  echo "::error:: verify: linear-check could not establish linearity at all — see its message. No receipt written." >&2
-  exit 1
-fi
-# The one call that flattens. Whatever `verify:gated` exited — a `depends` task's
-# code, a body step's, a policy verdict's 2 — a content failure is a stop, and it
-# leaves here as 1 so no caller can mistake it for the rebase race above.
-if ! mise run verify:gated; then
-  echo "::error:: verify: a gate refused this tree — read the step's own path:line pointers above, this is not a rebase. No receipt written." >&2
-  exit 1
-fi
-'''
+# THE RECEIPT FAST PATH (CLOUD-1891) IS `land`'s AND ONLY `land`'s NOW. A lap
+# answers a head that already carries a valid `verify` receipt without running
+# this task at all (`LAND_VERIFY_RECEIPT`, `land::verified_by_receipt`), which is
+# the path the measurement was about. A hand-run `mise run verify` re-proves; the
+# early exit could not be spelled as a step of a sequence that runs every step.
+env = { BATTEN_PRUNE_LAP_OPEN = "{{config_root}}" }
+run = [
+  "mise run target-prune:lap",
+  "mise run toolchain-check",
+  "cargo run --quiet -p batten -- receipt status claim --or bot --or carry --key branch",
+  "mise run linear-check",
+  "mise run verify:gated",
+]
 
 # `ci-task-parity` RETIRED WHOLE (CLOUD-1991), and both of its halves already had
 # a home that decides them without a shell loop. "Every task a workflow runs
@@ -5182,11 +4938,12 @@ fi
 # which drive the verb the way `ci.yml` calls it.
 
 [tasks."verify:gated"]
-description = "Every gate verify runs, and the receipt — invoked only through `verify`, which maps its exit code"
-shell = "bash -c"
-# Split out of `[tasks.verify]` for CLOUD-407. Everything here can fail for a
-# CONTENT reason, so nothing here needs to preserve a distinct exit code: the
-# caller flattens the lot to 1. That is what lets `depends` stay a `depends`.
+description = "Every gate verify runs, and the receipt — invoked through `verify`, after the claim and linearity questions"
+# Split out of `[tasks.verify]` for CLOUD-407, when `verify` was a mapper that
+# flattened this task's code to 1. Nothing flattens it now (CLOUD-843): a gate
+# here that refuses leaves with its own code, and `land` no longer reads a 2
+# from the gate as "main moved" unless its own reading of the base agrees
+# (`land::confirmed`), so a policy verdict reaching `verify` still stops a lap.
 #
 # lock-check is deliberately NOT here. It runs `mise lock` — a remote round
 # trip that rewrites the tracked lockfile — so its verdict is "did upstream
@@ -5239,252 +4996,74 @@ shell = "bash -c"
 # `ready-guard`. It is deliberately NOT an hk step: `pre-commit` runs over a
 # tree that is dirty by definition.
 depends = ["tree-clean", "ci", "cross-check", "darwin-link", "zizmor", "semver"]
-run = '''
-# A task body does not run under `set -e` (see rules/toolchain.md), so
-# every step whose failure changes the verdict is guarded by hand.
+# THE BODY, AS A SEQUENCE (CLOUD-843, CLOUD-1990). It was hand-guarded shell
+# because a task body does not run under `set -e`; a `run` array needs no guard,
+# since mise stops at the first failing step and the receipt is the last one —
+# so every refusal still leaves no receipt, which is the whole of what the
+# retired `tests/task-fail-closed.bats` pinned and `verify_chain.rs` pins now.
+# The order is the retired body's:
 #
-# First, because it decides whether anything below is ABOUT the commit it names.
-# Every gate above read the working tree; the receipt at the bottom is keyed to
-# HEAD. A dirty tree that FAILS is loud and self-correcting; one that PASSES
-# writes a receipt `verified` matches and `ready-guard` accepts, so CI runs a
-# commit that was never the thing that passed (CLOUD-277).
-if ! mise run tree-clean; then
-  echo "::error:: verify: the working tree is not the bytes at HEAD, so a receipt naming HEAD would attest a run of something else. No receipt written." >&2
-  exit 1
-fi
-# `test:bats` BY NAME, and in the body rather than in the `depends` above
-# (CLOUD-1140). The `ci` job hands hk `HK_SKIP_STEPS: test:bats` so the suite runs
-# on its own runner, and `ci-local-parity` property 3 then requires the suite to
-# be a task `verify` runs by name — otherwise CI is where a shell-suite failure is
-# DISCOVERED, and discovery costs a runner. Naming it in a comment would satisfy
-# that gate's grep and nothing else, which is the shape its own header condemns.
+# * `tree-clean` FIRST (CLOUD-277): the gates above read the working tree and the
+#   receipt is keyed to HEAD, so a dirty tree must fail before anything is decided
+#   about the commit. It is also in `depends`, which fails in seconds; this one
+#   catches a tree dirtied while `depends` ran.
+# * `test:bats` in the body rather than in `depends` (CLOUD-1140), so it answers
+#   from its receipt after the `ci` leg ran the suite instead of racing it.
+# * `commit-lint` over the lap's own range (CLOUD-1702) — `verify:commit-lint`
+#   carries the base, below.
+# * `record-verdicts` before the rows that read them (CLOUD-1265).
+# * `config-lint` against the trusted base (CLOUD-236, CLOUD-1702) —
+#   `verify:config-lint` carries it.
+# * `evaluator-io-record` then its verdict row (CLOUD-1717, CLOUD-831).
+# * `perf-gate` in the body, where it does not compete with the test builds
+#   (CLOUD-1891).
+# * `prose-only-check` last of the content gates (CLOUD-827), stating no remedy of
+#   its own (CLOUD-1050): the gate's message is the remedy.
+# * THE LAP'S CLOSE (CLOUD-861): the same reclaim that opened it, recording what
+#   the lap consumed. A lap that ended below its floor leaves no receipt.
+# * The receipt (CLOUD-203), keyed to the exact commit verified. `receipt record`
+#   refuses a tree that differs from HEAD itself, which is also where CLOUD-1953's
+#   property lives now that `test:cargo` is argv: that task compared the tracked
+#   state before and after its suite, and a verb run from this checkout that
+#   rewrote a committed file — whichever gate ran it — leaves this lap with no
+#   receipt.
+run = [
+  "mise run tree-clean",
+  "mise run test:bats",
+  "mise run verify:commit-lint",
+  "mise run record-verdicts",
+  "mise run verify:config-lint",
+  "mise run evaluator-io-record",
+  "mise run batten -- check --rule 'test cover never'",
+  "mise run perf-gate",
+  "mise run prose-only-check",
+  "mise run target-prune:lap",
+  "cargo run --quiet -p batten -- receipt record verify",
+]
+
+# THE LAP'S COMMIT RANGE, AS DATA (CLOUD-1702). `commit-lint` reads
+# `BASE_SHA`/`HEAD_SHA`, which CI sets from the pull request and this sets from the
+# lap: `BATTEN_SPEC_BASE` when `land` published a speculative base, otherwise
+# `origin/main` — the retired `${BATTEN_SPEC_BASE:-origin/main}`. Refs rather than
+# resolved shas: every gate under `commit-lint` walks `A..B` through the engine,
+# which resolves either spelling identically. `land` removes the variable when no
+# bet is live rather than emptying it, so the default is the only reading of an
+# absent one.
 #
-# THE BODY, BECAUSE `depends` RUNS IN PARALLEL AND THIS MUST NOT. The `ci` leg
-# above still runs the suite through hk, so a `depends` entry would start a second
-# full run concurrently with it rather than answering from its receipt. Here the
-# gate set has already finished, so `batten step` hits and this costs ~0.3s —
-# which is also what makes it an assertion about coverage rather than a second
-# execution. A taplo reflow of that array would have broken three suites that read
-# `depends` as a single line, which is the other reason it does not go there.
-if ! mise run test:bats; then
-  echo "::error:: verify: the shell suite failed. No receipt written." >&2
-  exit 1
-fi
-# THE SAME BOUND, AND THIS HALF IS ALREADY IN THE COST RECORD (CLOUD-1702).
-# CLOUD-1775's body tabulates a lap lost to `commit-lint` reporting "28 commits
-# claim no CLOUD-<n> issue" — those 28 were the lease holder's, charged here
-# because `BASE_SHA` named trunk while the tree sat on the holder's base. See the
-# `config-lint` paragraph below for why the borrowed base is the honest one.
-if ! BASE_SHA="$(git rev-parse "${BATTEN_SPEC_BASE:-origin/main}")" HEAD_SHA="$(git rev-parse HEAD)" mise run commit-lint; then
-  echo "::error:: verify: commit-lint failed. No receipt written." >&2
-  exit 1
-fi
-# The config trust mechanism, armed (CLOUD-236). `--config-from` reads the
-# committed authority out of a trusted ref rather than out of the branch under
-# review, so a change cannot lower the bar it is judged by (house style §8).
-#
-# HERE AND IN CI, which is `ci-local-parity` property 3 satisfied rather than
-# dodged: the `ci.yml` step runs this same task against the PR's real base, so
-# CI confirms what this proved. The first arming ran in CI alone and a
-# ref-namespace mistake was unreachable by any local run — it cost a matrix.
-#
-# `origin/main` IS THE RIGHT BASE ONLY WHEN THE LAP DID NOT SPECULATE, and the
-# paragraph below used to say it unconditionally (CLOUD-1702). Its reasoning —
-# `verify` has already refused this branch unless it is rebased on current
-# `origin/main`, so this task is a function of (commit, current trunk) — holds
-# for an ordinary run and is FALSE on a speculative lap: `land` replays the
-# branch onto the lease holder's UNLANDED commits, "the main that is about to
-# exist", so the tree is a function of (commit, the holder's base) instead.
-#
-# Judging that tree against trunk charges the holder's weakenings to the
-# BORROWER. `lint::groom` keys the claim receipt on the branch name, and a
-# borrower has one of its own, minted for its own row and naming no weakening —
-# `Groom::Read({})`, which refuses by design (CLOUD-841: evidence of absence, not
-# absence of evidence). The holder's `Weakens:` trailer cannot admit it, because
-# the borrower's groom has already answered. Measured 2026-09-25/26: five laps
-# over four different borrowed tips, every one refusing
-# `recorder[board-issue-created] recorder-changed` and its sibling, while
-# `mise run test:cargo` over the identical integrated commit was 6057/6057 green.
-#
-# `BATTEN_SPEC_BASE` is what `land` already publishes for exactly this question
-# (`speculation::PUBLISHED_AS`, CLOUD-748), and `land.rs`'s own
-# `a_body_gate_is_told_which_base_the_lap_borrowed` asserts it arrives. Using it
-# is the same bound CLOUD-1711 put on `race::authored_log`, which read the whole
-# branch history where the shell read only the commits the branch authored.
-#
-# NOTHING ESCAPES JUDGEMENT, which is the property that makes this a fix rather
-# than a relaxation: every commit is still judged once, on its own branch,
-# against the base it actually sits on. The holder's weakenings are adjudicated
-# on the holder's own lap, against trunk, under the holder's groom.
-#
-# A no-op wherever no bet is live — an ordinary local lap and CI both leave the
-# variable unset, so the expansion is `origin/main` and the class is unchanged.
-# The
-# pre-commit step stays single-tree, where that reasoning does not hold.
-#
-# THE PRE-COMMIT STEP IS NO LONGER UNARMED, and the objection above still holds
-# (CLOUD-1896). It was left single-tree because the only base it could name was
-# `origin/main`, a property of the world. The engine now arms a CLAIMED branch at
-# its FORK POINT when no base is passed — a property of the branch, and exactly
-# what the line above compares against once `verify` has proved the rebase — and
-# asks the one question a commit with no message yet can answer: did the board
-# groom this weakening? That is what moves the refusal from the end of a lap to
-# the edit. An unclaimed checkout is unaffected and runs single-tree as before.
-# The third-party validators' verdicts, recorded where the engine reads them
-# (CLOUD-1265). BEFORE the gates below, because `validator-verdict-clean` is a
-# `severity = "deny"` row that adjudicates what it finds here — and until this
-# task existed it found nothing, on every checkout, silently.
-#
-# Guarded by hand like every other step: a producer that could not run leaves the
-# previous record in place, and a record keyed to bytes that have since moved is
-# ABSENT rather than wrong, so the failure mode is a silent gate — which is
-# exactly what this row exists to end. It must be loud here instead.
-if ! mise run record-verdicts; then
-  echo "::error:: verify: the validator verdicts could not be recorded, so the rows that read them would decide over a record nothing wrote. No receipt written." >&2
-  exit 1
-fi
-if ! CONFIG_LINT_BASE="${BATTEN_SPEC_BASE:-origin/main}" mise run config-lint; then
-  echo "::error:: verify: config-lint refused this tree — either batten.toml carries a policy smell, or this branch weakens policy against origin/main. No receipt written." >&2
-  exit 1
-fi
-# The external analyzer's verdict on this exact HEAD, which `final` asserts in
-# CI (CLOUD-441). Here for the reason every other gate is: what CI runs, verify
-# runs, so the failure is discovered locally and for free rather than costing a
-# runner and a round trip.
-#
-# Exit 3 is a PASS here and a failure in CI, and the asymmetry is the point: 3
-# means "no answer yet", and locally the ordinary reason is that HEAD has not
-# been pushed, so no analyzer has seen it. Refusing there would fail every
-# pre-push verify on a state that is not a defect. In CI the head is pushed by
-# construction, every leg has already finished, and a missing verdict is a real
-# gap. Only 1 (a red analysis) and 2 (a reading we could not take) stop this.
-# NOT READ HERE EITHER (CLOUD-897), and that keeps `ci-local-parity` true: this
-# ran because `final` ran it, and `final` no longer does. The task still exists;
-# nothing in the landing path reads it until CLOUD-897 restores the gate
-# alongside CLOUD-528.
-# The IO-free evaluator test, shown able to FAIL (CLOUD-831, CLOUD-418). The
-# closure half of that pin is a `batten.toml` rule row and rides `batten-check`
-# above; this half cannot, because its subject is a BUILD with a different
-# feature set and no rule kind can ask for one.
-#
-# Cheap on the common change: receipt-gated on the Rust specs, so it costs a
-# checksum read unless the crate, its manifests or the lockfile moved. When it
-# does run it pays one feature-toggled compile — which is the commit worth
-# paying for, since that is exactly when the test could have stopped
-# discriminating.
-#
-# NOT a CI job, and that is `ci-local-parity` satisfied rather than dodged: the
-# constraint is that every task CI runs is one `verify` runs, not the reverse.
-# `ready-guard` refuses `gh pr ready` without a verify receipt for this HEAD, so
-# a test that has quietly stopped discriminating blocks the PR before it can
-# spend a runner.
-# THE SPLIT THE PORT FORCED (CLOUD-1717), and this caller is what the retirement
-# left dangling — `mise run evaluator-io-check` named a program this branch had
-# already deleted, so `verify` exited 1 before reaching anything below it and the
-# branch could not verify itself. `evaluator-io-check` was one program making the
-# probe build AND adjudicating its log; §5 makes `check` `read` and incapable of
-# spawning, so the build is `evaluator-io-record`'s and the verdict is the
-# engine's.
-#
-# BOTH HALVES GUARDED BY HAND, because this body declares `shell = "bash -c"` and
-# so does not run under `set -e`. A producer that could not run must not fall
-# through to a judge that would then read its absence as silence and pass.
-if ! mise run evaluator-io-record; then
-  echo "::error:: verify: evaluator-io-record could not run the probe build, so there is no reading to judge. No receipt written." >&2
-  exit 1
-fi
-if ! mise run batten -- check --rule 'test cover never'; then
-  echo "::error:: verify: 'test cover never' refused — the IO-free evaluator test no longer discriminates. No receipt written." >&2
-  exit 1
-fi
-# The latency regression gate (CLOUD-172). `perf-assert` holds the published
-# number to an absolute ceiling; this asks whether THIS branch made an
-# invocation path slower than its own merge base.
-#
-# IN THE BODY, AFTER `depends`, AND THAT WAS MEASURED (CLOUD-1891). Run in
-# `depends` beside hk, its two builds competed with the test builds: 7m40s and
-# 6m23s against 3m46s alone, and the gate got slower. Its skip is narrow — only
-# a diff touching no crate source, manifest or lockfile is exempt — so its cost
-# is the two builds, which is what to make cheaper.
-#
-# Here and never CI-only: CI confirms, it never discovers. `ready-guard`
-# refuses to ready a PR without a verify receipt for this HEAD, so a regression
-# blocks the PR before it can spend a runner at all.
-if ! mise run perf-gate; then
-  echo "::error:: verify: perf-gate failed — this branch made an invocation path measurably slower than its merge base, or the measurement could not run. No receipt written." >&2
-  exit 1
-fi
-# The COST gate (CLOUD-827), and it is deliberately last of the content gates:
-# every question above is "is this branch correct", and this one is "is the matrix
-# it is about to buy able to have an opinion about it". Asking that before the
-# correctness gates would refuse a branch before telling the author whether it
-# even works.
-#
-# In `verify` AND in `land`'s pre-ready set, for the reason `perf-gate` is here:
-# `ready-guard` refuses `gh pr ready` without a verify receipt for this exact
-# HEAD, so a prose-only branch is stopped before it can spend a runner at all.
-# That is strictly earlier and cheaper than a check that reds after the matrix has
-# been paid for — and this gate exists precisely because nothing in the pre-ready
-# set asked what the diff was WORTH.
-#
-# NOT a CI job, and that is `ci-local-parity` satisfied rather than dodged: the
-# constraint is that every task CI runs is one `verify` runs, not the reverse. It
-# also could not be one honestly — by the time CI runs, the matrix this gate
-# exists to avoid has already been bought.
-#
-# Every could-not-look path inside it exits 0, so this stops a run only on a
-# positive verdict.
-#
-# THIS CALLER STATES NO REMEDY, and the omission is the fix rather than an
-# oversight (CLOUD-1050 defect B). It used to restate the gate's routes, and the
-# copy had drifted: it dropped the fold-it-in route entirely and turned the
-# override's PRECONDITION — "if the prose is the deliverable and cannot wait", a
-# claim you must defend — into "to record the exception", which is bookkeeping.
-# What survived was a binary whose only concrete arm was the bypass, and that
-# manufactured an override request for a change that needed none (CLOUD-680).
-# Deleting the copy is the only fix that cannot drift again; `linear-check`'s
-# "see its message" is the idiom this adopts. `remedy-has-one-author` is the gate.
-if ! mise run prose-only-check; then
-  echo "::error:: verify: prose-only-check refused this branch — see its message above for what is wrong and every route out. No receipt written." >&2
-  exit 1
-fi
-# The receipt write is the binary's job (CLOUD-203): `batten receipt record`
-# keys the claim to the exact commit verified — an amend or a rebase produces a
-# new HEAD and therefore no receipt, which is the point (see ready-guard) — and
-# maintains the grandfathered $GIT_DIR/batten-receipts/ compatibility layout
-# those readers consume. Guarded like every step above: a receipt that cannot
-# be recorded must fail verify and leave no receipt.
-# THE CLOSING READING, and it is the whole of CLOUD-861 (folding CLOUD-1153's
-# classification above). The floor used to be read ONCE, at the head of
-# `verify`, answering "is there room to begin" — and nothing re-read during the
-# phase that actually consumes the disk. Measured three times in one session: the
-# prune passed at 6242MB free, the `cargo test` link step inside the same lap took
-# all of it, and the exhaustion arrived as a rustc IO error inside a test run,
-# under a `land` line telling the author to fix their own diff.
-#
-# So the same verb runs at both boundaries. This call closes the lap the head call
-# opened, records what it actually consumed, ratchets the observed floor, and
-# admits the next lap. It also reclaims what this run's own build just superseded,
-# which is why the second walk is not waste.
-#
-# LAST OF THE CONTENT STEPS AND BEFORE THE RECEIPT, deliberately: a lap that ended
-# below its floor must leave no receipt, exactly like any other refusal here.
-lap_rc=0
-BATTEN_PRUNE_LAP_OPEN= mise run target-prune || lap_rc=$?
-if [ "$lap_rc" = 2 ]; then
-  echo "::error:: verify: this lap ended below the disk floor it was ADMITTED under — the refusal above names what it consumed. That is the environment rather than this branch: there is nothing in the diff to reproduce. No receipt written." >&2
-  exit 1
-fi
-if [ "$lap_rc" != 0 ]; then
-  echo "::error:: verify: target-prune could not close this lap — see its message for whether nothing was examined or the invocation itself was refused. No receipt written." >&2
-  exit 1
-fi
-if ! cargo run --quiet -p batten -- receipt record verify; then
-  echo "::error:: verify: could not record the receipt. No receipt written." >&2
-  exit 1
-fi
-echo "verify: fast-forward-green — rebased on latest main, ci + cross + commit-lint all pass"
-'''
+# A TASK OF ITS OWN, because a task's `env` reaches its `run` steps and the
+# processes they start, and must reach `commit-lint` alone: `test:bats` reads
+# `BASE_SHA` too, and it never used to see this one.
+[tasks."verify:commit-lint"]
+description = "`commit-lint` over the verify lap's own range — invoked through `verify:gated`"
+env = { BASE_SHA = "{{ get_env(name='BATTEN_SPEC_BASE', default='origin/main') }}", HEAD_SHA = "HEAD" }
+run = "mise run commit-lint"
+
+# THE TRUSTED BASE, AS DATA (CLOUD-236, CLOUD-1702): the same base as the range
+# above, for `config-lint`'s `--config-from`.
+[tasks."verify:config-lint"]
+description = "`config-lint` against the verify lap's trusted base — invoked through `verify:gated`"
+env = { CONFIG_LINT_BASE = "{{ get_env(name='BATTEN_SPEC_BASE', default='origin/main') }}" }
+run = "mise run config-lint"
 
 [tasks.commit-msg]
 description = "Gate: one pending commit message's subject follows the convention (policy: [commit] in batten.toml)"
@@ -5645,104 +5224,23 @@ description = "Validate every commit in BASE_SHA..HEAD_SHA is Conventional Commi
 # gathering from the judging; the entry named the retired program for as long
 # as nothing asked whether a `depends` target still resolves.
 depends = ["commit-attribution", "signing-posture-check", "commit-check"]
-shell = "bash -c"                                                         # uses ${sha:0:8}; mise defaults tasks to /bin/sh (dash)
-# The SERVER-SIDE half of CLOUD-431. The claim receipt lives in `.git/` and never
-# leaves the clone, so no reviewer and no workflow can see it; what a server CAN
-# see is whether each commit names the issue it serves. `verify` holds the
-# receipt half, this holds the half that survives a fresh checkout.
+# NO BODY, AND THE CLAIM HALF IS `commit-check`'s NOW (CLOUD-843, CLOUD-1990).
+# This task's shell walked the range and asked, per commit, whether it names the
+# issue it serves — the SERVER-SIDE half of CLOUD-431, since the claim receipt
+# lives in `.git/` and no reviewer or workflow can see it. That walk is
+# `batten commit check <base>..<head>` in the engine, one clause beside the subject
+# convention it already judged over the same range (`commit::judge_claims`), so
+# the dependency above runs it and nothing else has to:
 #
-# `claimed-keys` answers "which issue does this CLAIM", and it is asked here
-# rather than re-deriving `CLOUD-[0-9]+` inline — that second-authority mistake is
-# the whole reason that file exists (CLOUD-338/CLOUD-378). Claiming is stricter
-# than mentioning, which is the property wanted: a commit citing an issue as
-# evidence has not thereby become work on it.
-#
-# TWO EXEMPTIONS, and both are properties of the COMMIT rather than of the
-# subject line.
-#
-# The first: release-plz authors `chore: release vX.Y.Z` touching exactly the
-# version and changelog files, and it has no issue to name because it is not work
-# on one; measured on this repo's history, every release commit is keyless and
-# every other commit in the last 200 revs carries a key. Keying the exemption to
-# the file set rather than the wording means it cannot be claimed by a
-# hand-written commit that merely borrows the subject, and it does not encode a
-# message format release-plz is free to change.
-#
-# THE SECOND IS THE UPDATE BOT'S, AND IT CLOSES A LOOP THAT COULD NOT TERMINATE
-# (CLOUD-1207). A Renovate bump carries no `Refs:` trailer and structurally
-# cannot: CLOUD-693's `batten pr ensure` mints the row FROM the pull request, so
-# the key does not exist when the commit is authored, and the lane deliberately
-# never checks the bot's head out under a write token to amend one in. The row is
-# real and the merge still moves it — through `Closes CLOUD-<n>` in the PR BODY,
-# which this gate does not read and should not, since a body is rewritten on
-# every rebase (CLOUD-768) and a commit message is not.
-#
-# So the gate refused, forever, a class of commit it was never aimed at. Measured
-# on #676: seven days Ready and red, one full matrix per `main` advance, 372
-# workflow runs, none of which could ever land.
-#
-# TWO CONJUNCTS, because the diff alone is too wide here where it was sufficient
-# for release-plz. A workflow-only diff is ordinary human work in this repository,
-# so exempting it by paths would drop the server-side claim (CLOUD-431) for a
-# whole class of real changes. The author test is what narrows it: an address of
-# the form `…[bot]@users.noreply.github.com` is minted by GitHub for an App, and
-# is not a login allowlist — `[bot_lane]`'s `bots` list answers a
-# different question over a different object (which bot's pull request this lane
-# will adopt), so this is not a second spelling of it. A contributor forging that
-# address is refused one gate over, by `commit-attribution`'s identity table.
-#
-# The paths are the manifests `renovate.json5`'s `enabledManagers` can move, and
-# no others: a bot commit reaching anything else is not a bump and is not exempt.
-run = '''
-fail=0
-
-for sha in $(git rev-list --no-merges "${BASE_SHA:?}..${HEAD_SHA:?}"); do
-  subject=$(git show -s --format=%s "$sha")
-  # The subject-convention half is NOT here: it is `commit-check`, above in
-  # `depends`, reading `[commit].subject_pattern` from batten.toml (CLOUD-701).
-  # What remains in this body is the claim half, which is about the message's
-  # trailers rather than its shape.
-  touched=$(git show --name-only --format='' "$sha" | grep -v '^$' || true)
-  if [ -z "$(printf '%s\n' "$touched" | grep -vE '^(Cargo\.(toml|lock)|.*CHANGELOG\.md)$' || true)" ]; then
-    echo "REL   ${sha:0:8}  version/changelog only — no issue to name"
-    continue
-  fi
-  # The bot exemption's two conjuncts, in the order that costs least: the author
-  # is one string, the diff is a walk. `%ae` is the AUTHOR's address rather than
-  # the committer's, because GitHub commits the bot's work as `noreply@github.com`
-  # and only the author half names which App wrote it.
-  case "$(git show -s --format='%ae' "$sha")" in
-    *'[bot]@users.noreply.github.com')
-      if [ -z "$(printf '%s\n' "$touched" | grep -vE '^(\.github/workflows/[^/]+\.ya?ml|mise\.(toml|lock)|Cargo\.(toml|lock))$' || true)" ]; then
-        echo "BOT   ${sha:0:8}  bot-authored manifest bump — its row is minted from the PR, after the commit"
-        continue
-      fi
-      ;;
-  esac
-  # `</dev/null` is load-bearing, not tidiness: `claimed-keys` reads optional
-  # extra evidence from stdin whenever stdin is not a tty, so under a task runner
-  # — where it never is — a call with nothing piped BLOCKS FOREVER. Measured here
-  # as a two-minute harness kill. Same shape as CLOUD-511's bare `cat`.
-  # `batten claim keys`, not the retired `claimed-keys.sh` (CLOUD-1711). The
-  # binding this replaces pointed at a deleted path, so the command emitted
-  # nothing and every commit read as claiming no issue — including ones carrying
-  # a `Refs:` trailer, which is the tell: a missing program's empty output is
-  # byte-identical to a message that names no row.
-  #
-  # `cargo run`, NEVER A BARE `batten`, and the first repair got this wrong in a
-  # way only CI could show: a bare name resolves wherever the binary happens to be
-  # installed, so the gate passed locally and failed on the runner — accusing four
-  # commits that carry `Refs: CLOUD-1688`. That is the SAME false negative one
-  # environment over, which is why the form matters rather than being a style
-  # choice: 52 other call sites in this file spell it this way and none of them
-  # depends on what is on PATH.
-  if [ -z "$(cargo run --quiet -p batten -- claim keys --branch "" --title "" --log "$(git show -s --format='%B' "$sha")" </dev/null 2>/dev/null)" ]; then
-    echo "::error::Commit ${sha:0:8} claims no CLOUD-<n> issue: '$subject' — add a 'Refs: CLOUD-<n>' trailer naming the work it serves"
-    fail=1
-  fi
-done
-exit $fail
-'''
+# * "does this commit CLAIM a row" is `claim keys`' own reading (`race::claimed_from`
+#   over the whole message), asked in process rather than spawned per commit —
+#   never a key pattern re-derived here (CLOUD-338/CLOUD-378);
+# * the two exemptions — release-plz's version/changelog commits, and an update
+#   bot's manifest bump whose row is minted from its PR after the commit exists
+#   (CLOUD-1207) — are `[[commit.claims.unclaimed]]` rows in `batten.toml`, which is
+#   where a repository's own paths and bot addresses belong (rule 1);
+# * a finding is `<sha8> claim`, a pointer — the subject the retired `::error::`
+#   line printed is exactly the payload rule 4 refuses.
 
 [tasks.release-pr]
 description = "Open/update the release PR (version bump + changelog)"

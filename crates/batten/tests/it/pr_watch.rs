@@ -160,9 +160,8 @@ impl Fixture {
         // first entry is a drive letter and whose second swallows the rest
         // (CLOUD-617). `primitives.rs` is the gate on that.
         let mut entries = vec![self.dir.join("bin")];
-        entries.extend(std::env::split_paths(
-            &std::env::var_os("PATH").unwrap_or_default(),
-        ));
+        // The masked ambient PATH (CLOUD-1951; `common::ambient_path`).
+        entries.extend(std::env::split_paths(&common::ambient_path()));
         let path = std::env::join_paths(entries).expect("the stub directory joins into a PATH");
         let output = common::batten()
             .arg("pr")
@@ -226,6 +225,47 @@ fn a_green_head_exits_zero_and_prints_each_conclusion() {
     assert!(stdout.contains("ci success"), "{stdout}");
     assert!(stdout.contains("cross success"), "{stdout}");
     assert!(stdout.contains("terminal and green"), "{stdout}");
+}
+
+/// `--sha HEAD` IS RESOLVED BEFORE THE FORGE IS ASKED (CLOUD-843). The consumer's
+/// `ci-wait` names its own working tree that way now that no shell runs
+/// `rev-parse` for it, and a forge asked about the literal `HEAD` would answer
+/// about somebody else's default branch. The request must carry the sha.
+#[test]
+#[cfg_attr(not(unix), ignore = "the stubbed client is a shebang script")]
+fn a_ref_is_resolved_to_the_commit_it_names_before_the_request() {
+    let fixture = Fixture::new("ci-wait-ref", &[response("W/\"a\"", &all_green(""))]);
+    common::init_repo(&fixture.dir);
+    common::git_in(&fixture.dir, &["add", "-A"]);
+    common::git_in(&fixture.dir, &["commit", "--quiet", "-m", "base"]);
+    let head = common::git_in(&fixture.dir, &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+    let (code, _, stderr) = fixture.watch_with(&[
+        "--sha",
+        "HEAD",
+        "--interval",
+        "0",
+        "--required",
+        REQUIRED,
+        "--answered",
+        ANSWERED,
+        "--fanin",
+        "final",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        fixture
+            .args()
+            .contains(&format!("commits/{head}/check-runs")),
+        "the request names the resolved commit: {}",
+        fixture.args()
+    );
+    assert!(
+        !fixture.args().contains("commits/HEAD/"),
+        "and never the ref itself: {}",
+        fixture.args()
+    );
 }
 
 // THE REQUEST IS PART OF THE PREDICATE (CLOUD-337). This endpoint returns a run

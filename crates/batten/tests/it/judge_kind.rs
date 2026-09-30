@@ -92,7 +92,9 @@ fn make_executable(_path: &Path) {}
 /// that case is to run the very same fixture without its `bin/`.
 fn judge_cmd(repo: &Path, home: &Path, args: &[&str], with_stub: bool) -> Output {
     let bin = repo.parent().expect("the fixture root").join("bin");
-    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    // The masked ambient PATH, so no `batten` resolves by name here either
+    // (CLOUD-1951; `common::ambient_path`).
+    let inherited = crate::common::ambient_path();
     // `join_paths`, never a hardcoded `:`. The separator is `;` on Windows and a
     // path there begins `D:\`, so the interpolated form did not merely fail to
     // separate — it produced a PATH whose first entry was `D` and whose second
