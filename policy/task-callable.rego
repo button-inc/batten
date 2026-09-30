@@ -195,7 +195,10 @@ caller contains ["hk.pkl", task] if {
 
 run_lines(body) := split(body.run, "\n") if is_string(body.run)
 
-run_lines(body) := [line | some command in body.run; is_string(command); some line in split(command, "\n")] if is_array(body.run)
+run_lines(body) := lines if {
+	is_array(body.run)
+	lines := [line | some command in body.run; is_string(command); some line in split(command, "\n")]
+}
 
 # A COMMENT IS NOT A CALLER, and the test is the comment MARKER, not a YAML
 # `run:` key: a `run: |` block scalar puts its command on a CONTINUATION line, so

@@ -157,8 +157,9 @@ board_cites_tree(lines) := {"tree": {"records": {"board-cites": lines}}}
 
 board_refs_tree(lines) := {"tree": {"records": {"board-refs": lines}}}
 
-board_rendered(found) := {concat(" ", [subject.artifact | some subject in entry.subjects]) |
+board_rendered(found) := {rendered |
 	some entry in found
+	rendered := concat(" ", [subject.artifact | some subject in entry.subjects])
 }
 
 test_board_a_test_no_corpus_file_carries_is_refused if {

@@ -142,7 +142,10 @@ violation contains {
 # sequence would make undefined and so silently unjudged.
 run_text(task) := task.run if is_string(task.run)
 
-run_text(task) := concat("\n", [entry | some entry in task.run; is_string(entry)]) if is_array(task.run)
+run_text(task) := text if {
+	is_array(task.run)
+	text := concat("\n", [entry | some entry in task.run; is_string(entry)])
+}
 
 # The other way onto the landing path, and the one `verify` cannot see.
 violation contains {
