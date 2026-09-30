@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.192](https://github.com/button-inc/batten/compare/v0.0.191...v0.0.192) - 2026-09-30
+
+### Added
+
+- *(codemod)* lossless Rust rewrites through ra_ap_syntax, pinned =0.0.331
+
+### Fixed
+
+- *(codemod)* declare the mutations at column zero, where the sweep reads them
+
 ## [0.0.191](https://github.com/button-inc/batten/compare/v0.0.190...v0.0.191) - 2026-09-29
 
 ### Added
