@@ -108,7 +108,14 @@ pub fn append_whole_lines(path: &Path, text: &str) -> std::io::Result<()> {
                 .iter()
                 .rposition(|byte| *byte == b'\n')
                 .map_or(0, |at| at + 1);
-            file.set_len(u64::try_from(whole).unwrap_or(0))?;
+            // THROUGH A WRITE HANDLE OF ITS OWN: Windows grants an append-only
+            // handle FILE_APPEND_DATA and not FILE_WRITE_DATA, so truncating
+            // through `file` is access-denied there. The append itself stays on
+            // `file`, so every write still lands at the end.
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(path)?
+                .set_len(u64::try_from(whole).unwrap_or(0))?;
         }
     }
     file.write_all(buffer.as_bytes())?;
